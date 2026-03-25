@@ -385,7 +385,7 @@ class InviteCampaignFlowTest extends TestCase
         $this->assertSame(0, InviteCode::where('code', $campaign->invite_code)->value('status'));
     }
 
-    public function test_local_dev_checkout_marks_order_paid_and_activates_subscription()
+    public function test_checkout_payment_notify_marks_order_paid_and_activates_subscription()
     {
         $user = $this->createUser();
         $plan = $this->createPlan([
@@ -396,8 +396,8 @@ class InviteCampaignFlowTest extends TestCase
             'speed_limit' => 100,
         ]);
         $payment = $this->createPayment([
-            'payment' => 'LocalDev',
-            'name' => 'Local Dev',
+            'payment' => 'EPay',
+            'name' => 'EPay',
         ]);
 
         $orderResponse = $this->withHeaders($this->userHeaders($user))
@@ -417,13 +417,23 @@ class InviteCampaignFlowTest extends TestCase
 
         $checkoutResponse->assertOk()
             ->assertJsonPath('type', 1);
-        $this->assertStringContainsString('/#/order/' . $tradeNo, $checkoutResponse->json('data'));
+        $this->assertStringContainsString('submit.php?', $checkoutResponse->json('data'));
+        $this->assertStringContainsString($tradeNo, $checkoutResponse->json('data'));
+
+        $this->post('/api/v1/guest/payment/notify/EPay/' . $payment->uuid, $this->buildEPayNotifyPayload(
+            $payment,
+            $tradeNo,
+            'invite-checkout-001'
+        ))
+            ->assertOk()
+            ->assertSee('success');
 
         $order = Order::where('trade_no', $tradeNo)->first();
         $user->refresh();
 
         $this->assertNotNull($order);
         $this->assertSame(3, $order->status);
+        $this->assertSame('invite-checkout-001', $order->callback_no);
         $this->assertNotNull($order->paid_at);
         $this->assertSame($plan->id, $user->plan_id);
         $this->assertSame($plan->group_id, $user->group_id);
@@ -1058,10 +1068,14 @@ class InviteCampaignFlowTest extends TestCase
     {
         $payment = new Payment();
         $payment->uuid = $overrides['uuid'] ?? str_pad(substr(md5((string) microtime(true)), 0, 16), 32, '0');
-        $payment->payment = $overrides['payment'] ?? 'LocalDev';
-        $payment->name = $overrides['name'] ?? 'Local Dev';
+        $payment->payment = $overrides['payment'] ?? 'EPay';
+        $payment->name = $overrides['name'] ?? 'EPay';
         $payment->icon = $overrides['icon'] ?? null;
-        $payment->config = $overrides['config'] ?? [];
+        $payment->config = $overrides['config'] ?? [
+            'url' => 'https://epay.test',
+            'pid' => '10001',
+            'key' => 'epay-test-key',
+        ];
         $payment->notify_domain = $overrides['notify_domain'] ?? null;
         $payment->handling_fee_fixed = $overrides['handling_fee_fixed'] ?? null;
         $payment->handling_fee_percent = $overrides['handling_fee_percent'] ?? null;
@@ -1070,6 +1084,20 @@ class InviteCampaignFlowTest extends TestCase
         $payment->save();
 
         return $payment->fresh();
+    }
+
+    private function buildEPayNotifyPayload(Payment $payment, string $tradeNo, string $callbackNo): array
+    {
+        $params = [
+            'out_trade_no' => $tradeNo,
+            'trade_no' => $callbackNo,
+        ];
+        ksort($params);
+        reset($params);
+        $params['sign'] = md5(stripslashes(urldecode(http_build_query($params))) . $payment->config['key']);
+        $params['sign_type'] = 'MD5';
+
+        return $params;
     }
 
     private function createOrder(array $overrides = []): Order

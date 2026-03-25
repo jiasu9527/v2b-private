@@ -65,10 +65,11 @@ class OrderCancelRecoveryTest extends TestCase
         $this->assertSame(2, $order->status);
         $this->assertSame(1100, $user->balance);
 
-        $this->post('/api/v1/guest/payment/notify/LocalDev/' . $payment->uuid, [
-            'out_trade_no' => $order->trade_no,
-            'trade_no' => 'notify-recover-001',
-        ])
+        $this->post('/api/v1/guest/payment/notify/EPay/' . $payment->uuid, $this->buildEPayNotifyPayload(
+            $payment,
+            $order->trade_no,
+            'notify-recover-001'
+        ))
             ->assertOk()
             ->assertSee('success');
 
@@ -264,10 +265,14 @@ class OrderCancelRecoveryTest extends TestCase
     {
         $payment = new Payment();
         $payment->uuid = $overrides['uuid'] ?? substr(md5((string) microtime(true)), 0, 32);
-        $payment->payment = $overrides['payment'] ?? 'LocalDev';
-        $payment->name = $overrides['name'] ?? 'Local Dev';
+        $payment->payment = $overrides['payment'] ?? 'EPay';
+        $payment->name = $overrides['name'] ?? 'EPay';
         $payment->icon = $overrides['icon'] ?? null;
-        $payment->config = $overrides['config'] ?? [];
+        $payment->config = $overrides['config'] ?? [
+            'url' => 'https://epay.test',
+            'pid' => '10001',
+            'key' => 'epay-test-key',
+        ];
         $payment->notify_domain = $overrides['notify_domain'] ?? null;
         $payment->handling_fee_fixed = $overrides['handling_fee_fixed'] ?? null;
         $payment->handling_fee_percent = $overrides['handling_fee_percent'] ?? null;
@@ -278,6 +283,20 @@ class OrderCancelRecoveryTest extends TestCase
         $payment->save();
 
         return $payment->fresh();
+    }
+
+    private function buildEPayNotifyPayload(Payment $payment, string $tradeNo, string $callbackNo): array
+    {
+        $params = [
+            'out_trade_no' => $tradeNo,
+            'trade_no' => $callbackNo,
+        ];
+        ksort($params);
+        reset($params);
+        $params['sign'] = md5(stripslashes(urldecode(http_build_query($params))) . $payment->config['key']);
+        $params['sign_type'] = 'MD5';
+
+        return $params;
     }
 
     private function userHeaders(User $user): array
