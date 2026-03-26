@@ -114899,9 +114899,12 @@
                     var O = document.createElement("select");
                     O.id = "admin-campaign-invitee-plan-id",
                     O.disabled = m.disabled;
+                    var S = function(e) {
+                        return String(null == e ? "" : e).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;")
+                    };
                     var T = ['<option value="0">请选择活动体验套餐</option>'];
                     n.plans && n.plans.length ? n.plans.forEach(function(e) {
-                        T.push('<option value="' + l(e.id) + '"' + (String(n.inviteeTryOutPlanId) === String(e.id) ? " selected" : "") + ">" + l(e.name || "套餐#" + e.id) + "</option>")
+                        T.push('<option value="' + S(e.id) + '"' + (String(n.inviteeTryOutPlanId) === String(e.id) ? " selected" : "") + ">" + S(e.name || "套餐#" + e.id) + "</option>")
                     }) : T.push('<option value="0">暂无可选套餐</option>'),
                     O.innerHTML = T.join(""),
                     m.parentNode && m.parentNode.replaceChild(O, m),
