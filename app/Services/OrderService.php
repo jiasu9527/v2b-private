@@ -6,10 +6,12 @@ use App\Jobs\OrderHandleJob;
 use App\Models\Order;
 use App\Models\Plan;
 use App\Models\User;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class OrderService
 {
+    const CANCEL_RECOVER_TTL_SECONDS = 1800;
     CONST STR_TO_TIME = [
         'month_price' => 1,
         'quarter_price' => 3,
@@ -97,6 +99,7 @@ class OrderService
             DB::rollBack();
             abort(500, '开通失败');
         }
+        (new InviteCampaignService())->markUsedByOrder($order);
 
         DB::commit();
     }
@@ -254,14 +257,48 @@ class OrderService
         $order->surplus_order_ids = array_column($orders, 'id');
     }
 
-    public function paid(string $callbackNo)
+    public function canMarkPaid(bool $allowCancelled = false): bool
+    {
+        $status = (int) $this->order->status;
+
+        if ($status === 0) {
+            return true;
+        }
+
+        if ($status !== 2) {
+            return false;
+        }
+
+        return $allowCancelled || $this->canRecoverCancelledOrder();
+    }
+
+    public function paid(string $callbackNo, bool $allowCancelled = false)
     {
         $order = $this->order;
-        if ($order->status !== 0) return true;
+        if ((int) $order->status === 1 || (int) $order->status === 3 || (int) $order->status === 4) {
+            return true;
+        }
+        if (!$this->canMarkPaid($allowCancelled)) {
+            return false;
+        }
+
+        DB::beginTransaction();
+        if ((int) $order->status === 2 && $order->balance_amount) {
+            $userService = new UserService();
+            if (!$userService->addBalance($order->user_id, -$order->balance_amount)) {
+                DB::rollBack();
+                return false;
+            }
+        }
         $order->status = 1;
         $order->paid_at = time();
         $order->callback_no = $callbackNo;
-        if (!$order->save()) return false;
+        if (!$order->save()) {
+            DB::rollBack();
+            return false;
+        }
+        DB::commit();
+        $this->forgetCancelRecoveryWindow();
         try {
             OrderHandleJob::dispatch($order->trade_no);
         } catch (\Exception $e) {
@@ -287,7 +324,32 @@ class OrderService
             }
         }
         DB::commit();
+        $this->rememberCancelRecoveryWindow();
         return true;
+    }
+
+    private function canRecoverCancelledOrder(): bool
+    {
+        return (int) $this->order->status === 2 && Cache::has($this->getCancelRecoveryCacheKey());
+    }
+
+    private function rememberCancelRecoveryWindow(): void
+    {
+        Cache::put(
+            $this->getCancelRecoveryCacheKey(),
+            time(),
+            now()->addSeconds((int) config('v2board.order_cancel_recover_ttl', self::CANCEL_RECOVER_TTL_SECONDS))
+        );
+    }
+
+    private function forgetCancelRecoveryWindow(): void
+    {
+        Cache::forget($this->getCancelRecoveryCacheKey());
+    }
+
+    private function getCancelRecoveryCacheKey(): string
+    {
+        return 'order:cancel:recover:' . $this->order->trade_no;
     }
 
     private function setSpeedLimit($speedLimit)

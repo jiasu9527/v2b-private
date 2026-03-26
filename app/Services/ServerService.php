@@ -19,6 +19,145 @@ use Illuminate\Support\Facades\Cache;
 
 class ServerService
 {
+    // --- 核心逻辑：动态 Host 解析 (支持多 UA 关键词 | 分隔) ---
+    private function parseHostByCondition($hostConfig, $user, $ua = '')
+    {
+        if (empty($hostConfig)) {
+            return null;
+        }
+
+        $hosts = explode(',', $hostConfig);
+        $defaultHost = null;
+        $hasRangeConfig = false;
+
+        $registrationDays = null;
+        if ($user->created_at !== null) {
+            $createdAt = is_numeric($user->created_at) ? $user->created_at : strtotime($user->created_at);
+            $registrationDays = floor((time() - $createdAt) / 86400);
+        }
+
+        foreach ($hosts as $host) {
+            $host = trim($host);
+
+            // 1. UA多关键词 + UID范围: host(Ureq|UTunnel1-1000) 或 host(req|tunnel1-1000)
+            if (preg_match('/^(.+?)\(U(.+?)(\d+)-(\d+)\)$/i', $host, $matches)) {
+                $hasRangeConfig = true;
+                $uaKeywords = explode('|', $matches[2]);
+                $uaHit = false;
+                foreach ($uaKeywords as $kw) {
+                    $kw = trim($kw);
+                    // 移除关键词开头的U（如果有），支持 Ureq 或 req 两种写法
+                    $kw = preg_replace('/^U/i', '', $kw);
+                    if (!empty($ua) && stripos($ua, $kw) !== false) {
+                        $uaHit = true;
+                        break;
+                    }
+                }
+                if ($uaHit) {
+                    if ($user->id >= (int)$matches[3] && $user->id <= (int)$matches[4]) {
+                        return $matches[1];
+                    }
+                }
+                continue;
+            }
+
+            // 2. UA多关键词识别: host(Ureq|UTunnel) 或 host(req|tunnel)
+            if (preg_match('/^(.+?)\(U([^)]+)\)$/i', $host, $matches)) {
+                $hasRangeConfig = true;
+                $uaKeywords = explode('|', $matches[2]);
+                foreach ($uaKeywords as $kw) {
+                    $kw = trim($kw);
+                    // 移除关键词开头的U（如果有），支持 Ureq 或 req 两种写法
+                    $kw = preg_replace('/^U/i', '', $kw);
+                    if (!empty($ua) && stripos($ua, $kw) !== false) {
+                        return $matches[1];
+                    }
+                }
+                continue;
+            }
+
+            // 3. 套餐ID范围 (P1-5)
+            if (preg_match('/^(.+?)\(P(\d+)-(\d+)\)$/i', $host, $matches)) {
+                $hasRangeConfig = true;
+                $minPlan = (int)$matches[2];
+                $maxPlan = (int)$matches[3];
+                if ($user->plan_id >= $minPlan && $user->plan_id <= $maxPlan) {
+                    return $matches[1];
+                }
+                continue;
+            }
+
+            // 4. 注册天数范围: host(D30-60)
+            if (preg_match('/^(.+?)\(D(\d+)-(\d+)\)$/i', $host, $matches)) {
+                $hasRangeConfig = true;
+                if ($registrationDays !== null) {
+                    $minDays = (int) $matches[2];
+                    $maxDays = (int) $matches[3];
+                    if ($registrationDays >= $minDays && $registrationDays <= $maxDays) {
+                        return $matches[1];
+                    }
+                }
+                continue;
+            }
+
+            // 5. 注册天数大于: host(D>30)
+            if (preg_match('/^(.+?)\(D>(\d+)\)$/i', $host, $matches)) {
+                $hasRangeConfig = true;
+                if ($registrationDays !== null) {
+                    $minDays = (int) $matches[2];
+                    if ($registrationDays > $minDays) {
+                        return $matches[1];
+                    }
+                }
+                continue;
+            }
+
+            // 6. 注册天数小于等于: host(D<=30) 或 host(D30)
+            if (preg_match('/^(.+?)\(D<=(\d+)\)$/i', $host, $matches)) {
+                $hasRangeConfig = true;
+                if ($registrationDays !== null) {
+                    $maxDays = (int) $matches[2];
+                    if ($registrationDays <= $maxDays) {
+                        return $matches[1];
+                    }
+                }
+                continue;
+            }
+
+            // 6b. 注册天数小于等于简写: host(D30)
+            if (preg_match('/^(.+?)\(D(\d+)\)$/i', $host, $matches)) {
+                $hasRangeConfig = true;
+                if ($registrationDays !== null) {
+                    $maxDays = (int) $matches[2];
+                    if ($registrationDays <= $maxDays) {
+                        return $matches[1];
+                    }
+                }
+                continue;
+            }
+
+            // 7. 用户ID范围: host(1-2000)
+            if (preg_match('/^(.+?)\((\d+)-(\d+)\)$/', $host, $matches)) {
+                $hasRangeConfig = true;
+                $startId = (int) $matches[2];
+                $endId = (int) $matches[3];
+                if ($user->id >= $startId && $user->id <= $endId) {
+                    return $matches[1];
+                }
+                continue;
+            }
+
+            // 默认值 (不带括号的部分)
+            $defaultHost = $host;
+        }
+
+        if ($hasRangeConfig && ($defaultHost === null || $defaultHost === '')) {
+            return null;
+        }
+
+        return $defaultHost;
+    }
+
     public function getAvailableVless(User $user): array
     {
         $servers = [];
@@ -48,8 +187,6 @@ class ServerService
             }
             $servers[] = $server[$key]->toArray();
         }
-
-
         return $servers;
     }
 
@@ -72,8 +209,6 @@ class ServerService
             }
             $servers[] = $vmess[$key]->toArray();
         }
-
-
         return $servers;
     }
 
@@ -218,6 +353,8 @@ class ServerService
 
     public function getAvailableServers(User $user)
     {
+        $ua = request()->header('User-Agent', '');
+
         $servers = array_merge(
             $this->getAvailableShadowsocks($user),
             $this->getAvailableVmess($user),
@@ -230,16 +367,32 @@ class ServerService
         );
         $tmp = array_column($servers, 'sort');
         array_multisort($tmp, SORT_ASC, $servers);
-        return array_map(function ($server) {
-            if (strpos($server['port'], '-')) {
+
+        $filteredServers = [];
+        foreach ($servers as $server) {
+            // 端口处理
+            if (strpos((string)$server['port'], '-')) {
                 $server['mport'] = (string)$server['port'];
             } else {
                 $server['port'] = (int)$server['port'];
             }
-            $server['is_online'] = (time() - 300 > $server['last_check_at']) ? 0 : 1;
+
+            // --- 核心：下发前的 Host 动态解析 ---
+            if (isset($server['host'])) {
+                $parsedHost = $this->parseHostByCondition($server['host'], $user, $ua);
+                if ($parsedHost === null) {
+                    continue; // 不满足条件则跳过该节点
+                }
+                $server['host'] = $parsedHost;
+            }
+
+            $server['is_online'] = (time() - 300 > ($server['last_check_at'] ?? 0)) ? 0 : 1;
             $server['cache_key'] = "{$server['type']}-{$server['id']}-{$server['updated_at']}-{$server['is_online']}";
-            return $server;
-        }, $servers);
+            
+            $filteredServers[] = $server;
+        }
+
+        return $filteredServers;
     }
 
     public function getAvailableUsers($groupId)

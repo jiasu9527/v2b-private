@@ -25,19 +25,28 @@ class StatController extends Controller
 {
     public function getOverride(Request $request)
     {
+        $currentMonthStart = strtotime(date('Y-m-1'));
+        $lastMonthStart = strtotime('-1 month', $currentMonthStart);
+        $now = time();
+
         return [
             'data' => [
                 'online_user' => User::where('t','>=', time() - 600)
                     ->count(),
-                'month_income' => Order::where('created_at', '>=', strtotime(date('Y-m-1')))
-                    ->where('created_at', '<', time())
+                'month_income' => Order::where('created_at', '>=', $currentMonthStart)
+                    ->where('created_at', '<', $now)
                     ->whereNotIn('status', [0, 2])
                     ->sum('total_amount'),
-                'month_register_total' => User::where('created_at', '>=', strtotime(date('Y-m-1')))
-                    ->where('created_at', '<', time())
+                'month_register_total' => User::where('created_at', '>=', $currentMonthStart)
+                    ->where('created_at', '<', $now)
                     ->count(),
+                'last_month_register_total' => User::where('created_at', '>=', $lastMonthStart)
+                    ->where('created_at', '<', $currentMonthStart)
+                    ->count(),
+                'month_paid_user_total' => $this->getRegisteredPaidUserCount($currentMonthStart, $now),
+                'last_month_paid_user_total' => $this->getRegisteredPaidUserCount($lastMonthStart, $currentMonthStart),
                 'day_register_total' => User::where('created_at', '>=', strtotime(date('Y-m-d')))
-                    ->where('created_at', '<', time())
+                    ->where('created_at', '<', $now)
                     ->count(),
                 'ticket_pending_total' => Ticket::where('status', 0)
                     ->where('reply_status', 0)
@@ -48,21 +57,36 @@ class StatController extends Controller
                     ->where('commission_balance', '>', 0)
                     ->count(),
                 'day_income' => Order::where('created_at', '>=', strtotime(date('Y-m-d')))
-                    ->where('created_at', '<', time())
+                    ->where('created_at', '<', $now)
                     ->whereNotIn('status', [0, 2])
                     ->sum('total_amount'),
-                'last_month_income' => Order::where('created_at', '>=', strtotime('-1 month', strtotime(date('Y-m-1'))))
-                    ->where('created_at', '<', strtotime(date('Y-m-1')))
+                'last_month_income' => Order::where('created_at', '>=', $lastMonthStart)
+                    ->where('created_at', '<', $currentMonthStart)
                     ->whereNotIn('status', [0, 2])
                     ->sum('total_amount'),
-                'commission_month_payout' => CommissionLog::where('created_at', '>=', strtotime(date('Y-m-1')))
-                    ->where('created_at', '<', time())
+                'commission_month_payout' => CommissionLog::where('created_at', '>=', $currentMonthStart)
+                    ->where('created_at', '<', $now)
                     ->sum('get_amount'),
-                'commission_last_month_payout' => CommissionLog::where('created_at', '>=', strtotime('-1 month', strtotime(date('Y-m-1'))))
-                    ->where('created_at', '<', strtotime(date('Y-m-1')))
+                'commission_last_month_payout' => CommissionLog::where('created_at', '>=', $lastMonthStart)
+                    ->where('created_at', '<', $currentMonthStart)
                     ->sum('get_amount'),
             ]
         ];
+    }
+
+    private function getRegisteredPaidUserCount(int $startAt, int $endAt): int
+    {
+        return User::where('created_at', '>=', $startAt)
+            ->where('created_at', '<', $endAt)
+            ->whereExists(function ($query) {
+                $query->select(DB::raw(1))
+                    ->from('v2_order')
+                    ->whereColumn('v2_order.user_id', 'v2_user.id')
+                    ->whereNotNull('v2_order.user_id')
+                    ->where('v2_order.user_id', '>', 0)
+                    ->whereNotIn('v2_order.status', [0, 2]);
+            })
+            ->count();
     }
 
     public function getOrder(Request $request)
@@ -293,4 +317,3 @@ class StatController extends Controller
     }
 
 }
-

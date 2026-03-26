@@ -77,6 +77,7 @@ CREATE TABLE `v2_invite_code` (
                                   `user_id` int(11) NOT NULL,
                                   `code` char(32) NOT NULL,
                                   `status` tinyint(1) NOT NULL DEFAULT '0',
+                                  `invite_campaign_id` int(11) DEFAULT NULL,
                                   `pv` int(11) NOT NULL DEFAULT '0',
                                   `created_at` int(11) NOT NULL,
                                   `updated_at` int(11) NOT NULL,
@@ -166,6 +167,8 @@ CREATE TABLE `v2_order` (
                             `commission_status` tinyint(1) NOT NULL DEFAULT '0' COMMENT '0待确认1发放中2有效3无效',
                             `commission_balance` int(11) NOT NULL DEFAULT '0',
                             `actual_commission_balance` int(11) DEFAULT NULL COMMENT '实际支付佣金',
+                            `invite_campaign_id` int(11) DEFAULT NULL,
+                            `invite_campaign_discount_amount` int(11) NOT NULL DEFAULT '0',
                             `paid_at` int(11) DEFAULT NULL,
                             `created_at` int(11) NOT NULL,
                             `updated_at` int(11) NOT NULL,
@@ -174,6 +177,46 @@ CREATE TABLE `v2_order` (
                             INDEX idx_user (`user_id`),
                             INDEX idx_user_status (`user_id`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+
+DROP TABLE IF EXISTS `v2_invite_campaign`;
+CREATE TABLE `v2_invite_campaign` (
+                                      `id` int(11) NOT NULL AUTO_INCREMENT,
+                                      `user_id` int(11) NOT NULL,
+                                      `plan_id` int(11) NOT NULL,
+                                      `period` varchar(32) NOT NULL,
+                                      `invite_code_id` int(11) DEFAULT NULL,
+                                      `invite_code` char(32) DEFAULT NULL,
+                                      `reward_amount` int(11) NOT NULL,
+                                      `target_amount` int(11) NOT NULL,
+                                      `current_amount` int(11) NOT NULL DEFAULT '0',
+                                      `invite_count` int(11) NOT NULL DEFAULT '0',
+                                      `status` tinyint(1) NOT NULL DEFAULT '0' COMMENT '0 active 1 completed 2 expired 3 abandoned 4 used',
+                                      `started_at` int(11) NOT NULL,
+                                      `expired_at` int(11) NOT NULL,
+                                      `completed_at` int(11) DEFAULT NULL,
+                                      `abandoned_at` int(11) DEFAULT NULL,
+                                      `used_at` int(11) DEFAULT NULL,
+                                      `created_at` int(11) NOT NULL,
+                                      `updated_at` int(11) NOT NULL,
+                                      PRIMARY KEY (`id`),
+                                      INDEX `idx_user_status` (`user_id`, `status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+DROP TABLE IF EXISTS `v2_invite_campaign_record`;
+CREATE TABLE `v2_invite_campaign_record` (
+                                             `id` int(11) NOT NULL AUTO_INCREMENT,
+                                             `campaign_id` int(11) NOT NULL,
+                                             `invitee_user_id` int(11) NOT NULL,
+                                             `invite_code` char(32) NOT NULL,
+                                             `reward_amount` int(11) NOT NULL,
+                                             `created_at` int(11) NOT NULL,
+                                             `updated_at` int(11) NOT NULL,
+                                             PRIMARY KEY (`id`),
+                                             UNIQUE KEY `uniq_campaign_invitee` (`campaign_id`, `invitee_user_id`),
+                                             INDEX `idx_campaign_id` (`campaign_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 
 DROP TABLE IF EXISTS `v2_payment`;

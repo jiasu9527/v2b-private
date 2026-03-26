@@ -1,8 +1,6 @@
 <?php
 namespace App\Logging;
 
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Monolog\Handler\AbstractProcessingHandler;
 use Monolog\Logger;
 use App\Models\Log as LogModel;
@@ -38,7 +36,7 @@ class MysqlLoggerHandler extends AbstractProcessingHandler
                 $log
             );
         }catch (\Exception $e){
-            Log::channel('daily')->error($e->getMessage().$e->getFile().$e->getTraceAsString());
+            error_log($e->getMessage() . ' ' . $e->getFile() . ' ' . $e->getTraceAsString());
         }
     }
 }

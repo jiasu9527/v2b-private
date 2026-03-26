@@ -9,6 +9,7 @@ use App\Models\Payment;
 use App\Models\Plan;
 use App\Models\User;
 use App\Services\CouponService;
+use App\Services\InviteCampaignService;
 use App\Services\OrderService;
 use App\Services\PaymentService;
 use App\Services\PlanService;
@@ -169,6 +170,7 @@ class OrderController extends Controller
 
         $orderService->setVipDiscount($user);
         $orderService->setOrderType($user);
+        (new InviteCampaignService())->applyOrderDiscount($order, $user);
 
         if ($user->balance > 0 && $order->total_amount > 0) {
             $remainingBalance = $user->balance - $order->total_amount;

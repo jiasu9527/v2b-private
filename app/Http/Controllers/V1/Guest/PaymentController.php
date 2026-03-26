@@ -32,7 +32,7 @@ class PaymentController extends Controller
         if (!$order) {
             abort(500, 'order is not found');
         }
-        if ($order->status !== 0) return true;
+        if (!in_array((int) $order->status, [0, 2], true)) return true;
         $orderService = new OrderService($order);
         if (!$orderService->paid($callbackNo)) {
             return false;

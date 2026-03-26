@@ -37,8 +37,40 @@ Route::get('/', function (Request $request) {
     return view('theme::' . config('v2board.frontend_theme', 'default') . '.dashboard', $renderParams);
 });
 
-//TODO:: 兼容
-Route::get('/' . config('v2board.secure_path', config('v2board.frontend_admin_path', hash('crc32b', config('app.key')))), function () {
+Route::get('/invite-campaign', function (Request $request) {
+    if (config('v2board.app_url') && config('v2board.safe_mode_enable', 0)) {
+        if ($request->server('HTTP_HOST') !== parse_url(config('v2board.app_url'))['host']) {
+            abort(403);
+        }
+    }
+
+    $renderParams = [
+        'title' => config('v2board.app_name', 'V2Board'),
+        'theme' => config('v2board.frontend_theme', 'default'),
+        'version' => config('app.version'),
+        'description' => config('v2board.app_description', 'V2Board is best'),
+        'logo' => config('v2board.logo')
+    ];
+    return view('invite-campaign', $renderParams);
+});
+
+$adminSecurePath = config('v2board.secure_path', config('v2board.frontend_admin_path', hash('crc32b', config('app.key'))));
+$resolveAdminAssetVersion = function () {
+    $baseVersion = config('app.version');
+    $files = [
+        public_path('assets/admin/vendors.async.js'),
+        public_path('assets/admin/components.async.js'),
+        public_path('assets/admin/umi.js'),
+        public_path('assets/admin/custom.js'),
+        public_path('assets/invite-campaign-common.css'),
+    ];
+    $timestamps = array_map(function ($path) {
+        return file_exists($path) ? (int) filemtime($path) : 0;
+    }, $files);
+
+    return $baseVersion . '.' . max($timestamps);
+};
+$renderAdminApp = function () use ($adminSecurePath, $resolveAdminAssetVersion) {
     return view('admin', [
         'title' => config('v2board.app_name', 'V2Board'),
         'theme_sidebar' => config('v2board.frontend_theme_sidebar', 'light'),
@@ -46,10 +78,15 @@ Route::get('/' . config('v2board.secure_path', config('v2board.frontend_admin_pa
         'theme_color' => config('v2board.frontend_theme_color', 'default'),
         'background_url' => config('v2board.frontend_background_url'),
         'version' => config('app.version'),
+        'asset_version' => $resolveAdminAssetVersion(),
         'logo' => config('v2board.logo'),
-        'secure_path' => config('v2board.secure_path', config('v2board.frontend_admin_path', hash('crc32b', config('app.key'))))
+        'secure_path' => $adminSecurePath
     ]);
-});
+};
+
+//TODO:: 兼容
+Route::get('/' . $adminSecurePath, $renderAdminApp);
+Route::get('/' . $adminSecurePath . '/{any}', $renderAdminApp)->where('any', '.*');
 
 if (!empty(config('v2board.subscribe_path'))) {
     Route::get(config('v2board.subscribe_path'), 'V1\\Client\\ClientController@subscribe')->middleware('client');

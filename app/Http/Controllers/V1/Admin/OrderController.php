@@ -85,10 +85,12 @@ class OrderController extends Controller
         if (!$order) {
             abort(500, '订单不存在');
         }
-        if ($order->status !== 0) abort(500, '只能对待支付的订单进行操作');
 
         $orderService = new OrderService($order);
-        if (!$orderService->paid('manual_operation')) {
+        if (!$orderService->canMarkPaid(true)) {
+            abort(500, '当前订单不支持补单');
+        }
+        if (!$orderService->paid('manual_operation', true)) {
             abort(500, '更新失败');
         }
         return response([

@@ -14,6 +14,9 @@ class TelegramController extends Controller
 
     public function __construct(Request $request)
     {
+        if (app()->runningInConsole()) {
+            return;
+        }
         if ($request->input('access_token') !== md5(config('v2board.telegram_bot_token'))) {
             abort(401);
         }

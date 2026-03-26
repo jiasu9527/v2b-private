@@ -19,6 +19,7 @@ use App\Utils\Helper;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
+use Carbon\Carbon; //邮件延迟新增这边
 
 class UserController extends Controller
 {
@@ -276,29 +277,34 @@ class UserController extends Controller
         echo $data;
     }
 
-    public function sendMail(UserSendMail $request)
-    {
-        $sortType = in_array($request->input('sort_type'), ['ASC', 'DESC']) ? $request->input('sort_type') : 'DESC';
-        $sort = $request->input('sort') ? $request->input('sort') : 'created_at';
-        $builder = User::orderBy($sort, $sortType);
-        $this->filter($request, $builder);
-        foreach ($builder->cursor() as $user) {
-            SendEmailJob::dispatch([
-                'email' => $user->email,
-                'subject' => $request->input('subject'),
-                'template_name' => 'notify',
-                'template_value' => [
-                    'name' => config('v2board.app_name', 'V2Board'),
-                    'url' => config('v2board.app_url'),
-                    'content' => $request->input('content')
-                ]
-            ], 'send_email_mass');
-        }
+public function sendMail(UserSendMail $request)
+{
+    $sortType = in_array($request->input('sort_type'), ['ASC', 'DESC']) ? $request->input('sort_type') : 'DESC';
+    $sort = $request->input('sort') ? $request->input('sort') : 'created_at';
+    $builder = User::orderBy($sort, $sortType);
+    $this->filter($request, $builder);
+    $users = $builder->get();
+    
+    $delay = Carbon::now()->addSeconds(3); // 设置初始延迟时间
+    foreach ($users as $user) {
+        SendEmailJob::dispatch([
+            'email' => $user->email,
+            'subject' => $request->input('subject'),
+            'template_name' => 'notify',
+            'template_value' => [
+                'name' => config('v2board.app_name', 'V2Board'),
+                'url' => config('v2board.app_url'),
+                'content' => $request->input('content')
+            ]
+        ], 'send_email_mass')->delay($delay); // 注意这里的 delay
 
-        return response([
-            'data' => true
-        ]);
+        $delay->addSeconds(3); // 更新下一封邮件的延迟时间
     }
+
+    return response([
+        'data' => true
+    ]);
+}
 
     public function ban(Request $request)
     {

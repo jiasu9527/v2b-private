@@ -2,9 +2,9 @@
 <html>
 
 <head>
-    <link rel="stylesheet" href="/assets/admin/components.chunk.css?v={{$version}}">
-    <link rel="stylesheet" href="/assets/admin/umi.css?v={{$version}}">
-    <link rel="stylesheet" href="/assets/admin/custom.css?v={{$version}}">
+    <link rel="stylesheet" href="/assets/admin/components.chunk.css?v={{$asset_version ?? $version}}">
+    <link rel="stylesheet" href="/assets/admin/umi.css?v={{$asset_version ?? $version}}">
+    <link rel="stylesheet" href="/assets/admin/custom.css?v={{$asset_version ?? $version}}">
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no">
     <title>{{$title}}</title>
@@ -18,7 +18,7 @@
                 header: '{{$theme_header}}',
                 color: '{{$theme_color}}',
             },
-            version: '{{$version}}',
+            version: '{{$asset_version ?? $version}}',
             background_url: '{{$background_url}}',
             logo: '{{$logo}}',
             secure_path: '{{$secure_path}}'
@@ -28,9 +28,12 @@
 
 <body>
 <div id="root"></div>
-<script src="/assets/admin/vendors.async.js?v={{$version}}"></script>
-<script src="/assets/admin/components.async.js?v={{$version}}"></script>
-<script src="/assets/admin/umi.js?v={{$version}}"></script>
+<script src="/assets/admin/vendors.async.js?v={{$asset_version ?? $version}}"></script>
+<script src="/assets/admin/components.async.js?v={{$asset_version ?? $version}}"></script>
+<script src="/assets/admin/umi.js?v={{$asset_version ?? $version}}"></script>
+@if (file_exists(public_path('/assets/admin/custom.js')))
+    <script src="/assets/admin/custom.js?v={{$asset_version ?? $version}}"></script>
+@endif
 </body>
 
 </html>

@@ -40,6 +40,10 @@ class UserRoute
             $router->get ('/invite/save', 'V1\\User\\InviteController@save');
             $router->get ('/invite/fetch', 'V1\\User\\InviteController@fetch');
             $router->get ('/invite/details', 'V1\\User\\InviteController@details');
+            $router->post('/invite/campaign/save', 'V1\\User\\InviteCampaignController@save');
+            $router->get ('/invite/campaign/fetch', 'V1\\User\\InviteCampaignController@fetch');
+            $router->get ('/invite/campaign/records', 'V1\\User\\InviteCampaignController@records');
+            $router->post('/invite/campaign/abandon', 'V1\\User\\InviteCampaignController@abandon');
             // Notice
             $router->get ('/notice/fetch', 'V1\\User\\NoticeController@fetch');
             // Ticket

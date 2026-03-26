@@ -5546,6 +5546,62 @@
                                 }
                         }, e)
                     })()
+                },
+                updateHost(e, t) {
+                    var n = e.params
+                      , r = e.callback
+                      , i = t.put;
+                    return a().mark(function e() {
+                        var t;
+                        return a().wrap(function(e) {
+                            while (1)
+                                switch (e.prev = e.next) {
+                                case 0:
+                                    return e.next = 2,
+                                    i({
+                                        type: "setState",
+                                        payload: {
+                                            fetchLoading: !0
+                                        }
+                                    });
+                                case 2:
+                                    return e.next = 4,
+                                    Object(o["b"])("/" + window.settings.secure_path + "/server/manage/updateHost", n);
+                                case 4:
+                                    if (t = e.sent,
+                                    200 === t.code) {
+                                        e.next = 8;
+                                        break
+                                    }
+                                    return e.next = 7,
+                                    i({
+                                        type: "setState",
+                                        payload: {
+                                            fetchLoading: !1
+                                        }
+                                    });
+                                case 7:
+                                    return e.abrupt("return");
+                                case 8:
+                                    return e.next = 10,
+                                    i({
+                                        type: "getNodes"
+                                    });
+                                case 10:
+                                    return "function" === typeof r && r(t),
+                                    e.next = 13,
+                                    i({
+                                        type: "setState",
+                                        payload: {
+                                            fetchLoading: !1
+                                        }
+                                    });
+                                case 13:
+                                case "end":
+                                    return e.stop()
+                                }
+                        }, e)
+                    })()
                 }
             }
         }
@@ -21082,6 +21138,13 @@
                         href: "/giftcard",
                         icon: o.a.createElement("i", {
                             className: "nav-main-link-icon si si-star"
+                        })
+                    }, {
+                        title: "\u6d3b\u52a8\u4efb\u52a1",
+                        type: "item",
+                        href: "/invite-campaign",
+                        icon: o.a.createElement("i", {
+                            className: "nav-main-link-icon si si-flag"
                         })
                     }, {
                         title: "\u7528\u6237",
@@ -82304,6 +82367,10 @@
             exact: !0,
             component: n("showgiftcardpage").default
         }, {
+            path: "/invite-campaign",
+            exact: !0,
+            component: n("invitecampaignadminpage").default
+        }, {
             path: "/dashboard",
             exact: !0,
             component: n("sFYk").default
@@ -95791,7 +95858,17 @@
                             href: "javascript:void(0);"
                         }, "\u6807\u8bb0\u4e3a ", g.a.createElement(d["a"], {
                             type: "caret-down"
-                        })))))
+                        })))), 2 === e && g.a.createElement("a", {
+                            href: "javascript:void(0);",
+                            className: "ml-2",
+                            onClick: e=>{
+                                e.preventDefault(),
+                                this.props.dispatch({
+                                    type: "order/paid",
+                                    tradeNo: t.trade_no
+                                })
+                            }
+                        }, "补单"))
                     }
                 }, {
                     title: "\u4f63\u91d1\u91d1\u989d",
@@ -98493,8 +98570,7 @@
                     className: "col-lg-12 js-appear-enabled animated",
                     "data-toggle": "appear"
                 }, l.a.createElement("div", {
-                    className: "block border-bottom mb-0 v2board-stats-bar",
-                    onScroll: e=>console.log(e.currentTarget.scrollLeft)
+                    className: "block border-bottom mb-0 v2board-stats-bar"
                 }, l.a.createElement("div", {
                     className: "block-content block-content-full"
                 }, l.a.createElement("div", {
@@ -98509,21 +98585,39 @@
                     class: "px-4 px-sm-5 border-start"
                 }, l.a.createElement("p", {
                     class: "fs-3 text-dark mb-0"
+                }, t.month_register_total || "0"), l.a.createElement("p", {
+                    class: "text-muted mb-0"
+                }, "本月新增用户")), l.a.createElement("div", {
+                    class: "px-4 px-sm-5 border-start"
+                }, l.a.createElement("p", {
+                    class: "fs-3 text-dark mb-0"
+                }, t.month_paid_user_total || "0"), l.a.createElement("p", {
+                    class: "text-muted mb-0"
+                }, "本月新增付费用户")), l.a.createElement("div", {
+                    class: "px-4 px-sm-5 border-start"
+                }, l.a.createElement("p", {
+                    class: "fs-3 text-dark mb-0"
                 }, t.last_month_income ? (t.last_month_income / 100).toFixed(2) : "0.00", " ", n.site.currency), l.a.createElement("p", {
                     class: "text-muted mb-0"
                 }, "\u4e0a\u6708\u6536\u5165")), l.a.createElement("div", {
                     class: "px-4 px-sm-5 border-start"
                 }, l.a.createElement("p", {
                     class: "fs-3 text-dark mb-0"
-                }, t.commission_last_month_payout ? (t.commission_last_month_payout / 100).toFixed(2) : "0.00", " ", n.site.currency), l.a.createElement("p", {
+                }, t.last_month_register_total || "0"), l.a.createElement("p", {
                     class: "text-muted mb-0"
-                }, "\u4e0a\u6708\u4f63\u91d1\u652f\u51fa")), l.a.createElement("div", {
+                }, "上月新增用户")), l.a.createElement("div", {
                     class: "px-4 px-sm-5 border-start"
                 }, l.a.createElement("p", {
                     class: "fs-3 text-dark mb-0"
-                }, t.month_register_total || "-"), l.a.createElement("p", {
+                }, t.last_month_paid_user_total || "0"), l.a.createElement("p", {
                     class: "text-muted mb-0"
-                }, "\u672c\u6708\u65b0\u589e\u7528\u6237")))))), l.a.createElement("div", {
+                }, "上月新增付费用户")), l.a.createElement("div", {
+                    class: "px-4 px-sm-5 border-start"
+                }, l.a.createElement("p", {
+                    class: "fs-3 text-dark mb-0"
+                }, t.commission_last_month_payout ? (t.commission_last_month_payout / 100).toFixed(2) : "0.00", " ", n.site.currency), l.a.createElement("p", {
+                    class: "text-muted mb-0"
+                }, "\u4e0a\u6708\u4f63\u91d1\u652f\u51fa")))))), l.a.createElement("div", {
                     className: "col-lg-12 js-appear-enabled animated",
                     "data-toggle": "appear"
                 }, l.a.createElement("div", {
@@ -106624,6 +106718,9 @@
                 this.state = {
                     searchKey: void 0,
                     sortMode: !0,
+                    showBulkHostEditor: !1,
+                    bulkOldHost: "",
+                    bulkNewHost: "",
                     pageSize: Object(L["e"])("server_manage_page_size") || 10
                 }
             }
@@ -106714,8 +106811,46 @@
                     id: e.id
                 })
             }
+            toggleBulkHostEditor(e) {
+                var t = "boolean" === typeof e ? e : !this.state.showBulkHostEditor;
+                this.setState({
+                    showBulkHostEditor: t,
+                    bulkOldHost: t ? this.state.bulkOldHost : "",
+                    bulkNewHost: t ? this.state.bulkNewHost : ""
+                })
+            }
+            bulkUpdateHost() {
+                var e = (this.state.bulkOldHost || "").trim()
+                  , t = (this.state.bulkNewHost || "").trim();
+                if (!e)
+                    return void c["a"].error("原地址不能为空");
+                if (!t)
+                    return void c["a"].error("新地址不能为空");
+                if (e === t)
+                    return void c["a"].error("新旧地址不能相同");
+                this.setState({
+                    bulkOldHost: e,
+                    bulkNewHost: t
+                }),
+                this.props.dispatch({
+                    type: "serverManage/updateHost",
+                    params: {
+                        old_host: e,
+                        new_host: t
+                    },
+                    callback: e=>{
+                        var t = e.data && e.data.updated_total || 0;
+                        this.setState({
+                            showBulkHostEditor: !1,
+                            bulkOldHost: "",
+                            bulkNewHost: ""
+                        }),
+                        t > 0 ? c["a"].success("\u5df2\u6279\u91cf\u4fee\u6539 ".concat(t, " \u4e2a\u8282\u70b9\u5730\u5740")) : c["a"].success("\u672a\u627e\u5230\u5339\u914d\u539f\u5730\u5740\u7684\u8282\u70b9")
+                    }
+                })
+            }
             render() {
-                var e, t, n, r, v, _ = this.props.serverManage, E = _.servers, O = _.fetchLoading, A = _.sortMode, R = this.props.serverGroup.groups, N = this.state.searchKey, D = {
+                var e, t, n, r, v, _ = this.props.serverManage, E = _.servers, O = _.fetchLoading, A = _.sortMode, R = this.props.serverGroup.groups, N = this.state.searchKey, H = this.state.showBulkHostEditor, B = this.state.bulkOldHost, U = this.state.bulkNewHost, D = {
                     0: "error",
                     1: "warning",
                     2: "processing"
@@ -106950,7 +107085,10 @@
                     onChange: e=>this.setState({
                         searchKey: e.target.value
                     })
-                }), !Object(L["f"])() && y.a.createElement(l["a"], {
+                }), y.a.createElement(l["a"], {
+                    className: "ml-2",
+                    onClick: ()=>this.toggleBulkHostEditor()
+                }, H ? "收起批量修改地址" : "展开批量修改地址"), !Object(L["f"])() && y.a.createElement(l["a"], {
                     style: {
                         float: "right"
                     },
@@ -106965,7 +107103,47 @@
                             }
                         })
                     }
-                }, A ? "\u4fdd\u5b58\u6392\u5e8f" : "\u7f16\u8f91\u6392\u5e8f")), Object(L["f"])() ? y.a.createElement(o["a"], {
+                }, A ? "\u4fdd\u5b58\u6392\u5e8f" : "\u7f16\u8f91\u6392\u5e8f")), H && y.a.createElement("div", {
+                    style: {
+                        padding: "0 15px 15px"
+                    }
+                }, y.a.createElement("div", {
+                    style: {
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 8,
+                        alignItems: "center",
+                        padding: 12,
+                        background: "#fafafa",
+                        border: "1px solid #f0f0f0",
+                        borderRadius: 4
+                    }
+                }, y.a.createElement(s["a"], {
+                    placeholder: "原地址筛选",
+                    style: {
+                        width: 220
+                    },
+                    value: B,
+                    onChange: e=>this.setState({
+                        bulkOldHost: e.target.value
+                    })
+                }), y.a.createElement(s["a"], {
+                    placeholder: "新地址",
+                    style: {
+                        width: 220
+                    },
+                    value: U,
+                    onChange: e=>this.setState({
+                        bulkNewHost: e.target.value
+                    }),
+                    onPressEnter: ()=>this.bulkUpdateHost()
+                }), y.a.createElement(l["a"], {
+                    type: "primary",
+                    loading: O,
+                    onClick: ()=>this.bulkUpdateHost()
+                }, "批量修改地址"), y.a.createElement(l["a"], {
+                    onClick: ()=>this.toggleBulkHostEditor(!1)
+                }, "取消"))), Object(L["f"])() ? y.a.createElement(o["a"], {
                     className: "v2board-table",
                     itemLayout: "vertical",
                     dataSource: N ? E.filter(e=>-1 !== JSON.stringify(e).indexOf(N)) : E,
@@ -114396,6 +114574,452 @@
             }
         }),
         n("gRqi")(v)
+    },
+    invitecampaignadminpage: function(e, t, n) {
+        "use strict";
+        n.r(t);
+        var r = n("q1tI")
+          , i = n.n(r)
+          , o = n("Bl7J")
+          , a = n("3a4m")
+          , s = n.n(a);
+        function l(e) {
+            return String(null == e ? "" : e).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;")
+        }
+        function c(e) {
+            return "¥" + (Number(e || 0) / 100).toFixed(2)
+        }
+        function u(e) {
+            if (!e)
+                return "--";
+            var t = new Date(1e3 * Number(e));
+            return [t.getFullYear(), String(t.getMonth() + 1).padStart(2, "0"), String(t.getDate()).padStart(2, "0")].join("-") + " " + [String(t.getHours()).padStart(2, "0"), String(t.getMinutes()).padStart(2, "0"), String(t.getSeconds()).padStart(2, "0")].join(":")
+        }
+        function h(e) {
+            if (!e)
+                return "--";
+            var t = Math.max(0, Number(e) - Math.floor(Date.now() / 1e3))
+              , n = Math.floor(t / 86400)
+              , r = Math.floor(t % 86400 / 3600)
+              , i = Math.floor(t % 3600 / 60)
+              , o = t % 60;
+            return [n, r, i, o].map(function(e) {
+                return String(e).padStart(2, "0")
+            }).join(":")
+        }
+        function f(e) {
+            var t = {
+                0: {
+                    text: "进行中",
+                    className: "status-ongoing"
+                },
+                1: {
+                    text: "已达标",
+                    className: "status-completed"
+                },
+                2: {
+                    text: "已过期",
+                    className: "status-expired"
+                },
+                3: {
+                    text: "已放弃",
+                    className: "status-abandoned"
+                },
+                4: {
+                    text: "已使用",
+                    className: "status-used"
+                }
+            };
+            return Object.prototype.hasOwnProperty.call(t, e) ? t[e] : {
+                text: "未知",
+                className: "status-unknown"
+            }
+        }
+        function d(e) {
+            var t = {
+                apiBase: "/api/v1",
+                securePath: window.settings && window.settings.secure_path ? window.settings.secure_path : "admin"
+            }
+              , n = {
+                list: [],
+                total: 0,
+                page: 1,
+                pageSize: 20,
+                keyword: "",
+                keywordType: "email",
+                status: "",
+                detail: null,
+                records: [],
+                recordsTotal: 0,
+                recordsPage: 1,
+                listLoaded: !1,
+                enabled: null,
+                savingEnabled: !1,
+                savingSettings: !1,
+                rewardAmountYuan: "",
+                expireHours: "",
+                inviteeTryOutTransferGb: "",
+                inviteeTryOutHours: ""
+            }
+              , r = !1;
+            function i() {
+                if (document.getElementById("invite-campaign-common-style"))
+                    return;
+                var e = document.createElement("link");
+                e.id = "invite-campaign-common-style",
+                e.rel = "stylesheet",
+                e.href = "/assets/invite-campaign-common.css?v=" + (window.settings && window.settings.version ? window.settings.version : ""),
+                document.head.appendChild(e)
+            }
+            function o() {
+                return window.localStorage.getItem("authorization")
+            }
+            function a() {
+                s.a.push("/login")
+            }
+            function d(e, n) {
+                var r = n || {}
+                  , i = o();
+                if (!i)
+                    return a(),
+                    Promise.reject(new Error("未登录"));
+                r.headers = r.headers || {},
+                r.headers.authorization = i,
+                r.credentials = "include",
+                r.json ? (r.method = r.method || "POST",
+                r.headers["Content-Type"] = "application/json",
+                r.body = JSON.stringify(r.json)) : r.method = r.method || "GET";
+                return window.fetch((t.apiBase || "/api/v1") + e, r).then(function(e) {
+                    var t = e.headers.get("content-type") || "";
+                    return (t.indexOf("application/json") > -1 ? e.json() : Promise.resolve({})).then(function(t) {
+                        if (403 === e.status)
+                            throw a(),
+                            new Error("登录已失效");
+                        if (!e.ok)
+                            throw new Error(t.message || t.msg || "请求失败");
+                        return t
+                    })
+                })
+            }
+            function p(t, n) {
+                if (!r) {
+                    var i = document.createElement("div");
+                    i.className = "alert " + ("error" === n ? "alert-danger" : "alert-success"),
+                    i.textContent = t,
+                    i.style.position = "fixed",
+                    i.style.right = "20px",
+                    i.style.top = "20px",
+                    i.style.zIndex = "9999",
+                    i.style.minWidth = "220px",
+                    document.body.appendChild(i),
+                    window.setTimeout(function() {
+                        i.remove()
+                    }, 2200)
+                }
+            }
+            function S(e, t) {
+                return '<div class="block block-rounded campaign-admin-panel"><div class="block-content block-content-full"><div class="' + (t || "campaign-admin-empty") + '">' + e + "</div></div></div>"
+            }
+            function m(t) {
+                r || (e.innerHTML = S('<div class="spinner-grow text-primary" role="status"><span class="sr-only">Loading...</span></div><div class="campaign-admin-loading-text">' + l(t || "正在加载任务数据...") + "</div>", "campaign-admin-loading"))
+            }
+            function g() {
+                var e = new URLSearchParams;
+                e.set("current", n.page),
+                e.set("pageSize", n.pageSize);
+                var t = 0;
+                return n.keyword && (e.set("filter[" + t + "][key]", n.keywordType),
+                e.set("filter[" + t + "][condition]", "email" === n.keywordType ? "=" : "模糊"),
+                e.set("filter[" + t + "][value]", n.keyword),
+                t += 1),
+                "" !== n.status && (e.set("filter[" + t + "][key]", "status"),
+                e.set("filter[" + t + "][condition]", "="),
+                e.set("filter[" + t + "][value]", n.status)),
+                e.toString()
+            }
+            function P(e, t) {
+                var n = Number(e);
+                return Number.isFinite(n) ? n : t
+            }
+            function A(e) {
+                var t = Number(e);
+                return Number.isFinite(t) ? t : 0
+            }
+            function k() {
+                return d("/" + t.securePath + "/config/fetch?key=invite").then(function(e) {
+                    var t = e && e.data && e.data.invite ? e.data.invite : {};
+                    n.enabled = 1 === Number(t.invite_campaign_enable),
+                    n.rewardAmountYuan = (P(t.invite_campaign_reward_amount, 1000) / 100).toString(),
+                    n.expireHours = P(t.invite_campaign_expire_hours, 48).toString(),
+                    n.inviteeTryOutTransferGb = P(t.invite_campaign_try_out_transfer_gb, 0).toString(),
+                    n.inviteeTryOutHours = P(t.invite_campaign_try_out_hours, 0).toString(),
+                    n.listLoaded && v()
+                }).catch(function(e) {
+                    p(e.message || "加载活动配置失败", "error")
+                })
+            }
+            function C(e) {
+                if (n.savingEnabled || null === n.enabled)
+                    return Promise.resolve();
+                var r = !!e
+                  , i = n.enabled;
+                return n.enabled = r,
+                n.savingEnabled = !0,
+                n.listLoaded && v(),
+                d("/" + t.securePath + "/config/save", {
+                    method: "POST",
+                    json: {
+                        invite_campaign_enable: r ? 1 : 0
+                    }
+                }).then(function() {
+                    p(r ? "活动任务已开启" : "活动任务已关闭")
+                }).catch(function(e) {
+                    n.enabled = i,
+                    p(e.message || "保存活动开关失败", "error")
+                }).then(function() {
+                    n.savingEnabled = !1,
+                    n.listLoaded && v()
+                })
+            }
+            function L() {
+                if (n.savingSettings || null === n.enabled)
+                    return Promise.resolve();
+                var e = A(n.rewardAmountYuan)
+                  , r = A(n.expireHours)
+                  , i = A(n.inviteeTryOutTransferGb)
+                  , o = A(n.inviteeTryOutHours);
+                if (e < 0)
+                    return p("每邀请减免金额不能小于 0", "error"),
+                    Promise.resolve();
+                if (r <= 0)
+                    return p("任务有效期必须大于 0 小时", "error"),
+                    Promise.resolve();
+                if (i < 0 || o < 0)
+                    return p("活动试用流量和时长不能小于 0", "error"),
+                    Promise.resolve();
+                return n.savingSettings = !0,
+                n.listLoaded && v(),
+                d("/" + t.securePath + "/config/save", {
+                    method: "POST",
+                    json: {
+                        invite_campaign_reward_amount: Math.round(100 * e),
+                        invite_campaign_expire_hours: Math.round(r),
+                        invite_campaign_try_out_transfer_gb: i,
+                        invite_campaign_try_out_hours: o
+                    }
+                }).then(function() {
+                    n.rewardAmountYuan = e.toString(),
+                    n.expireHours = Math.round(r).toString(),
+                    n.inviteeTryOutTransferGb = i.toString(),
+                    n.inviteeTryOutHours = o.toString(),
+                    p("活动参数已保存")
+                }).catch(function(e) {
+                    p(e.message || "保存活动参数失败", "error")
+                }).then(function() {
+                    n.savingSettings = !1,
+                    n.listLoaded && v()
+                })
+            }
+            function v() {
+                if (!r) {
+                    var t = Math.max(1, Math.ceil(n.total / n.pageSize))
+                      , i = n.list.filter(function(e) {
+                        return 0 === Number(e.status)
+                    }).length
+                      , o = n.list.filter(function(e) {
+                        return 1 === Number(e.status)
+                    }).length
+                      , a = n.list.filter(function(e) {
+                        return 4 === Number(e.status)
+                    }).length
+                      , s = n.list.filter(function(e) {
+                        return 2 === Number(e.status)
+                    }).length
+                      , O = n.savingEnabled ? "保存中..." : null === n.enabled ? "读取中" : n.enabled ? "已开启" : "已关闭"
+                      , T = null === n.enabled ? "status-unknown" : n.enabled ? "status-ongoing" : "status-abandoned"
+                      , N = '<div class="campaign-admin-config"><div class="campaign-admin-config-top"><div class="campaign-admin-config-copy"><div class="campaign-admin-config-title">活动开关与参数</div><div class="campaign-admin-config-desc">关闭后禁止用户新建活动任务，普通邀请返佣不受影响，已有任务仍可查看和使用。被邀请用户继续复用现有试用套餐的组别、速率和设备限制；这里只覆盖活动专属流量和体验时长。</div></div><div class="campaign-admin-config-actions"><span class="status-badge ' + T + ' campaign-admin-config-badge">' + O + '</span><label class="campaign-admin-toggle' + (n.savingEnabled ? " is-disabled" : "") + '"><input type="checkbox" id="admin-campaign-enable"' + (n.enabled ? " checked" : "") + (null === n.enabled || n.savingEnabled ? " disabled" : "") + '><span class="campaign-admin-toggle-slider"></span></label></div></div><div class="campaign-admin-config-grid"><div class="campaign-field"><label>每邀请 1 人减免金额（元）</label><input type="number" min="0" step="0.01" id="admin-campaign-reward-amount" value="' + l(n.rewardAmountYuan) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>任务有效期（小时）</label><input type="number" min="1" step="1" id="admin-campaign-expire-hours" value="' + l(n.expireHours) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>被邀请用户体验流量（GB）</label><input type="number" min="0" step="1" id="admin-campaign-invitee-transfer" value="' + l(n.inviteeTryOutTransferGb) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>被邀请用户体验时长（小时）</label><input type="number" min="0" step="1" id="admin-campaign-invitee-hours" value="' + l(n.inviteeTryOutHours) + '"' + (null === n.enabled ? " disabled" : "") + '></div></div><div class="campaign-admin-config-footer"><div class="campaign-admin-config-hint">当前预览：每邀请 1 人减免 ' + l((Number(n.rewardAmountYuan || 0)).toFixed(2)) + ' 元，任务有效期 ' + l(n.expireHours || "--") + ' 小时，被邀请用户额外获得 ' + l(n.inviteeTryOutTransferGb || "0") + ' GB / ' + l(n.inviteeTryOutHours || "0") + ' 小时。</div><button class="btn btn-sm btn-primary" id="admin-campaign-save-settings"' + (null === n.enabled || n.savingSettings ? " disabled" : "") + '>' + (n.savingSettings ? "保存中..." : "保存参数") + '</button></div></div>'
+                      , m = n.list.length ? n.list.map(function(e) {
+                        var t = f(Number(e.status))
+                          , n = Number(e.target_amount) > 0 ? Math.min(100, Math.round(Number(e.current_amount) / Number(e.target_amount) * 100)) : 0;
+                        return '<tr><td>#' + l(e.id) + "</td><td>" + l(e.user_email || "--") + "</td><td>" + l(e.plan_name || "--") + '<div class="campaign-subvalue">' + l({month_price:"月付",quarter_price:"季付",half_year_price:"半年付",year_price:"年付",two_year_price:"两年付",three_year_price:"三年付",onetime_price:"一次性",reset_price:"重置流量",deposit:"余额充值"}[e.period] || e.period || "--") + "</div></td><td>" + l(e.invite_code || "--") + '</td><td><span class="status-badge ' + t.className + '">' + t.text + '</span></td><td><div style="min-width:180px;"><div class="campaign-progress-bar"><div class="campaign-progress-fill" style="width:' + n + '%;"></div></div><div class="campaign-progress-text">' + l(c(e.current_amount)) + " / " + l(c(e.target_amount)) + '</div></div></td><td>' + (0 === Number(e.status) ? l(h(e.expired_at)) : "--") + "</td><td>" + l(e.used_order_trade_no || "--") + "</td><td>" + l(u(e.created_at)) + '</td><td><button class="btn btn-sm btn-alt-primary admin-campaign-detail-btn" data-id="' + l(e.id) + '">详情</button></td></tr>'
+                    }).join("") : '<tr><td colspan="10" class="campaign-empty">暂无任务</td></tr>';
+                    e.innerHTML = '<div class="block block-rounded campaign-admin-panel"><div class="block-header block-header-default"><h3 class="block-title">活动任务</h3><div class="block-options"><button class="btn btn-sm btn-alt-primary" id="admin-campaign-refresh">刷新列表</button></div></div><div class="block-content"><p class="campaign-admin-intro">查看邀请减免活动任务、绑定邀请码、完成进度和触发的实际抵扣订单。</p>' + N + '</div></div><div class="row gutters-tiny campaign-admin-stats"><div class="col-6 col-xl-3"><div class="block block-rounded block-link-shadow text-center h-100 mb-0 campaign-admin-stat-card"><div class="block-content block-content-full"><div class="campaign-admin-stat-label">总任务数</div><div class="campaign-admin-stat-value">' + l(n.total) + '</div></div></div></div><div class="col-6 col-xl-3"><div class="block block-rounded block-link-shadow text-center h-100 mb-0 campaign-admin-stat-card"><div class="block-content block-content-full"><div class="campaign-admin-stat-label">当前页进行中</div><div class="campaign-admin-stat-value">' + l(i) + '</div></div></div></div><div class="col-6 col-xl-3"><div class="block block-rounded block-link-shadow text-center h-100 mb-0 campaign-admin-stat-card"><div class="block-content block-content-full"><div class="campaign-admin-stat-label">当前页已达标</div><div class="campaign-admin-stat-value">' + l(o) + '</div></div></div></div><div class="col-6 col-xl-3"><div class="block block-rounded block-link-shadow text-center h-100 mb-0 campaign-admin-stat-card"><div class="block-content block-content-full"><div class="campaign-admin-stat-label">当前页已使用/过期</div><div class="campaign-admin-stat-value">' + l(a + s) + '</div></div></div></div></div><div class="block block-rounded campaign-admin-panel"><div class="block-header block-header-default"><h3 class="block-title">任务列表</h3></div><div class="block-content"><div class="campaign-toolbar campaign-toolbar--admin"><div class="campaign-field"><label>搜索字段</label><select id="admin-campaign-keyword-type"><option value="email"' + ("email" === n.keywordType ? " selected" : "") + '>邀请人邮箱</option><option value="invite_code"' + ("invite_code" === n.keywordType ? " selected" : "") + '>邀请码</option></select></div><div class="campaign-field"><label>关键词</label><input id="admin-campaign-keyword" value="' + l(n.keyword) + '" placeholder="邮箱或邀请码"></div><div class="campaign-field"><label>状态</label><select id="admin-campaign-status"><option value="">全部状态</option><option value="0"' + ("0" === String(n.status) ? " selected" : "") + '>进行中</option><option value="1"' + ("1" === String(n.status) ? " selected" : "") + '>已达标</option><option value="2"' + ("2" === String(n.status) ? " selected" : "") + '>已过期</option><option value="3"' + ("3" === String(n.status) ? " selected" : "") + '>已放弃</option><option value="4"' + ("4" === String(n.status) ? " selected" : "") + '>已使用</option></select></div><button class="btn btn-primary" id="admin-campaign-search">搜索</button></div></div><div class="block-content block-content-full pt-0"><div class="table-responsive"><table class="campaign-table campaign-table--admin"><thead><tr><th>ID</th><th>邀请人</th><th>目标套餐</th><th>邀请码</th><th>状态</th><th>进度</th><th>倒计时</th><th>抵扣订单</th><th>创建时间</th><th>操作</th></tr></thead><tbody>' + m + '</tbody></table></div><div class="campaign-pagination"><button class="btn btn-sm btn-alt-secondary" id="admin-campaign-prev"' + (n.page <= 1 ? " disabled" : "") + '>上一页</button><span>第 ' + n.page + " / " + t + ' 页</span><button class="btn btn-sm btn-alt-secondary" id="admin-campaign-next"' + (n.page >= t ? " disabled" : "") + '>下一页</button></div></div></div><div id="admin-campaign-detail-wrap" class="campaign-admin-detail-wrap"></div>',
+                    y(),
+                    b()
+                }
+            }
+            function b() {
+                var t = e.querySelector("#admin-campaign-detail-wrap");
+                if (t)
+                    if (!n.detail)
+                        t.innerHTML = "";
+                    else {
+                        var r = n.detail
+                          , i = f(Number(r.status))
+                          , o = Number(r.target_amount) > 0 ? Math.min(100, Math.round(Number(r.current_amount) / Number(r.target_amount) * 100)) : 0
+                          , a = Math.max(1, Math.ceil(n.recordsTotal / 10))
+                          , s = n.records.length ? n.records.map(function(e) {
+                            return "<tr><td>" + l(u(e.created_at)) + "</td><td>" + l(e.invitee_email || "#" + e.invitee_user_id) + "</td><td>" + l(e.invite_code || "--") + "</td><td>" + l(c(e.reward_amount || 0)) + "</td></tr>"
+                        }).join("") : '<tr><td colspan="4" class="campaign-empty">暂无注册记录</td></tr>';
+                        t.innerHTML = '<div class="row"><div class="col-xl-7"><div class="block block-rounded campaign-admin-panel"><div class="block-header block-header-default"><h3 class="block-title">任务详情 #' + l(r.id) + '</h3><div class="block-options"><span class="status-badge ' + i.className + '">' + i.text + '</span></div></div><div class="block-content"><p class="campaign-admin-subtitle">绑定邀请码：' + l(r.invite_code || "--") + '</p><div class="campaign-progress"><div class="campaign-progress-bar"><div class="campaign-progress-fill" style="width:' + o + '%;"></div></div><div class="campaign-progress-text">' + l(c(r.current_amount)) + " / " + l(c(r.target_amount)) + '</div></div><div class="campaign-admin-kv-list"><div class="campaign-kv"><div class="campaign-kv-key">邀请人邮箱</div><div class="campaign-kv-value">' + l(r.user && r.user.email || r.user_email || "--") + '</div></div><div class="campaign-kv"><div class="campaign-kv-key">目标套餐</div><div class="campaign-kv-value">' + l(r.plan && r.plan.name || "--") + " / " + l({month_price:"月付",quarter_price:"季付",half_year_price:"半年付",year_price:"年付",two_year_price:"两年付",three_year_price:"三年付",onetime_price:"一次性",reset_price:"重置流量",deposit:"余额充值"}[r.period] || r.period || "--") + '</div></div><div class="campaign-kv"><div class="campaign-kv-key">单次奖励</div><div class="campaign-kv-value">' + l(c(r.reward_amount)) + '</div></div><div class="campaign-kv"><div class="campaign-kv-key">邀请人数</div><div class="campaign-kv-value">' + l(r.invite_count) + '</div></div><div class="campaign-kv"><div class="campaign-kv-key">任务时效</div><div class="campaign-kv-value">' + l(u(r.started_at)) + " 至 " + l(u(r.expired_at)) + '</div></div><div class="campaign-kv"><div class="campaign-kv-key">绑定邀请码 ID</div><div class="campaign-kv-value">' + l(r.invite_code_id || "--") + '</div></div><div class="campaign-kv"><div class="campaign-kv-key">使用订单</div><div class="campaign-kv-value">' + l(r.used_order && r.used_order.trade_no || "--") + '</div></div><div class="campaign-kv"><div class="campaign-kv-key">订单抵扣</div><div class="campaign-kv-value">' + l(r.used_order ? c(r.used_order.invite_campaign_discount_amount || 0) : "--") + '</div></div></div></div></div></div><div class="col-xl-5"><div class="block block-rounded campaign-admin-panel"><div class="block-header block-header-default"><h3 class="block-title">注册记录</h3></div><div class="block-content block-content-full"><div class="table-responsive"><table class="campaign-table campaign-table--admin"><thead><tr><th>注册时间</th><th>被邀请用户</th><th>邀请码</th><th>奖励</th></tr></thead><tbody>' + s + '</tbody></table></div><div class="campaign-pagination"><button class="btn btn-sm btn-alt-secondary" id="admin-record-prev"' + (n.recordsPage <= 1 ? " disabled" : "") + '>上一页</button><span>第 ' + n.recordsPage + " / " + a + ' 页</span><button class="btn btn-sm btn-alt-secondary" id="admin-record-next"' + (n.recordsPage >= a ? " disabled" : "") + '>下一页</button></div></div></div></div></div>',
+                        w()
+                    }
+            }
+            function y() {
+                var t = e.querySelector("#admin-campaign-search")
+                  , r = e.querySelector("#admin-campaign-refresh")
+                  , i = e.querySelector("#admin-campaign-prev")
+                  , o = e.querySelector("#admin-campaign-next")
+                  , a = e.querySelector("#admin-campaign-keyword-type")
+                  , s = e.querySelector("#admin-campaign-keyword")
+                  , l = e.querySelector("#admin-campaign-status")
+                  , u = e.querySelector("#admin-campaign-enable")
+                  , h = e.querySelector("#admin-campaign-reward-amount")
+                  , f = e.querySelector("#admin-campaign-expire-hours")
+                  , m = e.querySelector("#admin-campaign-invitee-transfer")
+                  , g = e.querySelector("#admin-campaign-invitee-hours")
+                  , v = e.querySelector("#admin-campaign-save-settings")
+                  , c = e.querySelectorAll(".admin-campaign-detail-btn");
+                t && (t.onclick = function() {
+                    n.page = 1,
+                    n.keywordType = a.value,
+                    n.keyword = s.value.trim(),
+                    n.status = l.value,
+                    x()
+                }),
+                u && (u.onchange = function() {
+                    C(u.checked)
+                }),
+                h && (h.oninput = function() {
+                    n.rewardAmountYuan = h.value
+                }),
+                f && (f.oninput = function() {
+                    n.expireHours = f.value
+                }),
+                m && (m.oninput = function() {
+                    n.inviteeTryOutTransferGb = m.value
+                }),
+                g && (g.oninput = function() {
+                    n.inviteeTryOutHours = g.value
+                }),
+                v && (v.onclick = function() {
+                    L()
+                }),
+                s && (s.onkeydown = function(e) {
+                    "Enter" === e.key && t && t.click()
+                }),
+                r && (r.onclick = function() {
+                    x()
+                }),
+                i && (i.onclick = function() {
+                    n.page > 1 && (n.page -= 1,
+                    x())
+                }),
+                o && (o.onclick = function() {
+                    var e = Math.max(1, Math.ceil(n.total / n.pageSize));
+                    n.page < e && (n.page += 1,
+                    x())
+                }),
+                c.forEach(function(e) {
+                    e.onclick = function() {
+                        _(e.getAttribute("data-id"))
+                    }
+                })
+            }
+            function w() {
+                var t = e.querySelector("#admin-record-prev")
+                  , r = e.querySelector("#admin-record-next");
+                t && (t.onclick = function() {
+                    n.recordsPage > 1 && E(n.recordsPage - 1)
+                }),
+                r && (r.onclick = function() {
+                    var e = Math.max(1, Math.ceil(n.recordsTotal / 10));
+                    n.recordsPage < e && E(n.recordsPage + 1)
+                })
+            }
+            function x() {
+                return m("正在加载任务列表..."),
+                d("/" + t.securePath + "/invite/campaign/fetch?" + g()).then(function(e) {
+                    n.list = e.data || [],
+                    n.total = e.total || 0,
+                    n.listLoaded = !0,
+                    v()
+                }).catch(function(t) {
+                    r || (e.innerHTML = S(l(t.message || "加载失败"), "campaign-admin-empty"))
+                })
+            }
+            function _(e) {
+                return d("/" + t.securePath + "/invite/campaign/detail", {
+                    method: "POST",
+                    json: {
+                        id: Number(e)
+                    }
+                }).then(function(e) {
+                    return n.detail = e.data || null,
+                    n.recordsPage = 1,
+                    E(1)
+                }).then(function() {
+                    v()
+                }).catch(function(e) {
+                    p(e.message || "加载详情失败", "error")
+                })
+            }
+            function E(e) {
+                return n.detail ? (n.recordsPage = e || 1,
+                d("/" + t.securePath + "/invite/campaign/records?campaign_id=" + n.detail.id + "&current=" + n.recordsPage + "&page_size=10").then(function(e) {
+                    n.records = e.data || [],
+                    n.recordsTotal = e.total || 0,
+                    b()
+                }).catch(function(e) {
+                    p(e.message || "加载记录失败", "error")
+                })) : Promise.resolve()
+            }
+            return {
+                init: function() {
+                    i(),
+                    x(),
+                    k()
+                },
+                destroy: function() {
+                    r = !0,
+                    e.innerHTML = ""
+                }
+            }
+        }
+        class p extends i.a.Component {
+            componentDidMount() {
+                this.page = d(this.mountNode),
+                this.page.init()
+            }
+            componentWillUnmount() {
+                this.page && this.page.destroy && this.page.destroy()
+            }
+            render() {
+                return i.a.createElement(o["a"], Object.assign({}, this.props, {
+                    title: "活动任务"
+                }), i.a.createElement("div", {
+                    ref: e=>{
+                        this.mountNode = e
+                    }
+                    ,
+                    className: "campaign-shell campaign-shell--admin"
+                }, i.a.createElement("div", {
+                    className: "block block-rounded campaign-admin-panel"
+                }, i.a.createElement("div", {
+                    className: "block-content block-content-full"
+                }, i.a.createElement("div", {
+                    className: "campaign-admin-loading"
+                }, i.a.createElement("div", {
+                    className: "spinner-grow text-primary",
+                    role: "status"
+                }, i.a.createElement("span", {
+                    className: "sr-only"
+                }, "Loading...")), i.a.createElement("div", {
+                    className: "campaign-admin-loading-text"
+                }, "正在加载任务数据..."))))))
+            }
+        }
+        t["default"] = p
     },
     showgiftcardpage: function(e, t, n) {
         "use strict";

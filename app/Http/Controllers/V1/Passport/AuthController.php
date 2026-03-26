@@ -8,9 +8,9 @@ use App\Http\Requests\Passport\AuthLogin;
 use App\Http\Requests\Passport\AuthRegister;
 use App\Jobs\SendEmailJob;
 use App\Models\InviteCode;
-use App\Models\Plan;
 use App\Models\User;
 use App\Services\AuthService;
+use App\Services\InviteCampaignService;
 use App\Utils\CacheKey;
 use App\Utils\Dict;
 use App\Utils\Helper;
@@ -126,6 +126,9 @@ class AuthController extends Controller
         if ($exist) {
             abort(500, __('Email already exists'));
         }
+        $inviteCampaignService = new InviteCampaignService();
+        $inviteCode = null;
+        $activeInviteCampaign = null;
         $user = new User();
         $user->email = $email;
         $user->password = password_hash($password, PASSWORD_DEFAULT);
@@ -141,6 +144,7 @@ class AuthController extends Controller
                 }
             } else {
                 $user->invite_user_id = $inviteCode->user_id ? $inviteCode->user_id : null;
+                $activeInviteCampaign = $inviteCampaignService->getActiveCampaignByInviteCode($inviteCode->code);
                 if (!(int)config('v2board.invite_never_expire', 0)) {
                     $inviteCode->status = 1;
                     $inviteCode->save();
@@ -148,21 +152,13 @@ class AuthController extends Controller
             }
         }
 
-        // try out
-        if ((int)config('v2board.try_out_plan_id', 0)) {
-            $plan = Plan::find(config('v2board.try_out_plan_id'));
-            if ($plan) {
-                $user->transfer_enable = $plan->transfer_enable * 1073741824;
-                $user->device_limit = $plan->device_limit;
-                $user->plan_id = $plan->id;
-                $user->group_id = $plan->group_id;
-                $user->expired_at = time() + (config('v2board.try_out_hour', 1) * 3600);
-                $user->speed_limit = $plan->speed_limit;
-            }
-        }
+        $inviteCampaignService->applyInviteeTryOut($user, $activeInviteCampaign);
 
         if (!$user->save()) {
             abort(500, __('Register failed'));
+        }
+        if ($inviteCode) {
+            $inviteCampaignService->accrueRegistration($inviteCode, $user);
         }
         if ((int)config('v2board.email_verify', 0)) {
             Cache::forget(CacheKey::get('EMAIL_VERIFY_CODE', $request->input('email')));

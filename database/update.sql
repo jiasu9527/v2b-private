@@ -116,6 +116,9 @@ DROP `method`;
 ALTER TABLE `v2_invite_code`
 ADD `pv` int(11) NOT NULL DEFAULT '0' AFTER `status`;
 
+ALTER TABLE `v2_invite_code`
+ADD `invite_campaign_id` int(11) NULL AFTER `status`;
+
 ALTER TABLE `v2_user`
 ADD `password_algo` char(10) COLLATE 'utf8_general_ci' NULL AFTER `password`;
 
@@ -404,6 +407,12 @@ ALTER TABLE `v2_user`
 ALTER TABLE `v2_order`
     ADD `paid_at` int(11) NULL AFTER `commission_balance`;
 
+ALTER TABLE `v2_order`
+    ADD `invite_campaign_id` int(11) NULL AFTER `actual_commission_balance`;
+
+ALTER TABLE `v2_order`
+    ADD `invite_campaign_discount_amount` int(11) NOT NULL DEFAULT '0' AFTER `invite_campaign_id`;
+
 ALTER TABLE `v2_server_log`
     ADD INDEX `user_id` (`user_id`),
 ADD INDEX `server_id` (`server_id`);
@@ -426,6 +435,42 @@ CREATE TABLE `v2_commission_log` (
                                      `get_amount` int(11) NOT NULL,
                                      `created_at` int(11) NOT NULL,
                                      `updated_at` int(11) NOT NULL
+) COLLATE 'utf8mb4_general_ci';
+
+CREATE TABLE `v2_invite_campaign` (
+                                      `id` int(11) NOT NULL AUTO_INCREMENT,
+                                      `user_id` int(11) NOT NULL,
+                                      `plan_id` int(11) NOT NULL,
+                                      `period` varchar(32) NOT NULL,
+                                      `invite_code_id` int(11) DEFAULT NULL,
+                                      `invite_code` char(32) DEFAULT NULL,
+                                      `reward_amount` int(11) NOT NULL,
+                                      `target_amount` int(11) NOT NULL,
+                                      `current_amount` int(11) NOT NULL DEFAULT '0',
+                                      `invite_count` int(11) NOT NULL DEFAULT '0',
+                                      `status` tinyint(1) NOT NULL DEFAULT '0' COMMENT '0 active 1 completed 2 expired 3 abandoned 4 used',
+                                      `started_at` int(11) NOT NULL,
+                                      `expired_at` int(11) NOT NULL,
+                                      `completed_at` int(11) DEFAULT NULL,
+                                      `abandoned_at` int(11) DEFAULT NULL,
+                                      `used_at` int(11) DEFAULT NULL,
+                                      `created_at` int(11) NOT NULL,
+                                      `updated_at` int(11) NOT NULL,
+                                      PRIMARY KEY (`id`),
+                                      INDEX `idx_user_status` (`user_id`, `status`)
+) COLLATE 'utf8mb4_general_ci';
+
+CREATE TABLE `v2_invite_campaign_record` (
+                                             `id` int(11) NOT NULL AUTO_INCREMENT,
+                                             `campaign_id` int(11) NOT NULL,
+                                             `invitee_user_id` int(11) NOT NULL,
+                                             `invite_code` char(32) NOT NULL,
+                                             `reward_amount` int(11) NOT NULL,
+                                             `created_at` int(11) NOT NULL,
+                                             `updated_at` int(11) NOT NULL,
+                                             PRIMARY KEY (`id`),
+                                             UNIQUE KEY `uniq_campaign_invitee` (`campaign_id`, `invitee_user_id`),
+                                             INDEX `idx_campaign_id` (`campaign_id`)
 ) COLLATE 'utf8mb4_general_ci';
 
 ALTER TABLE `v2_plan`

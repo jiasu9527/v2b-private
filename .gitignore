@@ -8,9 +8,12 @@
 /storage/*.key
 /vendor
 .env
-.env.backup
+.env.*
+!.env.example
+!.env.*.example
 .phpunit.result.cache
 .idea
+.vscode
 .lock
 Homestead.json
 Homestead.yaml

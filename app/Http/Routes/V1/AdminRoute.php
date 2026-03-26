@@ -33,6 +33,7 @@ class AdminRoute
             $router->post('/server/route/drop', 'V1\\Admin\\Server\\RouteController@drop');
             $router->get ('/server/manage/getNodes', 'V1\\Admin\\Server\\ManageController@getNodes');
             $router->post('/server/manage/sort', 'V1\\Admin\\Server\\ManageController@sort');
+            $router->post('/server/manage/updateHost', 'V1\\Admin\\Server\\ManageController@updateHost');
             $router->group([
                 'prefix' => 'server/trojan'
             ], function ($router) {
@@ -104,6 +105,10 @@ class AdminRoute
             $router->post('/order/paid', 'V1\\Admin\\OrderController@paid');
             $router->post('/order/cancel', 'V1\\Admin\\OrderController@cancel');
             $router->post('/order/detail', 'V1\\Admin\\OrderController@detail');
+            // Invite Campaign
+            $router->get ('/invite/campaign/fetch', 'V1\\Admin\\InviteCampaignController@fetch');
+            $router->post('/invite/campaign/detail', 'V1\\Admin\\InviteCampaignController@detail');
+            $router->get ('/invite/campaign/records', 'V1\\Admin\\InviteCampaignController@records');
             // User
             $router->get ('/user/fetch', 'V1\\Admin\\UserController@fetch');
             $router->post('/user/update', 'V1\\Admin\\UserController@update');
