@@ -169,6 +169,7 @@ class InviteCampaignFlowTest extends TestCase
 
         Config::set('v2board.try_out_plan_id', $trialPlan->id);
         Config::set('v2board.try_out_hour', 24);
+        Config::set('v2board.invite_campaign_try_out_plan_id', $trialPlan->id);
 
         $this->withHeaders($this->userHeaders($inviter))
             ->postJson('/api/v1/user/invite/campaign/save', [
@@ -229,6 +230,7 @@ class InviteCampaignFlowTest extends TestCase
 
         Config::set('v2board.try_out_plan_id', $trialPlan->id);
         Config::set('v2board.try_out_hour', 24);
+        Config::set('v2board.invite_campaign_try_out_plan_id', $trialPlan->id);
         Config::set('v2board.invite_campaign_try_out_transfer_gb', 25);
         Config::set('v2board.invite_campaign_try_out_hours', 72);
 
@@ -260,6 +262,55 @@ class InviteCampaignFlowTest extends TestCase
         $this->assertLessThanOrEqual($beforeRegister + (72 * 3600) + 5, (int) $invitee->expired_at);
     }
 
+    public function test_active_campaign_registration_uses_campaign_plan_when_site_try_out_disabled()
+    {
+        $inviter = $this->createUser();
+        $inviteCode = $this->createInviteCode($inviter, [
+            'code' => 'NORMAL001B',
+        ]);
+        $campaignPlan = $this->createPlan([
+            'month_price' => 9800,
+        ]);
+        $campaignTrialPlan = $this->createPlan([
+            'name' => 'Campaign Trial Only',
+            'transfer_enable' => 15,
+            'device_limit' => 3,
+            'group_id' => 3,
+            'speed_limit' => 20,
+        ]);
+
+        Config::set('v2board.try_out_plan_id', 0);
+        Config::set('v2board.invite_campaign_try_out_plan_id', $campaignTrialPlan->id);
+        Config::set('v2board.invite_campaign_try_out_transfer_gb', 30);
+        Config::set('v2board.invite_campaign_try_out_hours', 96);
+
+        $this->withHeaders($this->userHeaders($inviter))
+            ->postJson('/api/v1/user/invite/campaign/save', [
+                'plan_id' => $campaignPlan->id,
+                'period' => 'month_price',
+            ])
+            ->assertOk();
+
+        $beforeRegister = time();
+        $this->withHeaders($this->guestHeaders())
+            ->postJson('/api/v1/passport/auth/register', [
+                'email' => 'invitee-campaign-plan@example.com',
+                'password' => 'password123',
+                'invite_code' => $inviteCode->code,
+            ])
+            ->assertOk();
+
+        $invitee = User::where('email', 'invitee-campaign-plan@example.com')->first();
+        $this->assertNotNull($invitee);
+        $this->assertSame($campaignTrialPlan->id, $invitee->plan_id);
+        $this->assertSame($campaignTrialPlan->group_id, $invitee->group_id);
+        $this->assertSame($campaignTrialPlan->device_limit, $invitee->device_limit);
+        $this->assertSame($campaignTrialPlan->speed_limit, $invitee->speed_limit);
+        $this->assertSame(30 * 1073741824, (int) $invitee->transfer_enable);
+        $this->assertGreaterThanOrEqual($beforeRegister + (96 * 3600) - 5, (int) $invitee->expired_at);
+        $this->assertLessThanOrEqual($beforeRegister + (96 * 3600) + 5, (int) $invitee->expired_at);
+    }
+
     public function test_guest_invite_preview_returns_campaign_when_code_hits_active_campaign()
     {
         $inviter = $this->createUser();
@@ -276,6 +327,7 @@ class InviteCampaignFlowTest extends TestCase
 
         Config::set('v2board.try_out_plan_id', $trialPlan->id);
         Config::set('v2board.try_out_hour', 24);
+        Config::set('v2board.invite_campaign_try_out_plan_id', $trialPlan->id);
         Config::set('v2board.invite_campaign_try_out_transfer_gb', 20);
         Config::set('v2board.invite_campaign_try_out_hours', 72);
 
@@ -313,6 +365,7 @@ class InviteCampaignFlowTest extends TestCase
 
         Config::set('v2board.try_out_plan_id', $trialPlan->id);
         Config::set('v2board.try_out_hour', 24);
+        Config::set('v2board.invite_campaign_try_out_plan_id', $trialPlan->id);
         Config::set('v2board.invite_campaign_try_out_transfer_gb', 20);
         Config::set('v2board.invite_campaign_try_out_hours', 72);
 
@@ -753,6 +806,7 @@ class InviteCampaignFlowTest extends TestCase
             ->assertJsonPath('data.invite.invite_campaign_enable', 1)
             ->assertJsonPath('data.invite.invite_campaign_reward_amount', 1000)
             ->assertJsonPath('data.invite.invite_campaign_expire_hours', 48)
+            ->assertJsonPath('data.invite.invite_campaign_try_out_plan_id', 0)
             ->assertJsonPath('data.invite.invite_campaign_try_out_transfer_gb', 0)
             ->assertJsonPath('data.invite.invite_campaign_try_out_hours', 0);
     }
@@ -1144,6 +1198,7 @@ class InviteCampaignFlowTest extends TestCase
         Config::set('v2board.invite_campaign_enable', 1);
         Config::set('v2board.invite_campaign_reward_amount', 1000);
         Config::set('v2board.invite_campaign_expire_hours', 48);
+        Config::set('v2board.invite_campaign_try_out_plan_id', 0);
         Config::set('v2board.invite_campaign_try_out_transfer_gb', 0);
         Config::set('v2board.invite_campaign_try_out_hours', 0);
     }

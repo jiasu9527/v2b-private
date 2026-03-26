@@ -114658,6 +114658,7 @@
                 savingSettings: !1,
                 rewardAmountYuan: "",
                 expireHours: "",
+                inviteeTryOutPlanId: "",
                 inviteeTryOutTransferGb: "",
                 inviteeTryOutHours: ""
             }
@@ -114751,6 +114752,7 @@
                     n.enabled = 1 === Number(t.invite_campaign_enable),
                     n.rewardAmountYuan = (P(t.invite_campaign_reward_amount, 1000) / 100).toString(),
                     n.expireHours = P(t.invite_campaign_expire_hours, 48).toString(),
+                    n.inviteeTryOutPlanId = P(t.invite_campaign_try_out_plan_id, 0).toString(),
                     n.inviteeTryOutTransferGb = P(t.invite_campaign_try_out_transfer_gb, 0).toString(),
                     n.inviteeTryOutHours = P(t.invite_campaign_try_out_hours, 0).toString(),
                     n.listLoaded && v()
@@ -114786,15 +114788,16 @@
                     return Promise.resolve();
                 var e = A(n.rewardAmountYuan)
                   , r = A(n.expireHours)
-                  , i = A(n.inviteeTryOutTransferGb)
-                  , o = A(n.inviteeTryOutHours);
+                  , i = Math.max(0, Math.round(A(n.inviteeTryOutPlanId)))
+                  , o = A(n.inviteeTryOutTransferGb)
+                  , a = A(n.inviteeTryOutHours);
                 if (e < 0)
                     return p("每邀请减免金额不能小于 0", "error"),
                     Promise.resolve();
                 if (r <= 0)
                     return p("任务有效期必须大于 0 小时", "error"),
                     Promise.resolve();
-                if (i < 0 || o < 0)
+                if (o < 0 || a < 0)
                     return p("活动试用流量和时长不能小于 0", "error"),
                     Promise.resolve();
                 return n.savingSettings = !0,
@@ -114804,14 +114807,16 @@
                     json: {
                         invite_campaign_reward_amount: Math.round(100 * e),
                         invite_campaign_expire_hours: Math.round(r),
-                        invite_campaign_try_out_transfer_gb: i,
-                        invite_campaign_try_out_hours: o
+                        invite_campaign_try_out_plan_id: i,
+                        invite_campaign_try_out_transfer_gb: o,
+                        invite_campaign_try_out_hours: a
                     }
                 }).then(function() {
                     n.rewardAmountYuan = e.toString(),
                     n.expireHours = Math.round(r).toString(),
-                    n.inviteeTryOutTransferGb = i.toString(),
-                    n.inviteeTryOutHours = o.toString(),
+                    n.inviteeTryOutPlanId = i.toString(),
+                    n.inviteeTryOutTransferGb = o.toString(),
+                    n.inviteeTryOutHours = a.toString(),
                     p("活动参数已保存")
                 }).catch(function(e) {
                     p(e.message || "保存活动参数失败", "error")
@@ -114837,7 +114842,7 @@
                     }).length
                       , O = n.savingEnabled ? "保存中..." : null === n.enabled ? "读取中" : n.enabled ? "已开启" : "已关闭"
                       , T = null === n.enabled ? "status-unknown" : n.enabled ? "status-ongoing" : "status-abandoned"
-                      , N = '<div class="campaign-admin-config"><div class="campaign-admin-config-top"><div class="campaign-admin-config-copy"><div class="campaign-admin-config-title">活动开关与参数</div><div class="campaign-admin-config-desc">关闭后禁止用户新建活动任务，普通邀请返佣不受影响，已有任务仍可查看和使用。被邀请用户继续复用现有试用套餐的组别、速率和设备限制；这里只覆盖活动专属流量和体验时长。</div></div><div class="campaign-admin-config-actions"><span class="status-badge ' + T + ' campaign-admin-config-badge">' + O + '</span><label class="campaign-admin-toggle' + (n.savingEnabled ? " is-disabled" : "") + '"><input type="checkbox" id="admin-campaign-enable"' + (n.enabled ? " checked" : "") + (null === n.enabled || n.savingEnabled ? " disabled" : "") + '><span class="campaign-admin-toggle-slider"></span></label></div></div><div class="campaign-admin-config-grid"><div class="campaign-field"><label>每邀请 1 人减免金额（元）</label><input type="number" min="0" step="0.01" id="admin-campaign-reward-amount" value="' + l(n.rewardAmountYuan) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>任务有效期（小时）</label><input type="number" min="1" step="1" id="admin-campaign-expire-hours" value="' + l(n.expireHours) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>被邀请用户体验流量（GB）</label><input type="number" min="0" step="1" id="admin-campaign-invitee-transfer" value="' + l(n.inviteeTryOutTransferGb) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>被邀请用户体验时长（小时）</label><input type="number" min="0" step="1" id="admin-campaign-invitee-hours" value="' + l(n.inviteeTryOutHours) + '"' + (null === n.enabled ? " disabled" : "") + '></div></div><div class="campaign-admin-config-footer"><div class="campaign-admin-config-hint">当前预览：每邀请 1 人减免 ' + l((Number(n.rewardAmountYuan || 0)).toFixed(2)) + ' 元，任务有效期 ' + l(n.expireHours || "--") + ' 小时，被邀请用户额外获得 ' + l(n.inviteeTryOutTransferGb || "0") + ' GB / ' + l(n.inviteeTryOutHours || "0") + ' 小时。</div><button class="btn btn-sm btn-primary" id="admin-campaign-save-settings"' + (null === n.enabled || n.savingSettings ? " disabled" : "") + '>' + (n.savingSettings ? "保存中..." : "保存参数") + '</button></div></div>'
+                      , N = '<div class="campaign-admin-config"><div class="campaign-admin-config-top"><div class="campaign-admin-config-copy"><div class="campaign-admin-config-title">活动开关与参数</div><div class="campaign-admin-config-desc">关闭后禁止用户新建活动任务，普通邀请返佣不受影响，已有任务仍可查看和使用。被邀请用户使用活动专属体验套餐，不依赖全站注册试用；流量和体验时长可在下方单独配置。</div></div><div class="campaign-admin-config-actions"><span class="status-badge ' + T + ' campaign-admin-config-badge">' + O + '</span><label class="campaign-admin-toggle' + (n.savingEnabled ? " is-disabled" : "") + '"><input type="checkbox" id="admin-campaign-enable"' + (n.enabled ? " checked" : "") + (null === n.enabled || n.savingEnabled ? " disabled" : "") + '><span class="campaign-admin-toggle-slider"></span></label></div></div><div class="campaign-admin-config-grid"><div class="campaign-field"><label>每邀请 1 人减免金额（元）</label><input type="number" min="0" step="0.01" id="admin-campaign-reward-amount" value="' + l(n.rewardAmountYuan) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>任务有效期（小时）</label><input type="number" min="1" step="1" id="admin-campaign-expire-hours" value="' + l(n.expireHours) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>活动体验套餐ID</label><input type="number" min="0" step="1" id="admin-campaign-invitee-plan-id" value="' + l(n.inviteeTryOutPlanId) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>被邀请用户体验流量（GB）</label><input type="number" min="0" step="1" id="admin-campaign-invitee-transfer" value="' + l(n.inviteeTryOutTransferGb) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>被邀请用户体验时长（小时）</label><input type="number" min="0" step="1" id="admin-campaign-invitee-hours" value="' + l(n.inviteeTryOutHours) + '"' + (null === n.enabled ? " disabled" : "") + '></div></div><div class="campaign-admin-config-footer"><div class="campaign-admin-config-hint">当前预览：每邀请 1 人减免 ' + l((Number(n.rewardAmountYuan || 0)).toFixed(2)) + ' 元，任务有效期 ' + l(n.expireHours || "--") + ' 小时，活动体验套餐 ID ' + l(n.inviteeTryOutPlanId || "0") + '，被邀请用户额外获得 ' + l(n.inviteeTryOutTransferGb || "0") + ' GB / ' + l(n.inviteeTryOutHours || "0") + ' 小时。</div><button class="btn btn-sm btn-primary" id="admin-campaign-save-settings"' + (null === n.enabled || n.savingSettings ? " disabled" : "") + '>' + (n.savingSettings ? "保存中..." : "保存参数") + '</button></div></div>'
                       , m = n.list.length ? n.list.map(function(e) {
                         var t = f(Number(e.status))
                           , n = Number(e.target_amount) > 0 ? Math.min(100, Math.round(Number(e.current_amount) / Number(e.target_amount) * 100)) : 0;
@@ -114876,9 +114881,10 @@
                   , u = e.querySelector("#admin-campaign-enable")
                   , h = e.querySelector("#admin-campaign-reward-amount")
                   , f = e.querySelector("#admin-campaign-expire-hours")
-                  , m = e.querySelector("#admin-campaign-invitee-transfer")
-                  , g = e.querySelector("#admin-campaign-invitee-hours")
-                  , v = e.querySelector("#admin-campaign-save-settings")
+                  , m = e.querySelector("#admin-campaign-invitee-plan-id")
+                  , g = e.querySelector("#admin-campaign-invitee-transfer")
+                  , v = e.querySelector("#admin-campaign-invitee-hours")
+                  , b = e.querySelector("#admin-campaign-save-settings")
                   , c = e.querySelectorAll(".admin-campaign-detail-btn");
                 t && (t.onclick = function() {
                     n.page = 1,
@@ -114897,12 +114903,15 @@
                     n.expireHours = f.value
                 }),
                 m && (m.oninput = function() {
-                    n.inviteeTryOutTransferGb = m.value
+                    n.inviteeTryOutPlanId = m.value
                 }),
                 g && (g.oninput = function() {
-                    n.inviteeTryOutHours = g.value
+                    n.inviteeTryOutTransferGb = g.value
                 }),
-                v && (v.onclick = function() {
+                v && (v.oninput = function() {
+                    n.inviteeTryOutHours = v.value
+                }),
+                b && (b.onclick = function() {
                     L()
                 }),
                 s && (s.onkeydown = function(e) {

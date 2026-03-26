@@ -83,6 +83,7 @@ class ConfigController extends Controller
                 'invite_campaign_enable' => (int)config('v2board.invite_campaign_enable', 1),
                 'invite_campaign_reward_amount' => (int)config('v2board.invite_campaign_reward_amount', 1000),
                 'invite_campaign_expire_hours' => (int)config('v2board.invite_campaign_expire_hours', 48),
+                'invite_campaign_try_out_plan_id' => (int)config('v2board.invite_campaign_try_out_plan_id', 0),
                 'invite_campaign_try_out_transfer_gb' => config('v2board.invite_campaign_try_out_transfer_gb', 0) + 0,
                 'invite_campaign_try_out_hours' => config('v2board.invite_campaign_try_out_hours', 0) + 0,
                 'commission_first_time_enable' => config('v2board.commission_first_time_enable', 1),

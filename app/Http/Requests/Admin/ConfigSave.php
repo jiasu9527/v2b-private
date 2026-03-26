@@ -21,6 +21,7 @@ class ConfigSave extends FormRequest
         'invite_campaign_enable' => 'in:0,1',
         'invite_campaign_reward_amount' => 'integer|min:0',
         'invite_campaign_expire_hours' => 'numeric|min:1',
+        'invite_campaign_try_out_plan_id' => 'integer|min:0',
         'invite_campaign_try_out_transfer_gb' => 'numeric|min:0',
         'invite_campaign_try_out_hours' => 'numeric|min:0',
         'commission_first_time_enable' => 'in:0,1',

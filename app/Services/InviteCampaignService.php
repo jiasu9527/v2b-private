@@ -60,6 +60,7 @@ class InviteCampaignService
         return [
             'reward_amount' => $this->getRewardAmount(),
             'expire_hours' => $this->getExpireHours(),
+            'invitee_try_out_plan_id' => $this->getInviteeTryOutPlanId(),
             'invitee_try_out_transfer_gb' => $this->getInviteeTryOutTransferGb(),
             'invitee_try_out_hours' => $this->getInviteeTryOutHours(),
         ];
@@ -253,6 +254,21 @@ class InviteCampaignService
         return Plan::find($planId);
     }
 
+    public function getInviteeTryOutPlanId(): int
+    {
+        return (int) config('v2board.invite_campaign_try_out_plan_id', 0);
+    }
+
+    public function getInviteeTryOutPlan(): ?Plan
+    {
+        $planId = $this->getInviteeTryOutPlanId();
+        if ($planId <= 0) {
+            return null;
+        }
+
+        return Plan::find($planId);
+    }
+
     public function getDefaultInviteeTryOutTransferGb()
     {
         $plan = $this->getTryOutPlan();
@@ -280,6 +296,15 @@ class InviteCampaignService
 
     public function getEffectiveInviteeTryOutProfile(?InviteCampaign $campaign = null): array
     {
+        if ($campaign && (int) $campaign->status === InviteCampaign::STATUS_ACTIVE) {
+            return $this->getCampaignInviteeTryOutProfile();
+        }
+
+        return $this->getDefaultInviteeTryOutProfile();
+    }
+
+    private function getDefaultInviteeTryOutProfile(): array
+    {
         $plan = $this->getTryOutPlan();
         if (!$plan) {
             return [
@@ -293,16 +318,34 @@ class InviteCampaignService
         $giftTransferGb = $this->getDefaultInviteeTryOutTransferGb();
         $giftHours = $this->getDefaultInviteeTryOutHours();
 
-        if ($campaign && (int) $campaign->status === InviteCampaign::STATUS_ACTIVE) {
-            $campaignTransferGb = $this->getInviteeTryOutTransferGb();
-            if ($campaignTransferGb > 0) {
-                $giftTransferGb = $campaignTransferGb;
-            }
+        return [
+            'plan' => $plan,
+            'gift_transfer_gb' => $this->normalizeNumeric($giftTransferGb),
+            'gift_transfer_bytes' => $this->convertGbToBytes($giftTransferGb),
+            'gift_hours' => $this->normalizeNumeric($giftHours),
+        ];
+    }
 
-            $campaignHours = $this->getInviteeTryOutHours();
-            if ($campaignHours > 0) {
-                $giftHours = $campaignHours;
-            }
+    private function getCampaignInviteeTryOutProfile(): array
+    {
+        $plan = $this->getInviteeTryOutPlan();
+        if (!$plan) {
+            return [
+                'plan' => null,
+                'gift_transfer_gb' => 0,
+                'gift_transfer_bytes' => 0,
+                'gift_hours' => 0,
+            ];
+        }
+
+        $giftTransferGb = $this->getInviteeTryOutTransferGb();
+        if ($giftTransferGb <= 0) {
+            $giftTransferGb = is_numeric($plan->transfer_enable) ? $plan->transfer_enable + 0 : 0;
+        }
+
+        $giftHours = $this->getInviteeTryOutHours();
+        if ($giftHours <= 0) {
+            $giftHours = 24;
         }
 
         return [
