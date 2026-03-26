@@ -114660,7 +114660,8 @@
                 expireHours: "",
                 inviteeTryOutPlanId: "",
                 inviteeTryOutTransferGb: "",
-                inviteeTryOutHours: ""
+                inviteeTryOutHours: "",
+                plans: []
             }
               , r = !1;
             function i() {
@@ -114760,6 +114761,14 @@
                     p(e.message || "加载活动配置失败", "error")
                 })
             }
+            function R() {
+                return d("/" + t.securePath + "/plan/fetch").then(function(e) {
+                    n.plans = e && e.data ? e.data : [],
+                    n.listLoaded && v()
+                }).catch(function(e) {
+                    p(e.message || "加载套餐列表失败", "error")
+                })
+            }
             function C(e) {
                 if (n.savingEnabled || null === n.enabled)
                     return Promise.resolve();
@@ -114842,7 +114851,7 @@
                     }).length
                       , O = n.savingEnabled ? "保存中..." : null === n.enabled ? "读取中" : n.enabled ? "已开启" : "已关闭"
                       , T = null === n.enabled ? "status-unknown" : n.enabled ? "status-ongoing" : "status-abandoned"
-                      , N = '<div class="campaign-admin-config"><div class="campaign-admin-config-top"><div class="campaign-admin-config-copy"><div class="campaign-admin-config-title">活动开关与参数</div><div class="campaign-admin-config-desc">关闭后禁止用户新建活动任务，普通邀请返佣不受影响，已有任务仍可查看和使用。被邀请用户使用活动专属体验套餐，不依赖全站注册试用；流量和体验时长可在下方单独配置。</div></div><div class="campaign-admin-config-actions"><span class="status-badge ' + T + ' campaign-admin-config-badge">' + O + '</span><label class="campaign-admin-toggle' + (n.savingEnabled ? " is-disabled" : "") + '"><input type="checkbox" id="admin-campaign-enable"' + (n.enabled ? " checked" : "") + (null === n.enabled || n.savingEnabled ? " disabled" : "") + '><span class="campaign-admin-toggle-slider"></span></label></div></div><div class="campaign-admin-config-grid"><div class="campaign-field"><label>每邀请 1 人减免金额（元）</label><input type="number" min="0" step="0.01" id="admin-campaign-reward-amount" value="' + l(n.rewardAmountYuan) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>任务有效期（小时）</label><input type="number" min="1" step="1" id="admin-campaign-expire-hours" value="' + l(n.expireHours) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>活动体验套餐ID</label><input type="number" min="0" step="1" id="admin-campaign-invitee-plan-id" value="' + l(n.inviteeTryOutPlanId) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>被邀请用户体验流量（GB）</label><input type="number" min="0" step="1" id="admin-campaign-invitee-transfer" value="' + l(n.inviteeTryOutTransferGb) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>被邀请用户体验时长（小时）</label><input type="number" min="0" step="1" id="admin-campaign-invitee-hours" value="' + l(n.inviteeTryOutHours) + '"' + (null === n.enabled ? " disabled" : "") + '></div></div><div class="campaign-admin-config-footer"><div class="campaign-admin-config-hint">当前预览：每邀请 1 人减免 ' + l((Number(n.rewardAmountYuan || 0)).toFixed(2)) + ' 元，任务有效期 ' + l(n.expireHours || "--") + ' 小时，活动体验套餐 ID ' + l(n.inviteeTryOutPlanId || "0") + '，被邀请用户额外获得 ' + l(n.inviteeTryOutTransferGb || "0") + ' GB / ' + l(n.inviteeTryOutHours || "0") + ' 小时。</div><button class="btn btn-sm btn-primary" id="admin-campaign-save-settings"' + (null === n.enabled || n.savingSettings ? " disabled" : "") + '>' + (n.savingSettings ? "保存中..." : "保存参数") + '</button></div></div>'
+                      , N = '<div class="campaign-admin-config"><div class="campaign-admin-config-top"><div class="campaign-admin-config-copy"><div class="campaign-admin-config-title">活动开关与参数</div><div class="campaign-admin-config-desc">关闭后禁止用户新建活动任务，普通邀请返佣不受影响，已有任务仍可查看和使用。被邀请用户使用活动专属体验套餐，不依赖全站注册试用；流量和体验时长可在下方单独配置。</div></div><div class="campaign-admin-config-actions"><span class="status-badge ' + T + ' campaign-admin-config-badge">' + O + '</span><label class="campaign-admin-toggle' + (n.savingEnabled ? " is-disabled" : "") + '"><input type="checkbox" id="admin-campaign-enable"' + (n.enabled ? " checked" : "") + (null === n.enabled || n.savingEnabled ? " disabled" : "") + '><span class="campaign-admin-toggle-slider"></span></label></div></div><div class="campaign-admin-config-grid"><div class="campaign-field"><label>每邀请 1 人减免金额（元）</label><input type="number" min="0" step="0.01" id="admin-campaign-reward-amount" value="' + l(n.rewardAmountYuan) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>任务有效期（小时）</label><input type="number" min="1" step="1" id="admin-campaign-expire-hours" value="' + l(n.expireHours) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>活动体验套餐</label><input type="number" min="0" step="1" id="admin-campaign-invitee-plan-id" value="' + l(n.inviteeTryOutPlanId) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>被邀请用户体验流量（GB）</label><input type="number" min="0" step="1" id="admin-campaign-invitee-transfer" value="' + l(n.inviteeTryOutTransferGb) + '"' + (null === n.enabled ? " disabled" : "") + '></div><div class="campaign-field"><label>被邀请用户体验时长（小时）</label><input type="number" min="0" step="1" id="admin-campaign-invitee-hours" value="' + l(n.inviteeTryOutHours) + '"' + (null === n.enabled ? " disabled" : "") + '></div></div><div class="campaign-admin-config-footer"><div class="campaign-admin-config-hint">当前预览：每邀请 1 人减免 ' + l((Number(n.rewardAmountYuan || 0)).toFixed(2)) + ' 元，任务有效期 ' + l(n.expireHours || "--") + ' 小时，活动体验套餐 ' + l(n.inviteeTryOutPlanId || "0") + '，被邀请用户额外获得 ' + l(n.inviteeTryOutTransferGb || "0") + ' GB / ' + l(n.inviteeTryOutHours || "0") + ' 小时。</div><button class="btn btn-sm btn-primary" id="admin-campaign-save-settings"' + (null === n.enabled || n.savingSettings ? " disabled" : "") + '>' + (n.savingSettings ? "保存中..." : "保存参数") + '</button></div></div>'
                       , m = n.list.length ? n.list.map(function(e) {
                         var t = f(Number(e.status))
                           , n = Number(e.target_amount) > 0 ? Math.min(100, Math.round(Number(e.current_amount) / Number(e.target_amount) * 100)) : 0;
@@ -114886,6 +114895,18 @@
                   , v = e.querySelector("#admin-campaign-invitee-hours")
                   , b = e.querySelector("#admin-campaign-save-settings")
                   , c = e.querySelectorAll(".admin-campaign-detail-btn");
+                if (m && m.tagName && "input" === m.tagName.toLowerCase()) {
+                    var O = document.createElement("select");
+                    O.id = "admin-campaign-invitee-plan-id",
+                    O.disabled = m.disabled;
+                    var T = ['<option value="0">请选择活动体验套餐</option>'];
+                    n.plans && n.plans.length ? n.plans.forEach(function(e) {
+                        T.push('<option value="' + l(e.id) + '"' + (String(n.inviteeTryOutPlanId) === String(e.id) ? " selected" : "") + ">" + l(e.name || "套餐#" + e.id) + "</option>")
+                    }) : T.push('<option value="0">暂无可选套餐</option>'),
+                    O.innerHTML = T.join(""),
+                    m.parentNode && m.parentNode.replaceChild(O, m),
+                    m = O
+                }
                 t && (t.onclick = function() {
                     n.page = 1,
                     n.keywordType = a.value,
@@ -114902,7 +114923,7 @@
                 f && (f.oninput = function() {
                     n.expireHours = f.value
                 }),
-                m && (m.oninput = function() {
+                m && (m.onchange = function() {
                     n.inviteeTryOutPlanId = m.value
                 }),
                 g && (g.oninput = function() {
@@ -114987,7 +115008,8 @@
                 init: function() {
                     i(),
                     x(),
-                    k()
+                    k(),
+                    R()
                 },
                 destroy: function() {
                     r = !0,
