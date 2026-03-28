@@ -15,6 +15,7 @@ use App\Services\UserService;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class OrderController extends Controller
 {
@@ -41,9 +42,28 @@ class OrderController extends Controller
     {
         $order = Order::find($request->input('id'));
         if (!$order) abort(500, '订单不存在');
-        $order['commission_log'] = CommissionLog::where('trade_no', $order->trade_no)->get();
-        if ($order->surplus_order_ids) {
-            $order['surplus_orders'] = Order::whereIn('id', $order->surplus_order_ids)->get();
+        $order['commission_log'] = collect();
+        if (Schema::hasTable('v2_commission_log')) {
+            $order['commission_log'] = CommissionLog::where('trade_no', $order->trade_no)->get();
+        }
+
+        $surplusOrderIds = $order->surplus_order_ids;
+        if (is_string($surplusOrderIds)) {
+            $decoded = json_decode($surplusOrderIds, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                $surplusOrderIds = $decoded;
+            } else {
+                $surplusOrderIds = array_filter(array_map('intval', explode(',', $surplusOrderIds)));
+            }
+        }
+
+        if (!is_array($surplusOrderIds)) {
+            $surplusOrderIds = [];
+        }
+
+        $order['surplus_orders'] = collect();
+        if ($surplusOrderIds) {
+            $order['surplus_orders'] = Order::whereIn('id', $surplusOrderIds)->get();
         }
         return response([
             'data' => $order

@@ -115,8 +115,20 @@ class UserController extends Controller
             abort(500, '参数错误');
         }
         $user = User::find($request->input('id'));
+        if (!$user) {
+            return response([
+                'data' => [
+                    'id' => (int)$request->input('id'),
+                    'email' => '[deleted user]',
+                    'invite_user_id' => null
+                ]
+            ]);
+        }
         if ($user->invite_user_id) {
-            $user['invite_user'] = User::find($user->invite_user_id);
+            $inviteUser = User::find($user->invite_user_id);
+            if ($inviteUser) {
+                $user['invite_user'] = $inviteUser;
+            }
         }
         return response([
             'data' => $user
