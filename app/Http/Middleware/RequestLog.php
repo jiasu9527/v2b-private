@@ -16,8 +16,17 @@ class RequestLog
     public function handle($request, Closure $next)
     {
         if ($request->method() === 'POST') {
-            $path = $request->path();
-            info("POST {$path}");
+            try {
+                $path = $request->path();
+                info("POST {$path}");
+            } catch (\Throwable $e) {
+                error_log(sprintf(
+                    'RequestLog failed for [%s] %s: %s',
+                    $request->method(),
+                    $request->path(),
+                    $e->getMessage()
+                ));
+            }
         };
         return $next($request);
     }
