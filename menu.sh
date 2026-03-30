@@ -23,7 +23,6 @@ LSOF_BIN="${LSOF_BIN:-lsof}"
 GIT_BIN="${GIT_BIN:-git}"
 COLOR_RESET=""
 COLOR_BOLD=""
-COLOR_DIM=""
 COLOR_GREEN=""
 COLOR_RED=""
 COLOR_CYAN=""
@@ -75,7 +74,6 @@ init_colors() {
 
   COLOR_RESET=$'\033[0m'
   COLOR_BOLD=$'\033[1m'
-  COLOR_DIM=$'\033[2m'
   COLOR_GREEN=$'\033[32m'
   COLOR_RED=$'\033[31m'
   COLOR_CYAN=$'\033[36m'
@@ -127,7 +125,6 @@ resolve_env_file_name() {
 print_header() {
   printf '%s--------------------------------%s\n' "${COLOR_CYAN}" "${COLOR_RESET}"
   printf '%sForest 管理菜单%s\n' "${COLOR_BOLD}" "${COLOR_RESET}"
-  printf '%sGo API + PostgreSQL 单机版%s\n' "${COLOR_DIM}" "${COLOR_RESET}"
   printf '%s--------------------------------%s\n' "${COLOR_CYAN}" "${COLOR_RESET}"
 }
 

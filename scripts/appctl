@@ -9,6 +9,7 @@ BIN_PATH="${BIN_DIR}/forest-go-api"
 PID_PATH="${RUN_DIR}/forest-go-api.pid"
 LOG_PATH="${RUN_DIR}/forest-go-api.log"
 GO_BIN="${GO_BIN:-go}"
+GIT_BIN="${GIT_BIN:-git}"
 PGREP_BIN="${PGREP_BIN:-pgrep}"
 LOCAL_TOOL_DIR="${ROOT_DIR}/.local"
 LOCAL_GO_ROOT="${LOCAL_TOOL_DIR}/go"
@@ -105,6 +106,42 @@ download_file() {
 
   echo "自动安装 Go 需要 curl 或 wget" >&2
   exit 1
+}
+
+git_available() {
+  command -v "${GIT_BIN}" >/dev/null 2>&1
+}
+
+git_repo_available() {
+  git_available || return 1
+  "${GIT_BIN}" -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1
+}
+
+git_head_short() {
+  git_available || return 1
+  "${GIT_BIN}" -C "${ROOT_DIR}" rev-parse --short=7 HEAD 2>/dev/null | tail -n 1
+}
+
+update_source_code_from_git() {
+  git_repo_available || return 0
+
+  local old_head new_head
+  old_head="$(git_head_short || true)"
+  if ! "${GIT_BIN}" -C "${ROOT_DIR}" pull --ff-only --quiet; then
+    echo "代码拉取失败，请先处理本地改动、冲突或网络问题后重试" >&2
+    exit 1
+  fi
+
+  new_head="$(git_head_short || true)"
+  if [[ -n "${new_head}" ]] && [[ "${new_head}" != "${old_head}" ]]; then
+    echo "代码已更新 ${old_head:-unknown} -> ${new_head}"
+    return 0
+  fi
+  if [[ -n "${new_head}" ]]; then
+    echo "代码已是最新版本 (${new_head})"
+    return 0
+  fi
+  echo "代码拉取完成"
 }
 
 bootstrap_local_go() {
@@ -1039,6 +1076,7 @@ cmd_install_legacy() {
 }
 
 cmd_update() {
+  update_source_code_from_git
   ensure_go
   cleanup_legacy_runtime_artifacts true
   load_env

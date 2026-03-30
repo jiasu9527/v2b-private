@@ -77,6 +77,12 @@ if ! rg -n '^环境文件:[[:space:]]+fake\.env\.go$' /tmp/test-menu-dashboard.o
   exit 1
 fi
 
+if rg -n 'Go API \+ PostgreSQL 单机版' /tmp/test-menu-dashboard.out >/dev/null 2>&1; then
+  echo "expected subtitle to be removed"
+  cat /tmp/test-menu-dashboard.out
+  exit 1
+fi
+
 if ! rg -n '^1\. 服务管理$' /tmp/test-menu-dashboard.out >/dev/null 2>&1; then
   echo "expected service menu entry first"
   cat /tmp/test-menu-dashboard.out
