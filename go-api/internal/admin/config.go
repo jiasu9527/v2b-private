@@ -1,0 +1,789 @@
+package admin
+
+import (
+	"context"
+	"crypto/md5"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/smtp"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+var (
+	configKeyPattern     = regexp.MustCompile(`^'((?:\\.|[^'])*)'\s*=>\s*(.*)$`)
+	configArrayItemRegex = regexp.MustCompile(`^\d+\s*=>\s*(.*),$`)
+	configBonusPattern   = regexp.MustCompile(`^\d+(\.\d+)?:\d+(\.\d+)?$`)
+)
+
+type phpConfigKind int
+
+const (
+	phpConfigScalar phpConfigKind = iota
+	phpConfigNil
+	phpConfigArray
+	phpConfigRaw
+)
+
+type phpConfigValue struct {
+	kind   phpConfigKind
+	scalar string
+	array  []phpConfigValue
+}
+
+type phpConfigFile struct {
+	order  []string
+	values map[string]phpConfigValue
+}
+
+var adminProjectRoot = detectAdminProjectRoot()
+
+func (s *DBService) FetchConfig(_ context.Context, key string) (map[string]any, error) {
+	cfg, err := loadAdminConfigStore(adminConfigPath())
+	if err != nil {
+		return nil, err
+	}
+
+	data := map[string]any{
+		"ticket": map[string]any{
+			"ticket_status": cfg.int64Value("ticket_status", 0),
+		},
+		"deposit": map[string]any{
+			"deposit_bounus": cfg.stringSliceValue("deposit_bounus", []string{}),
+		},
+		"invite": map[string]any{
+			"invite_force":                        cfg.int64Value("invite_force", 0),
+			"invite_commission":                   cfg.int64Value("invite_commission", 10),
+			"invite_gen_limit":                    cfg.int64Value("invite_gen_limit", 5),
+			"invite_never_expire":                 cfg.int64Value("invite_never_expire", 0),
+			"invite_campaign_enable":              cfg.int64Value("invite_campaign_enable", 1),
+			"invite_campaign_reward_amount":       cfg.int64Value("invite_campaign_reward_amount", 1000),
+			"invite_campaign_expire_hours":        cfg.int64Value("invite_campaign_expire_hours", 48),
+			"invite_campaign_try_out_plan_id":     cfg.int64Value("invite_campaign_try_out_plan_id", 0),
+			"invite_campaign_try_out_transfer_gb": cfg.float64Value("invite_campaign_try_out_transfer_gb", 0),
+			"invite_campaign_try_out_hours":       cfg.float64Value("invite_campaign_try_out_hours", 0),
+			"commission_first_time_enable":        cfg.int64Value("commission_first_time_enable", 1),
+			"commission_auto_check_enable":        cfg.int64Value("commission_auto_check_enable", 1),
+			"commission_withdraw_limit":           cfg.int64Value("commission_withdraw_limit", 100),
+			"commission_withdraw_method":          cfg.stringSliceValue("commission_withdraw_method", []string{"支付宝", "USDT", "Paypal"}),
+			"withdraw_close_enable":               cfg.int64Value("withdraw_close_enable", 0),
+			"commission_distribution_enable":      cfg.int64Value("commission_distribution_enable", 0),
+			"commission_distribution_l1":          cfg.nullableNumericString("commission_distribution_l1"),
+			"commission_distribution_l2":          cfg.nullableNumericString("commission_distribution_l2"),
+			"commission_distribution_l3":          cfg.nullableNumericString("commission_distribution_l3"),
+		},
+		"site": map[string]any{
+			"logo":            cfg.nullableStringValue("logo"),
+			"force_https":     cfg.int64Value("force_https", 0),
+			"stop_register":   cfg.int64Value("stop_register", 0),
+			"app_name":        cfg.stringValue("app_name", "V2Board"),
+			"app_description": cfg.stringValue("app_description", "V2Board is best!"),
+			"app_url":         cfg.nullableStringValue("app_url"),
+			"subscribe_url":   cfg.nullableStringValue("subscribe_url"),
+			"subscribe_path":  cfg.nullableStringValue("subscribe_path"),
+			"try_out_plan_id": cfg.int64Value("try_out_plan_id", 0),
+			"try_out_hour":    cfg.int64Value("try_out_hour", 1),
+			"tos_url":         cfg.nullableStringValue("tos_url"),
+			"currency":        cfg.stringValue("currency", "CNY"),
+			"currency_symbol": cfg.stringValue("currency_symbol", "¥"),
+		},
+		"subscribe": map[string]any{
+			"plan_change_enable":         cfg.int64Value("plan_change_enable", 1),
+			"reset_traffic_method":       cfg.int64Value("reset_traffic_method", 0),
+			"surplus_enable":             cfg.int64Value("surplus_enable", 1),
+			"allow_new_period":           cfg.int64Value("allow_new_period", 0),
+			"new_order_event_id":         cfg.int64Value("new_order_event_id", 0),
+			"renew_order_event_id":       cfg.int64Value("renew_order_event_id", 0),
+			"change_order_event_id":      cfg.int64Value("change_order_event_id", 0),
+			"show_info_to_server_enable": cfg.int64Value("show_info_to_server_enable", 0),
+			"show_subscribe_method":      cfg.int64Value("show_subscribe_method", 0),
+			"show_subscribe_expire":      cfg.int64Value("show_subscribe_expire", 5),
+		},
+		"frontend": map[string]any{
+			"frontend_theme":          cfg.stringValue("frontend_theme", "v2board"),
+			"frontend_theme_sidebar":  cfg.stringValue("frontend_theme_sidebar", "light"),
+			"frontend_theme_header":   cfg.stringValue("frontend_theme_header", "dark"),
+			"frontend_theme_color":    cfg.stringValue("frontend_theme_color", "default"),
+			"frontend_background_url": cfg.nullableStringValue("frontend_background_url"),
+		},
+		"server": map[string]any{
+			"server_api_url":                   cfg.nullableStringValue("server_api_url"),
+			"server_token":                     cfg.nullableStringValue("server_token"),
+			"server_pull_interval":             cfg.int64Value("server_pull_interval", 60),
+			"server_push_interval":             cfg.int64Value("server_push_interval", 60),
+			"server_node_report_min_traffic":   cfg.int64Value("server_node_report_min_traffic", 0),
+			"server_device_online_min_traffic": cfg.int64Value("server_device_online_min_traffic", 0),
+			"device_limit_mode":                cfg.int64Value("device_limit_mode", 0),
+		},
+		"email": map[string]any{
+			"email_template":     cfg.stringValue("email_template", "default"),
+			"email_host":         cfg.nullableStringValue("email_host"),
+			"email_port":         cfg.nullableStringValue("email_port"),
+			"email_username":     cfg.nullableStringValue("email_username"),
+			"email_password":     cfg.nullableStringValue("email_password"),
+			"email_encryption":   cfg.nullableStringValue("email_encryption"),
+			"email_from_address": cfg.nullableStringValue("email_from_address"),
+		},
+		"telegram": map[string]any{
+			"telegram_bot_enable":   cfg.int64Value("telegram_bot_enable", 0),
+			"telegram_bot_token":    cfg.nullableStringValue("telegram_bot_token"),
+			"telegram_discuss_link": cfg.nullableStringValue("telegram_discuss_link"),
+		},
+		"app": map[string]any{
+			"windows_version":      cfg.nullableStringValue("windows_version"),
+			"windows_download_url": cfg.nullableStringValue("windows_download_url"),
+			"macos_version":        cfg.nullableStringValue("macos_version"),
+			"macos_download_url":   cfg.nullableStringValue("macos_download_url"),
+			"android_version":      cfg.nullableStringValue("android_version"),
+			"android_download_url": cfg.nullableStringValue("android_download_url"),
+		},
+		"safe": map[string]any{
+			"email_verify":                cfg.int64Value("email_verify", 0),
+			"safe_mode_enable":            cfg.int64Value("safe_mode_enable", 0),
+			"secure_path":                 cfg.stringValue("secure_path", fallbackAdminPath(s.cfg.AdminPath)),
+			"email_whitelist_enable":      cfg.int64Value("email_whitelist_enable", 0),
+			"email_whitelist_suffix":      cfg.stringSliceValue("email_whitelist_suffix", []string{"gmail.com", "qq.com", "163.com", "yahoo.com", "sina.com", "126.com", "outlook.com", "yeah.net", "foxmail.com"}),
+			"email_gmail_limit_enable":    cfg.int64Value("email_gmail_limit_enable", 0),
+			"recaptcha_enable":            cfg.int64Value("recaptcha_enable", 0),
+			"recaptcha_key":               cfg.nullableStringValue("recaptcha_key"),
+			"recaptcha_site_key":          cfg.nullableStringValue("recaptcha_site_key"),
+			"register_limit_by_ip_enable": cfg.int64Value("register_limit_by_ip_enable", 0),
+			"register_limit_count":        cfg.int64Value("register_limit_count", 3),
+			"register_limit_expire":       cfg.int64Value("register_limit_expire", 60),
+			"password_limit_enable":       cfg.int64Value("password_limit_enable", 1),
+			"password_limit_count":        cfg.int64Value("password_limit_count", 5),
+			"password_limit_expire":       cfg.int64Value("password_limit_expire", 60),
+		},
+	}
+
+	key = strings.TrimSpace(key)
+	if key != "" {
+		if item, ok := data[key]; ok {
+			return map[string]any{key: item}, nil
+		}
+	}
+	return data, nil
+}
+
+func (s *DBService) SaveConfig(_ context.Context, values map[string]any) (bool, error) {
+	cfg, err := loadAdminConfigStore(adminConfigPath())
+	if err != nil {
+		return false, err
+	}
+
+	newKeys := make([]string, 0)
+	for key, value := range values {
+		key = strings.TrimSpace(key)
+		if key == "" || key == "auth_data" {
+			continue
+		}
+		normalized, err := normalizeConfigValue(value)
+		if err != nil {
+			return false, errors.New("参数错误")
+		}
+		if err := validateConfigValue(key, normalized); err != nil {
+			return false, err
+		}
+		if _, exists := cfg.values[key]; !exists {
+			newKeys = append(newKeys, key)
+		}
+		cfg.values[key] = normalized
+	}
+	sort.Strings(newKeys)
+	cfg.order = appendMissingConfigKeys(cfg.order, newKeys, cfg.values)
+
+	if err := writeJSONConfigFile(adminConfigPath(), cfg); err != nil {
+		return false, errors.New("修改失败")
+	}
+	return true, nil
+}
+
+func (s *DBService) ListEmailTemplates(_ context.Context) ([]string, error) {
+	return listTemplateEntries(adminMailTemplatePath())
+}
+
+func (s *DBService) ListThemeTemplates(_ context.Context) ([]string, error) {
+	return listTemplateEntries(adminThemeTemplatePath())
+}
+
+func (s *DBService) SetTelegramWebhook(_ context.Context, token string) (bool, error) {
+	token = strings.TrimSpace(token)
+	cfg, err := loadAdminConfigStore(adminConfigPath())
+	if err != nil {
+		return false, err
+	}
+	if token == "" {
+		token = cfg.stringValue("telegram_bot_token", "")
+	}
+	if token == "" {
+		return false, errors.New("参数错误")
+	}
+
+	appURL := strings.TrimSpace(valueToString(cfg.values["app_url"]))
+	if appURL == "" {
+		appURL = strings.TrimSpace(s.cfg.AppURL)
+	}
+	if appURL == "" {
+		return false, errors.New("站点URL格式不正确，必须携带http(s)://")
+	}
+	parsedURL, err := url.Parse(appURL)
+	if err != nil || parsedURL.Host == "" {
+		return false, errors.New("站点URL格式不正确，必须携带http(s)://")
+	}
+	parsedURL.Scheme = "https"
+	baseURL := strings.TrimRight(parsedURL.String(), "/")
+	hookURL := baseURL + "/api/v1/guest/telegram/webhook?access_token=" + fmt.Sprintf("%x", md5.Sum([]byte(token)))
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	if err := telegramAPICall(client, token, "getMe", nil); err != nil {
+		return false, err
+	}
+	if err := telegramAPICall(client, token, "setWebhook", map[string]string{"url": hookURL}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *DBService) TestSendMail(_ context.Context, email string) (ConfigMailTestLog, error) {
+	cfg, err := loadAdminConfigStore(adminConfigPath())
+	if err != nil {
+		return nil, err
+	}
+
+	email = strings.TrimSpace(email)
+	host := strings.TrimSpace(valueToString(cfg.values["email_host"]))
+	portValue := cfg.int64Value("email_port", s.cfg.MailPort)
+	if portValue == 0 {
+		portValue = 25
+	}
+	username := strings.TrimSpace(valueToString(cfg.values["email_username"]))
+	password := valueToString(cfg.values["email_password"])
+	encryption := strings.TrimSpace(valueToString(cfg.values["email_encryption"]))
+	fromAddress := strings.TrimSpace(valueToString(cfg.values["email_from_address"]))
+	if fromAddress == "" {
+		fromAddress = email
+	}
+	if fromAddress == "" {
+		fromAddress = "noreply@example.com"
+	}
+
+	log := ConfigMailTestLog{
+		"email":         email,
+		"subject":       "This is v2board test email",
+		"template_name": "mail." + cfg.stringValue("email_template", "default") + ".notify",
+		"config": map[string]any{
+			"host":       host,
+			"port":       portValue,
+			"encryption": encryption,
+			"username":   username,
+		},
+	}
+
+	if host == "" || email == "" {
+		log["error"] = "邮件服务未配置"
+		return log, nil
+	}
+
+	body := "This is v2board test email"
+	if err := sendMail(host, int(portValue), encryption, username, password, fromAddress, email, "This is v2board test email", body); err != nil {
+		log["error"] = err.Error()
+	}
+	return log, nil
+}
+
+func detectAdminProjectRoot() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return "."
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+}
+
+func adminConfigPath() string {
+	return filepath.Join(adminProjectRoot, "config", "admin.json")
+}
+
+func legacyAdminConfigPath() string {
+	return filepath.Join(adminProjectRoot, "config", "v2board.php")
+}
+
+func adminMailTemplatePath() string {
+	return filepath.Join(adminProjectRoot, "resources", "views", "mail")
+}
+
+func adminThemeTemplatePath() string {
+	return filepath.Join(adminProjectRoot, "public", "theme")
+}
+
+func fallbackAdminPath(path string) string {
+	path = strings.Trim(strings.TrimSpace(path), "/")
+	if path == "" {
+		return "localadmin"
+	}
+	return path
+}
+
+func loadPHPConfigFile(path string) (*phpConfigFile, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return &phpConfigFile{values: map[string]phpConfigValue{}}, nil
+		}
+		return nil, err
+	}
+
+	lines := strings.Split(string(raw), "\n")
+	result := &phpConfigFile{
+		order:  make([]string, 0),
+		values: make(map[string]phpConfigValue),
+	}
+
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		matches := configKeyPattern.FindStringSubmatch(line)
+		if len(matches) != 3 {
+			continue
+		}
+
+		key := unescapePHPString(matches[1])
+		rest := strings.TrimSpace(matches[2])
+		if rest == "" && i+1 < len(lines) {
+			next := strings.TrimSpace(lines[i+1])
+			if next == "array (" {
+				rest = next
+				i++
+			}
+		}
+
+		var value phpConfigValue
+		if rest == "array (" {
+			items := make([]phpConfigValue, 0)
+			for i = i + 1; i < len(lines); i++ {
+				itemLine := strings.TrimSpace(lines[i])
+				if itemLine == ")," || itemLine == ")" {
+					break
+				}
+				itemMatches := configArrayItemRegex.FindStringSubmatch(itemLine)
+				if len(itemMatches) != 2 {
+					continue
+				}
+				items = append(items, parsePHPScalar(strings.TrimSpace(itemMatches[1])))
+			}
+			value = phpConfigValue{kind: phpConfigArray, array: items}
+		} else {
+			value = parsePHPScalar(strings.TrimSuffix(rest, ","))
+		}
+
+		result.order = append(result.order, key)
+		result.values[key] = value
+	}
+	return result, nil
+}
+
+func parsePHPScalar(token string) phpConfigValue {
+	token = strings.TrimSpace(token)
+	switch {
+	case token == "NULL":
+		return phpConfigValue{kind: phpConfigNil}
+	case strings.HasPrefix(token, "'") && strings.HasSuffix(token, "'") && len(token) >= 2:
+		return phpConfigValue{kind: phpConfigScalar, scalar: unescapePHPString(token[1 : len(token)-1])}
+	default:
+		return phpConfigValue{kind: phpConfigRaw, scalar: token}
+	}
+}
+
+func (f *phpConfigFile) marshal() string {
+	var builder strings.Builder
+	builder.WriteString("<?php\n return array (\n")
+	for _, key := range f.order {
+		value, ok := f.values[key]
+		if !ok {
+			continue
+		}
+		writePHPConfigEntry(&builder, key, value)
+	}
+	builder.WriteString(") ;\n")
+	return builder.String()
+}
+
+func writePHPConfigEntry(builder *strings.Builder, key string, value phpConfigValue) {
+	switch value.kind {
+	case phpConfigArray:
+		builder.WriteString("  '")
+		builder.WriteString(escapePHPString(key))
+		builder.WriteString("' => \n")
+		builder.WriteString("  array (\n")
+		for idx, item := range value.array {
+			builder.WriteString("    ")
+			builder.WriteString(strconv.Itoa(idx))
+			builder.WriteString(" => ")
+			builder.WriteString(marshalPHPScalar(item))
+			builder.WriteString(",\n")
+		}
+		builder.WriteString("  ),\n")
+	default:
+		builder.WriteString("  '")
+		builder.WriteString(escapePHPString(key))
+		builder.WriteString("' => ")
+		builder.WriteString(marshalPHPScalar(value))
+		builder.WriteString(",\n")
+	}
+}
+
+func marshalPHPScalar(value phpConfigValue) string {
+	switch value.kind {
+	case phpConfigNil:
+		return "NULL"
+	case phpConfigRaw:
+		return value.scalar
+	default:
+		return "'" + escapePHPString(value.scalar) + "'"
+	}
+}
+
+func appendMissingConfigKeys(order, newKeys []string, values map[string]phpConfigValue) []string {
+	seen := make(map[string]struct{}, len(order))
+	for _, key := range order {
+		seen[key] = struct{}{}
+	}
+	for _, key := range newKeys {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		if _, exists := values[key]; exists {
+			order = append(order, key)
+		}
+	}
+	return order
+}
+
+func normalizeConfigValue(value any) (phpConfigValue, error) {
+	switch typed := value.(type) {
+	case nil:
+		return phpConfigValue{kind: phpConfigNil}, nil
+	case string:
+		return phpConfigValue{kind: phpConfigScalar, scalar: typed}, nil
+	case json.Number:
+		return phpConfigValue{kind: phpConfigScalar, scalar: typed.String()}, nil
+	case float64:
+		return phpConfigValue{kind: phpConfigScalar, scalar: strconv.FormatFloat(typed, 'f', -1, 64)}, nil
+	case float32:
+		return phpConfigValue{kind: phpConfigScalar, scalar: strconv.FormatFloat(float64(typed), 'f', -1, 64)}, nil
+	case int:
+		return phpConfigValue{kind: phpConfigScalar, scalar: strconv.Itoa(typed)}, nil
+	case int64:
+		return phpConfigValue{kind: phpConfigScalar, scalar: strconv.FormatInt(typed, 10)}, nil
+	case int32:
+		return phpConfigValue{kind: phpConfigScalar, scalar: strconv.FormatInt(int64(typed), 10)}, nil
+	case bool:
+		if typed {
+			return phpConfigValue{kind: phpConfigScalar, scalar: "1"}, nil
+		}
+		return phpConfigValue{kind: phpConfigScalar, scalar: "0"}, nil
+	case []string:
+		items := make([]phpConfigValue, 0, len(typed))
+		for _, item := range typed {
+			items = append(items, phpConfigValue{kind: phpConfigScalar, scalar: item})
+		}
+		return phpConfigValue{kind: phpConfigArray, array: items}, nil
+	case []any:
+		items := make([]phpConfigValue, 0, len(typed))
+		for _, item := range typed {
+			next, err := normalizeConfigValue(item)
+			if err != nil {
+				return phpConfigValue{}, err
+			}
+			if next.kind == phpConfigArray {
+				return phpConfigValue{}, errors.New("nested array")
+			}
+			items = append(items, next)
+		}
+		return phpConfigValue{kind: phpConfigArray, array: items}, nil
+	default:
+		return phpConfigValue{}, fmt.Errorf("unsupported config value %T", value)
+	}
+}
+
+func validateConfigValue(key string, value phpConfigValue) error {
+	switch key {
+	case "deposit_bounus":
+		if value.kind != phpConfigArray {
+			return errors.New("充值奖励格式不正确，必须为充值金额:奖励金额")
+		}
+		for _, item := range value.array {
+			raw := strings.TrimSpace(valueToString(item))
+			if raw == "" {
+				continue
+			}
+			if !configBonusPattern.MatchString(raw) {
+				return errors.New("充值奖励格式不正确，必须为充值金额:奖励金额")
+			}
+		}
+	case "logo":
+		if err := validateOptionalURL(value, "LOGO URL格式不正确，必须携带https(s)://"); err != nil {
+			return err
+		}
+	case "app_url":
+		if err := validateOptionalURL(value, "站点URL格式不正确，必须携带http(s)://"); err != nil {
+			return err
+		}
+	case "tos_url":
+		if err := validateOptionalURL(value, "服务条款URL格式不正确，必须携带http(s)://"); err != nil {
+			return err
+		}
+	case "telegram_discuss_link":
+		if err := validateOptionalURL(value, "Telegram群组地址必须为URL格式，必须携带http(s)://"); err != nil {
+			return err
+		}
+	case "subscribe_path":
+		if raw := strings.TrimSpace(valueToString(value)); raw != "" && !strings.HasPrefix(raw, "/") {
+			return errors.New("订阅路径必须以/开头")
+		}
+	case "server_token":
+		if raw := strings.TrimSpace(valueToString(value)); raw != "" && len(raw) < 16 {
+			return errors.New("通讯密钥长度必须大于16位")
+		}
+	case "secure_path":
+		raw := strings.TrimSpace(valueToString(value))
+		if len(raw) < 8 {
+			return errors.New("后台路径长度最小为8位")
+		}
+		if matched, _ := regexp.MatchString(`^[\w-]*$`, raw); !matched {
+			return errors.New("后台路径只能为字母或数字")
+		}
+	}
+	return nil
+}
+
+func validateOptionalURL(value phpConfigValue, message string) error {
+	raw := strings.TrimSpace(valueToString(value))
+	if raw == "" {
+		return nil
+	}
+	parsed, err := url.ParseRequestURI(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return errors.New(message)
+	}
+	return nil
+}
+
+func (f *phpConfigFile) stringValue(key, fallback string) string {
+	raw := strings.TrimSpace(valueToString(f.values[key]))
+	if raw == "" {
+		return fallback
+	}
+	return raw
+}
+
+func (f *phpConfigFile) nullableStringValue(key string) any {
+	value, ok := f.values[key]
+	if !ok || value.kind == phpConfigNil {
+		return nil
+	}
+	return valueToString(value)
+}
+
+func (f *phpConfigFile) int64Value(key string, fallback int64) int64 {
+	raw := strings.TrimSpace(valueToString(f.values[key]))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func (f *phpConfigFile) float64Value(key string, fallback float64) float64 {
+	raw := strings.TrimSpace(valueToString(f.values[key]))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func (f *phpConfigFile) stringSliceValue(key string, fallback []string) []string {
+	value, ok := f.values[key]
+	if !ok {
+		return append([]string(nil), fallback...)
+	}
+	switch value.kind {
+	case phpConfigArray:
+		result := make([]string, 0, len(value.array))
+		for _, item := range value.array {
+			raw := strings.TrimSpace(valueToString(item))
+			if raw != "" {
+				result = append(result, raw)
+			}
+		}
+		return result
+	case phpConfigScalar, phpConfigRaw:
+		raw := strings.TrimSpace(value.scalar)
+		if raw == "" {
+			return append([]string(nil), fallback...)
+		}
+		return []string{raw}
+	default:
+		return append([]string(nil), fallback...)
+	}
+}
+
+func (f *phpConfigFile) nullableNumericString(key string) any {
+	value, ok := f.values[key]
+	if !ok || value.kind == phpConfigNil {
+		return nil
+	}
+	raw := strings.TrimSpace(valueToString(value))
+	if raw == "" {
+		return nil
+	}
+	if parsed, err := strconv.ParseFloat(raw, 64); err == nil {
+		return parsed
+	}
+	return raw
+}
+
+func valueToString(value phpConfigValue) string {
+	switch value.kind {
+	case phpConfigScalar, phpConfigRaw:
+		return value.scalar
+	default:
+		return ""
+	}
+}
+
+func escapePHPString(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `'`, `\'`)
+	return value
+}
+
+func unescapePHPString(value string) string {
+	value = strings.ReplaceAll(value, `\'`, `'`)
+	value = strings.ReplaceAll(value, `\\`, `\`)
+	return value
+}
+
+func listTemplateEntries(path string) ([]string, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := strings.TrimSpace(entry.Name())
+		if name == "" || strings.HasPrefix(name, ".") {
+			continue
+		}
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func telegramAPICall(client *http.Client, token, method string, params map[string]string) error {
+	endpoint := "https://api.telegram.org/bot" + token + "/" + method
+	if len(params) > 0 {
+		query := url.Values{}
+		for key, value := range params {
+			query.Set(key, value)
+		}
+		endpoint += "?" + query.Encode()
+	}
+	resp, err := client.Get(endpoint)
+	if err != nil {
+		return errors.New("请求失败")
+	}
+	defer resp.Body.Close()
+
+	var payload struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return errors.New("请求失败")
+	}
+	if !payload.OK {
+		if strings.TrimSpace(payload.Description) == "" {
+			return errors.New("请求失败")
+		}
+		return errors.New("来自TG的错误：" + payload.Description)
+	}
+	return nil
+}
+
+func sendMail(host string, port int, encryption, username, password, from, to, subject, body string) error {
+	address := host + ":" + strconv.Itoa(port)
+	message := buildSMTPMessage(from, to, subject, body)
+
+	switch strings.ToLower(strings.TrimSpace(encryption)) {
+	case "ssl":
+		conn, err := tls.Dial("tcp", address, &tls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: true,
+		})
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+
+		client, err := smtp.NewClient(conn, host)
+		if err != nil {
+			return err
+		}
+		defer client.Quit()
+
+		if username != "" {
+			if err := client.Auth(smtp.PlainAuth("", username, password, host)); err != nil {
+				return err
+			}
+		}
+		if err := client.Mail(from); err != nil {
+			return err
+		}
+		if err := client.Rcpt(to); err != nil {
+			return err
+		}
+		writer, err := client.Data()
+		if err != nil {
+			return err
+		}
+		if _, err := writer.Write(message); err != nil {
+			return err
+		}
+		return writer.Close()
+	default:
+		var auth smtp.Auth
+		if username != "" {
+			auth = smtp.PlainAuth("", username, password, host)
+		}
+		return smtp.SendMail(address, auth, from, []string{to}, message)
+	}
+}
+
+func buildSMTPMessage(from, to, subject, body string) []byte {
+	return []byte(strings.Join([]string{
+		"To: " + to,
+		"From: " + from,
+		"Subject: " + subject,
+		"MIME-Version: 1.0",
+		"Content-Type: text/plain; charset=UTF-8",
+		"",
+		body,
+	}, "\r\n"))
+}

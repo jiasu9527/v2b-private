@@ -1,0 +1,229 @@
+package httpapi
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"forest/go-api/internal/config"
+	"forest/go-api/internal/nodeapi"
+	"forest/go-api/internal/user"
+)
+
+func TestRouterClientAppGetVersionEndpoint(t *testing.T) {
+	t.Setenv("WINDOWS_VERSION", "1.2.3")
+	t.Setenv("WINDOWS_DOWNLOAD_URL", "https://example.com/windows.exe")
+	t.Setenv("MACOS_VERSION", "2.3.4")
+	t.Setenv("MACOS_DOWNLOAD_URL", "https://example.com/macos.dmg")
+	t.Setenv("ANDROID_VERSION", "3.4.5")
+	t.Setenv("ANDROID_DOWNLOAD_URL", "https://example.com/android.apk")
+
+	router := NewRouter(config.Load())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/app/getVersion", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("expected json body: %v", err)
+	}
+
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object, got %#v", payload["data"])
+	}
+	if data["windows_version"] != "1.2.3" || data["android_download_url"] != "https://example.com/android.apk" {
+		t.Fatalf("unexpected version payload: %#v", data)
+	}
+}
+
+func TestRouterClientAppGetConfigEndpoint(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		servers: []map[string]any{
+			{
+				"type":    "vmess",
+				"name":    "VMess-1",
+				"host":    "node.example.com",
+				"port":    int64(443),
+				"network": "ws",
+				"tls":     int64(1),
+				"tls_settings": map[string]any{
+					"server_name": "node.example.com",
+				},
+				"network_settings": map[string]any{
+					"path": "/ws",
+					"headers": map[string]any{
+						"Host": "node.example.com",
+					},
+				},
+			},
+		},
+	}
+	router := NewRouter(config.Config{PublicDir: "../public"}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/app/getConfig?token=token-1", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "yaml") {
+		t.Fatalf("expected yaml content type, got %q", contentType)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "VMess-1") || !strings.Contains(body, "proxies:") {
+		t.Fatalf("expected generated clash app config, got %q", body)
+	}
+	if userService.lastClientToken != "token-1" || userService.lastServerUA != "" {
+		t.Fatalf("unexpected client auth/request state: token=%q ua=%q", userService.lastClientToken, userService.lastServerUA)
+	}
+}
+
+func TestRouterClientSubscribeEndpoint(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		subscribe: user.Subscribe{
+			U:              11,
+			D:              22,
+			TransferEnable: 100,
+			ExpiredAt:      int64Ptr(1234567890),
+			UUID:           "user-uuid",
+		},
+		servers: []map[string]any{
+			{
+				"type":    "vmess",
+				"name":    "VMess-1",
+				"host":    "node.example.com",
+				"port":    int64(443),
+				"network": "ws",
+				"tls":     int64(1),
+				"tls_settings": map[string]any{
+					"server_name": "node.example.com",
+				},
+				"network_settings": map[string]any{
+					"path": "/ws",
+					"headers": map[string]any{
+						"Host": "node.example.com",
+					},
+				},
+			},
+			{
+				"type":        "trojan",
+				"name":        "Trojan-1",
+				"host":        "trojan.example.com",
+				"port":        int64(443),
+				"network":     "tcp",
+				"tls":         int64(1),
+				"server_name": "trojan.example.com",
+			},
+		},
+	}
+	router := NewRouter(config.Config{AppName: "Forest"}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("subscription-userinfo"); got != "upload=11; download=22; total=100; expire=1234567890" {
+		t.Fatalf("unexpected subscription-userinfo header: %q", got)
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(rec.Body.String()))
+	if err != nil {
+		t.Fatalf("expected base64 body: %v", err)
+	}
+	body := string(decoded)
+	if !strings.Contains(body, "vmess://") || !strings.Contains(body, "trojan://") {
+		t.Fatalf("unexpected subscribe payload: %q", body)
+	}
+}
+
+func TestRouterServerV2ConfigEndpoint(t *testing.T) {
+	t.Setenv("SERVER_PUSH_INTERVAL", "90")
+	t.Setenv("SERVER_PULL_INTERVAL", "45")
+	t.Setenv("SERVER_NODE_REPORT_MIN_TRAFFIC", "2048")
+	t.Setenv("SERVER_DEVICE_ONLINE_MIN_TRAFFIC", "4096")
+
+	nodeService := &fakeNodeService{
+		server: nodeapi.ServerRecord{
+			ID:       9,
+			NodeType: "v2node",
+			RouteIDs: []int64{3},
+			Fields: map[string]any{
+				"listen_ip":           "0.0.0.0",
+				"server_port":         int64(443),
+				"network":             "ws",
+				"network_settings":    map[string]any{"path": "/ws"},
+				"protocol":            "vmess",
+				"tls":                 int64(1),
+				"tls_settings":        map[string]any{"server_name": "node.example.com"},
+				"encryption":          "none",
+				"encryption_settings": map[string]any{},
+				"flow":                "xtls-rprx-vision",
+				"cipher":              "2022-blake3-aes-128-gcm",
+				"congestion_control":  "bbr",
+				"zero_rtt_handshake":  int64(1),
+				"up_mbps":             int64(0),
+				"down_mbps":           int64(0),
+				"obfs":                "salamander",
+				"obfs_password":       "secret",
+				"padding_scheme":      []any{"stop=8"},
+				"created_at":          int64(1700000000),
+			},
+		},
+		routes: []map[string]any{
+			{"id": int64(3), "match": []any{"geosite:cn"}, "action": "direct"},
+		},
+	}
+	router := NewRouter(config.Load(), WithNodeService(nodeService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/server/config?token=&node_id=9", nil)
+	req.URL.RawQuery = "token=" + "secret" + "&node_id=9"
+	rec := httptest.NewRecorder()
+
+	cfg := config.Load()
+	cfg.ServerToken = "secret"
+	router = NewRouter(cfg, WithNodeService(nodeService))
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("ETag") == "" {
+		t.Fatal("expected etag header")
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("expected json body: %v", err)
+	}
+	if payload["listen_ip"] != "0.0.0.0" || payload["protocol"] != "vmess" {
+		t.Fatalf("unexpected payload: %#v", payload)
+	}
+	if payload["ignore_client_bandwidth"] != true {
+		t.Fatalf("expected ignore_client_bandwidth=true, got %#v", payload["ignore_client_bandwidth"])
+	}
+	baseConfig, ok := payload["base_config"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected base_config object, got %#v", payload["base_config"])
+	}
+	if baseConfig["push_interval"] != float64(90) || baseConfig["node_report_min_traffic"] != float64(2048) || baseConfig["device_online_min_traffic"] != float64(4096) {
+		t.Fatalf("unexpected base config: %#v", baseConfig)
+	}
+}

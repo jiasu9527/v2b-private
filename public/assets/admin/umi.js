@@ -41595,7 +41595,7 @@
                     onClick: ()=>{
                         r["a"].info({
                             title: "\u5fd8\u8bb0\u5bc6\u7801",
-                            content: a.a.createElement("div", null, a.a.createElement("div", null, "\u5728\u7ad9\u70b9\u76ee\u5f55\u4e0b\u6267\u884c\u547d\u4ee4\u627e\u56de\u5bc6\u7801"), a.a.createElement("code", null, "php artisan reset:password \u7ba1\u7406\u5458\u90ae\u7bb1")),
+                            content: a.a.createElement("div", null, a.a.createElement("div", null, "\u5728\u7ad9\u70b9\u76ee\u5f55\u4e0b\u6267\u884c\u547d\u4ee4\u627e\u56de\u5bc6\u7801"), a.a.createElement("code", null, "ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=new-password ./scripts/appctl create-admin")),
                             centered: !0,
                             okText: "\u6211\u77e5\u9053\u4e86",
                             onOk() {}
