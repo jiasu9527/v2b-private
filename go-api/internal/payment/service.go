@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -25,9 +26,10 @@ var (
 )
 
 type CheckoutRequest struct {
-	TradeNo  string
-	MethodID int64
-	Token    string
+	TradeNo        string
+	MethodID       int64
+	Token          string
+	RequestBaseURL string
 }
 
 type CheckoutResult struct {
@@ -189,7 +191,7 @@ func (s *DBService) Checkout(ctx context.Context, userID int64, req CheckoutRequ
 		TradeNo:   order.TradeNo,
 		Total:     total,
 		NotifyURL: s.notifyURL(paymentMethod),
-		ReturnURL: s.returnURL(order.TradeNo),
+		ReturnURL: s.returnURL(req.RequestBaseURL, order.TradeNo),
 		Token:     strings.TrimSpace(req.Token),
 	})
 }
@@ -343,12 +345,32 @@ func (s *DBService) notifyURL(paymentMethod paymentRecord) string {
 	return base + path
 }
 
-func (s *DBService) returnURL(tradeNo string) string {
-	base := strings.TrimRight(strings.TrimSpace(s.cfg.AppURL), "/")
+func (s *DBService) returnURL(requestBaseURL, tradeNo string) string {
+	base := strings.TrimRight(normalizePublicBase(requestBaseURL), "/")
+	if base == "" {
+		base = strings.TrimRight(strings.TrimSpace(s.cfg.AppURL), "/")
+	}
 	if base == "" {
 		base = "http://127.0.0.1"
 	}
 	return base + "/#/order/" + tradeNo
+}
+
+func normalizePublicBase(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+		return parsed.Scheme + "://" + parsed.Host
+	default:
+		return ""
+	}
 }
 
 func (s *DBService) findUserEmail(ctx context.Context, userID int64) (string, error) {

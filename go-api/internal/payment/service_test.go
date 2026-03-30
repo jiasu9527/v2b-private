@@ -23,6 +23,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"forest/go-api/internal/config"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -266,6 +268,24 @@ func TestBuildGatewayCheckoutCoinbase(t *testing.T) {
 	}
 	if result.Type != 1 || fmt.Sprint(result.Data) != "https://coinbase.example.com/pay/T406" {
 		t.Fatalf("unexpected coinbase result: %#v", result)
+	}
+}
+
+func TestDBServiceReturnURLUsesCurrentAccessDomainBeforeAppURL(t *testing.T) {
+	service := NewDBService(config.Config{AppURL: "https://site.example.com"}, nil, nil)
+
+	got := service.returnURL("https://mirror.example.com/path?q=1", "T900")
+	if got != "https://mirror.example.com/#/order/T900" {
+		t.Fatalf("unexpected return url: %s", got)
+	}
+}
+
+func TestDBServiceReturnURLFallsBackToAppURLWhenCurrentAccessDomainMissing(t *testing.T) {
+	service := NewDBService(config.Config{AppURL: "https://site.example.com"}, nil, nil)
+
+	got := service.returnURL("", "T901")
+	if got != "https://site.example.com/#/order/T901" {
+		t.Fatalf("unexpected return url: %s", got)
 	}
 }
 

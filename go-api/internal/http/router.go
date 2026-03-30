@@ -2651,9 +2651,10 @@ func handleUserOrderCheckout(w http.ResponseWriter, r *http.Request, sessionServ
 	}
 
 	result, err := paymentService.Checkout(r.Context(), identity.ID, payment.CheckoutRequest{
-		TradeNo:  strings.TrimSpace(inputs["trade_no"]),
-		MethodID: methodID,
-		Token:    strings.TrimSpace(inputs["token"]),
+		TradeNo:        strings.TrimSpace(inputs["trade_no"]),
+		MethodID:       methodID,
+		Token:          strings.TrimSpace(inputs["token"]),
+		RequestBaseURL: detectCheckoutRequestBaseURL(r),
 	})
 	if err != nil {
 		return handlePaymentError(w, err)
@@ -2663,6 +2664,36 @@ func handleUserOrderCheckout(w http.ResponseWriter, r *http.Request, sessionServ
 		"data": result.Data,
 	})
 	return true
+}
+
+func detectCheckoutRequestBaseURL(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if base := detectPublicBaseURL(r.Header.Get("Origin")); base != "" {
+		return base
+	}
+	if base := detectPublicBaseURL(r.Referer()); base != "" {
+		return base
+	}
+	return ""
+}
+
+func detectPublicBaseURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+		return parsed.Scheme + "://" + parsed.Host
+	default:
+		return ""
+	}
 }
 
 func handleUserOrderCheck(w http.ResponseWriter, r *http.Request, sessionService session.Service, userService usersvc.Service) bool {

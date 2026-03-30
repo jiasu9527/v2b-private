@@ -2825,6 +2825,53 @@ func TestRouterUserOrderCheckoutUnsupportedPaymentGatewayMessage(t *testing.T) {
 	}
 }
 
+func TestRouterUserOrderCheckoutPassesCurrentAccessDomainToPaymentService(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 10}}
+	paymentService := &fakePaymentService{
+		checkoutResult: payment.CheckoutResult{
+			Type: 1,
+			Data: "https://pay.example.com/T201",
+		},
+	}
+	router := NewRouter(
+		config.Config{AppName: "forest-go"},
+		WithSessionService(sessionService),
+		WithPaymentService(paymentService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/user/order/checkout", strings.NewReader(`{"auth_data":"jwt-order","trade_no":"T201","method":"9","token":"tok_123"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "https://mirror.example.com")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if paymentService.lastCheckout.RequestBaseURL != "https://mirror.example.com" {
+		t.Fatalf("expected request base url to be forwarded, got %#v", paymentService.lastCheckout)
+	}
+}
+
+func TestDetectCheckoutRequestBaseURLUsesRefererWhenOriginMissing(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/user/order/checkout", nil)
+	req.Header.Set("Referer", "https://mirror.example.com/#/shop")
+
+	got := detectCheckoutRequestBaseURL(req)
+	if got != "https://mirror.example.com" {
+		t.Fatalf("unexpected checkout request base url: %s", got)
+	}
+}
+
+func TestDetectCheckoutRequestBaseURLEmptyWithoutBrowserDomainContext(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/user/order/checkout", nil)
+
+	got := detectCheckoutRequestBaseURL(req)
+	if got != "" {
+		t.Fatalf("expected empty checkout request base url, got %s", got)
+	}
+}
+
 func TestRouterUserOrderCancelEndpoint(t *testing.T) {
 	sessionService := &fakeSessionService{user: &session.Identity{ID: 10}}
 	userService := &fakeUserService{cancelOK: true}
