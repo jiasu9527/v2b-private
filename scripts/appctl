@@ -477,6 +477,12 @@ normalize_yes_no_answer() {
   printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'
 }
 
+mysql_force_overwrite_enabled() {
+  local value
+  value="$(normalize_yes_no_answer "${FORCE_MYSQL_OVERWRITE:-}")"
+  [[ "${value}" == "1" || "${value}" == "true" || "${value}" == "y" || "${value}" == "yes" ]]
+}
+
 confirm_reset_postgres_target() {
   local answer=""
   printf '检测到 PostgreSQL 目标库已有数据，是否清空 PostgreSQL 并用 MySQL 全量覆盖？ [y/N]: ' >&2
@@ -692,6 +698,18 @@ auto_migrate_legacy_mysql_if_needed() {
 
   local source_env output
   source_env="$(legacy_mysql_env_path)"
+  if mysql_force_overwrite_enabled; then
+    echo "已启用 FORCE_MYSQL_OVERWRITE=1，开始清空 PostgreSQL 目标库并按 MySQL 全量覆盖"
+    output="$(run_ops_migrate_mysql "${source_env}" "true")"
+    if [[ -n "${output}" ]]; then
+      printf '%s\n' "${output}"
+    fi
+    if [[ "${output}" == *"migration_status=applied"* ]]; then
+      return 0
+    fi
+    return 1
+  fi
+
   output="$(run_ops_migrate_mysql "${source_env}")"
   if [[ -n "${output}" ]]; then
     printf '%s\n' "${output}"
@@ -865,6 +883,15 @@ cmd_migrate_mysql() {
 
   local source_env output
   source_env="$(legacy_mysql_env_path)"
+  if mysql_force_overwrite_enabled; then
+    echo "已启用 FORCE_MYSQL_OVERWRITE=1，开始清空 PostgreSQL 目标库并按 MySQL 全量覆盖"
+    output="$(run_ops_migrate_mysql "${source_env}" "true")"
+    if [[ -n "${output}" ]]; then
+      printf '%s\n' "${output}"
+    fi
+    return 0
+  fi
+
   output="$(run_ops_migrate_mysql "${source_env}")"
   if [[ -n "${output}" ]]; then
     printf '%s\n' "${output}"
