@@ -39,6 +39,35 @@ func TestLegacyMySQLConfigFromEnv(t *testing.T) {
 	}
 }
 
+func TestResolveSourceTableNamePrefersExactMatch(t *testing.T) {
+	sourceSet := map[string]struct{}{
+		"v2_server_vmess": {},
+		"v2_server_v2ray": {},
+	}
+
+	source, ok := resolveSourceTableName("v2_server_vmess", sourceSet)
+	if !ok {
+		t.Fatal("expected source table to resolve")
+	}
+	if source != "v2_server_vmess" {
+		t.Fatalf("expected exact source table, got %q", source)
+	}
+}
+
+func TestResolveSourceTableNameFallsBackToLegacyAlias(t *testing.T) {
+	sourceSet := map[string]struct{}{
+		"v2_server_v2ray": {},
+	}
+
+	source, ok := resolveSourceTableName("v2_server_vmess", sourceSet)
+	if !ok {
+		t.Fatal("expected source table alias to resolve")
+	}
+	if source != "v2_server_v2ray" {
+		t.Fatalf("expected legacy alias source table, got %q", source)
+	}
+}
+
 func TestCopyTableRowsConvertsValuesAndResetsSequence(t *testing.T) {
 	ctx := context.Background()
 

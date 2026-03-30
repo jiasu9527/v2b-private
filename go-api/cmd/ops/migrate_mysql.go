@@ -32,6 +32,7 @@ type tableColumnPlan struct {
 }
 
 type tableCopyPlan struct {
+	SourceTable    string
 	Table          string
 	Columns        []tableColumnPlan
 	IdentityColumn string
@@ -272,18 +273,27 @@ func migrateMySQLIntoPostgres(ctx context.Context, sourceDB, targetDB *sql.DB) (
 		targetSet[table] = struct{}{}
 	}
 
-	copyTables := make([]string, 0, len(sourceTables))
+	sourceSet := make(map[string]struct{}, len(sourceTables))
 	for _, table := range sourceTables {
-		if _, ok := targetSet[table]; ok {
-			copyTables = append(copyTables, table)
+		sourceSet[table] = struct{}{}
+	}
+
+	copyTables := make([]string, 0, len(targetTables))
+	copySources := make(map[string]string, len(targetTables))
+	for _, targetTable := range targetTables {
+		sourceTable, ok := resolveSourceTableName(targetTable, sourceSet)
+		if !ok {
+			continue
 		}
+		copyTables = append(copyTables, targetTable)
+		copySources[targetTable] = sourceTable
 	}
 	sort.Strings(copyTables)
 
 	tablesCopied := 0
 	var rowsCopied int64
 	for _, table := range copyTables {
-		plan, ok, err := buildTableCopyPlan(ctx, sourceDB, targetDB, table)
+		plan, ok, err := buildTableCopyPlan(ctx, sourceDB, targetDB, copySources[table], table)
 		if err != nil {
 			return tablesCopied, rowsCopied, err
 		}
@@ -298,6 +308,20 @@ func migrateMySQLIntoPostgres(ctx context.Context, sourceDB, targetDB *sql.DB) (
 		rowsCopied += count
 	}
 	return tablesCopied, rowsCopied, nil
+}
+
+func resolveSourceTableName(targetTable string, sourceSet map[string]struct{}) (string, bool) {
+	candidates := []string{targetTable}
+	switch targetTable {
+	case "v2_server_vmess":
+		candidates = append(candidates, "v2_server_v2ray", "v2_server")
+	}
+	for _, candidate := range candidates {
+		if _, ok := sourceSet[candidate]; ok {
+			return candidate, true
+		}
+	}
+	return "", false
 }
 
 func mysqlTableNames(ctx context.Context, db *sql.DB) ([]string, error) {
@@ -333,17 +357,17 @@ func scanSingleStringColumn(rows *sql.Rows, label string) ([]string, error) {
 	return items, nil
 }
 
-func buildTableCopyPlan(ctx context.Context, sourceDB, targetDB *sql.DB, table string) (tableCopyPlan, bool, error) {
-	sourceColumns, err := mysqlColumnSet(ctx, sourceDB, table)
+func buildTableCopyPlan(ctx context.Context, sourceDB, targetDB *sql.DB, sourceTable, targetTable string) (tableCopyPlan, bool, error) {
+	sourceColumns, err := mysqlColumnSet(ctx, sourceDB, sourceTable)
 	if err != nil {
 		return tableCopyPlan{}, false, err
 	}
-	targetColumns, identityColumn, err := postgresColumnPlans(ctx, targetDB, table)
+	targetColumns, identityColumn, err := postgresColumnPlans(ctx, targetDB, targetTable)
 	if err != nil {
 		return tableCopyPlan{}, false, err
 	}
 
-	plan := tableCopyPlan{Table: table, IdentityColumn: identityColumn}
+	plan := tableCopyPlan{SourceTable: sourceTable, Table: targetTable, IdentityColumn: identityColumn}
 	for _, item := range targetColumns {
 		if _, ok := sourceColumns[item.Name]; ok {
 			plan.Columns = append(plan.Columns, item)
@@ -526,7 +550,11 @@ func buildMySQLSelectSQL(plan tableCopyPlan) string {
 	for _, item := range plan.Columns {
 		columns = append(columns, quoteMySQLIdent(item.Name))
 	}
-	return fmt.Sprintf(`SELECT %s FROM %s`, strings.Join(columns, ", "), quoteMySQLIdent(plan.Table))
+	sourceTable := plan.SourceTable
+	if strings.TrimSpace(sourceTable) == "" {
+		sourceTable = plan.Table
+	}
+	return fmt.Sprintf(`SELECT %s FROM %s`, strings.Join(columns, ", "), quoteMySQLIdent(sourceTable))
 }
 
 func buildPostgresInsertSQL(plan tableCopyPlan) string {
