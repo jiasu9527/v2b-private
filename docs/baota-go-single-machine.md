@@ -172,6 +172,40 @@ journalctl -u forest-go-api -n 100 --no-pager
 - HTTPS 证书：继续在宝塔里申请和续期
 - 静态目录、PHP 版本、PHP 扩展不再是这套运行时的关键路径
 
+宝塔面板里建议这样配：
+
+- 站点正常保留
+- PHP 项目类型无所谓，但不要再依赖 PHP 处理请求
+- 打开站点的“反向代理”
+- 代理名称随便填，比如 `forest-go`
+- 目标 URL 填：`http://127.0.0.1:8080`
+- 发送域名：默认即可
+- 提交后保存 Nginx 配置
+
+如果你想直接看 Nginx 最终规则，宝塔默认反代到 Go API 的站点配置可以写成这样：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $http_host;
+    proxy_set_header X-Forwarded-Port $server_port;
+    proxy_http_version 1.1;
+    proxy_redirect off;
+}
+```
+
+如果站点原来是 PHP 版本，注意：
+
+- 不要再把请求转给 PHP-FPM
+- 不要再保留原来那套 V2Board PHP 伪静态规则
+- 只保留上面的反代规则即可
+
+如果你用了宝塔自动生成的反向代理配置，只要目标地址是 `127.0.0.1:8080`，并且请求最终能走到 Go API，就不要求和上面逐字一致。
+
 ## 6. 上线前检查
 
 ```bash

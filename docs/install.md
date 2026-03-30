@@ -161,6 +161,18 @@ systemctl daemon-reload
 systemctl enable --now forest-go-api
 ```
 
+## 宝塔 / Nginx 反代
+
+如果你是宝塔环境，站点层只需要把域名反代到：
+
+```bash
+http://127.0.0.1:8080
+```
+
+可直接照抄的 Nginx 规则见：
+
+- `docs/baota-go-single-machine.md`
+
 ## 安装后检查
 
 ```bash
