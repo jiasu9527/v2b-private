@@ -26,7 +26,7 @@ func TestNotifyTicketReplyEnqueuesEmailJob(t *testing.T) {
 		subject string
 		body    string
 	)
-	service.mailSender = func(host string, port int, encryption, username, password, from, to, mailSubject, mailBody string) error {
+	service.mailSender = func(host string, port int, encryption, username, password, from, fromName, to, mailSubject, mailBody string) error {
 		sentTo = to
 		subject = mailSubject
 		body = mailBody

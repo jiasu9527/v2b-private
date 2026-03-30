@@ -116,6 +116,44 @@ func TestDBServiceSaveConfigPersistsJSONValues(t *testing.T) {
 	}
 }
 
+func TestLoadBulkMailConfigFallsBackToAppNameForFromName(t *testing.T) {
+	root := t.TempDir()
+	writeAdminJSONFixture(t, root, map[string]any{
+		"app_name":           "Forest",
+		"app_url":            "https://forest.example.com",
+		"email_host":         "smtp.example.com",
+		"email_port":         2525,
+		"email_from_address": "noreply@example.com",
+		"email_template":     "forest-v2",
+	})
+
+	oldRoot := adminProjectRoot
+	adminProjectRoot = root
+	defer func() { adminProjectRoot = oldRoot }()
+
+	service := &DBService{cfg: cfgpkg.Config{
+		AppName:         "forest-go-api",
+		AppURL:          "http://localhost",
+		MailHost:        "127.0.0.1",
+		MailPort:        25,
+		MailFromAddress: "env@example.com",
+		MailFromName:    "forest-go-api",
+	}}
+	mailCfg, err := service.loadBulkMailConfig()
+	if err != nil {
+		t.Fatalf("load bulk mail config: %v", err)
+	}
+	if mailCfg.fromName != "Forest" {
+		t.Fatalf("expected fromName Forest, got %q", mailCfg.fromName)
+	}
+	if mailCfg.appURL != "https://forest.example.com" {
+		t.Fatalf("expected appURL from admin.json, got %q", mailCfg.appURL)
+	}
+	if mailCfg.template != "forest-v2" {
+		t.Fatalf("expected template forest-v2, got %q", mailCfg.template)
+	}
+}
+
 func writeAdminJSONFixture(t *testing.T, root string, values map[string]any) {
 	t.Helper()
 	mustMkdirAll(t, filepath.Join(root, "config"))

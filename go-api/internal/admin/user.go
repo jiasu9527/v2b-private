@@ -861,6 +861,10 @@ type bulkMailConfig struct {
 	password   string
 	encryption string
 	from       string
+	fromName   string
+	template   string
+	appName    string
+	appURL     string
 }
 
 func (s *DBService) dispatchUserMailJobs(ctx context.Context, emails []string, subject, content string, cfg bulkMailConfig) error {
@@ -875,7 +879,8 @@ func (s *DBService) dispatchUserMailJobs(ctx context.Context, emails []string, s
 			if cfg.host == "" {
 				sendErr = errors.New("邮件服务未配置")
 			} else {
-				sendErr = s.adminMailSender()(cfg.host, int(cfg.port), cfg.encryption, cfg.username, cfg.password, cfg.from, email, subject, content)
+				renderedBody := renderAdminMailBody(cfg, "notify", content, nil)
+				sendErr = s.adminMailSender()(cfg.host, int(cfg.port), cfg.encryption, cfg.username, cfg.password, cfg.from, cfg.fromName, email, subject, renderedBody)
 			}
 			_ = s.insertMailLog(jobCtx, email, subject, sendErr)
 			return sendErr
@@ -891,7 +896,7 @@ func (s *DBService) dispatchUserMailJobs(ctx context.Context, emails []string, s
 	return nil
 }
 
-func (s *DBService) adminMailSender() func(host string, port int, encryption, username, password, from, to, subject, body string) error {
+func (s *DBService) adminMailSender() func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error {
 	if s.mailSender != nil {
 		return s.mailSender
 	}

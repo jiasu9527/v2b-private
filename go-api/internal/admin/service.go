@@ -300,7 +300,7 @@ type DBService struct {
 	db         *sql.DB
 	orders     orderRuntime
 	jobs       queue.Enqueuer
-	mailSender func(host string, port int, encryption, username, password, from, to, subject, body string) error
+	mailSender func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error
 }
 
 type paymentRow struct {

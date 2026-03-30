@@ -2,6 +2,9 @@ package admin
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"forest/go-api/internal/queue"
@@ -29,7 +32,7 @@ func (c *captureQueue) Snapshot() queue.Snapshot {
 func TestDispatchUserMailJobsEnqueuesEachEmail(t *testing.T) {
 	service := (&DBService{}).WithQueueRuntime(&captureQueue{runNow: true})
 	var sent []string
-	service.mailSender = func(host string, port int, encryption, username, password, from, to, subject, body string) error {
+	service.mailSender = func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error {
 		sent = append(sent, to)
 		return nil
 	}
@@ -39,7 +42,7 @@ func TestDispatchUserMailJobsEnqueuesEachEmail(t *testing.T) {
 		[]string{"a@example.com", "b@example.com"},
 		"Notice",
 		"Hello",
-		bulkMailConfig{host: "127.0.0.1", port: 25, from: "noreply@example.com"},
+		bulkMailConfig{host: "127.0.0.1", port: 25, from: "noreply@example.com", fromName: "Forest", appName: "Forest", template: "default"},
 	)
 	if err != nil {
 		t.Fatalf("dispatch user mail jobs: %v", err)
@@ -51,5 +54,39 @@ func TestDispatchUserMailJobsEnqueuesEachEmail(t *testing.T) {
 	}
 	if len(sent) != 2 || sent[0] != "a@example.com" || sent[1] != "b@example.com" {
 		t.Fatalf("unexpected sent emails: %#v", sent)
+	}
+}
+
+func TestDispatchUserMailJobsRendersNotifyTemplate(t *testing.T) {
+	oldRoot := adminProjectRoot
+	adminProjectRoot = t.TempDir()
+	defer func() { adminProjectRoot = oldRoot }()
+
+	if err := os.MkdirAll(filepath.Join(adminProjectRoot, "resources", "views", "mail", "forest-v2"), 0o755); err != nil {
+		t.Fatalf("mkdir mail template: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(adminProjectRoot, "resources", "views", "mail", "forest-v2", "notify.blade.php"), []byte(`<html><body><h1>{{$name}}</h1><div>{!! nl2br(e($content)) !!}</div></body></html>`), 0o644); err != nil {
+		t.Fatalf("write notify template: %v", err)
+	}
+
+	service := (&DBService{}).WithQueueRuntime(&captureQueue{runNow: true})
+	var body string
+	service.mailSender = func(host string, port int, encryption, username, password, from, fromName, to, subject, renderedBody string) error {
+		body = renderedBody
+		return nil
+	}
+
+	err := service.dispatchUserMailJobs(
+		context.Background(),
+		[]string{"a@example.com"},
+		"Notice",
+		"Line1\nLine2",
+		bulkMailConfig{host: "127.0.0.1", port: 25, from: "noreply@example.com", fromName: "Forest", appName: "Forest", template: "forest-v2"},
+	)
+	if err != nil {
+		t.Fatalf("dispatch user mail jobs: %v", err)
+	}
+	if !strings.Contains(body, "<html>") || !strings.Contains(body, "Line1<br>Line2") {
+		t.Fatalf("expected rendered notify template body, got %q", body)
 	}
 }

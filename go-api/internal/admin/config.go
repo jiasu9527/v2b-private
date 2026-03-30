@@ -263,41 +263,45 @@ func (s *DBService) TestSendMail(_ context.Context, email string) (ConfigMailTes
 	}
 
 	email = strings.TrimSpace(email)
-	host := strings.TrimSpace(valueToString(cfg.values["email_host"]))
-	portValue := cfg.int64Value("email_port", s.cfg.MailPort)
-	if portValue == 0 {
-		portValue = 25
+	mailConfig, err := s.loadBulkMailConfig()
+	if err != nil {
+		return nil, err
 	}
-	username := strings.TrimSpace(valueToString(cfg.values["email_username"]))
-	password := valueToString(cfg.values["email_password"])
-	encryption := strings.TrimSpace(valueToString(cfg.values["email_encryption"]))
-	fromAddress := strings.TrimSpace(valueToString(cfg.values["email_from_address"]))
-	if fromAddress == "" {
-		fromAddress = email
+	if mailConfig.from == "" {
+		mailConfig.from = email
 	}
-	if fromAddress == "" {
-		fromAddress = "noreply@example.com"
+	if mailConfig.from == "" {
+		mailConfig.from = "noreply@example.com"
 	}
+	appName := strings.TrimSpace(valueToString(cfg.values["app_name"]))
+	if appName == "" {
+		appName = mailConfig.appName
+	}
+	subject := appName + "测试邮件"
 
 	log := ConfigMailTestLog{
 		"email":         email,
-		"subject":       "This is v2board test email",
+		"subject":       subject,
 		"template_name": "mail." + cfg.stringValue("email_template", "default") + ".notify",
 		"config": map[string]any{
-			"host":       host,
-			"port":       portValue,
-			"encryption": encryption,
-			"username":   username,
+			"host":       mailConfig.host,
+			"port":       mailConfig.port,
+			"encryption": mailConfig.encryption,
+			"username":   mailConfig.username,
 		},
 	}
 
-	if host == "" || email == "" {
+	if mailConfig.host == "" || email == "" {
 		log["error"] = "邮件服务未配置"
 		return log, nil
 	}
 
-	body := "This is v2board test email"
-	if err := sendMail(host, int(portValue), encryption, username, password, fromAddress, email, "This is v2board test email", body); err != nil {
+	body := renderAdminMailBody(mailConfig, "notify", "This is v2board test email", map[string]string{
+		"name":    mailConfig.appName,
+		"url":     mailConfig.appURL,
+		"content": "This is v2board test email",
+	})
+	if err := sendMail(mailConfig.host, int(mailConfig.port), mailConfig.encryption, mailConfig.username, mailConfig.password, mailConfig.from, mailConfig.fromName, email, subject, body); err != nil {
 		log["error"] = err.Error()
 	}
 	return log, nil
@@ -729,9 +733,9 @@ func telegramAPICall(client *http.Client, token, method string, params map[strin
 	return nil
 }
 
-func sendMail(host string, port int, encryption, username, password, from, to, subject, body string) error {
+func sendMail(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error {
 	address := host + ":" + strconv.Itoa(port)
-	message := buildSMTPMessage(from, to, subject, body)
+	message := buildSMTPMessage(from, fromName, to, subject, body)
 
 	switch strings.ToLower(strings.TrimSpace(encryption)) {
 	case "ssl":
@@ -778,13 +782,13 @@ func sendMail(host string, port int, encryption, username, password, from, to, s
 	}
 }
 
-func buildSMTPMessage(from, to, subject, body string) []byte {
+func buildSMTPMessage(from, fromName, to, subject, body string) []byte {
 	return []byte(strings.Join([]string{
 		"To: " + to,
-		"From: " + from,
+		"From: " + buildSMTPHeaderFrom(from, fromName),
 		"Subject: " + subject,
 		"MIME-Version: 1.0",
-		"Content-Type: text/plain; charset=UTF-8",
+		"Content-Type: " + adminSMTPContentType(body),
 		"",
 		body,
 	}, "\r\n"))

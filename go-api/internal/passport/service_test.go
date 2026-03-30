@@ -110,7 +110,7 @@ func TestSendEmailBestEffortEnqueuesEmailJob(t *testing.T) {
 		return nil
 	}
 
-	if err := service.sendEmailBestEffort(context.Background(), "user@example.com", "Subject", "verify", "Body"); err != nil {
+	if err := service.sendEmailBestEffort(context.Background(), "user@example.com", "Subject", "verify", "Body", nil); err != nil {
 		t.Fatalf("send email best effort: %v", err)
 	}
 
@@ -178,6 +178,39 @@ func TestRuntimeMailSettingsPreferAdminJSON(t *testing.T) {
 	}
 }
 
+func TestRuntimeMailSettingsFallsBackToAdminAppNameForFromName(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	raw := []byte(`{
+  "app_name": "Forest",
+  "email_host": "smtp.example.com",
+  "email_port": 25,
+  "email_from_address": "noreply@example.com"
+}`)
+	if err := os.WriteFile(filepath.Join(root, "config", "admin.json"), raw, 0o644); err != nil {
+		t.Fatalf("write admin.json: %v", err)
+	}
+
+	oldRoot := passportProjectRoot
+	passportProjectRoot = root
+	defer func() { passportProjectRoot = oldRoot }()
+
+	service := NewDBServiceWithConfig(config.Config{
+		AppName:         "forest-go-api",
+		MailHost:        "127.0.0.1",
+		MailPort:        25,
+		MailFromAddress: "env@example.com",
+		MailFromName:    "forest-go-api",
+	}, &fakeExecer{})
+
+	settings := service.runtimeMailSettings()
+	if settings.FromName != "Forest" {
+		t.Fatalf("expected from name to fall back to admin app_name, got %q", settings.FromName)
+	}
+}
+
 func TestSendSMTPUsesSSLEncryption(t *testing.T) {
 	server := startTestSMTPServer(t, smtpModeSSL)
 	defer server.Close()
@@ -217,6 +250,43 @@ func TestSendSMTPAllowsLegacyPlainAuthWithoutTLS(t *testing.T) {
 	}
 	if !strings.Contains(server.Message(), "Subject: Plain Subject") {
 		t.Fatalf("expected plain message subject, got %q", server.Message())
+	}
+}
+
+func TestSendEmailBestEffortRendersHTMLTemplate(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "resources", "views", "mail", "forest-v2"), 0o755); err != nil {
+		t.Fatalf("mkdir mail template: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config", "admin.json"), []byte(`{"app_name":"Forest","app_url":"https://forest.example.com","email_template":"forest-v2"}`), 0o644); err != nil {
+		t.Fatalf("write admin.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "resources", "views", "mail", "forest-v2", "verify.blade.php"), []byte(`<html><body><h1>{{$name}}</h1><span>{{$code}}</span></body></html>`), 0o644); err != nil {
+		t.Fatalf("write verify template: %v", err)
+	}
+
+	oldRoot := passportProjectRoot
+	passportProjectRoot = root
+	defer func() { passportProjectRoot = oldRoot }()
+
+	service := NewDBServiceWithConfig(config.Config{}, &fakeExecer{})
+	var rendered string
+	service.mailSender = func(to, subject, body string) error {
+		rendered = body
+		return nil
+	}
+
+	if err := service.sendEmailBestEffort(context.Background(), "user@example.com", "Subject", "verify", "fallback", map[string]string{
+		"name": "Forest",
+		"code": "654321",
+	}); err != nil {
+		t.Fatalf("send email best effort: %v", err)
+	}
+	if !strings.Contains(rendered, "<html>") || !strings.Contains(rendered, "654321") {
+		t.Fatalf("expected rendered html template body, got %q", rendered)
 	}
 }
 

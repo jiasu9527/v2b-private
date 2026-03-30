@@ -22,12 +22,12 @@ func (s *DBService) notifyTicketReply(ctx context.Context, email, ticketSubject,
 		return err
 	}
 
-	appName := strings.TrimSpace(s.cfg.AppName)
+	appName := strings.TrimSpace(mailConfig.appName)
 	if appName == "" {
 		appName = "V2Board"
 	}
 	subject := fmt.Sprintf("您在%s的工单得到了回复", appName)
-	body := buildTicketReplyMailBody(strings.TrimSpace(ticketSubject), strings.TrimSpace(replyMessage), strings.TrimSpace(s.cfg.AppURL))
+	body := buildTicketReplyMailBody(strings.TrimSpace(ticketSubject), strings.TrimSpace(replyMessage), strings.TrimSpace(mailConfig.appURL))
 	return s.dispatchTicketReplyMail(ctx, email, subject, body, mailConfig)
 }
 
@@ -51,7 +51,8 @@ func (s *DBService) dispatchTicketReplyMail(ctx context.Context, email, subject,
 		if cfg.host == "" {
 			sendErr = errors.New("邮件服务未配置")
 		} else {
-			sendErr = s.adminMailSender()(cfg.host, int(cfg.port), cfg.encryption, cfg.username, cfg.password, cfg.from, email, subject, content)
+			renderedBody := renderAdminMailBody(cfg, "notify", content, nil)
+			sendErr = s.adminMailSender()(cfg.host, int(cfg.port), cfg.encryption, cfg.username, cfg.password, cfg.from, cfg.fromName, email, subject, renderedBody)
 		}
 		_ = s.insertMailLog(jobCtx, email, subject, sendErr)
 		return sendErr
@@ -79,6 +80,10 @@ func (s *DBService) loadBulkMailConfig() (bulkMailConfig, error) {
 		password:   valueToString(cfg.values["email_password"]),
 		encryption: strings.TrimSpace(valueToString(cfg.values["email_encryption"])),
 		from:       strings.TrimSpace(valueToString(cfg.values["email_from_address"])),
+		fromName:   strings.TrimSpace(valueToString(cfg.values["email_from_name"])),
+		template:   strings.TrimSpace(valueToString(cfg.values["email_template"])),
+		appName:    strings.TrimSpace(valueToString(cfg.values["app_name"])),
+		appURL:     strings.TrimSpace(valueToString(cfg.values["app_url"])),
 	}
 
 	if mailConfig.host == "" {
@@ -104,6 +109,21 @@ func (s *DBService) loadBulkMailConfig() (bulkMailConfig, error) {
 	}
 	if mailConfig.from == "" {
 		mailConfig.from = "noreply@example.com"
+	}
+	if mailConfig.appName == "" {
+		mailConfig.appName = strings.TrimSpace(s.cfg.AppName)
+	}
+	if mailConfig.appName == "" {
+		mailConfig.appName = "V2Board"
+	}
+	if mailConfig.appURL == "" {
+		mailConfig.appURL = strings.TrimSpace(s.cfg.AppURL)
+	}
+	if mailConfig.template == "" {
+		mailConfig.template = "default"
+	}
+	if mailConfig.fromName == "" || mailConfig.fromName == "forest-go-api" || mailConfig.fromName == "V2Board" {
+		mailConfig.fromName = mailConfig.appName
 	}
 	return mailConfig, nil
 }

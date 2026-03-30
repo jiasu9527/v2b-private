@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"forest/go-api/internal/config"
+	"forest/go-api/internal/platform/mailtmpl"
 	"forest/go-api/internal/platform/smtpcompat"
 	"forest/go-api/internal/queue"
 
@@ -214,9 +215,14 @@ func (s *DBService) SendEmailVerify(ctx context.Context, req SendEmailVerifyRequ
 	}
 
 	code := randomDigits(6)
-	subject := fmt.Sprintf("%s%s", fallback(s.cfg.AppName, "V2Board"), " Email verification code")
-
-	_ = s.sendEmailBestEffort(ctx, email, subject, mailTemplateVerify, fmt.Sprintf("Your verification code is: %s", code))
+	settings := s.runtimeMailSettings()
+	subject := fmt.Sprintf("%s邮箱验证码", settings.AppName)
+	_ = s.sendEmailBestEffort(ctx, email, subject, mailTemplateVerify, fmt.Sprintf("您的验证码是：%s", code), map[string]string{
+		"name":    settings.AppName,
+		"url":     settings.AppURL,
+		"code":    code,
+		"content": fmt.Sprintf("您的验证码是：%s", code),
+	})
 	if err := s.kvSet(ctx, cacheKey(cacheEmailVerifyCode, email), code, 300); err != nil {
 		return err
 	}
@@ -650,9 +656,15 @@ func (s *DBService) LoginWithMailLink(ctx context.Context, req LoginWithMailLink
 	if redirect == "" {
 		redirect = defaultDashboardRedirect
 	}
-	link := s.buildFrontendURL(fmt.Sprintf("/#/login?verify=%s&redirect=%s", code, redirect))
-	subject := fmt.Sprintf("Login to %s", fallback(s.cfg.AppName, "V2Board"))
-	_ = s.sendEmailBestEffort(ctx, email, subject, mailTemplateLogin, fmt.Sprintf("Use the following link to login:\n%s", link))
+	settings := s.runtimeMailSettings()
+	link := joinMailURL(settings.AppURL, fmt.Sprintf("/#/login?verify=%s&redirect=%s", code, redirect))
+	subject := fmt.Sprintf("%s登录确认", settings.AppName)
+	_ = s.sendEmailBestEffort(ctx, email, subject, mailTemplateLogin, fmt.Sprintf("请使用以下链接登录：\n%s", link), map[string]string{
+		"name":    settings.AppName,
+		"url":     settings.AppURL,
+		"link":    link,
+		"content": fmt.Sprintf("请使用以下链接登录：\n%s", link),
+	})
 
 	return link, nil
 }
@@ -1093,9 +1105,17 @@ func (s *DBService) verifyRecaptcha(ctx context.Context, token string) error {
 	return nil
 }
 
-func (s *DBService) sendEmailBestEffort(ctx context.Context, email, subject, templateName, body string) error {
+func (s *DBService) sendEmailBestEffort(ctx context.Context, email, subject, templateName, body string, templateValues map[string]string) error {
 	runJob := func(jobCtx context.Context) error {
-		sendErr := s.smtpSender()(email, subject, body)
+		sendBody := body
+		settings := s.runtimeMailSettings()
+		if rendered, htmlBody, err := mailtmpl.Render(passportProjectRoot, settings.Template, templateName, templateValues); err == nil {
+			sendBody = rendered
+			if htmlBody {
+				sendBody = strings.TrimSpace(sendBody)
+			}
+		}
+		sendErr := s.smtpSender()(email, subject, sendBody)
 		logErr := ""
 		if sendErr != nil {
 			logErr = sendErr.Error()
@@ -1137,7 +1157,7 @@ func (s *DBService) sendSMTP(to, subject, body string) error {
 	msg.WriteString(fmt.Sprintf("To: %s\r\n", to))
 	msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
 	msg.WriteString("MIME-Version: 1.0\r\n")
-	msg.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
+	msg.WriteString("Content-Type: " + smtpContentType(body) + "\r\n")
 	msg.WriteString("\r\n")
 	msg.WriteString(body)
 	msg.WriteString("\r\n")
@@ -1213,6 +1233,9 @@ type runtimeMailSettings struct {
 	Encryption string
 	From       string
 	FromName   string
+	Template   string
+	AppName    string
+	AppURL     string
 }
 
 func (s *DBService) runtimeMailSettings() runtimeMailSettings {
@@ -1224,6 +1247,9 @@ func (s *DBService) runtimeMailSettings() runtimeMailSettings {
 		Encryption: strings.TrimSpace(s.cfg.MailEncryption),
 		From:       strings.TrimSpace(s.cfg.MailFromAddress),
 		FromName:   strings.TrimSpace(s.cfg.MailFromName),
+		Template:   "default",
+		AppName:    strings.TrimSpace(s.cfg.AppName),
+		AppURL:     strings.TrimSpace(s.cfg.AppURL),
 	}
 
 	if values, err := loadPassportAdminJSONValues(); err == nil {
@@ -1248,15 +1274,46 @@ func (s *DBService) runtimeMailSettings() runtimeMailSettings {
 		if fromName := strings.TrimSpace(passportStringValue(values["email_from_name"])); fromName != "" {
 			settings.FromName = fromName
 		}
+		if template := strings.TrimSpace(passportStringValue(values["email_template"])); template != "" {
+			settings.Template = template
+		}
+		if appName := strings.TrimSpace(passportStringValue(values["app_name"])); appName != "" {
+			settings.AppName = appName
+		}
+		if appURL := strings.TrimSpace(passportStringValue(values["app_url"])); appURL != "" {
+			settings.AppURL = appURL
+		}
 	}
 
 	if settings.Port <= 0 {
 		settings.Port = 25
 	}
-	if settings.FromName == "" {
-		settings.FromName = fallback(strings.TrimSpace(s.cfg.AppName), "V2Board")
+	if settings.Template == "" {
+		settings.Template = "default"
+	}
+	if settings.AppName == "" {
+		settings.AppName = "V2Board"
+	}
+	if settings.FromName == "" || settings.FromName == "forest-go-api" || settings.FromName == "V2Board" {
+		settings.FromName = settings.AppName
 	}
 	return settings
+}
+
+func joinMailURL(baseURL, path string) string {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return path
+	}
+	return strings.TrimRight(baseURL, "/") + path
+}
+
+func smtpContentType(body string) string {
+	lower := strings.ToLower(body)
+	if strings.Contains(lower, "<html") || strings.Contains(lower, "<body") || strings.Contains(lower, "<div") || strings.Contains(lower, "<table") {
+		return "text/html; charset=UTF-8"
+	}
+	return "text/plain; charset=UTF-8"
 }
 
 func detectPassportProjectRoot() string {
