@@ -198,6 +198,28 @@ func TestSendSMTPUsesSSLEncryption(t *testing.T) {
 	}
 }
 
+func TestSendSMTPAllowsLegacyPlainAuthWithoutTLS(t *testing.T) {
+	server := startTestSMTPServer(t, smtpModePlain)
+	defer server.Close()
+
+	service := NewDBServiceWithConfig(config.Config{
+		MailHost:        server.Host(),
+		MailPort:        int64(server.Port()),
+		MailUsername:    "mailer",
+		MailPassword:    "secret",
+		MailEncryption:  "",
+		MailFromAddress: "noreply@example.com",
+		MailFromName:    "Forest Mail",
+	}, &fakeExecer{})
+
+	if err := service.sendSMTP("user@example.com", "Plain Subject", "Plain Body"); err != nil {
+		t.Fatalf("send smtp plain auth: %v", err)
+	}
+	if !strings.Contains(server.Message(), "Subject: Plain Subject") {
+		t.Fatalf("expected plain message subject, got %q", server.Message())
+	}
+}
+
 type smtpTestMode string
 
 const (

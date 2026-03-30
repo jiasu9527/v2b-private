@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"forest/go-api/internal/config"
+	"forest/go-api/internal/platform/smtpcompat"
 	"forest/go-api/internal/queue"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -1180,7 +1181,7 @@ func (s *DBService) sendSMTP(to, subject, body string) error {
 
 	var auth smtp.Auth
 	if settings.Username != "" {
-		auth = smtp.PlainAuth("", settings.Username, settings.Password, host)
+		auth = smtpcompat.PlainAuth("", settings.Username, settings.Password, host, smtpcompat.AllowInsecureAuth(settings.Encryption))
 	}
 	return smtp.SendMail(addr, auth, from, []string{to}, []byte(msg.String()))
 }

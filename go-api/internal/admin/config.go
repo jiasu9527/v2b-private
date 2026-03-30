@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"forest/go-api/internal/platform/smtpcompat"
 )
 
 var (
@@ -770,7 +772,7 @@ func sendMail(host string, port int, encryption, username, password, from, to, s
 	default:
 		var auth smtp.Auth
 		if username != "" {
-			auth = smtp.PlainAuth("", username, password, host)
+			auth = smtpcompat.PlainAuth("", username, password, host, smtpcompat.AllowInsecureAuth(encryption))
 		}
 		return smtp.SendMail(address, auth, from, []string{to}, message)
 	}
