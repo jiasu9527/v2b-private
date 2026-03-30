@@ -846,12 +846,17 @@ restart_running_service_after_update() {
   local old_pid
   old_pid="$(pid_file_service_pid || process_scan_service_pid || true)"
   if [[ -z "${old_pid}" ]]; then
-    return 0
+    return 1
   fi
 
   cmd_stop >/dev/null
   start_binary
   echo "检测到 Go API 正在运行，已自动重启，PID $(cat "${PID_PATH}")"
+  return 0
+}
+
+warn_if_service_stopped_after_update() {
+  echo "当前 Go API 未运行，更新已完成，如需立即生效请执行 ./scripts/appctl start"
 }
 
 run_ops_install() {
@@ -1040,13 +1045,13 @@ cmd_update() {
   run_ops_migrate_config
   if auto_migrate_legacy_mysql_if_needed; then
     build
-    restart_running_service_after_update
+    restart_running_service_after_update || warn_if_service_stopped_after_update
     return 0
   fi
   resolve_postgres_dsn
   run_ops_update
   build
-  restart_running_service_after_update
+  restart_running_service_after_update || warn_if_service_stopped_after_update
 }
 
 cmd_start() {
