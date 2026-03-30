@@ -9,6 +9,7 @@ BIN_PATH="${BIN_DIR}/forest-go-api"
 PID_PATH="${RUN_DIR}/forest-go-api.pid"
 LOG_PATH="${RUN_DIR}/forest-go-api.log"
 GO_BIN="${GO_BIN:-go}"
+PGREP_BIN="${PGREP_BIN:-pgrep}"
 LOCAL_TOOL_DIR="${ROOT_DIR}/.local"
 LOCAL_GO_ROOT="${LOCAL_TOOL_DIR}/go"
 LOCAL_GO_BIN="${LOCAL_GO_ROOT}/bin/go"
@@ -721,6 +722,19 @@ systemctl_available() {
   command -v "${SYSTEMCTL_BIN}" >/dev/null 2>&1
 }
 
+pgrep_available() {
+  if [[ "${PGREP_BIN}" == */* ]]; then
+    [[ -x "${PGREP_BIN}" ]]
+    return
+  fi
+  command -v "${PGREP_BIN}" >/dev/null 2>&1
+}
+
+run_pgrep_checked() {
+  pgrep_available || return 1
+  "${PGREP_BIN}" "$@"
+}
+
 run_systemctl_checked() {
   systemctl_available || return 1
   "${SYSTEMCTL_BIN}" "$@"
@@ -754,15 +768,63 @@ pid_file_service_pid() {
   printf '%s\n' "${pid}"
 }
 
+process_scan_service_pid() {
+  pgrep_available || return 1
+
+  local pattern resolved
+  resolved="$(resolve_realpath "${BIN_PATH}" 2>/dev/null || true)"
+  pattern="${resolved:-${BIN_PATH}}"
+
+  local matches pid
+  matches="$(run_pgrep_checked -f "${pattern}" 2>/dev/null || true)"
+  [[ -n "${matches}" ]] || return 1
+
+  while IFS= read -r pid; do
+    [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+    [[ "${pid}" != "$$" ]] || continue
+    [[ "${pid}" != "${PPID:-}" ]] || continue
+    kill -0 "${pid}" 2>/dev/null || continue
+    printf '%s\n' "${pid}"
+    return 0
+  done <<< "${matches}"
+
+  return 1
+}
+
 current_service_pid() {
   pid_file_service_pid && return 0
-  systemd_service_pid
+  systemd_service_pid && return 0
+  process_scan_service_pid
 }
 
 start_binary() {
   cd "${GO_DIR}"
   nohup "${BIN_PATH}" >> "${LOG_PATH}" 2>&1 &
   echo $! > "${PID_PATH}"
+}
+
+wait_for_pid_exit() {
+  local pid="$1"
+  local attempts="${2:-20}"
+  local i=0
+  while (( i < attempts )); do
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+stop_local_process_pid() {
+  local pid="$1"
+  kill "${pid}" 2>/dev/null || true
+  if wait_for_pid_exit "${pid}" 20; then
+    return 0
+  fi
+  kill -9 "${pid}" 2>/dev/null || true
+  wait_for_pid_exit "${pid}" 10 || true
 }
 
 restart_running_service_after_update() {
@@ -782,7 +844,7 @@ restart_running_service_after_update() {
   fi
 
   local old_pid
-  old_pid="$(pid_file_service_pid || true)"
+  old_pid="$(pid_file_service_pid || process_scan_service_pid || true)"
   if [[ -z "${old_pid}" ]]; then
     return 0
   fi
@@ -1031,13 +1093,13 @@ cmd_stop() {
   fi
 
   local pid
-  pid="$(pid_file_service_pid || true)"
+  pid="$(pid_file_service_pid || process_scan_service_pid || true)"
   if [[ -z "${pid}" ]]; then
     rm -f "${PID_PATH}"
     echo "Go API 未运行"
     return 0
   fi
-  kill "${pid}"
+  stop_local_process_pid "${pid}"
   rm -f "${PID_PATH}"
   echo "已停止"
 }
@@ -1050,6 +1112,10 @@ cmd_status() {
   fi
   if pid="$(pid_file_service_pid || true)" && [[ -n "${pid}" ]]; then
     echo "运行中，PID $(cat "${PID_PATH}")"
+    return 0
+  fi
+  if pid="$(process_scan_service_pid || true)" && [[ -n "${pid}" ]]; then
+    echo "运行中，PID ${pid}（进程扫描）"
     return 0
   fi
   echo "已停止"
