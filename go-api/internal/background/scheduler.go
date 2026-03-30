@@ -10,6 +10,8 @@ import (
 
 const defaultInterval = time.Minute
 
+const statRefreshQueueName = "stat_refresh"
+
 type Heartbeater interface {
 	TouchScheduleHeartbeat(ctx context.Context) error
 }
@@ -82,8 +84,8 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		}
 	}
 
-	if r.stats != nil && !r.queueBusy("stat") {
-		if err := r.jobs.Enqueue("stat", "stat:refresh", func(jobCtx context.Context) error {
+	if r.stats != nil && !r.queueBusy(statRefreshQueueName) {
+		if err := r.jobs.Enqueue(statRefreshQueueName, "stat:refresh", func(jobCtx context.Context) error {
 			return r.stats.RefreshLegacyStats(jobCtx)
 		}); err != nil {
 			errs = append(errs, err)

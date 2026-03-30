@@ -108,7 +108,7 @@ func TestDBServiceGetQueueWorkloadIncludesKnownQueuesWhenIdle(t *testing.T) {
 		byName[name] = row
 	}
 
-	for _, queueName := range []string{"order_handle", "send_email", "send_email_mass", "send_telegram", "stat", "traffic_fetch"} {
+	for _, queueName := range []string{"order_handle", "send_email", "send_email_mass", "send_telegram", "stat", "stat_refresh", "traffic_fetch"} {
 		row, ok := byName[queueName]
 		if !ok {
 			t.Fatalf("expected queue %q in idle workload: %#v", queueName, workload)

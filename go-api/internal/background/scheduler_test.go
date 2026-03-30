@@ -74,12 +74,12 @@ func TestRunnerRunOnceEnqueuesOrderHandleAndStatJobs(t *testing.T) {
 	if stats.calls != 1 {
 		t.Fatalf("expected one stat refresh, got %d", stats.calls)
 	}
-	if len(q.queueNames) != 2 || q.queueNames[0] != "order_handle" || q.queueNames[1] != "stat" {
+	if len(q.queueNames) != 2 || q.queueNames[0] != "order_handle" || q.queueNames[1] != "stat_refresh" {
 		t.Fatalf("unexpected queue names: %#v", q.queueNames)
 	}
 }
 
-func TestRunnerRunOnceSkipsBusyQueues(t *testing.T) {
+func TestRunnerRunOnceSkipsBusyQueuesButStillRefreshesDailyStats(t *testing.T) {
 	q := &captureQueue{
 		runNow: true,
 		snapshot: queue.Snapshot{
@@ -104,10 +104,10 @@ func TestRunnerRunOnceSkipsBusyQueues(t *testing.T) {
 	if orders.calls != 0 {
 		t.Fatalf("expected order sweep skipped, got %d", orders.calls)
 	}
-	if stats.calls != 0 {
-		t.Fatalf("expected stat refresh skipped, got %d", stats.calls)
+	if stats.calls != 1 {
+		t.Fatalf("expected stat refresh to run on dedicated queue, got %d", stats.calls)
 	}
-	if len(q.queueNames) != 0 {
-		t.Fatalf("expected no new queue jobs, got %#v", q.queueNames)
+	if len(q.queueNames) != 1 || q.queueNames[0] != "stat_refresh" {
+		t.Fatalf("expected only stat refresh queue job, got %#v", q.queueNames)
 	}
 }
