@@ -79,4 +79,3 @@ if [[ -n "${LEGACY_BACKUP_DIR}" ]]; then
   export LEGACY_CONFIG_ROOT="${LEGACY_BACKUP_DIR}"
 fi
 "${ROOT_DIR}/scripts/appctl" update
-"${ROOT_DIR}/scripts/appctl" restart

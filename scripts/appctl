@@ -14,6 +14,10 @@ PGREP_BIN="${PGREP_BIN:-pgrep}"
 LOCAL_TOOL_DIR="${ROOT_DIR}/.local"
 LOCAL_GO_ROOT="${LOCAL_TOOL_DIR}/go"
 LOCAL_GO_BIN="${LOCAL_GO_ROOT}/bin/go"
+LOCAL_GO_PATH="${LOCAL_TOOL_DIR}/gopath"
+LOCAL_GO_MOD_CACHE="${LOCAL_TOOL_DIR}/gomodcache"
+LOCAL_GO_BUILD_CACHE="${LOCAL_TOOL_DIR}/gocache"
+LOCAL_HOME_DIR="${LOCAL_TOOL_DIR}/home"
 SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
 FOREST_SERVICE_NAME="${FOREST_SERVICE_NAME:-forest-go-api}"
 FOREST_SERVICE_FILE_PATH="${FOREST_SERVICE_FILE_PATH:-/etc/systemd/system/${FOREST_SERVICE_NAME}.service}"
@@ -40,7 +44,16 @@ cleanup_legacy_runtime_artifacts() {
   fi
 }
 
+prepare_go_env() {
+  export HOME="${HOME:-${LOCAL_HOME_DIR}}"
+  export GOPATH="${GOPATH:-${LOCAL_GO_PATH}}"
+  export GOMODCACHE="${GOMODCACHE:-${LOCAL_GO_MOD_CACHE}}"
+  export GOCACHE="${GOCACHE:-${LOCAL_GO_BUILD_CACHE}}"
+  mkdir -p "${HOME}" "${GOPATH}" "${GOMODCACHE}" "${GOCACHE}"
+}
+
 ensure_go() {
+  prepare_go_env
   if command -v "${GO_BIN}" >/dev/null 2>&1; then
     GO_BIN="$(command -v "${GO_BIN}")"
     return 0
@@ -796,6 +809,15 @@ systemd_service_pid() {
   printf '%s\n' "${pid}"
 }
 
+systemd_service_main_pid() {
+  systemctl_available || return 1
+  local pid
+  pid="$("${SYSTEMCTL_BIN}" show -p MainPID --value "${FOREST_SERVICE_NAME}" 2>/dev/null || true)"
+  [[ "${pid}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${pid}" != "0" ]] || return 1
+  printf '%s\n' "${pid}"
+}
+
 pid_file_service_pid() {
   [[ -f "${PID_PATH}" ]] || return 1
   local pid
@@ -832,6 +854,59 @@ current_service_pid() {
   pid_file_service_pid && return 0
   systemd_service_pid && return 0
   process_scan_service_pid
+}
+
+write_systemd_service_file() {
+  local service_dir tmp
+  service_dir="$(dirname "${FOREST_SERVICE_FILE_PATH}")"
+  mkdir -p "${service_dir}"
+  tmp="${FOREST_SERVICE_FILE_PATH}.tmp.$$"
+  cmd_service_template > "${tmp}"
+  chmod 0644 "${tmp}" 2>/dev/null || true
+  mv "${tmp}" "${FOREST_SERVICE_FILE_PATH}"
+}
+
+install_or_refresh_systemd_service() {
+  systemctl_available || return 1
+  if ! write_systemd_service_file; then
+    return 1
+  fi
+  if ! run_systemctl_checked daemon-reload >/dev/null; then
+    return 1
+  fi
+  return 0
+}
+
+ensure_systemd_service_running() {
+  if ! install_or_refresh_systemd_service; then
+    return 1
+  fi
+
+  if systemd_service_active; then
+    if ! run_systemctl_checked restart "${FOREST_SERVICE_NAME}" >/dev/null; then
+      return 1
+    fi
+    local restart_pid
+    restart_pid="$(systemd_service_main_pid || true)"
+    if [[ -n "${restart_pid}" ]]; then
+      echo "检测到 systemd 服务正在运行，已自动重启，PID ${restart_pid}"
+    else
+      echo "检测到 systemd 服务正在运行，已自动重启"
+    fi
+    return 0
+  fi
+
+  if ! run_systemctl_checked enable --now "${FOREST_SERVICE_NAME}" >/dev/null; then
+    return 1
+  fi
+  local enabled_pid
+  enabled_pid="$(systemd_service_main_pid || true)"
+  if [[ -n "${enabled_pid}" ]]; then
+    echo "已通过 systemd 启动并设置开机自启，PID ${enabled_pid}"
+  else
+    echo "已通过 systemd 启动并设置开机自启"
+  fi
+  return 0
 }
 
 start_binary() {
@@ -1035,6 +1110,10 @@ cmd_install() {
   fi
   run_ops_install
   build
+  ensure_systemd_service_running || {
+    start_binary
+    echo "已启动，PID $(cat "${PID_PATH}")"
+  }
 }
 
 cmd_install_legacy() {
@@ -1073,6 +1152,10 @@ cmd_install_legacy() {
     exit 1
   fi
   build
+  ensure_systemd_service_running || {
+    start_binary
+    echo "已启动，PID $(cat "${PID_PATH}")"
+  }
 }
 
 cmd_update() {
@@ -1089,6 +1172,9 @@ cmd_update() {
   resolve_postgres_dsn
   run_ops_update
   build
+  if ensure_systemd_service_running; then
+    return 0
+  fi
   restart_running_service_after_update || warn_if_service_stopped_after_update
 }
 
@@ -1102,15 +1188,7 @@ cmd_start() {
     return 0
   fi
   build
-  if systemd_service_managed; then
-    run_systemctl_checked start "${FOREST_SERVICE_NAME}" >/dev/null
-    local systemd_pid
-    systemd_pid="$(systemd_service_pid || true)"
-    if [[ -n "${systemd_pid}" ]]; then
-      echo "已通过 systemd 启动，PID ${systemd_pid}"
-    else
-      echo "已通过 systemd 启动"
-    fi
+  if ensure_systemd_service_running; then
     return 0
   fi
   start_binary

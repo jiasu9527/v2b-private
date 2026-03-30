@@ -23,8 +23,12 @@ chmod +x "${TMP_DIR}/scripts/appctl"
 APPCTL_LOG="${TMP_DIR}/appctl.log"
 export APPCTL_LOG
 
+filtered_actions() {
+  grep -v -E '^(env-file|status)$' "${APPCTL_LOG}" || true
+}
+
 printf '2\n1\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-routing-install.out 2>/tmp/test-menu-routing-install.err
-if [[ "$(cat "${APPCTL_LOG}")" != "install" ]]; then
+if [[ "$(filtered_actions)" != "install" ]]; then
   echo "expected install action"
   cat "${APPCTL_LOG}"
   exit 1
@@ -32,7 +36,7 @@ fi
 
 : > "${APPCTL_LOG}"
 printf '4\n2\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-routing-migrate.out 2>/tmp/test-menu-routing-migrate.err
-if [[ "$(cat "${APPCTL_LOG}")" != "migrate-mysql" ]]; then
+if [[ "$(filtered_actions)" != "migrate-mysql" ]]; then
   echo "expected migrate-mysql action"
   cat "${APPCTL_LOG}"
   exit 1
@@ -40,7 +44,7 @@ fi
 
 : > "${APPCTL_LOG}"
 printf '1\n3\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-routing-restart.out 2>/tmp/test-menu-routing-restart.err
-if [[ "$(cat "${APPCTL_LOG}")" != $'stop\nstart' ]]; then
+if [[ "$(filtered_actions)" != $'stop\nstart' ]]; then
   echo "expected restart actions"
   cat "${APPCTL_LOG}"
   exit 1
@@ -48,7 +52,7 @@ fi
 
 : > "${APPCTL_LOG}"
 printf '2\n3\n/legacy/site\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-routing-install-legacy.out 2>/tmp/test-menu-routing-install-legacy.err
-if [[ "$(cat "${APPCTL_LOG}")" != "install-legacy /legacy/site" ]]; then
+if [[ "$(filtered_actions)" != "install-legacy /legacy/site" ]]; then
   echo "expected install-legacy action"
   cat "${APPCTL_LOG}"
   exit 1
@@ -56,7 +60,7 @@ fi
 
 : > "${APPCTL_LOG}"
 printf '4\n9\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-routing-uninstall.out 2>/tmp/test-menu-routing-uninstall.err
-if [[ "$(cat "${APPCTL_LOG}")" != "uninstall" ]]; then
+if [[ "$(filtered_actions)" != "uninstall" ]]; then
   echo "expected uninstall action"
   cat "${APPCTL_LOG}"
   exit 1

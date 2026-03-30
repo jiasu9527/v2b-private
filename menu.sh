@@ -20,6 +20,9 @@ TAIL_BIN="${TAIL_BIN:-tail}"
 PS_BIN="${PS_BIN:-ps}"
 SS_BIN="${SS_BIN:-ss}"
 LSOF_BIN="${LSOF_BIN:-lsof}"
+SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
+JOURNALCTL_BIN="${JOURNALCTL_BIN:-journalctl}"
+FOREST_SERVICE_NAME="${FOREST_SERVICE_NAME:-forest-go-api}"
 GIT_BIN="${GIT_BIN:-git}"
 COLOR_RESET=""
 COLOR_BOLD=""
@@ -83,6 +86,19 @@ detect_runtime_status() {
   RUNTIME_STATUS_LABEL="已停止"
   RUNTIME_STATUS_COLOR="${COLOR_RED}"
   RUNTIME_PID="-"
+
+  local status_output=""
+  status_output="$("${APPCTL_BIN}" status 2>/dev/null | tail -n 1 || true)"
+  if [[ "${status_output}" == 运行中* ]]; then
+    RUNTIME_STATUS_LABEL="运行中"
+    RUNTIME_STATUS_COLOR="${COLOR_GREEN}"
+    local pid=""
+    pid="$(printf '%s' "${status_output}" | sed -nE 's/.*PID[[:space:]]+([0-9]+).*/\1/p' | tail -n 1)"
+    if [[ -n "${pid}" ]]; then
+      RUNTIME_PID="${pid}"
+    fi
+    return 0
+  fi
 
   local pid=""
   if [[ -f "${PID_PATH}" ]]; then
@@ -187,6 +203,8 @@ show_observe_menu() {
 4. 查看最近错误关键字
 5. 查看进程详情
 6. 查看监听端口
+7. 查看 systemd 状态
+8. 查看 systemd 日志
 0. 返回上级
 TEXT
 }
@@ -313,6 +331,22 @@ show_listen_ports() {
   echo "未找到 ss 或 lsof，无法查看监听端口"
 }
 
+show_systemd_status() {
+  if ! tool_available "${SYSTEMCTL_BIN}"; then
+    echo "未找到 systemctl 命令"
+    return 0
+  fi
+  run_command "${SYSTEMCTL_BIN}" status "${FOREST_SERVICE_NAME}" --no-pager -l
+}
+
+show_systemd_journal() {
+  if ! tool_available "${JOURNALCTL_BIN}"; then
+    echo "未找到 journalctl 命令"
+    return 0
+  fi
+  run_command "${JOURNALCTL_BIN}" -u "${FOREST_SERVICE_NAME}" -n 200 --no-pager
+}
+
 run_verify_script() {
   local script_path="$1"
   if [[ ! -x "${script_path}" ]]; then
@@ -385,6 +419,8 @@ observe_menu() {
       4) show_recent_errors; pause_screen ;;
       5) show_process_details; pause_screen ;;
       6) show_listen_ports; pause_screen ;;
+      7) show_systemd_status; pause_screen ;;
+      8) show_systemd_journal; pause_screen ;;
       *) echo "无效编号"; pause_screen ;;
     esac
   done

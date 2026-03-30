@@ -50,8 +50,26 @@ APPCTL_LOG="${TMP_DIR}/appctl.log"
 HELPER_LOG="${TMP_DIR}/helper.log"
 export APPCTL_LOG HELPER_LOG
 
+filtered_actions() {
+  grep -v -E '^(env-file|status)$' "${APPCTL_LOG}" || true
+}
+
+cat > "${TMP_DIR}/fake-systemctl" <<'SYSTEMCTL'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'systemctl %s\n' "$*" >> "${HELPER_LOG}"
+SYSTEMCTL
+chmod +x "${TMP_DIR}/fake-systemctl"
+
+cat > "${TMP_DIR}/fake-journalctl" <<'JOURNALCTL'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'journalctl %s\n' "$*" >> "${HELPER_LOG}"
+JOURNALCTL
+chmod +x "${TMP_DIR}/fake-journalctl"
+
 printf '3\n1\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-doctor.out 2>/tmp/test-menu-helper-doctor.err
-if [[ "$(grep -v '^env-file$' "${APPCTL_LOG}")" != "doctor" ]]; then
+if [[ "$(filtered_actions)" != "doctor" ]]; then
   echo "expected doctor action"
   cat "${APPCTL_LOG}"
   exit 1
@@ -78,7 +96,7 @@ fi
 : > "${APPCTL_LOG}"
 : > "${HELPER_LOG}"
 printf '3\n5\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" PID_PATH="${TMP_DIR}/go-api/run/forest-go-api.pid" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-ps.out 2>/tmp/test-menu-helper-ps.err
-if [[ "$(grep -v '^env-file$' "${APPCTL_LOG}")" != "status" ]]; then
+if [[ "$(grep -c '^status$' "${APPCTL_LOG}")" -lt 1 ]]; then
   echo "expected status action before ps"
   cat "${APPCTL_LOG}"
   exit 1
@@ -92,9 +110,27 @@ fi
 : > "${APPCTL_LOG}"
 : > "${HELPER_LOG}"
 printf '4\n8\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-install-link.out 2>/tmp/test-menu-helper-install-link.err
-if [[ "$(grep -v '^env-file$' "${APPCTL_LOG}")" != "install-link" ]]; then
+if [[ "$(filtered_actions)" != "install-link" ]]; then
   echo "expected install-link action"
   cat "${APPCTL_LOG}"
+  exit 1
+fi
+
+: > "${APPCTL_LOG}"
+: > "${HELPER_LOG}"
+printf '3\n7\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" SYSTEMCTL_BIN="${TMP_DIR}/fake-systemctl" JOURNALCTL_BIN="${TMP_DIR}/fake-journalctl" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-systemd-status.out 2>/tmp/test-menu-helper-systemd-status.err
+if [[ "$(cat "${HELPER_LOG}")" != "systemctl status forest-go-api --no-pager -l" ]]; then
+  echo "expected systemctl status helper"
+  cat "${HELPER_LOG}"
+  exit 1
+fi
+
+: > "${APPCTL_LOG}"
+: > "${HELPER_LOG}"
+printf '3\n8\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" SYSTEMCTL_BIN="${TMP_DIR}/fake-systemctl" JOURNALCTL_BIN="${TMP_DIR}/fake-journalctl" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-systemd-journal.out 2>/tmp/test-menu-helper-systemd-journal.err
+if [[ "$(cat "${HELPER_LOG}")" != "journalctl -u forest-go-api -n 200 --no-pager" ]]; then
+  echo "expected journalctl helper"
+  cat "${HELPER_LOG}"
   exit 1
 fi
 
