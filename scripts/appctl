@@ -595,6 +595,7 @@ path_from_go_dir() {
 }
 
 run_ops_migrate_config() {
+  ensure_go
   local args=(run ./cmd/ops migrate-config --target-root ..)
   if [[ -n "${LEGACY_CONFIG_ROOT:-}" ]]; then
     args+=(--legacy-root "${LEGACY_CONFIG_ROOT}")
