@@ -20,6 +20,12 @@ TAIL_BIN="${TAIL_BIN:-tail}"
 PS_BIN="${PS_BIN:-ps}"
 SS_BIN="${SS_BIN:-ss}"
 LSOF_BIN="${LSOF_BIN:-lsof}"
+COLOR_RESET=""
+COLOR_BOLD=""
+COLOR_DIM=""
+COLOR_GREEN=""
+COLOR_RED=""
+COLOR_CYAN=""
 
 normalize_choice() {
   printf '%s' "${1:-}" | tr -d '[:space:]'
@@ -54,26 +60,47 @@ tool_available() {
   command -v "$1" >/dev/null 2>&1
 }
 
+supports_color() {
+  [[ -t 1 || "${FORCE_COLOR:-0}" == "1" ]]
+}
+
+init_colors() {
+  if ! supports_color; then
+    return 0
+  fi
+
+  COLOR_RESET=$'\033[0m'
+  COLOR_BOLD=$'\033[1m'
+  COLOR_DIM=$'\033[2m'
+  COLOR_GREEN=$'\033[32m'
+  COLOR_RED=$'\033[31m'
+  COLOR_CYAN=$'\033[36m'
+}
+
 print_header() {
-  cat <<'TEXT'
-==============================
- Forest 管理菜单
- Go + PostgreSQL 单机版
-==============================
-TEXT
+  printf '%s--------------------------------%s\n' "${COLOR_CYAN}" "${COLOR_RESET}"
+  printf '%sForest 管理菜单%s\n' "${COLOR_BOLD}" "${COLOR_RESET}"
+  printf '%sGo API + PostgreSQL 单机版%s\n' "${COLOR_DIM}" "${COLOR_RESET}"
+  printf '%s--------------------------------%s\n' "${COLOR_CYAN}" "${COLOR_RESET}"
 }
 
 show_runtime_overview() {
   local status_label="已停止"
+  local status_color="${COLOR_RED}"
   local pid=""
   if [[ -f "${PID_PATH}" ]]; then
     pid="$(cat "${PID_PATH}" 2>/dev/null || true)"
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
-      status_label="运行中 (PID ${pid})"
+      status_label="运行中"
+      status_color="${COLOR_GREEN}"
     fi
   fi
 
-  printf '当前状态: %s\n' "${status_label}"
+  if [[ -n "${pid}" ]] && [[ "${status_label}" == "运行中" ]]; then
+    printf '当前状态: %s%s%s (PID %s)\n' "${status_color}" "${status_label}" "${COLOR_RESET}" "${pid}"
+  else
+    printf '当前状态: %s%s%s\n' "${status_color}" "${status_label}" "${COLOR_RESET}"
+  fi
   printf '项目目录: %s\n' "${ROOT_DIR}"
   printf '日志文件: %s\n' "${LOG_PATH}"
   printf '\n'
@@ -83,12 +110,10 @@ show_main_menu() {
   print_header
   show_runtime_overview
   cat <<'TEXT'
-1. 安装与更新
-2. 数据库与迁移
-3. 服务管理
-4. 检查与日志
-5. 数据与账号
-6. 系统与环境
+1. 安装更新
+2. 服务管理
+3. 检查日志
+4. 高级操作
 0. 退出
 TEXT
 }
@@ -96,29 +121,12 @@ TEXT
 show_install_menu() {
   cat <<'TEXT'
 
-[安装与更新]
+[安装更新]
 1. 一键安装
 2. 一键更新
-3. 仅构建二进制
+3. 从旧项目一键迁移安装
 4. 初始化环境文件
 5. 配置 PostgreSQL
-6. 迁移旧 PHP 配置
-7. 从旧项目一键迁移安装
-8. 安全卸载当前部署
-0. 返回上级
-TEXT
-}
-
-show_database_menu() {
-  cat <<'TEXT'
-
-[数据库与迁移]
-1. 迁移旧 PHP 配置
-2. 迁移旧版 MySQL -> PostgreSQL
-3. 强制全量覆盖 PostgreSQL
-4. 数据库健康检查
-5. 查看数据库配置摘要
-6. 查看当前环境文件路径
 0. 返回上级
 TEXT
 }
@@ -131,8 +139,7 @@ show_service_menu() {
 2. 停止服务
 3. 重启服务
 4. 查看状态
-5. 前台运行
-6. 重新构建并重启
+5. 重新构建并重启
 0. 返回上级
 TEXT
 }
@@ -151,32 +158,19 @@ show_observe_menu() {
 TEXT
 }
 
-show_data_menu() {
+show_advanced_menu() {
   cat <<'TEXT'
 
-[数据与账号]
-1. 创建/重置管理员
-2. 导入演示数据
-3. 运行 API 验证脚本
-4. 运行支付 API 验证脚本
-5. 运行支付回调验证脚本
-6. 清理旧版运行残留
-0. 返回上级
-TEXT
-}
-
-show_system_menu() {
-  cat <<'TEXT'
-
-[系统与环境]
-1. 查看当前环境文件
-2. 打印环境变量摘要
-3. 生成 systemd 服务模板
-4. 运行 Go 单元测试
-5. 查看命令帮助
-6. 打印运行路径摘要
-7. 安装全局 forest 命令
-8. 安全卸载当前部署
+[高级操作]
+1. 迁移旧 PHP 配置
+2. 迁移旧版 MySQL -> PostgreSQL
+3. 强制全量覆盖 PostgreSQL
+4. 创建/重置管理员
+5. 查看数据库配置摘要
+6. 查看当前环境文件路径
+7. 生成 systemd 服务模板
+8. 安装全局 forest 命令
+9. 安全卸载当前部署
 0. 返回上级
 TEXT
 }
@@ -313,11 +307,7 @@ install_menu() {
       __EOF__|0) return 0 ;;
       1) run_appctl install; pause_screen ;;
       2) run_appctl update; pause_screen ;;
-      3) run_appctl build; pause_screen ;;
-      4) run_appctl init-env; pause_screen ;;
-      5) run_appctl prompt-db; pause_screen ;;
-      6) run_appctl migrate-config; pause_screen ;;
-      7)
+      3)
         legacy_path="$(prompt_text "请输入旧项目目录或旧版 .env 路径")"
         if [[ "${legacy_path}" == "__EOF__" ]]; then
           return 0
@@ -329,23 +319,8 @@ install_menu() {
         fi
         pause_screen
         ;;
-      8) run_appctl uninstall; pause_screen ;;
-      *) echo "无效编号"; pause_screen ;;
-    esac
-  done
-}
-
-database_menu() {
-  while true; do
-    show_database_menu
-    case "$(prompt_choice)" in
-      __EOF__|0) return 0 ;;
-      1) run_appctl migrate-config; pause_screen ;;
-      2) run_appctl migrate-mysql; pause_screen ;;
-      3) FORCE_MYSQL_OVERWRITE=1 run_appctl migrate-mysql; pause_screen ;;
-      4) run_appctl doctor; pause_screen ;;
-      5) show_env_summary; pause_screen ;;
-      6) run_appctl env-file; pause_screen ;;
+      4) run_appctl init-env; pause_screen ;;
+      5) run_appctl prompt-db; pause_screen ;;
       *) echo "无效编号"; pause_screen ;;
     esac
   done
@@ -360,8 +335,7 @@ service_menu() {
       2) run_appctl stop; pause_screen ;;
       3) restart_service; pause_screen ;;
       4) run_appctl status; pause_screen ;;
-      5) run_appctl run; pause_screen ;;
-      6) rebuild_and_restart; pause_screen ;;
+      5) rebuild_and_restart; pause_screen ;;
       *) echo "无效编号"; pause_screen ;;
     esac
   done
@@ -383,35 +357,20 @@ observe_menu() {
   done
 }
 
-data_menu() {
+advanced_menu() {
   while true; do
-    show_data_menu
+    show_advanced_menu
     case "$(prompt_choice)" in
       __EOF__|0) return 0 ;;
-      1) run_appctl create-admin; pause_screen ;;
-      2) run_appctl seed-demo; pause_screen ;;
-      3) run_verify_script "${ROOT_DIR}/scripts/verify-demo-api.sh"; pause_screen ;;
-      4) run_verify_script "${ROOT_DIR}/scripts/verify-demo-payment-api.sh"; pause_screen ;;
-      5) run_verify_script "${ROOT_DIR}/scripts/verify-demo-payment-notify.sh"; pause_screen ;;
-      6) run_appctl cleanup; pause_screen ;;
-      *) echo "无效编号"; pause_screen ;;
-    esac
-  done
-}
-
-system_menu() {
-  while true; do
-    show_system_menu
-    case "$(prompt_choice)" in
-      __EOF__|0) return 0 ;;
-      1) run_appctl env-file; pause_screen ;;
-      2) show_env_summary; pause_screen ;;
-      3) run_appctl service-template; pause_screen ;;
-      4) run_appctl test; pause_screen ;;
-      5) run_command "${APPCTL_BIN}"; pause_screen ;;
-      6) show_runtime_paths; pause_screen ;;
-      7) run_appctl install-link; pause_screen ;;
-      8) run_appctl uninstall; pause_screen ;;
+      1) run_appctl migrate-config; pause_screen ;;
+      2) run_appctl migrate-mysql; pause_screen ;;
+      3) FORCE_MYSQL_OVERWRITE=1 run_appctl migrate-mysql; pause_screen ;;
+      4) run_appctl create-admin; pause_screen ;;
+      5) show_env_summary; pause_screen ;;
+      6) run_appctl env-file; pause_screen ;;
+      7) run_appctl service-template; pause_screen ;;
+      8) run_appctl install-link; pause_screen ;;
+      9) run_appctl uninstall; pause_screen ;;
       *) echo "无效编号"; pause_screen ;;
     esac
   done
@@ -428,16 +387,16 @@ main() {
     exit 0
   fi
 
+  init_colors
+
   while true; do
     show_main_menu
     case "$(prompt_choice)" in
       __EOF__|0) exit 0 ;;
       1) install_menu ;;
-      2) database_menu ;;
-      3) service_menu ;;
-      4) observe_menu ;;
-      5) data_menu ;;
-      6) system_menu ;;
+      2) service_menu ;;
+      3) observe_menu ;;
+      4) advanced_menu ;;
       *) echo "无效编号"; pause_screen ;;
     esac
   done

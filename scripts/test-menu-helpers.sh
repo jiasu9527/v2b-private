@@ -48,7 +48,7 @@ APPCTL_LOG="${TMP_DIR}/appctl.log"
 HELPER_LOG="${TMP_DIR}/helper.log"
 export APPCTL_LOG HELPER_LOG
 
-printf '4\n1\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-doctor.out 2>/tmp/test-menu-helper-doctor.err
+printf '3\n1\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-doctor.out 2>/tmp/test-menu-helper-doctor.err
 if [[ "$(cat "${APPCTL_LOG}")" != "doctor" ]]; then
   echo "expected doctor action"
   cat "${APPCTL_LOG}"
@@ -57,7 +57,7 @@ fi
 
 : > "${APPCTL_LOG}"
 : > "${HELPER_LOG}"
-printf '4\n2\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" LOG_PATH="${TMP_DIR}/go-api/run/forest-go-api.log" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-log.out 2>/tmp/test-menu-helper-log.err
+printf '3\n2\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" LOG_PATH="${TMP_DIR}/go-api/run/forest-go-api.log" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-log.out 2>/tmp/test-menu-helper-log.err
 if [[ "$(cat "${HELPER_LOG}")" != "tail -n 200 ${TMP_DIR}/go-api/run/forest-go-api.log" ]]; then
   echo "expected tail helper"
   cat "${HELPER_LOG}"
@@ -66,7 +66,7 @@ fi
 
 : > "${APPCTL_LOG}"
 : > "${HELPER_LOG}"
-printf '6\n1\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-env-file.out 2>/tmp/test-menu-helper-env-file.err
+printf '4\n6\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-env-file.out 2>/tmp/test-menu-helper-env-file.err
 if [[ "$(cat "${APPCTL_LOG}")" != "env-file" ]]; then
   echo "expected env-file action"
   cat "${APPCTL_LOG}"
@@ -75,7 +75,7 @@ fi
 
 : > "${APPCTL_LOG}"
 : > "${HELPER_LOG}"
-printf '4\n5\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" PID_PATH="${TMP_DIR}/go-api/run/forest-go-api.pid" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-ps.out 2>/tmp/test-menu-helper-ps.err
+printf '3\n5\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" PID_PATH="${TMP_DIR}/go-api/run/forest-go-api.pid" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-ps.out 2>/tmp/test-menu-helper-ps.err
 if [[ "$(cat "${APPCTL_LOG}")" != "status" ]]; then
   echo "expected status action before ps"
   cat "${APPCTL_LOG}"
@@ -89,7 +89,7 @@ fi
 
 : > "${APPCTL_LOG}"
 : > "${HELPER_LOG}"
-printf '6\n7\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-install-link.out 2>/tmp/test-menu-helper-install-link.err
+printf '4\n8\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-install-link.out 2>/tmp/test-menu-helper-install-link.err
 if [[ "$(cat "${APPCTL_LOG}")" != "install-link" ]]; then
   echo "expected install-link action"
   cat "${APPCTL_LOG}"
