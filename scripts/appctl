@@ -31,7 +31,7 @@ cleanup_legacy_runtime_artifacts() {
   done
 
   if [[ "${quiet}" != "true" ]]; then
-    echo "removed ${removed} legacy runtime artifact(s)"
+    echo "已清理 ${removed} 个旧版运行残留文件"
   fi
 }
 
@@ -42,7 +42,7 @@ ensure_go() {
   fi
 
   if [[ "${GO_BIN}" != "go" ]]; then
-    echo "configured GO_BIN not found: ${GO_BIN}"
+    echo "找不到指定的 GO_BIN：${GO_BIN}"
     exit 1
   fi
 
@@ -53,7 +53,7 @@ ensure_go() {
 
   bootstrap_local_go
   if [[ ! -x "${LOCAL_GO_BIN}" ]]; then
-    echo "failed to bootstrap local go toolchain"
+    echo "本地 Go 工具链初始化失败"
     exit 1
   fi
   GO_BIN="${LOCAL_GO_BIN}"
@@ -68,7 +68,7 @@ detect_go_bootstrap_os() {
     Linux) printf 'linux\n' ;;
     Darwin) printf 'darwin\n' ;;
     *)
-      echo "unsupported OS for automatic Go bootstrap: $(uname -s)" >&2
+      echo "当前系统暂不支持自动安装 Go：$(uname -s)" >&2
       exit 1
       ;;
   esac
@@ -79,7 +79,7 @@ detect_go_bootstrap_arch() {
     x86_64|amd64) printf 'amd64\n' ;;
     arm64|aarch64) printf 'arm64\n' ;;
     *)
-      echo "unsupported CPU architecture for automatic Go bootstrap: $(uname -m)" >&2
+      echo "当前 CPU 架构暂不支持自动安装 Go：$(uname -m)" >&2
       exit 1
       ;;
   esac
@@ -99,7 +99,7 @@ download_file() {
     return 0
   fi
 
-  echo "automatic Go bootstrap requires curl or wget" >&2
+  echo "自动安装 Go 需要 curl 或 wget" >&2
   exit 1
 }
 
@@ -113,20 +113,20 @@ bootstrap_local_go() {
   extract_dir="${LOCAL_TOOL_DIR}/.go-extract.$$"
 
   if ! command -v tar >/dev/null 2>&1; then
-    echo "automatic Go bootstrap requires tar" >&2
+    echo "自动安装 Go 需要 tar" >&2
     exit 1
   fi
 
   mkdir -p "${LOCAL_TOOL_DIR}"
   rm -rf "${extract_dir}" "${LOCAL_GO_ROOT}"
 
-  echo "bootstrapping Go ${version} into ${LOCAL_GO_ROOT}" >&2
+  echo "正在初始化本地 Go 工具链 ${version} 到 ${LOCAL_GO_ROOT}" >&2
   download_file "${url}" "${archive}"
   mkdir -p "${extract_dir}"
   tar -C "${extract_dir}" -xzf "${archive}"
 
   if [[ ! -x "${extract_dir}/go/bin/go" ]]; then
-    echo "automatic Go bootstrap failed: extracted archive does not contain go/bin/go" >&2
+    echo "自动安装 Go 失败：解压结果中缺少 go/bin/go" >&2
     rm -rf "${extract_dir}" "${archive}"
     exit 1
   fi
@@ -461,7 +461,7 @@ prompt_secret_with_default() {
   local value=""
 
   if [[ -n "${default_value}" ]]; then
-    printf '%s [saved]: ' "${prompt}" >&2
+    printf '%s [已保存]: ' "${prompt}" >&2
   else
     printf '%s: ' "${prompt}" >&2
   fi
@@ -497,7 +497,7 @@ cmd_prompt_db() {
     case "${1}" in
       --optional) optional=true ;;
       *)
-        echo "unknown prompt-db option: ${1}" >&2
+        echo "未知的 prompt-db 参数：${1}" >&2
         exit 1
         ;;
     esac
@@ -513,7 +513,7 @@ cmd_prompt_db() {
       default_answer="n"
       prompt_label="[y/N]"
     fi
-    printf 'Update PostgreSQL config before continuing? %s: ' "${prompt_label}" >&2
+    printf '更新前是否修改 PostgreSQL 配置？ %s: ' "${prompt_label}" >&2
     local answer=""
     IFS= read -r answer || true
     answer="$(printf '%s' "${answer}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
@@ -521,22 +521,22 @@ cmd_prompt_db() {
       answer="${default_answer}"
     fi
     if [[ "${answer}" != "y" && "${answer}" != "yes" ]]; then
-      echo "skipped PostgreSQL config update"
+      echo "已跳过 PostgreSQL 配置更新"
       return 0
     fi
   fi
 
   local host port database username password sslmode dsn
-  host="$(prompt_with_default "DB_HOST" "$(current_db_value host)")"
+  host="$(prompt_with_default "PostgreSQL 主机 (DB_HOST)" "$(current_db_value host)")"
   host="${host:-127.0.0.1}"
-  port="$(prompt_with_default "DB_PORT" "$(current_db_value port)")"
+  port="$(prompt_with_default "PostgreSQL 端口 (DB_PORT)" "$(current_db_value port)")"
   port="${port:-5432}"
-  database="$(prompt_with_default "DB_DATABASE" "$(current_db_value database)")"
+  database="$(prompt_with_default "PostgreSQL 数据库名 (DB_DATABASE)" "$(current_db_value database)")"
   database="${database:-forest}"
-  username="$(prompt_with_default "DB_USERNAME" "$(current_db_value username)")"
+  username="$(prompt_with_default "PostgreSQL 用户名 (DB_USERNAME)" "$(current_db_value username)")"
   username="${username:-postgres}"
-  password="$(prompt_secret_with_default "DB_PASSWORD" "$(current_db_value password)")"
-  sslmode="$(prompt_with_default "DB_SSLMODE" "$(current_db_value sslmode)")"
+  password="$(prompt_secret_with_default "PostgreSQL 密码 (DB_PASSWORD)" "$(current_db_value password)")"
+  sslmode="$(prompt_with_default "PostgreSQL SSL 模式 (DB_SSLMODE)" "$(current_db_value sslmode)")"
   sslmode="${sslmode:-disable}"
   dsn="$(build_postgres_dsn_value "${host}" "${port}" "${database}" "${username}" "${password}" "${sslmode}")"
 
@@ -548,7 +548,7 @@ cmd_prompt_db() {
   set_env_var "DB_SSLMODE" "${sslmode}"
   set_env_var "POSTGRES_DSN" "${dsn}"
 
-  printf 'updated PostgreSQL config in %s\n' "$(resolve_env_path)"
+  printf '已更新 PostgreSQL 配置文件：%s\n' "$(resolve_env_path)"
 }
 
 ensure_app_key() {
@@ -574,7 +574,7 @@ resolve_postgres_dsn() {
   local sslmode="${DB_SSLMODE:-disable}"
 
   if [[ -z "${database}" || -z "${username}" ]]; then
-    echo "POSTGRES_DSN not set and DB_DATABASE/DB_USERNAME missing"
+    echo "未配置 PostgreSQL 连接，请设置 POSTGRES_DSN 或 DB_DATABASE/DB_USERNAME"
     exit 1
   fi
 
@@ -653,13 +653,13 @@ ensure_postgres_target_for_legacy_mysql() {
     return 1
   fi
   if should_prompt_db_config; then
-    echo "legacy MySQL env detected; configure PostgreSQL target before migration" >&2
+    echo "检测到旧版 MySQL 环境，请先配置 PostgreSQL 目标库" >&2
     cmd_prompt_db
     load_env
   fi
   if ! db_configured; then
-    echo "legacy MySQL env detected but PostgreSQL target is not configured" >&2
-    echo "run ./scripts/appctl prompt-db or set POSTGRES_DSN/DB_* in .env.go" >&2
+    echo "检测到旧版 MySQL 环境，但 PostgreSQL 目标库尚未配置" >&2
+    echo "请运行 ./scripts/appctl prompt-db，或在 .env.go 中设置 POSTGRES_DSN/DB_*" >&2
     exit 1
   fi
 }
@@ -691,7 +691,10 @@ cmd_install() {
   load_env
   run_ops_migrate_config
   resolve_postgres_dsn
-  : "${ADMIN_EMAIL:?ADMIN_EMAIL is required}"
+  if [[ -z "${ADMIN_EMAIL:-}" ]]; then
+    echo "必须设置 ADMIN_EMAIL"
+    exit 1
+  fi
   run_ops_install
   build
 }
@@ -716,14 +719,14 @@ cmd_start() {
   run_ops_migrate_config
   resolve_postgres_dsn
   if [[ -f "${PID_PATH}" ]] && kill -0 "$(cat "${PID_PATH}")" 2>/dev/null; then
-    echo "go api already running"
+    echo "Go API 已在运行"
     return 0
   fi
   build
   cd "${GO_DIR}"
   nohup "${BIN_PATH}" >> "${LOG_PATH}" 2>&1 &
   echo $! > "${PID_PATH}"
-  echo "started pid $(cat "${PID_PATH}")"
+  echo "已启动，PID $(cat "${PID_PATH}")"
 }
 
 cmd_run() {
@@ -738,7 +741,7 @@ cmd_run() {
 
 cmd_stop() {
   if [[ ! -f "${PID_PATH}" ]]; then
-    echo "go api not running"
+    echo "Go API 未运行"
     return 0
   fi
   local pid
@@ -747,15 +750,15 @@ cmd_stop() {
     kill "${pid}"
   fi
   rm -f "${PID_PATH}"
-  echo "stopped"
+  echo "已停止"
 }
 
 cmd_status() {
   if [[ -f "${PID_PATH}" ]] && kill -0 "$(cat "${PID_PATH}")" 2>/dev/null; then
-    echo "running pid $(cat "${PID_PATH}")"
+    echo "运行中，PID $(cat "${PID_PATH}")"
     return 0
   fi
-  echo "stopped"
+  echo "已停止"
 }
 
 cmd_test() {
@@ -768,14 +771,14 @@ cmd_init_env() {
   local env_path
   env_path="$(resolve_env_path)"
   if [[ -f "${env_path}" ]]; then
-    echo "${env_path} already exists"
+    echo "${env_path} 已存在，无需重复初始化"
     return 0
   fi
   cp "$(resolve_env_example_path)" "${env_path}"
   if [[ "${env_path}" == "${ROOT_DIR}/.env.go" ]]; then
     copy_shared_env_from_legacy_stack "${env_path}"
   fi
-  echo "initialized ${env_path}"
+  echo "已初始化 ${env_path}"
 }
 
 cmd_doctor() {
@@ -823,7 +826,7 @@ cmd_migrate_mysql() {
   load_env
   run_ops_migrate_config
   if ! legacy_mysql_configured; then
-    echo "legacy MySQL env not detected"
+    echo "未检测到旧版 MySQL 环境"
     exit 1
   fi
   ensure_postgres_target_for_legacy_mysql
@@ -841,7 +844,10 @@ cmd_create_admin() {
   ensure_go
   load_env
   resolve_postgres_dsn
-  : "${ADMIN_EMAIL:?ADMIN_EMAIL is required}"
+  if [[ -z "${ADMIN_EMAIL:-}" ]]; then
+    echo "必须设置 ADMIN_EMAIL"
+    exit 1
+  fi
 
   local args=(run ./cmd/ops create-admin --admin-email "${ADMIN_EMAIL}")
   if [[ -n "${ADMIN_PASSWORD:-}" ]]; then
@@ -904,7 +910,7 @@ cmd_cleanup() {
 
 usage() {
   cat <<'EOF'
-Usage:
+用法：
   ./scripts/appctl install
   ./scripts/appctl update
   ./scripts/appctl cleanup
@@ -926,14 +932,14 @@ Usage:
   ./scripts/appctl doctor
   ./scripts/appctl service-template
 
-Install requires:
+安装时必须设置：
   ADMIN_EMAIL
-Database env:
-  Prefer POSTGRES_DSN
-  Or DB_HOST DB_PORT DB_DATABASE DB_USERNAME DB_PASSWORD
-Env file priority:
+数据库环境变量：
+  优先使用 POSTGRES_DSN
+  或 DB_HOST DB_PORT DB_DATABASE DB_USERNAME DB_PASSWORD
+环境文件优先级：
   .env.go
-  .env (only when it does not look like a legacy MySQL/Redis env)
+  .env（仅当它看起来不是旧版 MySQL/Redis 环境时才会使用）
 EOF
 }
 

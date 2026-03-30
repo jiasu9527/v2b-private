@@ -61,7 +61,7 @@ if ! rg -n "^APP_NAME=custom$" "${TMP_DIR}/.env.go" >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ "${OUTPUT2}" != *"already exists"* ]]; then
+if [[ "${OUTPUT2}" != *"已存在，无需重复初始化"* ]]; then
   echo "expected existing-file message, got ${OUTPUT2}"
   exit 1
 fi

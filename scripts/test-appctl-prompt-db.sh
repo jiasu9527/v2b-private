@@ -33,6 +33,12 @@ EOF
 
 printf 'db.internal\n5433\nforestgo\nforest_user\nforest_pass\nrequire\n' | "${TMP_DIR}/scripts/appctl" prompt-db >/tmp/test-appctl-prompt-db.out 2>/tmp/test-appctl-prompt-db.err
 
+if ! rg -n '已更新 PostgreSQL 配置文件' /tmp/test-appctl-prompt-db.out >/dev/null 2>&1; then
+  echo "expected chinese update success message"
+  cat /tmp/test-appctl-prompt-db.out
+  exit 1
+fi
+
 if ! rg -n '^DB_HOST=db.internal$' "${TMP_DIR}/.env.go" >/dev/null 2>&1; then
   echo "expected DB_HOST to be updated"
   cat "${TMP_DIR}/.env.go"
@@ -87,6 +93,18 @@ POSTGRES_DSN=host=keep-host port=5432 user=keepuser dbname=keepdb sslmode=disabl
 EOF
 
 printf 'n\n' | "${TMP_DIR}/scripts/appctl" prompt-db --optional >/tmp/test-appctl-prompt-db-skip.out 2>/tmp/test-appctl-prompt-db-skip.err
+
+if ! rg -n '更新前是否修改 PostgreSQL 配置' /tmp/test-appctl-prompt-db-skip.err >/dev/null 2>&1; then
+  echo "expected chinese optional prompt"
+  cat /tmp/test-appctl-prompt-db-skip.err
+  exit 1
+fi
+
+if ! rg -n '已跳过 PostgreSQL 配置更新' /tmp/test-appctl-prompt-db-skip.out >/dev/null 2>&1; then
+  echo "expected chinese skip message"
+  cat /tmp/test-appctl-prompt-db-skip.out
+  exit 1
+fi
 
 if ! rg -n '^DB_HOST=keep-host$' "${TMP_DIR}/.env.go" >/dev/null 2>&1; then
   echo "expected optional prompt to preserve env when skipped"

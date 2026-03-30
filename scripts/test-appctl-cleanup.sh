@@ -29,7 +29,7 @@ if [[ -e "${TMP_DIR}/workerman.webman.php.pid" ]]; then
   exit 1
 fi
 
-if [[ "${OUTPUT}" != *"removed 2 legacy runtime artifact"* ]]; then
+if [[ "${OUTPUT}" != *"已清理 2 个旧版运行残留文件"* ]]; then
   echo "unexpected cleanup output: ${OUTPUT}"
   exit 1
 fi
