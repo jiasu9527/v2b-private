@@ -855,26 +855,37 @@ func (s *DBService) DeleteUsers(ctx context.Context, filters []UserFilter) (bool
 }
 
 type bulkMailConfig struct {
-	host       string
-	port       int64
-	username   string
-	password   string
-	encryption string
-	from       string
-	fromName   string
-	template   string
-	appName    string
-	appURL     string
+	host                string
+	port                int64
+	username            string
+	password            string
+	encryption          string
+	from                string
+	fromName            string
+	template            string
+	appName             string
+	appURL              string
+	bulkIntervalSeconds int64
 }
 
 func (s *DBService) dispatchUserMailJobs(ctx context.Context, emails []string, subject, content string, cfg bulkMailConfig) error {
+	emailList := make([]string, 0, len(emails))
 	for _, email := range emails {
 		email = strings.TrimSpace(email)
-		if email == "" {
-			continue
+		if email != "" {
+			emailList = append(emailList, email)
 		}
+	}
+	if len(emailList) == 0 {
+		return nil
+	}
+	if cfg.bulkIntervalSeconds < 0 {
+		cfg.bulkIntervalSeconds = 0
+	}
 
-		runJob := func(jobCtx context.Context) error {
+	runBatch := func(jobCtx context.Context) error {
+		var batchErr error
+		for idx, email := range emailList {
 			var sendErr error
 			if cfg.host == "" {
 				sendErr = errors.New("邮件服务未配置")
@@ -883,16 +894,28 @@ func (s *DBService) dispatchUserMailJobs(ctx context.Context, emails []string, s
 				sendErr = s.adminMailSender()(cfg.host, int(cfg.port), cfg.encryption, cfg.username, cfg.password, cfg.from, cfg.fromName, email, subject, renderedBody)
 			}
 			_ = s.insertMailLog(jobCtx, email, subject, sendErr)
-			return sendErr
-		}
-
-		if s.jobs != nil {
-			if err := s.jobs.Enqueue("send_email_mass", "send:"+email, runJob); err == nil {
+			if sendErr != nil && batchErr == nil {
+				batchErr = sendErr
+			}
+			if idx >= len(emailList)-1 || cfg.bulkIntervalSeconds <= 0 {
 				continue
 			}
+			if err := s.sleepContext(jobCtx, time.Duration(cfg.bulkIntervalSeconds)*time.Second); err != nil {
+				if batchErr == nil {
+					batchErr = err
+				}
+				break
+			}
 		}
-		_ = runJob(ctx)
+		return batchErr
 	}
+
+	if s.jobs != nil {
+		if err := s.jobs.Enqueue("send_email_mass", "batch:"+subject, runBatch); err == nil {
+			return nil
+		}
+	}
+	_ = runBatch(ctx)
 	return nil
 }
 

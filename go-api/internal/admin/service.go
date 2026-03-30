@@ -301,6 +301,7 @@ type DBService struct {
 	orders     orderRuntime
 	jobs       queue.Enqueuer
 	mailSender func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error
+	sleep      func(context.Context, time.Duration) error
 }
 
 type paymentRow struct {
@@ -330,6 +331,23 @@ func NewDBService(cfg config.Config, db *sql.DB, orders ...orderRuntime) *DBServ
 func (s *DBService) WithQueueRuntime(jobs queue.Enqueuer) *DBService {
 	s.jobs = jobs
 	return s
+}
+
+func (s *DBService) sleepContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	if s.sleep != nil {
+		return s.sleep(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *DBService) GetSystemStatus(ctx context.Context) (SystemStatus, error) {

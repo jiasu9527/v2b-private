@@ -16,6 +16,7 @@ func TestDBServiceFetchConfigAndTemplates(t *testing.T) {
 		"invite_campaign_enable":     1,
 		"invite_commission":          20,
 		"commission_withdraw_method": []string{"USDT", "支付宝"},
+		"email_bulk_interval":        3,
 		"email_whitelist_suffix":     []string{"qq.com"},
 		"secure_path":                "localadmin",
 		"frontend_theme":             "default",
@@ -29,7 +30,7 @@ func TestDBServiceFetchConfigAndTemplates(t *testing.T) {
 	defer func() { adminProjectRoot = oldRoot }()
 
 	service := &DBService{cfg: cfgpkg.Config{AdminPath: "localadmin"}}
-	data, err := service.FetchConfig(context.Background(), "invite")
+	data, err := service.FetchConfig(context.Background(), "")
 	if err != nil {
 		t.Fatalf("fetch config: %v", err)
 	}
@@ -44,6 +45,13 @@ func TestDBServiceFetchConfigAndTemplates(t *testing.T) {
 	methods, ok := invite["commission_withdraw_method"].([]string)
 	if !ok || len(methods) != 2 || methods[0] != "USDT" || methods[1] != "支付宝" {
 		t.Fatalf("unexpected withdraw methods: %#v", invite["commission_withdraw_method"])
+	}
+	emailCfg, ok := data["email"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected email group, got %#v", data)
+	}
+	if emailCfg["email_bulk_interval"] != int64(3) {
+		t.Fatalf("unexpected email bulk interval: %#v", emailCfg["email_bulk_interval"])
 	}
 
 	emailTemplates, err := service.ListEmailTemplates(context.Background())
@@ -79,6 +87,7 @@ func TestDBServiceSaveConfigPersistsJSONValues(t *testing.T) {
 		"secure_path":                "newsecure",
 		"deposit_bounus":             []any{"100:10"},
 		"commission_withdraw_method": []any{"USDT", "支付宝"},
+		"email_bulk_interval":        5,
 	})
 	if err != nil {
 		t.Fatalf("save config: %v", err)
@@ -113,6 +122,9 @@ func TestDBServiceSaveConfigPersistsJSONValues(t *testing.T) {
 	}
 	if written["secure_path"] != "newsecure" {
 		t.Fatalf("expected secure_path in json, got %#v", written["secure_path"])
+	}
+	if written["email_bulk_interval"] != "5" && written["email_bulk_interval"] != float64(5) {
+		t.Fatalf("expected email_bulk_interval in json, got %#v", written["email_bulk_interval"])
 	}
 }
 

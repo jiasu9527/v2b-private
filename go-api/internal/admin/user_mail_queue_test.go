@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"forest/go-api/internal/queue"
 )
@@ -29,7 +30,7 @@ func (c *captureQueue) Snapshot() queue.Snapshot {
 	return queue.Snapshot{}
 }
 
-func TestDispatchUserMailJobsEnqueuesEachEmail(t *testing.T) {
+func TestDispatchUserMailJobsEnqueuesSingleBatchJob(t *testing.T) {
 	service := (&DBService{}).WithQueueRuntime(&captureQueue{runNow: true})
 	var sent []string
 	service.mailSender = func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error {
@@ -49,11 +50,42 @@ func TestDispatchUserMailJobsEnqueuesEachEmail(t *testing.T) {
 	}
 
 	q := service.jobs.(*captureQueue)
-	if len(q.queueNames) != 2 || q.queueNames[0] != "send_email_mass" || q.queueNames[1] != "send_email_mass" {
+	if len(q.queueNames) != 1 || q.queueNames[0] != "send_email_mass" {
 		t.Fatalf("unexpected queue names: %#v", q.queueNames)
 	}
 	if len(sent) != 2 || sent[0] != "a@example.com" || sent[1] != "b@example.com" {
 		t.Fatalf("unexpected sent emails: %#v", sent)
+	}
+}
+
+func TestDispatchUserMailJobsWaitsBetweenEmails(t *testing.T) {
+	service := (&DBService{}).WithQueueRuntime(&captureQueue{runNow: true})
+	var sent []string
+	var waits []string
+	service.mailSender = func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error {
+		sent = append(sent, to)
+		return nil
+	}
+	service.sleep = func(_ context.Context, d time.Duration) error {
+		waits = append(waits, d.String())
+		return nil
+	}
+
+	err := service.dispatchUserMailJobs(
+		context.Background(),
+		[]string{"a@example.com", "b@example.com", "c@example.com"},
+		"Notice",
+		"Hello",
+		bulkMailConfig{host: "127.0.0.1", port: 25, from: "noreply@example.com", fromName: "Forest", appName: "Forest", template: "default", bulkIntervalSeconds: 2},
+	)
+	if err != nil {
+		t.Fatalf("dispatch user mail jobs: %v", err)
+	}
+	if len(sent) != 3 {
+		t.Fatalf("unexpected sent emails: %#v", sent)
+	}
+	if len(waits) != 2 || waits[0] != "2s" || waits[1] != "2s" {
+		t.Fatalf("unexpected wait durations: %#v", waits)
 	}
 }
 

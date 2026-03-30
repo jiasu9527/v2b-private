@@ -128,13 +128,14 @@ func (s *DBService) FetchConfig(_ context.Context, key string) (map[string]any, 
 			"device_limit_mode":                cfg.int64Value("device_limit_mode", 0),
 		},
 		"email": map[string]any{
-			"email_template":     cfg.stringValue("email_template", "default"),
-			"email_host":         cfg.nullableStringValue("email_host"),
-			"email_port":         cfg.nullableStringValue("email_port"),
-			"email_username":     cfg.nullableStringValue("email_username"),
-			"email_password":     cfg.nullableStringValue("email_password"),
-			"email_encryption":   cfg.nullableStringValue("email_encryption"),
-			"email_from_address": cfg.nullableStringValue("email_from_address"),
+			"email_template":      cfg.stringValue("email_template", "default"),
+			"email_host":          cfg.nullableStringValue("email_host"),
+			"email_port":          cfg.nullableStringValue("email_port"),
+			"email_username":      cfg.nullableStringValue("email_username"),
+			"email_password":      cfg.nullableStringValue("email_password"),
+			"email_encryption":    cfg.nullableStringValue("email_encryption"),
+			"email_from_address":  cfg.nullableStringValue("email_from_address"),
+			"email_bulk_interval": cfg.int64Value("email_bulk_interval", 0),
 		},
 		"telegram": map[string]any{
 			"telegram_bot_enable":   cfg.int64Value("telegram_bot_enable", 0),
@@ -566,6 +567,15 @@ func validateConfigValue(key string, value phpConfigValue) error {
 		}
 		if matched, _ := regexp.MatchString(`^[\w-]*$`, raw); !matched {
 			return errors.New("后台路径只能为字母或数字")
+		}
+	case "email_bulk_interval":
+		raw := strings.TrimSpace(valueToString(value))
+		if raw == "" {
+			return nil
+		}
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			return errors.New("群发速率限制必须为大于等于0的整数")
 		}
 	}
 	return nil

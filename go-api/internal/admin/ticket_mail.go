@@ -74,16 +74,17 @@ func (s *DBService) loadBulkMailConfig() (bulkMailConfig, error) {
 	}
 
 	mailConfig := bulkMailConfig{
-		host:       strings.TrimSpace(valueToString(cfg.values["email_host"])),
-		port:       cfg.int64Value("email_port", s.cfg.MailPort),
-		username:   strings.TrimSpace(valueToString(cfg.values["email_username"])),
-		password:   valueToString(cfg.values["email_password"]),
-		encryption: strings.TrimSpace(valueToString(cfg.values["email_encryption"])),
-		from:       strings.TrimSpace(valueToString(cfg.values["email_from_address"])),
-		fromName:   strings.TrimSpace(valueToString(cfg.values["email_from_name"])),
-		template:   strings.TrimSpace(valueToString(cfg.values["email_template"])),
-		appName:    strings.TrimSpace(valueToString(cfg.values["app_name"])),
-		appURL:     strings.TrimSpace(valueToString(cfg.values["app_url"])),
+		host:                strings.TrimSpace(valueToString(cfg.values["email_host"])),
+		port:                cfg.int64Value("email_port", s.cfg.MailPort),
+		username:            strings.TrimSpace(valueToString(cfg.values["email_username"])),
+		password:            valueToString(cfg.values["email_password"]),
+		encryption:          strings.TrimSpace(valueToString(cfg.values["email_encryption"])),
+		from:                strings.TrimSpace(valueToString(cfg.values["email_from_address"])),
+		fromName:            strings.TrimSpace(valueToString(cfg.values["email_from_name"])),
+		template:            strings.TrimSpace(valueToString(cfg.values["email_template"])),
+		appName:             strings.TrimSpace(valueToString(cfg.values["app_name"])),
+		appURL:              strings.TrimSpace(valueToString(cfg.values["app_url"])),
+		bulkIntervalSeconds: cfg.int64Value("email_bulk_interval", 0),
 	}
 
 	if mailConfig.host == "" {
@@ -121,6 +122,9 @@ func (s *DBService) loadBulkMailConfig() (bulkMailConfig, error) {
 	}
 	if mailConfig.template == "" {
 		mailConfig.template = "default"
+	}
+	if mailConfig.bulkIntervalSeconds < 0 {
+		mailConfig.bulkIntervalSeconds = 0
 	}
 	if mailConfig.fromName == "" || mailConfig.fromName == "forest-go-api" || mailConfig.fromName == "V2Board" {
 		mailConfig.fromName = mailConfig.appName

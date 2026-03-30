@@ -6438,6 +6438,16 @@
                     }, e)
                 }
                 ))), f.a.createElement(m, {
+                    title: "\u7fa4\u53d1\u901f\u7387\u9650\u5236",
+                    description: "\u4ec5\u5bf9\u7fa4\u53d1\u90ae\u4ef6\u751f\u6548\uff0c\u5355\u4f4d\u4e3a\u79d2\uff0c\u8868\u793a\u53d1\u9001\u5b8c\u4e00\u5c01\u540e\u7b49\u5f85\u591a\u4e45\u518d\u53d1\u9001\u4e0b\u4e00\u5c01\uff0c0 \u4e3a\u4e0d\u9650\u5236"
+                }, f.a.createElement(a["a"], {
+                    addonAfter: "\u79d2",
+                    size: "large",
+                    type: "number",
+                    placeholder: "\u8bf7\u8f93\u5165",
+                    defaultValue: v.email_bulk_interval,
+                    onChange: e=>this.set("email", "email_bulk_interval", e.target.value)
+                }))), f.a.createElement(m, {
                     title: "\u53d1\u9001\u6d4b\u8bd5\u90ae\u4ef6",
                     description: "\u90ae\u4ef6\u5c06\u4f1a\u53d1\u9001\u5230\u5f53\u524d\u767b\u9646\u7528\u6237\u90ae\u7bb1"
                 }, f.a.createElement(o["a"], {
