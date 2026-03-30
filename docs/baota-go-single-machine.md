@@ -25,6 +25,21 @@
 
 ## 2. 首次安装
 
+最省事的方式是一行命令直接拉起安装：
+
+```bash
+bash <(curl -fsSL <public-install-url>/install.sh)
+```
+
+或者：
+
+```bash
+wget -qO- <public-install-url>/install.sh | bash
+```
+
+脚本会自动安装全局 `forest` 命令，后续就不需要再进入站点目录。
+如果脚本当前只在私有 GitHub 仓库里，匿名 `curl/wget raw` 默认会 `404`，需要先放到公开地址。
+
 先生成 Go 环境文件：
 
 ```bash
@@ -57,6 +72,21 @@ DB_SSLMODE=disable
 ./init.sh
 ```
 
+如果旧 PHP 项目不在当前仓库目录，也可以直接指定旧目录一键迁移安装：
+
+```bash
+./init.sh /path/to/legacy-v2board
+./scripts/appctl install-legacy /path/to/legacy-v2board
+```
+
+旧目录只要求这些内容：
+
+- 必须：`旧目录/.env`
+- 可选：`旧目录/config/v2board.php`
+- 可选：`旧目录/config/theme/*.php`
+
+不需要把旧目录里的 PHP 运行环境、Redis、Webman、PM2、`vendor`、日志一起搬过来。
+
 ## 3. 更新
 
 平时更新就一条命令：
@@ -76,6 +106,16 @@ DB_SSLMODE=disable
 ```bash
 ./scripts/appctl install-link
 forest
+```
+
+装好后，不需要再进入站点目录，任意目录都可以直接执行：
+
+```bash
+forest install
+forest install-legacy /path/to/legacy-v2board
+forest update
+forest start
+forest status
 ```
 
 如果这是旧 PHP + MySQL 架构第一次切到现在这套 Go + PostgreSQL：

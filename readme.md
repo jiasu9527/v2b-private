@@ -17,16 +17,40 @@
 
 ## 一行命令
 
-安装:
+在线一键安装:
+
+```bash
+bash <(curl -fsSL <public-install-url>/install.sh)
+```
+
+或者：
+
+```bash
+wget -qO- <public-install-url>/install.sh | bash
+```
+
+本地仓库安装:
 
 ```bash
 ./init.sh
 ```
 
+如果旧 PHP 项目不在当前目录，直接把旧目录路径带上：
+
+```bash
+./init.sh /path/to/legacy-v2board
+./scripts/appctl install-legacy /path/to/legacy-v2board
+```
+
 说明:
 
 - 不要求系统预装 Go
+- `install.sh` 会自动拉取/更新仓库、初始化环境文件、安装全局 `forest` 命令，然后执行安装
 - `./init.sh` 和 `./update.sh` 缺少 Go 时会自动下载到项目目录 `.local/go`
+- 如果你现在只推到 `private/master`，GitHub raw 匿名访问会返回 `404`，这一行命令需要等脚本放到公开地址后再用
+- 旧目录迁移安装时，必须能读到旧目录里的 `.env`
+- 如果旧目录里还有 `config/v2board.php` 和 `config/theme/*.php`，也会一并迁移到新的 JSON 配置
+- 不需要旧目录里的 `vendor`、`node_modules`、`storage/logs`、Redis、Webman、PM2
 
 更新:
 
@@ -47,6 +71,16 @@
 forest
 ```
 
+安装好 `forest` 之后，就不用再进入网站根目录，任意目录都可以直接执行：
+
+```bash
+forest install
+forest install-legacy /path/to/legacy-v2board
+forest update
+forest start
+forest status
+```
+
 更新前重写 PostgreSQL 配置:
 
 ```bash
@@ -57,6 +91,12 @@ forest
 
 ```bash
 ./update.sh
+```
+
+如果你是在一个全新的 Go 仓库目录里接管旧站点，也可以直接指定旧项目路径安装迁移：
+
+```bash
+./init.sh /path/to/legacy-v2board
 ```
 
 说明:
@@ -101,6 +141,13 @@ forest
 ```bash
 ./scripts/appctl doctor
 ```
+
+配置文件位置:
+
+- 运行环境：`.env.go`
+- 后台主配置：`config/admin.json`
+- 主题配置：`config/theme/*.json`
+- 日志与 PID：`go-api/run/forest-go-api.log`、`go-api/run/forest-go-api.pid`
 
 节点 API 烟雾测试:
 

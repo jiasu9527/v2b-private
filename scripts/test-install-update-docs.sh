@@ -9,6 +9,7 @@ UPDATE_DOC="${REPO_ROOT}/docs/update.md"
 [[ -f "${UPDATE_DOC}" ]] || { echo "missing ${UPDATE_DOC}"; exit 1; }
 
 rg -n -F "./init.sh" "${INSTALL_DOC}" >/dev/null 2>&1 || { echo "missing init entry in install doc"; exit 1; }
+rg -n -F "install.sh" "${INSTALL_DOC}" >/dev/null 2>&1 || { echo "missing online install entry in install doc"; exit 1; }
 rg -n -F "./scripts/appctl install-link" "${INSTALL_DOC}" >/dev/null 2>&1 || { echo "missing install-link entry in install doc"; exit 1; }
 rg -n -F "PostgreSQL" "${INSTALL_DOC}" >/dev/null 2>&1 || { echo "missing PostgreSQL note in install doc"; exit 1; }
 rg -n -F "./update.sh" "${UPDATE_DOC}" >/dev/null 2>&1 || { echo "missing update entry in update doc"; exit 1; }
@@ -24,5 +25,7 @@ do
   rg -n -F "docs/install.md" "${file}" >/dev/null 2>&1 || { echo "missing install doc link in ${file}"; exit 1; }
   rg -n -F "docs/update.md" "${file}" >/dev/null 2>&1 || { echo "missing update doc link in ${file}"; exit 1; }
 done
+
+rg -n -F "install.sh" "${REPO_ROOT}/readme.md" >/dev/null 2>&1 || { echo "missing install.sh entry in readme.md"; exit 1; }
 
 echo "install/update docs test passed"

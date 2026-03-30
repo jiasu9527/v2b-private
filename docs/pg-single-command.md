@@ -3,11 +3,20 @@
 This repository now uses a unified Go runtime entrypoint:
 
 ```bash
+bash <(curl -fsSL <public-install-url>/install.sh)
+wget -qO- <public-install-url>/install.sh | bash
 ./menu.sh
 ./scripts/appctl install-link
 forest
+forest install
+forest install-legacy /path/to/legacy-v2board
+forest update
+forest start
+forest status
 ./init.sh
+./init.sh /path/to/legacy-v2board
 ./update.sh
+./scripts/appctl install-legacy /path/to/legacy-v2board
 ./scripts/appctl prompt-db
 ./scripts/appctl migrate-mysql
 ./scripts/appctl build
@@ -39,13 +48,50 @@ Dedicated install walkthrough: `docs/install.md`
 Fast path:
 
 ```bash
+bash <(curl -fsSL <public-install-url>/install.sh)
+```
+
+Or:
+
+```bash
+wget -qO- <public-install-url>/install.sh | bash
+```
+
+Local repo path:
+
+```bash
 ./init.sh
 ```
+
+If the old PHP project is in another directory:
+
+```bash
+./init.sh /path/to/legacy-v2board
+./scripts/appctl install-legacy /path/to/legacy-v2board
+```
+
+Legacy path mode only requires:
+
+- `legacy/.env` as the source MySQL connection file
+- optional `legacy/config/v2board.php`
+- optional `legacy/config/theme/*.php`
+
+It does not need the legacy PHP runtime, Redis, Webman, PM2, `vendor`, or `node_modules`.
 
 If you prefer an interactive numbered menu for manual ops:
 
 ```bash
 ./menu.sh
+```
+
+If `forest` is installed globally, you can also run commands from any directory without entering the project root:
+
+```bash
+forest install
+forest install-legacy /path/to/legacy-v2board
+forest update
+forest start
+forest status
 ```
 
 If you need to edit the database or admin config before importing data:

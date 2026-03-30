@@ -239,10 +239,43 @@ env_value_from_path() {
 }
 
 legacy_mysql_env_path() {
-  local legacy_env="${ROOT_DIR}/.env"
+  legacy_mysql_env_path_from_root "${ROOT_DIR}"
+}
+
+legacy_mysql_env_path_from_root() {
+  local legacy_root="$1"
+  local legacy_env="${legacy_root}/.env"
   if env_file_looks_legacy_stack "${legacy_env}"; then
     printf '%s\n' "${legacy_env}"
   fi
+}
+
+legacy_mysql_root_from_input() {
+  local input_path="${1:-}"
+
+  if [[ -z "${input_path}" ]]; then
+    echo "必须提供旧项目目录或旧版 .env 路径" >&2
+    exit 1
+  fi
+
+  if [[ -d "${input_path}" ]]; then
+    (
+      cd "${input_path}"
+      pwd
+    )
+    return 0
+  fi
+
+  if [[ -f "${input_path}" && "$(basename "${input_path}")" == ".env" ]]; then
+    (
+      cd "$(dirname "${input_path}")"
+      pwd
+    )
+    return 0
+  fi
+
+  echo "旧项目路径不存在，或不是目录/旧版 .env 文件：${input_path}" >&2
+  exit 1
 }
 
 legacy_mysql_configured() {
@@ -298,12 +331,9 @@ set_env_var_in_path() {
   mv "${tmp}" "${env_path}"
 }
 
-copy_shared_env_from_legacy_stack() {
+copy_shared_env_from_legacy_env() {
   local env_path="$1"
-  local legacy_env
-  legacy_env="$(legacy_mysql_env_path)"
-  [[ -n "${legacy_env}" ]] || return 0
-
+  local legacy_env="$2"
   local key legacy_value
   for key in \
     APP_NAME \
@@ -326,6 +356,14 @@ copy_shared_env_from_legacy_stack() {
     [[ -n "${legacy_value}" ]] || continue
     set_env_var_in_path "${env_path}" "${key}" "${legacy_value}"
   done
+}
+
+copy_shared_env_from_legacy_stack() {
+  local env_path="$1"
+  local legacy_env
+  legacy_env="$(legacy_mysql_env_path)"
+  [[ -n "${legacy_env}" ]] || return 0
+  copy_shared_env_from_legacy_env "${env_path}" "${legacy_env}"
 }
 
 dsn_value_from_url() {
@@ -636,7 +674,7 @@ run_ops_migrate_config() {
   ensure_go
   local args=(run ./cmd/ops migrate-config --target-root ..)
   if [[ -n "${LEGACY_CONFIG_ROOT:-}" ]]; then
-    args+=(--legacy-root "${LEGACY_CONFIG_ROOT}")
+    args+=(--legacy-root "$(path_from_go_dir "${LEGACY_CONFIG_ROOT}")")
   fi
   cd "${GO_DIR}"
   "${GO_BIN}" "${args[@]}"
@@ -689,10 +727,18 @@ run_ops_migrate_mysql() {
 }
 
 ensure_postgres_target_for_legacy_mysql() {
+  local legacy_env
+  legacy_env="$(legacy_mysql_env_path)"
+  [[ -n "${legacy_env}" ]] || return 1
+  ensure_postgres_target_for_legacy_source "${legacy_env}"
+}
+
+ensure_postgres_target_for_legacy_source() {
+  local legacy_env="$1"
   if db_configured; then
     return 0
   fi
-  if ! legacy_mysql_configured; then
+  if ! env_file_looks_legacy_stack "${legacy_env}"; then
     return 1
   fi
   if should_prompt_db_config; then
@@ -705,6 +751,33 @@ ensure_postgres_target_for_legacy_mysql() {
     echo "请运行 ./scripts/appctl prompt-db，或在 .env.go 中设置 POSTGRES_DSN/DB_*" >&2
     exit 1
   fi
+}
+
+run_legacy_mysql_migration_flow() {
+  local source_env="$1"
+  local output=""
+
+  output="$(run_ops_migrate_mysql "${source_env}")"
+  if [[ -n "${output}" ]]; then
+    printf '%s\n' "${output}"
+  fi
+  if [[ "${output}" == *"migration_status=applied"* ]]; then
+    return 0
+  fi
+  if [[ "${output}" == *"migration_reason=target_not_empty"* ]]; then
+    echo "PostgreSQL 目标库不是空库，已跳过 MySQL 数据导入，继续执行 PostgreSQL 结构更新"
+    if should_prompt_db_config && confirm_reset_postgres_target; then
+      echo "已确认清空 PostgreSQL 目标库，开始按 MySQL 全量覆盖"
+      output="$(run_ops_migrate_mysql "${source_env}" "true")"
+      if [[ -n "${output}" ]]; then
+        printf '%s\n' "${output}"
+      fi
+      if [[ "${output}" == *"migration_status=applied"* ]]; then
+        return 0
+      fi
+    fi
+  fi
+  return 1
 }
 
 auto_migrate_legacy_mysql_if_needed() {
@@ -737,27 +810,7 @@ auto_migrate_legacy_mysql_if_needed() {
     return 1
   fi
 
-  output="$(run_ops_migrate_mysql "${source_env}")"
-  if [[ -n "${output}" ]]; then
-    printf '%s\n' "${output}"
-  fi
-  if [[ "${output}" == *"migration_status=applied"* ]]; then
-    return 0
-  fi
-  if [[ "${output}" == *"migration_reason=target_not_empty"* ]]; then
-    echo "PostgreSQL 目标库不是空库，已跳过 MySQL 数据导入，继续执行 PostgreSQL 结构更新"
-    if should_prompt_db_config && confirm_reset_postgres_target; then
-      echo "已确认清空 PostgreSQL 目标库，开始按 MySQL 全量覆盖"
-      output="$(run_ops_migrate_mysql "${source_env}" "true")"
-      if [[ -n "${output}" ]]; then
-        printf '%s\n' "${output}"
-      fi
-      if [[ "${output}" == *"migration_status=applied"* ]]; then
-        return 0
-      fi
-    fi
-  fi
-  return 1
+  run_legacy_mysql_migration_flow "${source_env}"
 }
 
 cmd_install() {
@@ -772,6 +825,44 @@ cmd_install() {
     exit 1
   fi
   run_ops_install
+  build
+}
+
+cmd_install_legacy() {
+  local legacy_input="${1:-}"
+  local legacy_root legacy_env env_path env_existed=false
+
+  legacy_root="$(legacy_mysql_root_from_input "${legacy_input}")"
+  legacy_env="$(legacy_mysql_env_path_from_root "${legacy_root}")"
+  if [[ -z "${legacy_env}" ]]; then
+    echo "未在 ${legacy_root} 检测到可用的旧版 MySQL .env" >&2
+    exit 1
+  fi
+
+  ensure_go
+  cleanup_legacy_runtime_artifacts true
+  env_path="$(resolve_env_path)"
+  if [[ -f "${env_path}" ]]; then
+    env_existed=true
+  fi
+  ensure_env_file
+  copy_shared_env_from_legacy_env "${env_path}" "${legacy_env}"
+  ensure_app_key
+  load_env
+
+  export LEGACY_CONFIG_ROOT="${legacy_root}"
+  run_ops_migrate_config
+  unset LEGACY_CONFIG_ROOT
+
+  if [[ "${env_existed}" != "true" && -z "${POSTGRES_DSN:-}" && should_prompt_db_config ]]; then
+    cmd_prompt_db
+    load_env
+  fi
+  ensure_postgres_target_for_legacy_source "${legacy_env}"
+  resolve_postgres_dsn
+  if ! run_legacy_mysql_migration_flow "${legacy_env}"; then
+    exit 1
+  fi
   build
 }
 
@@ -1035,6 +1126,7 @@ usage() {
   cat <<'EOF'
 用法：
   ./scripts/appctl install
+  ./scripts/appctl install-legacy [legacy-root|legacy-env]
   ./scripts/appctl update
   ./scripts/appctl cleanup
   ./scripts/appctl build
@@ -1070,6 +1162,7 @@ EOF
 action="${1:-}"
 case "${action}" in
   install) cmd_install ;;
+  install-legacy) shift; cmd_install_legacy "$@" ;;
   update) cmd_update ;;
   cleanup) cmd_cleanup ;;
   build) build ;;

@@ -42,4 +42,12 @@ if [[ "$(cat "${APPCTL_LOG}")" != $'stop\nstart' ]]; then
   exit 1
 fi
 
+: > "${APPCTL_LOG}"
+printf '1\n7\n/legacy/site\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-routing-install-legacy.out 2>/tmp/test-menu-routing-install-legacy.err
+if [[ "$(cat "${APPCTL_LOG}")" != "install-legacy /legacy/site" ]]; then
+  echo "expected install-legacy action"
+  cat "${APPCTL_LOG}"
+  exit 1
+fi
+
 echo "menu routing test passed"

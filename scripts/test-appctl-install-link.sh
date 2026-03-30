@@ -49,4 +49,13 @@ if [[ "$(cat "${APPCTL_LOG}")" != "install" ]]; then
   exit 1
 fi
 
+: > "${APPCTL_LOG}"
+APPCTL_BIN="${TMP_DIR}/fake-appctl" "${TMP_DIR}/bin/forest" install-legacy /legacy/site >/tmp/test-appctl-install-link-cli.out 2>/tmp/test-appctl-install-link-cli.err
+
+if [[ "$(cat "${APPCTL_LOG}")" != "install-legacy /legacy/site" ]]; then
+  echo "expected forest cli passthrough to appctl"
+  cat "${APPCTL_LOG}"
+  exit 1
+fi
+
 echo "install-link test passed"

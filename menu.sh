@@ -86,6 +86,7 @@ show_install_menu() {
 4. 初始化环境文件
 5. 配置 PostgreSQL
 6. 迁移旧 PHP 配置
+7. 从旧项目一键迁移安装
 0. 返回上级
 TEXT
 }
@@ -169,6 +170,17 @@ prompt_choice() {
     return 0
   fi
   normalize_choice "${choice}"
+}
+
+prompt_text() {
+  local label="$1"
+  local value=""
+  printf '%s: ' "${label}" >&2
+  if ! IFS= read -r value; then
+    printf '__EOF__'
+    return 0
+  fi
+  printf '%s' "${value}"
 }
 
 show_env_summary() {
@@ -275,6 +287,7 @@ rebuild_and_restart() {
 }
 
 install_menu() {
+  local legacy_path=""
   while true; do
     show_install_menu
     case "$(prompt_choice)" in
@@ -285,6 +298,18 @@ install_menu() {
       4) run_appctl init-env; pause_screen ;;
       5) run_appctl prompt-db; pause_screen ;;
       6) run_appctl migrate-config; pause_screen ;;
+      7)
+        legacy_path="$(prompt_text "请输入旧项目目录或旧版 .env 路径")"
+        if [[ "${legacy_path}" == "__EOF__" ]]; then
+          return 0
+        fi
+        if [[ -z "${legacy_path}" ]]; then
+          echo "旧项目路径不能为空"
+        else
+          run_appctl install-legacy "${legacy_path}"
+        fi
+        pause_screen
+        ;;
       *) echo "无效编号"; pause_screen ;;
     esac
   done
@@ -375,6 +400,11 @@ main() {
   if [[ ! -x "${APPCTL_BIN}" ]]; then
     echo "未找到管理脚本: ${APPCTL_BIN}"
     exit 1
+  fi
+
+  if [[ $# -gt 0 ]]; then
+    run_appctl "$@"
+    exit 0
   fi
 
   while true; do
