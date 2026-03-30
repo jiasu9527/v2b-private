@@ -270,6 +270,7 @@ BASE_URL=http://127.0.0.1:8080 PAYMENT_GATEWAY=CoinPayments PENDING_TRADE_NO=see
 BASE_URL=http://127.0.0.1:8080 PAYMENT_GATEWAY=StripeCheckout PENDING_TRADE_NO=seed-demo-order-stchk-pending-01 CALLBACK_NO=seed-demo-callback-stchk-01 ./scripts/verify-demo-payment-notify.sh
 BASE_URL=http://127.0.0.1:8080 DURATION_SEC=15 CONCURRENCY=8 ./scripts/soak-demo-api.sh
 SUMMARY_JSON=/tmp/soak.json BASE_URL=http://127.0.0.1:8080 DURATION_SEC=15 CONCURRENCY=8 MAX_P95_MS=50 MAX_RSS_DELTA_KB=2048 ./scripts/soak-demo-api.sh
+GO_BASE_URL=http://127.0.0.1:8080 LEGACY_BASE_URL=http://127.0.0.1:9501 ./scripts/compare-api-bench.sh
 ./scripts/appctl env-file
 ./scripts/appctl doctor
 ./scripts/appctl service-template
@@ -280,6 +281,8 @@ BASE_URL=http://127.0.0.1:8080 SERVER_TOKEN='your-server-token' NODE_ID=1 NODE_T
 `./scripts/verify-demo-payment-api.sh` logs in with the seeded demo accounts and checks payment methods, payment form metadata, pending order detail, and real checkout redirect payload.
 `./scripts/verify-demo-payment-notify.sh` logs in, finds the seeded payment config, sends a signed local notify callback, and verifies the order status changes from pending to paid. Demo seed currently covers `EPay`, `CoinPayments`, and `StripeCheckout` for real local notify verification.
 `./scripts/soak-demo-api.sh` runs a short read-only concurrent smoke load against health/admin/user endpoints, can emit a JSON summary via `SUMMARY_JSON`, and can fail on `MAX_P95_MS` / `MAX_RSS_DELTA_KB` thresholds for repeatable local checks.
+
+`./scripts/compare-api-bench.sh` runs that same soak load once against the Go deployment and once against the legacy deployment, then prints throughput/p95/RSS deltas so you can see how much the new stack actually improved on the same machine.
 `./scripts/appctl prompt-db` rewrites `DB_*` fields and `POSTGRES_DSN` together; interactive `./update.sh` calls it automatically before the SQL update step when running in a TTY.
 `./scripts/appctl migrate-mysql` bootstraps a PostgreSQL schema from `database/install.pgsql.sql` and copies legacy MySQL table data when the repository is upgrading from the old PHP stack.
 
