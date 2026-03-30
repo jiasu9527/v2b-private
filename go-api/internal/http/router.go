@@ -293,7 +293,7 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleClientAppGetConfig(w, r, cfg, state.user) {
 				return
 			}
-		case r.URL.Path == clientSubscribePath(cfg):
+		case isClientSubscribePath(cfg, r.URL.Path):
 			if handleClientSubscribe(w, r, cfg, state.user) {
 				return
 			}
@@ -880,6 +880,15 @@ func clientSubscribePath(cfg config.Config) string {
 		return "/" + path
 	}
 	return path
+}
+
+func isClientSubscribePath(cfg config.Config, path string) bool {
+	defaultPath := "/api/v1/client/subscribe"
+	customPath := clientSubscribePath(cfg)
+	if path == customPath {
+		return true
+	}
+	return customPath != defaultPath && path == defaultPath
 }
 
 func handleGuestConfig(w http.ResponseWriter, r *http.Request, service guest.Service) bool {

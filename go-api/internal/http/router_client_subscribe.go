@@ -302,15 +302,59 @@ func buildSubscribeURI(userUUID string, server map[string]any) string {
 
 func normalizeSubscribeServer(server map[string]any) (string, map[string]any) {
 	normalized := copyMap(server)
-	serverType := strings.ToLower(strings.TrimSpace(fmt.Sprint(normalized["type"])))
+	serverType := canonicalSubscribeServerType(serverString(normalized, "type"))
 	if serverType == "v2node" {
-		serverType = strings.ToLower(strings.TrimSpace(fmt.Sprint(normalized["protocol"])))
+		serverType = canonicalSubscribeServerType(serverString(normalized, "protocol"))
+		if serverType == "" {
+			serverType = inferLegacyV2nodeProtocol(normalized)
+		}
 		normalized["type"] = serverType
 	}
 	if serverType == "hysteria" && serverInt64(normalized, "version") == 2 {
 		return "hysteria2", normalized
 	}
 	return serverType, normalized
+}
+
+func canonicalSubscribeServerType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "<nil>", "null":
+		return ""
+	case "v2ray":
+		return "vmess"
+	case "ss":
+		return "shadowsocks"
+	case "hy", "hy1":
+		return "hysteria"
+	case "hy2":
+		return "hysteria2"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
+func inferLegacyV2nodeProtocol(server map[string]any) string {
+	switch {
+	case serverString(server, "flow") != "" || serverString(server, "encryption") != "" || len(serverMap(server, "encryption_settings")) > 0:
+		return "vless"
+	case serverString(server, "cipher") != "":
+		return "shadowsocks"
+	case server["padding_scheme"] != nil:
+		return "anytls"
+	case serverString(server, "udp_relay_mode") != "" || serverBool(server, "disable_sni"):
+		return "tuic"
+	case serverInt64(server, "up_mbps") > 0 || serverInt64(server, "down_mbps") > 0 || serverString(server, "obfs") != "" || serverString(server, "obfs_password") != "":
+		if serverInt64(server, "tls") != 0 || len(serverMap(server, "tls_settings")) > 0 {
+			return "hysteria2"
+		}
+		return "hysteria"
+	case serverString(server, "server_name") != "" || serverBoolValue(server["allow_insecure"]):
+		return "trojan"
+	case len(serverMap(server, "tls_settings")) > 0 || len(serverMap(server, "network_settings")) > 0 || len(serverMap(server, "networkSettings")) > 0 || serverString(server, "network") != "":
+		return "vmess"
+	default:
+		return ""
+	}
 }
 
 func buildShadowsocksURI(userUUID string, server map[string]any) string {

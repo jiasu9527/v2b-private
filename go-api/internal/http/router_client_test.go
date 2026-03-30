@@ -229,8 +229,8 @@ func TestRouterClientSubscribeCustomPathEndpoint(t *testing.T) {
 	defaultReq := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
 	defaultRec := httptest.NewRecorder()
 	router.ServeHTTP(defaultRec, defaultReq)
-	if defaultRec.Code == http.StatusOK {
-		t.Fatalf("expected default subscribe path to be disabled when custom path is configured")
+	if defaultRec.Code != http.StatusOK {
+		t.Fatalf("expected default subscribe path to remain compatible, got %d: %s", defaultRec.Code, defaultRec.Body.String())
 	}
 }
 
