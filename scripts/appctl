@@ -473,6 +473,18 @@ prompt_secret_with_default() {
   printf '%s\n' "${value}"
 }
 
+normalize_yes_no_answer() {
+  printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'
+}
+
+confirm_reset_postgres_target() {
+  local answer=""
+  printf '检测到 PostgreSQL 目标库已有数据，是否清空 PostgreSQL 并用 MySQL 全量覆盖？ [y/N]: ' >&2
+  IFS= read -r answer || true
+  answer="$(normalize_yes_no_answer "${answer}")"
+  [[ "${answer}" == "y" || "${answer}" == "yes" ]]
+}
+
 build_postgres_dsn_value() {
   local host="$1"
   local port="$2"
@@ -634,6 +646,7 @@ run_ops_update() {
 
 run_ops_migrate_mysql() {
   local source_env="$1"
+  local reset_target="${2:-false}"
   local args=(
     run ./cmd/ops migrate-mysql
     --source-env "$(path_from_go_dir "${source_env}")"
@@ -641,6 +654,9 @@ run_ops_migrate_mysql() {
   )
   if [[ -n "${POSTGRES_DSN:-}" ]]; then
     args+=(--target-dsn "${POSTGRES_DSN}")
+  fi
+  if [[ "${reset_target}" == "true" ]]; then
+    args+=(--reset-target)
   fi
   cd "${GO_DIR}"
   "${GO_BIN}" "${args[@]}"
@@ -685,6 +701,16 @@ auto_migrate_legacy_mysql_if_needed() {
   fi
   if [[ "${output}" == *"migration_reason=target_not_empty"* ]]; then
     echo "PostgreSQL 目标库不是空库，已跳过 MySQL 数据导入，继续执行 PostgreSQL 结构更新"
+    if should_prompt_db_config && confirm_reset_postgres_target; then
+      echo "已确认清空 PostgreSQL 目标库，开始按 MySQL 全量覆盖"
+      output="$(run_ops_migrate_mysql "${source_env}" "true")"
+      if [[ -n "${output}" ]]; then
+        printf '%s\n' "${output}"
+      fi
+      if [[ "${output}" == *"migration_status=applied"* ]]; then
+        return 0
+      fi
+    fi
   fi
   return 1
 }

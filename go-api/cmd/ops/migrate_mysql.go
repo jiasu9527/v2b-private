@@ -42,6 +42,7 @@ func runMigrateMySQL(args []string) error {
 	sourceEnv := flags.String("source-env", "", "legacy MySQL env file path")
 	targetDSN := flags.String("target-dsn", "", "PostgreSQL DSN")
 	installSQL := flags.String("install-sql", defaultSQLPath("install.pgsql.sql"), "PostgreSQL install SQL path")
+	resetTarget := flags.Bool("reset-target", false, "reset PostgreSQL target before import")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -69,9 +70,15 @@ func runMigrateMySQL(args []string) error {
 		return err
 	}
 	if hasRows {
-		fmt.Println("migration_status=skipped")
-		fmt.Println("migration_reason=target_not_empty")
-		return nil
+		if *resetTarget {
+			if err := resetPostgresTarget(ctx, targetDB); err != nil {
+				return err
+			}
+		} else {
+			fmt.Println("migration_status=skipped")
+			fmt.Println("migration_reason=target_not_empty")
+			return nil
+		}
 	}
 
 	envValues, err := parseSimpleEnvFile(*sourceEnv)
@@ -103,6 +110,19 @@ func runMigrateMySQL(args []string) error {
 	fmt.Println("migration_status=applied")
 	fmt.Printf("migration_tables=%d\n", tablesCopied)
 	fmt.Printf("migration_rows=%d\n", rowsCopied)
+	return nil
+}
+
+func resetPostgresTarget(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `DROP SCHEMA IF EXISTS public CASCADE`); err != nil {
+		return fmt.Errorf("drop public schema: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE SCHEMA public`); err != nil {
+		return fmt.Errorf("create public schema: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `GRANT ALL ON SCHEMA public TO CURRENT_USER`); err != nil {
+		return fmt.Errorf("grant public schema to current user: %w", err)
+	}
 	return nil
 }
 
