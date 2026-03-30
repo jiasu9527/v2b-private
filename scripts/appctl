@@ -713,13 +713,50 @@ build() {
   "${GO_BIN}" build -o "${BIN_PATH}" ./cmd/server
 }
 
-current_service_pid() {
+systemctl_available() {
+  if [[ "${SYSTEMCTL_BIN}" == */* ]]; then
+    [[ -x "${SYSTEMCTL_BIN}" ]]
+    return
+  fi
+  command -v "${SYSTEMCTL_BIN}" >/dev/null 2>&1
+}
+
+run_systemctl_checked() {
+  systemctl_available || return 1
+  "${SYSTEMCTL_BIN}" "$@"
+}
+
+systemd_service_managed() {
+  systemctl_available || return 1
+  [[ -e "${FOREST_SERVICE_FILE_PATH}" ]]
+}
+
+systemd_service_active() {
+  systemd_service_managed || return 1
+  "${SYSTEMCTL_BIN}" is-active --quiet "${FOREST_SERVICE_NAME}" >/dev/null 2>&1
+}
+
+systemd_service_pid() {
+  systemd_service_active || return 1
+  local pid
+  pid="$("${SYSTEMCTL_BIN}" show -p MainPID --value "${FOREST_SERVICE_NAME}" 2>/dev/null || true)"
+  [[ "${pid}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${pid}" != "0" ]] || return 1
+  printf '%s\n' "${pid}"
+}
+
+pid_file_service_pid() {
   [[ -f "${PID_PATH}" ]] || return 1
   local pid
   pid="$(cat "${PID_PATH}")"
   [[ -n "${pid}" ]] || return 1
   kill -0 "${pid}" 2>/dev/null || return 1
   printf '%s\n' "${pid}"
+}
+
+current_service_pid() {
+  pid_file_service_pid && return 0
+  systemd_service_pid
 }
 
 start_binary() {
@@ -729,8 +766,23 @@ start_binary() {
 }
 
 restart_running_service_after_update() {
+  if systemd_service_active; then
+    run_systemctl_checked restart "${FOREST_SERVICE_NAME}" >/dev/null
+    local systemd_pid
+    systemd_pid="$(run_systemctl_checked show -p MainPID --value "${FOREST_SERVICE_NAME}" 2>/dev/null || true)"
+    if [[ ! "${systemd_pid}" =~ ^[0-9]+$ ]] || [[ "${systemd_pid}" == "0" ]]; then
+      systemd_pid=""
+    fi
+    if [[ -n "${systemd_pid}" ]]; then
+      echo "检测到 systemd 服务正在运行，已自动重启，PID ${systemd_pid}"
+    else
+      echo "检测到 systemd 服务正在运行，已自动重启"
+    fi
+    return 0
+  fi
+
   local old_pid
-  old_pid="$(current_service_pid || true)"
+  old_pid="$(pid_file_service_pid || true)"
   if [[ -z "${old_pid}" ]]; then
     return 0
   fi
@@ -945,6 +997,17 @@ cmd_start() {
     return 0
   fi
   build
+  if systemd_service_managed; then
+    run_systemctl_checked start "${FOREST_SERVICE_NAME}" >/dev/null
+    local systemd_pid
+    systemd_pid="$(systemd_service_pid || true)"
+    if [[ -n "${systemd_pid}" ]]; then
+      echo "已通过 systemd 启动，PID ${systemd_pid}"
+    else
+      echo "已通过 systemd 启动"
+    fi
+    return 0
+  fi
   start_binary
   echo "已启动，PID $(cat "${PID_PATH}")"
 }
@@ -960,8 +1023,15 @@ cmd_run() {
 }
 
 cmd_stop() {
+  if systemd_service_active; then
+    run_systemctl_checked stop "${FOREST_SERVICE_NAME}" >/dev/null
+    rm -f "${PID_PATH}"
+    echo "已停止（systemd）"
+    return 0
+  fi
+
   local pid
-  pid="$(current_service_pid || true)"
+  pid="$(pid_file_service_pid || true)"
   if [[ -z "${pid}" ]]; then
     rm -f "${PID_PATH}"
     echo "Go API 未运行"
@@ -973,7 +1043,12 @@ cmd_stop() {
 }
 
 cmd_status() {
-  if current_service_pid >/dev/null; then
+  local pid
+  if pid="$(systemd_service_pid || true)" && [[ -n "${pid}" ]]; then
+    echo "运行中，PID ${pid}（systemd）"
+    return 0
+  fi
+  if pid="$(pid_file_service_pid || true)" && [[ -n "${pid}" ]]; then
     echo "运行中，PID $(cat "${PID_PATH}")"
     return 0
   fi
@@ -1171,7 +1246,7 @@ cmd_install_link() {
 }
 
 run_systemctl_safe() {
-  if ! command -v "${SYSTEMCTL_BIN}" >/dev/null 2>&1; then
+  if ! systemctl_available; then
     return 0
   fi
   "${SYSTEMCTL_BIN}" "$@" >/dev/null 2>&1 || true

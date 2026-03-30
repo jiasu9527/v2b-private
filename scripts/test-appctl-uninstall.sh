@@ -22,6 +22,21 @@ cat > "${TMP_DIR}/fake-systemctl" <<'EOF_SYSTEMCTL'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "${SYSTEMCTL_LOG}"
+if [[ "${1:-}" == "is-active" && "${2:-}" == "--quiet" && "${3:-}" == "forest-go-api" ]]; then
+  exit 0
+fi
+if [[ "${1:-}" == "stop" && "${2:-}" == "forest-go-api" ]]; then
+  if [[ -n "${SERVICE_PID:-}" ]]; then
+    kill "${SERVICE_PID}" 2>/dev/null || true
+  fi
+  exit 0
+fi
+if [[ "${1:-}" == "disable" && "${2:-}" == "--now" && "${3:-}" == "forest-go-api" ]]; then
+  if [[ -n "${SERVICE_PID:-}" ]]; then
+    kill "${SERVICE_PID}" 2>/dev/null || true
+  fi
+  exit 0
+fi
 EOF_SYSTEMCTL
 chmod +x "${TMP_DIR}/fake-systemctl"
 
@@ -39,7 +54,7 @@ disown "${SERVICE_PID}" 2>/dev/null || true
 printf '%s\n' "${SERVICE_PID}" > "${TMP_DIR}/go-api/run/forest-go-api.pid"
 
 SYSTEMCTL_LOG="${TMP_DIR}/systemctl.log"
-export SYSTEMCTL_LOG
+export SYSTEMCTL_LOG SERVICE_PID
 
 FOREST_LINK_PATH="${TMP_DIR}/bin/forest" \
 FOREST_SERVICE_FILE_PATH="${SERVICE_FILE}" \
@@ -69,7 +84,7 @@ if [[ -e "${TMP_DIR}/bin/forest" ]]; then
   exit 1
 fi
 
-EXPECTED=$'disable --now forest-go-api\ndaemon-reload'
+EXPECTED=$'is-active --quiet forest-go-api\nstop forest-go-api\ndisable --now forest-go-api\ndaemon-reload'
 ACTUAL="$(cat "${SYSTEMCTL_LOG}")"
 if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
   echo "unexpected systemctl call order"
