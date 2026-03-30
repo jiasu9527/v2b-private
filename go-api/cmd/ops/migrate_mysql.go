@@ -115,13 +115,42 @@ func runMigrateMySQL(args []string) error {
 
 func resetPostgresTarget(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `DROP SCHEMA IF EXISTS public CASCADE`); err != nil {
-		return fmt.Errorf("drop public schema: %w", err)
+		if !shouldFallbackToTableDrop(err) {
+			return fmt.Errorf("drop public schema: %w", err)
+		}
+		schemaErr := err
+		if fallbackErr := resetPostgresTables(ctx, db); fallbackErr != nil {
+			return fmt.Errorf("drop public schema: %v; fallback table reset: %w", schemaErr, fallbackErr)
+		}
+		return nil
 	}
 	if _, err := db.ExecContext(ctx, `CREATE SCHEMA public`); err != nil {
 		return fmt.Errorf("create public schema: %w", err)
 	}
 	if _, err := db.ExecContext(ctx, `GRANT ALL ON SCHEMA public TO CURRENT_USER`); err != nil {
 		return fmt.Errorf("grant public schema to current user: %w", err)
+	}
+	return nil
+}
+
+func shouldFallbackToTableDrop(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "must be owner of schema public") || strings.Contains(msg, "sqlstate 42501")
+}
+
+func resetPostgresTables(ctx context.Context, db *sql.DB) error {
+	tables, err := postgresTableNames(ctx, db)
+	if err != nil {
+		return err
+	}
+	for i := len(tables) - 1; i >= 0; i-- {
+		query := fmt.Sprintf(`DROP TABLE IF EXISTS %s CASCADE`, quotePGIdent(tables[i]))
+		if _, err := db.ExecContext(ctx, query); err != nil {
+			return fmt.Errorf("drop table %s: %w", tables[i], err)
+		}
 	}
 	return nil
 }

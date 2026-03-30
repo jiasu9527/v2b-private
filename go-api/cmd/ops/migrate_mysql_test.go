@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"testing"
 
@@ -89,6 +90,90 @@ func TestCopyTableRowsConvertsValuesAndResetsSequence(t *testing.T) {
 		t.Fatalf("source expectations: %v", err)
 	}
 	if err := targetMock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("target expectations: %v", err)
+	}
+}
+
+func TestResetPostgresTargetFallsBackToDroppingTables(t *testing.T) {
+	ctx := context.Background()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new target mock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec(regexp.QuoteMeta(`DROP SCHEMA IF EXISTS public CASCADE`)).
+		WillReturnError(errors.New(`ERROR: must be owner of schema public (SQLSTATE 42501)`))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name`)).
+		WillReturnRows(sqlmock.NewRows([]string{"table_name"}).AddRow("v2_user").AddRow("v2_order"))
+	mock.ExpectExec(regexp.QuoteMeta(`DROP TABLE IF EXISTS "v2_order" CASCADE`)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(`DROP TABLE IF EXISTS "v2_user" CASCADE`)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	if err := resetPostgresTarget(ctx, db); err != nil {
+		t.Fatalf("resetPostgresTarget fallback: %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("target expectations: %v", err)
+	}
+}
+
+func TestResetPostgresTargetReturnsFallbackError(t *testing.T) {
+	ctx := context.Background()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new target mock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec(regexp.QuoteMeta(`DROP SCHEMA IF EXISTS public CASCADE`)).
+		WillReturnError(errors.New(`ERROR: must be owner of schema public (SQLSTATE 42501)`))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name`)).
+		WillReturnRows(sqlmock.NewRows([]string{"table_name"}).AddRow("v2_user"))
+	mock.ExpectExec(regexp.QuoteMeta(`DROP TABLE IF EXISTS "v2_user" CASCADE`)).
+		WillReturnError(errors.New("drop table failed"))
+
+	err = resetPostgresTarget(ctx, db)
+	if err == nil {
+		t.Fatal("expected resetPostgresTarget to fail")
+	}
+	if !regexp.MustCompile(`must be owner of schema public`).MatchString(err.Error()) {
+		t.Fatalf("expected error to include original schema failure, got %q", err)
+	}
+	if !regexp.MustCompile(`fallback table reset: drop table v2_user: drop table failed`).MatchString(err.Error()) {
+		t.Fatalf("expected error to include fallback failure, got %q", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("target expectations: %v", err)
+	}
+}
+
+func TestResetPostgresTargetDropsSchemaWhenPermitted(t *testing.T) {
+	ctx := context.Background()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new target mock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec(regexp.QuoteMeta(`DROP SCHEMA IF EXISTS public CASCADE`)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(`CREATE SCHEMA public`)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(`GRANT ALL ON SCHEMA public TO CURRENT_USER`)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	if err := resetPostgresTarget(ctx, db); err != nil {
+		t.Fatalf("resetPostgresTarget schema drop: %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("target expectations: %v", err)
 	}
 }
