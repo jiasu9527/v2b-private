@@ -6447,7 +6447,7 @@
                     placeholder: "\u8bf7\u8f93\u5165",
                     defaultValue: v.email_bulk_interval,
                     onChange: e=>this.set("email", "email_bulk_interval", e.target.value)
-                }))), f.a.createElement(m, {
+                })), f.a.createElement(m, {
                     title: "\u53d1\u9001\u6d4b\u8bd5\u90ae\u4ef6",
                     description: "\u90ae\u4ef6\u5c06\u4f1a\u53d1\u9001\u5230\u5f53\u524d\u767b\u9646\u7528\u6237\u90ae\u7bb1"
                 }, f.a.createElement(o["a"], {
