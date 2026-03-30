@@ -9,6 +9,9 @@ BIN_PATH="${BIN_DIR}/forest-go-api"
 PID_PATH="${RUN_DIR}/forest-go-api.pid"
 LOG_PATH="${RUN_DIR}/forest-go-api.log"
 GO_BIN="${GO_BIN:-go}"
+LOCAL_TOOL_DIR="${ROOT_DIR}/.local"
+LOCAL_GO_ROOT="${LOCAL_TOOL_DIR}/go"
+LOCAL_GO_BIN="${LOCAL_GO_ROOT}/bin/go"
 
 mkdir -p "${BIN_DIR}" "${RUN_DIR}"
 
@@ -33,10 +36,103 @@ cleanup_legacy_runtime_artifacts() {
 }
 
 ensure_go() {
-  if ! command -v "${GO_BIN}" >/dev/null 2>&1; then
-    echo "go is not installed or not found in PATH"
+  if command -v "${GO_BIN}" >/dev/null 2>&1; then
+    GO_BIN="$(command -v "${GO_BIN}")"
+    return 0
+  fi
+
+  if [[ "${GO_BIN}" != "go" ]]; then
+    echo "configured GO_BIN not found: ${GO_BIN}"
     exit 1
   fi
+
+  if [[ -x "${LOCAL_GO_BIN}" ]]; then
+    GO_BIN="${LOCAL_GO_BIN}"
+    return 0
+  fi
+
+  bootstrap_local_go
+  if [[ ! -x "${LOCAL_GO_BIN}" ]]; then
+    echo "failed to bootstrap local go toolchain"
+    exit 1
+  fi
+  GO_BIN="${LOCAL_GO_BIN}"
+}
+
+required_go_version() {
+  awk '/^go / { print $2; exit }' "${GO_DIR}/go.mod"
+}
+
+detect_go_bootstrap_os() {
+  case "$(uname -s)" in
+    Linux) printf 'linux\n' ;;
+    Darwin) printf 'darwin\n' ;;
+    *)
+      echo "unsupported OS for automatic Go bootstrap: $(uname -s)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+detect_go_bootstrap_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) printf 'amd64\n' ;;
+    arm64|aarch64) printf 'arm64\n' ;;
+    *)
+      echo "unsupported CPU architecture for automatic Go bootstrap: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+download_file() {
+  local url="$1"
+  local output="$2"
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "${url}" -o "${output}"
+    return 0
+  fi
+
+  if command -v wget >/dev/null 2>&1; then
+    wget -qO "${output}" "${url}"
+    return 0
+  fi
+
+  echo "automatic Go bootstrap requires curl or wget" >&2
+  exit 1
+}
+
+bootstrap_local_go() {
+  local version os arch url archive extract_dir
+  version="${GO_BOOTSTRAP_VERSION:-$(required_go_version)}"
+  os="${GO_BOOTSTRAP_OS:-$(detect_go_bootstrap_os)}"
+  arch="${GO_BOOTSTRAP_ARCH:-$(detect_go_bootstrap_arch)}"
+  url="${GO_BOOTSTRAP_URL:-https://go.dev/dl/go${version}.${os}-${arch}.tar.gz}"
+  archive="${LOCAL_TOOL_DIR}/go${version}.${os}-${arch}.tar.gz"
+  extract_dir="${LOCAL_TOOL_DIR}/.go-extract.$$"
+
+  if ! command -v tar >/dev/null 2>&1; then
+    echo "automatic Go bootstrap requires tar" >&2
+    exit 1
+  fi
+
+  mkdir -p "${LOCAL_TOOL_DIR}"
+  rm -rf "${extract_dir}" "${LOCAL_GO_ROOT}"
+
+  echo "bootstrapping Go ${version} into ${LOCAL_GO_ROOT}" >&2
+  download_file "${url}" "${archive}"
+  mkdir -p "${extract_dir}"
+  tar -C "${extract_dir}" -xzf "${archive}"
+
+  if [[ ! -x "${extract_dir}/go/bin/go" ]]; then
+    echo "automatic Go bootstrap failed: extracted archive does not contain go/bin/go" >&2
+    rm -rf "${extract_dir}" "${archive}"
+    exit 1
+  fi
+
+  mv "${extract_dir}/go" "${LOCAL_GO_ROOT}"
+  rm -rf "${extract_dir}" "${archive}"
 }
 
 env_file_looks_legacy_stack() {

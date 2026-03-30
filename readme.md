@@ -22,6 +22,11 @@
 ./init.sh
 ```
 
+说明:
+
+- 不要求系统预装 Go
+- `./init.sh` 和 `./update.sh` 缺少 Go 时会自动下载到项目目录 `.local/go`
+
 更新:
 
 ```bash
