@@ -20,12 +20,16 @@ TAIL_BIN="${TAIL_BIN:-tail}"
 PS_BIN="${PS_BIN:-ps}"
 SS_BIN="${SS_BIN:-ss}"
 LSOF_BIN="${LSOF_BIN:-lsof}"
+GIT_BIN="${GIT_BIN:-git}"
 COLOR_RESET=""
 COLOR_BOLD=""
 COLOR_DIM=""
 COLOR_GREEN=""
 COLOR_RED=""
 COLOR_CYAN=""
+RUNTIME_STATUS_LABEL="已停止"
+RUNTIME_STATUS_COLOR=""
+RUNTIME_PID="-"
 
 normalize_choice() {
   printf '%s' "${1:-}" | tr -d '[:space:]'
@@ -77,6 +81,49 @@ init_colors() {
   COLOR_CYAN=$'\033[36m'
 }
 
+detect_runtime_status() {
+  RUNTIME_STATUS_LABEL="已停止"
+  RUNTIME_STATUS_COLOR="${COLOR_RED}"
+  RUNTIME_PID="-"
+
+  local pid=""
+  if [[ -f "${PID_PATH}" ]]; then
+    pid="$(cat "${PID_PATH}" 2>/dev/null || true)"
+    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+      RUNTIME_STATUS_LABEL="运行中"
+      RUNTIME_STATUS_COLOR="${COLOR_GREEN}"
+      RUNTIME_PID="${pid}"
+    fi
+  fi
+}
+
+resolve_git_version() {
+  if ! tool_available "${GIT_BIN}"; then
+    printf '%s' "-"
+    return 0
+  fi
+
+  local version=""
+  version="$("${GIT_BIN}" -C "${ROOT_DIR}" rev-parse --short=7 HEAD 2>/dev/null | tail -n 1)"
+  printf '%s' "${version:--}"
+}
+
+resolve_env_file_path() {
+  local env_file=""
+  env_file="$("${APPCTL_BIN}" env-file 2>/dev/null | tail -n 1)"
+  printf '%s' "${env_file}"
+}
+
+resolve_env_file_name() {
+  local env_file=""
+  env_file="$(resolve_env_file_path)"
+  if [[ -z "${env_file}" ]]; then
+    printf '%s' "-"
+    return 0
+  fi
+  printf '%s' "${env_file##*/}"
+}
+
 print_header() {
   printf '%s--------------------------------%s\n' "${COLOR_CYAN}" "${COLOR_RESET}"
   printf '%sForest 管理菜单%s\n' "${COLOR_BOLD}" "${COLOR_RESET}"
@@ -85,24 +132,13 @@ print_header() {
 }
 
 show_runtime_overview() {
-  local status_label="已停止"
-  local status_color="${COLOR_RED}"
-  local pid=""
-  if [[ -f "${PID_PATH}" ]]; then
-    pid="$(cat "${PID_PATH}" 2>/dev/null || true)"
-    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
-      status_label="运行中"
-      status_color="${COLOR_GREEN}"
-    fi
-  fi
+  detect_runtime_status
 
-  if [[ -n "${pid}" ]] && [[ "${status_label}" == "运行中" ]]; then
-    printf '当前状态: %s%s%s (PID %s)\n' "${status_color}" "${status_label}" "${COLOR_RESET}" "${pid}"
-  else
-    printf '当前状态: %s%s%s\n' "${status_color}" "${status_label}" "${COLOR_RESET}"
-  fi
-  printf '项目目录: %s\n' "${ROOT_DIR}"
-  printf '日志文件: %s\n' "${LOG_PATH}"
+  printf '服务: %s%s%s\n' "${RUNTIME_STATUS_COLOR}" "${RUNTIME_STATUS_LABEL}" "${COLOR_RESET}"
+  printf 'PID: %s\n' "${RUNTIME_PID}"
+  printf '版本: %s\n' "$(resolve_git_version)"
+  printf '数据库: PostgreSQL\n'
+  printf '环境文件: %s\n' "$(resolve_env_file_name)"
   printf '\n'
 }
 
@@ -110,8 +146,8 @@ show_main_menu() {
   print_header
   show_runtime_overview
   cat <<'TEXT'
-1. 安装更新
-2. 服务管理
+1. 服务管理
+2. 安装更新
 3. 检查日志
 4. 高级操作
 0. 退出
@@ -198,7 +234,7 @@ prompt_text() {
 
 show_env_summary() {
   local env_file=""
-  env_file="$("${APPCTL_BIN}" env-file 2>/dev/null | tail -n 1)"
+  env_file="$(resolve_env_file_path)"
   if [[ -z "${env_file}" ]]; then
     echo "无法获取当前环境文件路径"
     return 0
@@ -393,8 +429,8 @@ main() {
     show_main_menu
     case "$(prompt_choice)" in
       __EOF__|0) exit 0 ;;
-      1) install_menu ;;
-      2) service_menu ;;
+      1) service_menu ;;
+      2) install_menu ;;
       3) observe_menu ;;
       4) advanced_menu ;;
       *) echo "无效编号"; pause_screen ;;

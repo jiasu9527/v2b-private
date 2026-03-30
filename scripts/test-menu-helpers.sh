@@ -13,10 +13,12 @@ touch "${TMP_DIR}/go-api/run/forest-go-api.log"
 cat > "${TMP_DIR}/scripts/appctl" <<'APPCTL'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$*" >> "${APPCTL_LOG}"
 if [[ "${1:-}" == "env-file" ]]; then
+  printf '%s\n' "$*" >> "${APPCTL_LOG}"
   echo "/tmp/fake.env.go"
+  exit 0
 fi
+printf '%s\n' "$*" >> "${APPCTL_LOG}"
 if [[ "${1:-}" == "status" ]]; then
   echo "运行中，PID 12345"
 fi
@@ -49,7 +51,7 @@ HELPER_LOG="${TMP_DIR}/helper.log"
 export APPCTL_LOG HELPER_LOG
 
 printf '3\n1\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-doctor.out 2>/tmp/test-menu-helper-doctor.err
-if [[ "$(cat "${APPCTL_LOG}")" != "doctor" ]]; then
+if [[ "$(grep -v '^env-file$' "${APPCTL_LOG}")" != "doctor" ]]; then
   echo "expected doctor action"
   cat "${APPCTL_LOG}"
   exit 1
@@ -67,7 +69,7 @@ fi
 : > "${APPCTL_LOG}"
 : > "${HELPER_LOG}"
 printf '4\n6\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-env-file.out 2>/tmp/test-menu-helper-env-file.err
-if [[ "$(cat "${APPCTL_LOG}")" != "env-file" ]]; then
+if ! grep -q '^env-file$' "${APPCTL_LOG}"; then
   echo "expected env-file action"
   cat "${APPCTL_LOG}"
   exit 1
@@ -76,7 +78,7 @@ fi
 : > "${APPCTL_LOG}"
 : > "${HELPER_LOG}"
 printf '3\n5\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" PID_PATH="${TMP_DIR}/go-api/run/forest-go-api.pid" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-ps.out 2>/tmp/test-menu-helper-ps.err
-if [[ "$(cat "${APPCTL_LOG}")" != "status" ]]; then
+if [[ "$(grep -v '^env-file$' "${APPCTL_LOG}")" != "status" ]]; then
   echo "expected status action before ps"
   cat "${APPCTL_LOG}"
   exit 1
@@ -90,7 +92,7 @@ fi
 : > "${APPCTL_LOG}"
 : > "${HELPER_LOG}"
 printf '4\n8\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-install-link.out 2>/tmp/test-menu-helper-install-link.err
-if [[ "$(cat "${APPCTL_LOG}")" != "install-link" ]]; then
+if [[ "$(grep -v '^env-file$' "${APPCTL_LOG}")" != "install-link" ]]; then
   echo "expected install-link action"
   cat "${APPCTL_LOG}"
   exit 1
