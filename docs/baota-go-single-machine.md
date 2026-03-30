@@ -65,6 +65,12 @@ DB_SSLMODE=disable
 ./update.sh
 ```
 
+如果你更习惯看菜单操作，也可以直接运行：
+
+```bash
+./menu.sh
+```
+
 如果这是旧 PHP + MySQL 架构第一次切到现在这套 Go + PostgreSQL：
 
 - 保留旧站点目录里的 legacy `.env`

@@ -50,6 +50,12 @@ DB_SSLMODE=disable
 ./init.sh
 ```
 
+如果你更习惯交互式编号菜单，也可以先运行：
+
+```bash
+./menu.sh
+```
+
 ## 安装后启动
 
 前台运行：

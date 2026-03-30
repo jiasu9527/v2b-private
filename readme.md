@@ -8,6 +8,7 @@
 - PostgreSQL
 - 单机部署
 - 统一入口脚本 `./scripts/appctl`
+- 交互菜单入口 `./menu.sh`
 
 文档入口:
 
@@ -31,6 +32,12 @@
 
 ```bash
 ./update.sh
+```
+
+手工运维也可以直接进编号菜单:
+
+```bash
+./menu.sh
 ```
 
 更新前重写 PostgreSQL 配置:

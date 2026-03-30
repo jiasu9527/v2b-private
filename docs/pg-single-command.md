@@ -3,6 +3,7 @@
 This repository now uses a unified Go runtime entrypoint:
 
 ```bash
+./menu.sh
 ./init.sh
 ./update.sh
 ./scripts/appctl prompt-db
@@ -37,6 +38,12 @@ Fast path:
 
 ```bash
 ./init.sh
+```
+
+If you prefer an interactive numbered menu for manual ops:
+
+```bash
+./menu.sh
 ```
 
 If you need to edit the database or admin config before importing data:
