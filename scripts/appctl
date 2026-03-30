@@ -670,6 +670,7 @@ auto_migrate_legacy_mysql_if_needed() {
     return 1
   fi
 
+  echo "已检测到旧版 MySQL 环境，将自动从 .env 读取源库配置"
   ensure_postgres_target_for_legacy_mysql
   resolve_postgres_dsn
 
@@ -681,6 +682,9 @@ auto_migrate_legacy_mysql_if_needed() {
   fi
   if [[ "${output}" == *"migration_status=applied"* ]]; then
     return 0
+  fi
+  if [[ "${output}" == *"migration_reason=target_not_empty"* ]]; then
+    echo "PostgreSQL 目标库不是空库，已跳过 MySQL 数据导入，继续执行 PostgreSQL 结构更新"
   fi
   return 1
 }

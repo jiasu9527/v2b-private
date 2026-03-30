@@ -42,6 +42,12 @@ export GO_LOG
 printf 'pg.internal\n5433\nforest_go\npg_user\npg_pass\nrequire\n' | \
   GO_BIN="${TMP_DIR}/fake-go" FORCE_INTERACTIVE_DB_CONFIG=1 "${TMP_DIR}/scripts/appctl" update >/tmp/test-appctl-auto-migrate.out 2>/tmp/test-appctl-auto-migrate.err
 
+if ! rg -n '已检测到旧版 MySQL 环境，将自动从 \.env 读取源库配置' /tmp/test-appctl-auto-migrate.out >/dev/null 2>&1; then
+  echo "expected legacy mysql detection message"
+  cat /tmp/test-appctl-auto-migrate.out
+  exit 1
+fi
+
 EXPECTED=$'run ./cmd/ops migrate-config --target-root ..\nrun ./cmd/ops migrate-mysql --source-env ../.env --install-sql ../database/install.pgsql.sql --target-dsn host=pg.internal port=5433 user=pg_user dbname=forest_go sslmode=require password=pg_pass\nmod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest-go-api ./cmd/server'
 ACTUAL="$(cat "${GO_LOG}")"
 if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
