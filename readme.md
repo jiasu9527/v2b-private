@@ -40,6 +40,13 @@
 ./menu.sh
 ```
 
+安装全局 `forest` 命令:
+
+```bash
+./scripts/appctl install-link
+forest
+```
+
 更新前重写 PostgreSQL 配置:
 
 ```bash

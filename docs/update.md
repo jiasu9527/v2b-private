@@ -16,6 +16,13 @@
 ./menu.sh
 ```
 
+如果你想在系统里直接输入 `forest`：
+
+```bash
+./scripts/appctl install-link
+forest
+```
+
 说明：
 
 - 不要求系统预装 Go

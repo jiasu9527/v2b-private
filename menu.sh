@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+resolve_script_path() {
+  local source="${BASH_SOURCE[0]}"
+  while [[ -L "${source}" ]]; do
+    local dir
+    dir="$(cd -P "$(dirname "${source}")" && pwd)"
+    source="$(readlink "${source}")"
+    [[ "${source}" != /* ]] && source="${dir}/${source}"
+  done
+  cd -P "$(dirname "${source}")" && pwd
+}
+
+ROOT_DIR="$(resolve_script_path)"
 APPCTL_BIN="${APPCTL_BIN:-${ROOT_DIR}/scripts/appctl}"
 LOG_PATH="${LOG_PATH:-${ROOT_DIR}/go-api/run/forest-go-api.log}"
 PID_PATH="${PID_PATH:-${ROOT_DIR}/go-api/run/forest-go-api.pid}"
@@ -145,6 +156,7 @@ show_system_menu() {
 4. 运行 Go 单元测试
 5. 查看命令帮助
 6. 打印运行路径摘要
+7. 安装全局 forest 命令
 0. 返回上级
 TEXT
 }
@@ -353,6 +365,7 @@ system_menu() {
       4) run_appctl test; pause_screen ;;
       5) run_command "${APPCTL_BIN}"; pause_screen ;;
       6) show_runtime_paths; pause_screen ;;
+      7) run_appctl install-link; pause_screen ;;
       *) echo "无效编号"; pause_screen ;;
     esac
   done

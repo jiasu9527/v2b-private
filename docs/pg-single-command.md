@@ -4,6 +4,8 @@ This repository now uses a unified Go runtime entrypoint:
 
 ```bash
 ./menu.sh
+./scripts/appctl install-link
+forest
 ./init.sh
 ./update.sh
 ./scripts/appctl prompt-db

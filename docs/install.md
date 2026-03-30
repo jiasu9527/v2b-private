@@ -56,6 +56,13 @@ DB_SSLMODE=disable
 ./menu.sh
 ```
 
+如果想装成全局命令：
+
+```bash
+./scripts/appctl install-link
+forest
+```
+
 ## 安装后启动
 
 前台运行：

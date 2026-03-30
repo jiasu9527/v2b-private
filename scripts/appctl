@@ -989,6 +989,44 @@ WantedBy=multi-user.target
 EOF
 }
 
+default_link_target_dir() {
+  if [[ -n "${FOREST_LINK_DIR:-}" ]]; then
+    printf '%s\n' "${FOREST_LINK_DIR}"
+    return 0
+  fi
+  if [[ -d "/usr/local/bin" && -w "/usr/local/bin" ]]; then
+    printf '%s\n' "/usr/local/bin"
+    return 0
+  fi
+  if [[ -n "${HOME:-}" ]]; then
+    mkdir -p "${HOME}/.local/bin"
+    printf '%s\n' "${HOME}/.local/bin"
+    return 0
+  fi
+  echo "无法确定全局命令安装目录，请手动指定目标目录" >&2
+  exit 1
+}
+
+cmd_install_link() {
+  local target_dir="${1:-}"
+  if [[ -z "${target_dir}" ]]; then
+    target_dir="$(default_link_target_dir)"
+  fi
+
+  mkdir -p "${target_dir}"
+  local target_path="${target_dir}/forest"
+  if [[ -e "${target_path}" && ! -L "${target_path}" ]]; then
+    echo "目标已存在且不是软链：${target_path}" >&2
+    exit 1
+  fi
+
+  ln -sfn "${ROOT_DIR}/menu.sh" "${target_path}"
+  echo "已安装全局命令：${target_path} -> ${ROOT_DIR}/menu.sh"
+  if [[ ":${PATH}:" != *":${target_dir}:"* ]]; then
+    echo "提示：当前 PATH 未包含 ${target_dir}，请手动加入后再直接执行 forest"
+  fi
+}
+
 cmd_cleanup() {
   cleanup_legacy_runtime_artifacts false
 }
@@ -1016,6 +1054,7 @@ usage() {
   ./scripts/appctl prompt-db [--optional]
   ./scripts/appctl doctor
   ./scripts/appctl service-template
+  ./scripts/appctl install-link [target-dir]
 
 安装时必须设置：
   ADMIN_EMAIL
@@ -1049,5 +1088,6 @@ case "${action}" in
   env-file) cmd_env_file ;;
   prompt-db) shift; cmd_prompt_db "$@" ;;
   service-template) cmd_service_template ;;
+  install-link) shift; cmd_install_link "$@" ;;
   *) usage; exit 1 ;;
 esac

@@ -71,6 +71,13 @@ DB_SSLMODE=disable
 ./menu.sh
 ```
 
+如果你想做成全局命令：
+
+```bash
+./scripts/appctl install-link
+forest
+```
+
 如果这是旧 PHP + MySQL 架构第一次切到现在这套 Go + PostgreSQL：
 
 - 保留旧站点目录里的 legacy `.env`

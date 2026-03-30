@@ -87,4 +87,13 @@ if [[ "$(cat "${HELPER_LOG}")" != "ps -fp 12345" ]]; then
   exit 1
 fi
 
+: > "${APPCTL_LOG}"
+: > "${HELPER_LOG}"
+printf '6\n7\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-install-link.out 2>/tmp/test-menu-helper-install-link.err
+if [[ "$(cat "${APPCTL_LOG}")" != "install-link" ]]; then
+  echo "expected install-link action"
+  cat "${APPCTL_LOG}"
+  exit 1
+fi
+
 echo "menu helpers test passed"
