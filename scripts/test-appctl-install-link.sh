@@ -41,9 +41,9 @@ if [[ "${OUTPUT}" != *"已安装全局命令"* ]]; then
   exit 1
 fi
 
-printf '1\n1\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/fake-appctl" "${TMP_DIR}/bin/forest" >/tmp/test-appctl-install-link.out 2>/tmp/test-appctl-install-link.err
+printf '2\n1\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/fake-appctl" "${TMP_DIR}/bin/forest" >/tmp/test-appctl-install-link.out 2>/tmp/test-appctl-install-link.err
 
-if [[ "$(cat "${APPCTL_LOG}")" != "install" ]]; then
+if [[ "$(grep -v '^env-file$' "${APPCTL_LOG}")" != "install" ]]; then
   echo "expected forest command to route into menu/appctl"
   cat "${APPCTL_LOG}"
   exit 1
