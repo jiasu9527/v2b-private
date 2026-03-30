@@ -483,6 +483,26 @@ mysql_force_overwrite_enabled() {
   [[ "${value}" == "1" || "${value}" == "true" || "${value}" == "y" || "${value}" == "yes" ]]
 }
 
+confirm_migrate_legacy_mysql() {
+  if mysql_force_overwrite_enabled; then
+    return 0
+  fi
+  if ! should_prompt_db_config; then
+    return 0
+  fi
+
+  local answer=""
+  printf '检测到本地旧版 .env 文件，是否迁移旧版 MySQL 数据到 PostgreSQL？ [Y/n]: ' >&2
+  IFS= read -r answer || true
+  answer="$(normalize_yes_no_answer "${answer}")"
+  if [[ -z "${answer}" || "${answer}" == "y" || "${answer}" == "yes" ]]; then
+    return 0
+  fi
+
+  echo "已跳过旧版 MySQL 数据迁移"
+  return 1
+}
+
 confirm_reset_postgres_target() {
   local answer=""
   printf '检测到 PostgreSQL 目标库已有数据，是否清空 PostgreSQL 并用 MySQL 全量覆盖？ [y/N]: ' >&2
@@ -692,7 +712,14 @@ auto_migrate_legacy_mysql_if_needed() {
     return 1
   fi
 
-  echo "已检测到旧版 MySQL 环境，将自动从 .env 读取源库配置"
+  echo "已检测到本地旧版 .env 文件，将从 .env 读取 MySQL 源库配置"
+  if ! confirm_migrate_legacy_mysql; then
+    if ! db_configured && should_prompt_db_config; then
+      ensure_postgres_target_for_legacy_mysql
+      load_env
+    fi
+    return 1
+  fi
   ensure_postgres_target_for_legacy_mysql
   resolve_postgres_dsn
 

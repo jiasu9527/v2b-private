@@ -41,7 +41,7 @@ export GO_LOG
 
 GO_BIN="${TMP_DIR}/fake-go" "${TMP_DIR}/scripts/appctl" update >/tmp/test-appctl-auto-migrate-target-not-empty.out 2>/tmp/test-appctl-auto-migrate-target-not-empty.err
 
-if ! rg -n '已检测到旧版 MySQL 环境，将自动从 \.env 读取源库配置' /tmp/test-appctl-auto-migrate-target-not-empty.out >/dev/null 2>&1; then
+if ! rg -n '已检测到本地旧版 \.env 文件，将从 \.env 读取 MySQL 源库配置' /tmp/test-appctl-auto-migrate-target-not-empty.out >/dev/null 2>&1; then
   echo "expected legacy mysql detection message"
   cat /tmp/test-appctl-auto-migrate-target-not-empty.out
   exit 1

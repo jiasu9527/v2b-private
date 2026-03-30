@@ -39,12 +39,18 @@ chmod +x "${TMP_DIR}/fake-go"
 GO_LOG="${TMP_DIR}/go.log"
 export GO_LOG
 
-printf 'pg.internal\n5433\nforest_go\npg_user\npg_pass\nrequire\n' | \
+printf 'y\npg.internal\n5433\nforest_go\npg_user\npg_pass\nrequire\n' | \
   GO_BIN="${TMP_DIR}/fake-go" FORCE_INTERACTIVE_DB_CONFIG=1 "${TMP_DIR}/scripts/appctl" update >/tmp/test-appctl-auto-migrate.out 2>/tmp/test-appctl-auto-migrate.err
 
-if ! rg -n '已检测到旧版 MySQL 环境，将自动从 \.env 读取源库配置' /tmp/test-appctl-auto-migrate.out >/dev/null 2>&1; then
+if ! rg -n '已检测到本地旧版 \.env 文件，将从 \.env 读取 MySQL 源库配置' /tmp/test-appctl-auto-migrate.out >/dev/null 2>&1; then
   echo "expected legacy mysql detection message"
   cat /tmp/test-appctl-auto-migrate.out
+  exit 1
+fi
+
+if ! rg -n '检测到本地旧版 \.env.*是否迁移旧版 MySQL 数据到 PostgreSQL' /tmp/test-appctl-auto-migrate.err >/dev/null 2>&1; then
+  echo "expected legacy mysql migrate confirmation prompt"
+  cat /tmp/test-appctl-auto-migrate.err
   exit 1
 fi
 

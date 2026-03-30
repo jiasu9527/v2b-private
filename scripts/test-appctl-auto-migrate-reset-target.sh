@@ -43,7 +43,13 @@ chmod +x "${TMP_DIR}/fake-go"
 GO_LOG="${TMP_DIR}/go.log"
 export GO_LOG
 
-printf 'y\n' | FORCE_INTERACTIVE_DB_CONFIG=1 GO_BIN="${TMP_DIR}/fake-go" "${TMP_DIR}/scripts/appctl" update >/tmp/test-appctl-auto-migrate-reset-target.out 2>/tmp/test-appctl-auto-migrate-reset-target.err
+printf 'y\ny\n' | FORCE_INTERACTIVE_DB_CONFIG=1 GO_BIN="${TMP_DIR}/fake-go" "${TMP_DIR}/scripts/appctl" update >/tmp/test-appctl-auto-migrate-reset-target.out 2>/tmp/test-appctl-auto-migrate-reset-target.err
+
+if ! rg -n '检测到本地旧版 \.env.*是否迁移旧版 MySQL 数据到 PostgreSQL' /tmp/test-appctl-auto-migrate-reset-target.err >/dev/null 2>&1; then
+  echo "expected legacy mysql migrate confirmation prompt"
+  cat /tmp/test-appctl-auto-migrate-reset-target.err
+  exit 1
+fi
 
 if ! rg -n '是否清空 PostgreSQL 并用 MySQL 全量覆盖' /tmp/test-appctl-auto-migrate-reset-target.err >/dev/null 2>&1; then
   echo "expected reset-target confirmation prompt"
