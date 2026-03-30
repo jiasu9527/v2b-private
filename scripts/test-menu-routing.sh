@@ -50,4 +50,12 @@ if [[ "$(cat "${APPCTL_LOG}")" != "install-legacy /legacy/site" ]]; then
   exit 1
 fi
 
+: > "${APPCTL_LOG}"
+printf '1\n8\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-routing-uninstall.out 2>/tmp/test-menu-routing-uninstall.err
+if [[ "$(cat "${APPCTL_LOG}")" != "uninstall" ]]; then
+  echo "expected uninstall action"
+  cat "${APPCTL_LOG}"
+  exit 1
+fi
+
 echo "menu routing test passed"

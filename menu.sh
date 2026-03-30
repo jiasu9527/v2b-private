@@ -63,8 +63,25 @@ print_header() {
 TEXT
 }
 
+show_runtime_overview() {
+  local status_label="已停止"
+  local pid=""
+  if [[ -f "${PID_PATH}" ]]; then
+    pid="$(cat "${PID_PATH}" 2>/dev/null || true)"
+    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+      status_label="运行中 (PID ${pid})"
+    fi
+  fi
+
+  printf '当前状态: %s\n' "${status_label}"
+  printf '项目目录: %s\n' "${ROOT_DIR}"
+  printf '日志文件: %s\n' "${LOG_PATH}"
+  printf '\n'
+}
+
 show_main_menu() {
   print_header
+  show_runtime_overview
   cat <<'TEXT'
 1. 安装与更新
 2. 数据库与迁移
@@ -87,6 +104,7 @@ show_install_menu() {
 5. 配置 PostgreSQL
 6. 迁移旧 PHP 配置
 7. 从旧项目一键迁移安装
+8. 安全卸载当前部署
 0. 返回上级
 TEXT
 }
@@ -158,6 +176,7 @@ show_system_menu() {
 5. 查看命令帮助
 6. 打印运行路径摘要
 7. 安装全局 forest 命令
+8. 安全卸载当前部署
 0. 返回上级
 TEXT
 }
@@ -310,6 +329,7 @@ install_menu() {
         fi
         pause_screen
         ;;
+      8) run_appctl uninstall; pause_screen ;;
       *) echo "无效编号"; pause_screen ;;
     esac
   done
@@ -391,6 +411,7 @@ system_menu() {
       5) run_command "${APPCTL_BIN}"; pause_screen ;;
       6) show_runtime_paths; pause_screen ;;
       7) run_appctl install-link; pause_screen ;;
+      8) run_appctl uninstall; pause_screen ;;
       *) echo "无效编号"; pause_screen ;;
     esac
   done

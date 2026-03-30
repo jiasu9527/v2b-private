@@ -12,6 +12,9 @@ GO_BIN="${GO_BIN:-go}"
 LOCAL_TOOL_DIR="${ROOT_DIR}/.local"
 LOCAL_GO_ROOT="${LOCAL_TOOL_DIR}/go"
 LOCAL_GO_BIN="${LOCAL_GO_ROOT}/bin/go"
+SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
+FOREST_SERVICE_NAME="${FOREST_SERVICE_NAME:-forest-go-api}"
+FOREST_SERVICE_FILE_PATH="${FOREST_SERVICE_FILE_PATH:-/etc/systemd/system/${FOREST_SERVICE_NAME}.service}"
 
 mkdir -p "${BIN_DIR}" "${RUN_DIR}"
 
@@ -670,6 +673,29 @@ path_from_go_dir() {
   printf '%s\n' "${path}"
 }
 
+resolve_realpath() {
+  local current="$1"
+  if [[ ! -e "${current}" && ! -L "${current}" ]]; then
+    return 1
+  fi
+
+  while [[ -L "${current}" ]]; do
+    local dir target
+    dir="$(cd -P "$(dirname "${current}")" && pwd)"
+    target="$(readlink "${current}")"
+    if [[ "${target}" != /* ]]; then
+      current="${dir}/${target}"
+    else
+      current="${target}"
+    fi
+  done
+
+  (
+    cd -P "$(dirname "${current}")"
+    printf '%s/%s\n' "$(pwd)" "$(basename "${current}")"
+  )
+}
+
 run_ops_migrate_config() {
   ensure_go
   local args=(run ./cmd/ops migrate-config --target-root ..)
@@ -1118,6 +1144,62 @@ cmd_install_link() {
   fi
 }
 
+run_systemctl_safe() {
+  if ! command -v "${SYSTEMCTL_BIN}" >/dev/null 2>&1; then
+    return 0
+  fi
+  "${SYSTEMCTL_BIN}" "$@" >/dev/null 2>&1 || true
+}
+
+remove_managed_forest_links() {
+  local removed=0
+  local candidates=()
+  local path resolved_target expected_target=""
+
+  expected_target="$(resolve_realpath "${ROOT_DIR}/menu.sh" 2>/dev/null || true)"
+
+  if [[ -n "${FOREST_LINK_PATH:-}" ]]; then
+    candidates+=("${FOREST_LINK_PATH}")
+  fi
+  candidates+=("/usr/local/bin/forest")
+  if [[ -n "${HOME:-}" ]]; then
+    candidates+=("${HOME}/.local/bin/forest")
+  fi
+
+  for path in "${candidates[@]}"; do
+    [[ -L "${path}" ]] || continue
+    resolved_target="$(resolve_realpath "${path}" 2>/dev/null || true)"
+    if [[ -z "${resolved_target}" || -z "${expected_target}" || "${resolved_target}" != "${expected_target}" ]]; then
+      continue
+    fi
+    rm -f "${path}"
+    removed=$((removed + 1))
+  done
+
+  printf '%s\n' "${removed}"
+}
+
+cmd_uninstall() {
+  local removed_links=0
+  local removed_service=false
+
+  cmd_stop >/dev/null 2>&1 || true
+  cleanup_legacy_runtime_artifacts true
+
+  if [[ -e "${FOREST_SERVICE_FILE_PATH}" ]]; then
+    run_systemctl_safe disable --now "${FOREST_SERVICE_NAME}"
+    rm -f "${FOREST_SERVICE_FILE_PATH}"
+    run_systemctl_safe daemon-reload
+    removed_service=true
+  fi
+
+  removed_links="$(remove_managed_forest_links)"
+
+  echo "已卸载当前部署（保留数据库、环境文件和项目目录）"
+  printf '移除 systemd 服务文件: %s\n' "${removed_service}"
+  printf '移除全局 forest 命令数量: %s\n' "${removed_links}"
+}
+
 cmd_cleanup() {
   cleanup_legacy_runtime_artifacts false
 }
@@ -1147,6 +1229,7 @@ usage() {
   ./scripts/appctl doctor
   ./scripts/appctl service-template
   ./scripts/appctl install-link [target-dir]
+  ./scripts/appctl uninstall
 
 安装时必须设置：
   ADMIN_EMAIL
@@ -1182,5 +1265,6 @@ case "${action}" in
   prompt-db) shift; cmd_prompt_db "$@" ;;
   service-template) cmd_service_template ;;
   install-link) shift; cmd_install_link "$@" ;;
+  uninstall) cmd_uninstall ;;
   *) usage; exit 1 ;;
 esac
