@@ -1,0 +1,816 @@
+{
+  "cases": [
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/config/fetch"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/config/getEmailTemplate"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/config/getThemeTemplate"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/config/save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/config/setTelegramWebhook"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/config/testSendMail"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/coupon/drop"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/coupon/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/coupon/generate"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/coupon/show"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/giftcard/drop"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/giftcard/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/giftcard/generate"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/invite/campaign/detail"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/invite/campaign/fetch"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/invite/campaign/records"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/knowledge/drop"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/knowledge/fetch"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/knowledge/getCategory"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/knowledge/save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/knowledge/show"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/knowledge/sort"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/notice/drop"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/notice/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/notice/save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/notice/show"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/notice/update"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/order/assign"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/order/cancel"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/order/detail"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/order/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/order/paid"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/order/update"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/payment/drop"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/payment/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/payment/getPaymentForm"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/payment/getPaymentMethods"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/payment/save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/payment/show"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/payment/sort"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/plan/drop"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/plan/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/plan/save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/plan/sort"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/plan/update"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/anytls/copy"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/anytls/drop"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/anytls/save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/anytls/update"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/group/drop"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/server/group/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/group/save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/hysteria/copy"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/hysteria/drop"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/hysteria/save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/hysteria/update"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/server/manage/getNodes"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/manage/sort"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/manage/updateHost"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/route/drop"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/server/route/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/route/save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/shadowsocks/copy"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/shadowsocks/drop"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/shadowsocks/save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/shadowsocks/update"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/trojan/copy"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/trojan/drop"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/trojan/save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/trojan/update"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/tuic/copy"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/tuic/drop"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/tuic/save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/tuic/update"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/v2node/copy"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/v2node/drop"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/v2node/save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/v2node/update"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/vless/copy"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/vless/drop"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/vless/save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/vless/update"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/vmess/copy"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/vmess/drop"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/vmess/save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/server/vmess/update"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/stat/getOrder"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/stat/getOverride"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/stat/getRanking"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/stat/getServerLastRank"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/stat/getServerTodayRank"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/stat/getStat"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/stat/getStatRecord"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/stat/getStatUser"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/stat/getUserLastRank"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/stat/getUserTodayRank"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/system/getQueueMasters"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/system/getQueueStats"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/system/getQueueWorkload"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/system/getSystemLog"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/system/getSystemStatus"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/theme/getThemeConfig"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/theme/getThemes"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/theme/saveThemeConfig"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/ticket/close"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/ticket/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/ticket/reply"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/user/allDel"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/user/ban"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/user/delUser"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/user/dumpCSV"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/user/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/user/generate"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/user/getUserInfoById"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/user/resetSecret"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/user/sendMail"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/user/setInviteUser"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/<admin_path>/user/update"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/client/app/getConfig"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/client/app/getVersion"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/client/subscribe"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/guest/comm/config"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/guest/invite/preview"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/guest/payment/notify/{method}/{uuid}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/guest/plan/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/guest/telegram/webhook"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/passport/auth/forget"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/passport/auth/getQuickLoginUrl"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/passport/auth/login"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/passport/auth/loginWithMailLink"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/passport/auth/register"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/passport/auth/token2Login"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/passport/comm/pv"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/passport/comm/sendEmailVerify"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/server/Deepbwork/config"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/server/Deepbwork/submit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/server/Deepbwork/user"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/server/ShadowsocksTidalab/submit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/server/ShadowsocksTidalab/user"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/server/TrojanTidalab/config"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/server/TrojanTidalab/submit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/server/TrojanTidalab/user"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/server/UniProxy/alive"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/server/UniProxy/alivelist"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/server/UniProxy/config"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/server/UniProxy/push"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/server/UniProxy/user"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/staff/notice/drop"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/staff/notice/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/staff/notice/save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/staff/notice/update"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/staff/plan/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/staff/ticket/close"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/staff/ticket/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/staff/ticket/reply"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/staff/user/ban"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/staff/user/getUserInfoById"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/staff/user/sendMail"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/staff/user/update"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/changePassword"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/checkLogin"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/comm/config"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/comm/getStripePublicKey"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/coupon/check"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/getActiveSession"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/getQuickLoginUrl"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/getStat"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/getSubscribe"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/info"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/invite/campaign/abandon"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/invite/campaign/fetch"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/invite/campaign/records"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/invite/campaign/save"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/invite/details"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/invite/fetch"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/invite/save"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/knowledge/fetch"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/knowledge/getCategory"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/newPeriod"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/notice/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/order/cancel"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/order/check"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/order/checkout"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/order/detail"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/order/fetch"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/order/getPaymentMethod"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/order/save"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/plan/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/redeemgiftcard"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/removeActiveSession"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/resetSecurity"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/server/fetch"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/stat/getTrafficLog"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/telegram/getBotInfo"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/ticket/close"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/ticket/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/ticket/reply"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/ticket/save"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/ticket/withdraw"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/transfer"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/unbindTelegram"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/update"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/server/config"
+    }
+  ]
+}
