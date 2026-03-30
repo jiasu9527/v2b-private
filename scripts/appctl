@@ -713,6 +713,33 @@ build() {
   "${GO_BIN}" build -o "${BIN_PATH}" ./cmd/server
 }
 
+current_service_pid() {
+  [[ -f "${PID_PATH}" ]] || return 1
+  local pid
+  pid="$(cat "${PID_PATH}")"
+  [[ -n "${pid}" ]] || return 1
+  kill -0 "${pid}" 2>/dev/null || return 1
+  printf '%s\n' "${pid}"
+}
+
+start_binary() {
+  cd "${GO_DIR}"
+  nohup "${BIN_PATH}" >> "${LOG_PATH}" 2>&1 &
+  echo $! > "${PID_PATH}"
+}
+
+restart_running_service_after_update() {
+  local old_pid
+  old_pid="$(current_service_pid || true)"
+  if [[ -z "${old_pid}" ]]; then
+    return 0
+  fi
+
+  cmd_stop >/dev/null
+  start_binary
+  echo "检测到 Go API 正在运行，已自动重启，PID $(cat "${PID_PATH}")"
+}
+
 run_ops_install() {
   local args=(run ./cmd/ops install --sql ../database/install.pgsql.sql --admin-email "${ADMIN_EMAIL}")
   if [[ -n "${ADMIN_PASSWORD:-}" ]]; then
@@ -899,11 +926,13 @@ cmd_update() {
   run_ops_migrate_config
   if auto_migrate_legacy_mysql_if_needed; then
     build
+    restart_running_service_after_update
     return 0
   fi
   resolve_postgres_dsn
   run_ops_update
   build
+  restart_running_service_after_update
 }
 
 cmd_start() {
@@ -911,14 +940,12 @@ cmd_start() {
   load_env
   run_ops_migrate_config
   resolve_postgres_dsn
-  if [[ -f "${PID_PATH}" ]] && kill -0 "$(cat "${PID_PATH}")" 2>/dev/null; then
+  if current_service_pid >/dev/null; then
     echo "Go API 已在运行"
     return 0
   fi
   build
-  cd "${GO_DIR}"
-  nohup "${BIN_PATH}" >> "${LOG_PATH}" 2>&1 &
-  echo $! > "${PID_PATH}"
+  start_binary
   echo "已启动，PID $(cat "${PID_PATH}")"
 }
 
@@ -933,21 +960,20 @@ cmd_run() {
 }
 
 cmd_stop() {
-  if [[ ! -f "${PID_PATH}" ]]; then
+  local pid
+  pid="$(current_service_pid || true)"
+  if [[ -z "${pid}" ]]; then
+    rm -f "${PID_PATH}"
     echo "Go API 未运行"
     return 0
   fi
-  local pid
-  pid="$(cat "${PID_PATH}")"
-  if kill -0 "${pid}" 2>/dev/null; then
-    kill "${pid}"
-  fi
+  kill "${pid}"
   rm -f "${PID_PATH}"
   echo "已停止"
 }
 
 cmd_status() {
-  if [[ -f "${PID_PATH}" ]] && kill -0 "$(cat "${PID_PATH}")" 2>/dev/null; then
+  if current_service_pid >/dev/null; then
     echo "运行中，PID $(cat "${PID_PATH}")"
     return 0
   fi
