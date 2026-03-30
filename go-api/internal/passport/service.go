@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	crand "crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -15,6 +16,9 @@ import (
 	"net/mail"
 	"net/smtp"
 	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +32,7 @@ import (
 )
 
 var ErrUnavailable = errors.New("passport service unavailable")
+var passportProjectRoot = detectPassportProjectRoot()
 
 const (
 	cacheEmailVerifyCode             = "EMAIL_VERIFY_CODE"
@@ -1112,17 +1117,18 @@ $1, $2, $3, $4, $5, $6
 }
 
 func (s *DBService) sendSMTP(to, subject, body string) error {
-	host := strings.TrimSpace(s.cfg.MailHost)
-	port := s.cfg.MailPort
-	from := strings.TrimSpace(s.cfg.MailFromAddress)
+	settings := s.runtimeMailSettings()
+	host := settings.Host
+	port := settings.Port
+	from := settings.From
 	if host == "" || port <= 0 || from == "" {
 		return fmt.Errorf("mail config incomplete")
 	}
 
 	addr := fmt.Sprintf("%s:%d", host, port)
 	headerFrom := from
-	if strings.TrimSpace(s.cfg.MailFromName) != "" {
-		headerFrom = fmt.Sprintf("%s <%s>", s.cfg.MailFromName, from)
+	if settings.FromName != "" {
+		headerFrom = fmt.Sprintf("%s <%s>", settings.FromName, from)
 	}
 
 	msg := strings.Builder{}
@@ -1135,9 +1141,46 @@ func (s *DBService) sendSMTP(to, subject, body string) error {
 	msg.WriteString(body)
 	msg.WriteString("\r\n")
 
+	if strings.EqualFold(settings.Encryption, "ssl") {
+		conn, err := tls.Dial("tcp", addr, &tls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: true,
+		})
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+
+		client, err := smtp.NewClient(conn, host)
+		if err != nil {
+			return err
+		}
+		defer client.Quit()
+
+		if settings.Username != "" {
+			if err := client.Auth(smtp.PlainAuth("", settings.Username, settings.Password, host)); err != nil {
+				return err
+			}
+		}
+		if err := client.Mail(from); err != nil {
+			return err
+		}
+		if err := client.Rcpt(to); err != nil {
+			return err
+		}
+		writer, err := client.Data()
+		if err != nil {
+			return err
+		}
+		if _, err := writer.Write([]byte(msg.String())); err != nil {
+			return err
+		}
+		return writer.Close()
+	}
+
 	var auth smtp.Auth
-	if strings.TrimSpace(s.cfg.MailUsername) != "" {
-		auth = smtp.PlainAuth("", s.cfg.MailUsername, s.cfg.MailPassword, host)
+	if settings.Username != "" {
+		auth = smtp.PlainAuth("", settings.Username, settings.Password, host)
 	}
 	return smtp.SendMail(addr, auth, from, []string{to}, []byte(msg.String()))
 }
@@ -1159,6 +1202,118 @@ func (s *DBService) buildFrontendURL(path string) string {
 
 func cacheKey(name, unique string) string {
 	return name + "_" + unique
+}
+
+type runtimeMailSettings struct {
+	Host       string
+	Port       int64
+	Username   string
+	Password   string
+	Encryption string
+	From       string
+	FromName   string
+}
+
+func (s *DBService) runtimeMailSettings() runtimeMailSettings {
+	settings := runtimeMailSettings{
+		Host:       strings.TrimSpace(s.cfg.MailHost),
+		Port:       s.cfg.MailPort,
+		Username:   strings.TrimSpace(s.cfg.MailUsername),
+		Password:   s.cfg.MailPassword,
+		Encryption: strings.TrimSpace(s.cfg.MailEncryption),
+		From:       strings.TrimSpace(s.cfg.MailFromAddress),
+		FromName:   strings.TrimSpace(s.cfg.MailFromName),
+	}
+
+	if values, err := loadPassportAdminJSONValues(); err == nil {
+		if host := strings.TrimSpace(passportStringValue(values["email_host"])); host != "" {
+			settings.Host = host
+		}
+		if port := passportInt64Value(values["email_port"]); port > 0 {
+			settings.Port = port
+		}
+		if username := strings.TrimSpace(passportStringValue(values["email_username"])); username != "" {
+			settings.Username = username
+		}
+		if password := passportStringValue(values["email_password"]); password != "" {
+			settings.Password = password
+		}
+		if encryption := strings.TrimSpace(passportStringValue(values["email_encryption"])); encryption != "" {
+			settings.Encryption = encryption
+		}
+		if from := strings.TrimSpace(passportStringValue(values["email_from_address"])); from != "" {
+			settings.From = from
+		}
+		if fromName := strings.TrimSpace(passportStringValue(values["email_from_name"])); fromName != "" {
+			settings.FromName = fromName
+		}
+	}
+
+	if settings.Port <= 0 {
+		settings.Port = 25
+	}
+	if settings.FromName == "" {
+		settings.FromName = fallback(strings.TrimSpace(s.cfg.AppName), "V2Board")
+	}
+	return settings
+}
+
+func detectPassportProjectRoot() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return "."
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+}
+
+func loadPassportAdminJSONValues() (map[string]any, error) {
+	raw, err := os.ReadFile(filepath.Join(passportProjectRoot, "config", "admin.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	values := map[string]any{}
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func passportStringValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case json.Number:
+		return typed.String()
+	case float64:
+		return strconv.FormatInt(int64(typed), 10)
+	default:
+		if value == nil {
+			return ""
+		}
+		return fmt.Sprint(value)
+	}
+}
+
+func passportInt64Value(value any) int64 {
+	switch typed := value.(type) {
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	case float64:
+		return int64(typed)
+	case json.Number:
+		parsed, _ := typed.Int64()
+		return parsed
+	case string:
+		parsed, _ := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+		return parsed
+	default:
+		return 0
+	}
 }
 
 func validateEmail(email string) error {

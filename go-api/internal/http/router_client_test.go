@@ -154,6 +154,32 @@ func TestRouterClientSubscribeEndpoint(t *testing.T) {
 	}
 }
 
+func TestRouterClientSubscribeCustomPathEndpoint(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		subscribe: user.Subscribe{
+			UUID: "user-uuid",
+		},
+		servers: []map[string]any{},
+	}
+	router := NewRouter(config.Config{SubscribePath: "/forest-sub"}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/forest-sub?token=token-1", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected custom subscribe path to work, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	defaultReq := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
+	defaultRec := httptest.NewRecorder()
+	router.ServeHTTP(defaultRec, defaultReq)
+	if defaultRec.Code == http.StatusOK {
+		t.Fatalf("expected default subscribe path to be disabled when custom path is configured")
+	}
+}
+
 func TestRouterServerV2ConfigEndpoint(t *testing.T) {
 	t.Setenv("SERVER_PUSH_INTERVAL", "90")
 	t.Setenv("SERVER_PULL_INTERVAL", "45")

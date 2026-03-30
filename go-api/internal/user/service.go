@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/url"
 	"slices"
 	"strconv"
@@ -665,11 +666,11 @@ func (s *DBService) planMapForOrders(ctx context.Context, orders []map[string]an
 }
 
 func (s *DBService) buildSubscribeURL(ctx context.Context, userID int64, token string) (string, error) {
-	path := strings.TrimSpace(s.cfg.SubscribePath)
-	if path == "" {
-		path = "/api/v1/client/subscribe"
+	path := normalizeSubscribePath(s.cfg.SubscribePath)
+	baseURL := selectSubscribeBaseURL(s.cfg.SubscribeURL)
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(s.cfg.AppURL)
 	}
-	baseURL := strings.TrimSpace(s.cfg.SubscribeURL)
 	switch s.cfg.ShowSubscribeMethod {
 	case 1:
 		newToken, err := s.oneTimeSubscribeToken(ctx, token)
@@ -943,13 +944,46 @@ func boolToInt64(value bool) int64 {
 }
 
 func appendTokenToURL(baseURL, path, token string) string {
-	if strings.TrimSpace(path) == "" {
-		path = "/api/v1/client/subscribe"
-	}
+	path = normalizeSubscribePath(path)
 	if baseURL == "" {
 		return path + "?token=" + url.QueryEscape(token)
 	}
 	return strings.TrimRight(baseURL, "/") + path + "?token=" + url.QueryEscape(token)
+}
+
+func normalizeSubscribePath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "/api/v1/client/subscribe"
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "/" + path
+	}
+	return path
+}
+
+func selectSubscribeBaseURL(raw string) string {
+	parts := strings.Split(raw, ",")
+	urls := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		urls = append(urls, strings.TrimRight(part, "/"))
+	}
+	if len(urls) == 0 {
+		return ""
+	}
+	if len(urls) == 1 {
+		return urls[0]
+	}
+	max := big.NewInt(int64(len(urls)))
+	index, err := rand.Int(rand.Reader, max)
+	if err != nil {
+		return urls[0]
+	}
+	return urls[index.Int64()]
 }
 
 func base64URLEncode(value string) string {
