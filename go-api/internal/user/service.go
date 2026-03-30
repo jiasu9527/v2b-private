@@ -1019,8 +1019,36 @@ func parseIDString(raw string) []int64 {
 
 	var ids []int64
 	if strings.HasPrefix(raw, "[") {
-		_ = json.Unmarshal([]byte(raw), &ids)
-		return ids
+		if err := json.Unmarshal([]byte(raw), &ids); err == nil {
+			return ids
+		}
+
+		var stringIDs []string
+		if err := json.Unmarshal([]byte(raw), &stringIDs); err == nil {
+			ids = make([]int64, 0, len(stringIDs))
+			for _, item := range stringIDs {
+				item = strings.TrimSpace(item)
+				if item == "" {
+					continue
+				}
+				if id, err := strconv.ParseInt(item, 10, 64); err == nil {
+					ids = append(ids, id)
+				}
+			}
+			return ids
+		}
+
+		var generic []any
+		if err := json.Unmarshal([]byte(raw), &generic); err == nil {
+			ids = make([]int64, 0, len(generic))
+			for _, item := range generic {
+				if id, err := strconv.ParseInt(strings.TrimSpace(fmt.Sprint(item)), 10, 64); err == nil {
+					ids = append(ids, id)
+				}
+			}
+			return ids
+		}
+		return nil
 	}
 	if strings.HasPrefix(raw, "{") && strings.HasSuffix(raw, "}") {
 		raw = strings.TrimPrefix(strings.TrimSuffix(raw, "}"), "{")

@@ -93,3 +93,13 @@ func TestLoadServerFetchUserAllowsNullGroupID(t *testing.T) {
 		t.Fatalf("unmet expectations: %v", err)
 	}
 }
+
+func TestParseIDStringSupportsJSONStringArray(t *testing.T) {
+	ids := parseIDString(`["1","2"]`)
+	if len(ids) != 2 {
+		t.Fatalf("expected two ids, got %#v", ids)
+	}
+	if ids[0] != 1 || ids[1] != 2 {
+		t.Fatalf("expected [1 2], got %#v", ids)
+	}
+}
