@@ -88,10 +88,11 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 		return true
 	}
 
-	writeSubscribeHeaders(w, cfg, subscribe)
+	writeSubscribeMetadataHeaders(w, cfg, subscribe)
 
 	flag := clientSubscribeFlag(r)
 	if strings.Contains(flag, "clash") || strings.Contains(flag, "meta") || strings.Contains(flag, "stash") {
+		writeSubscribeDownloadHeaders(w, cfg)
 		body, err := buildClashStandardProfile(cfg, "custom.clash.yaml", "default.clash.yaml", subscribe.UUID, servers)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
@@ -163,15 +164,10 @@ func clientSubscribeFlag(r *http.Request) string {
 	return strings.ToLower(strings.TrimSpace(r.UserAgent()))
 }
 
-func writeSubscribeHeaders(w http.ResponseWriter, cfg config.Config, subscribe usersvc.Subscribe) {
+func writeSubscribeMetadataHeaders(w http.ResponseWriter, cfg config.Config, subscribe usersvc.Subscribe) {
 	expire := int64(0)
 	if subscribe.ExpiredAt != nil {
 		expire = *subscribe.ExpiredAt
-	}
-
-	appName := strings.TrimSpace(cfg.AppName)
-	if appName == "" {
-		appName = "V2Board"
 	}
 
 	w.Header().Set("subscription-userinfo", fmt.Sprintf(
@@ -182,10 +178,17 @@ func writeSubscribeHeaders(w http.ResponseWriter, cfg config.Config, subscribe u
 		expire,
 	))
 	w.Header().Set("profile-update-interval", "24")
-	w.Header().Set("content-disposition", "attachment;filename*=UTF-8''"+url.PathEscape(appName))
 	if strings.TrimSpace(cfg.AppURL) != "" {
 		w.Header().Set("profile-web-page-url", strings.TrimSpace(cfg.AppURL))
 	}
+}
+
+func writeSubscribeDownloadHeaders(w http.ResponseWriter, cfg config.Config) {
+	appName := strings.TrimSpace(cfg.AppName)
+	if appName == "" {
+		appName = "V2Board"
+	}
+	w.Header().Set("content-disposition", "attachment;filename*=UTF-8''"+url.PathEscape(appName))
 }
 
 func buildV2ServerConfig(cfg config.Config, server nodeapi.ServerRecord, routes []map[string]any) map[string]any {

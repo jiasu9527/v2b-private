@@ -143,6 +143,9 @@ func TestRouterClientSubscribeEndpoint(t *testing.T) {
 	if got := rec.Header().Get("subscription-userinfo"); got != "upload=11; download=22; total=100; expire=1234567890" {
 		t.Fatalf("unexpected subscription-userinfo header: %q", got)
 	}
+	if got := rec.Header().Get("content-disposition"); got != "" {
+		t.Fatalf("expected general subscribe to avoid attachment header, got %q", got)
+	}
 
 	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(rec.Body.String()))
 	if err != nil {
@@ -151,6 +154,57 @@ func TestRouterClientSubscribeEndpoint(t *testing.T) {
 	body := string(decoded)
 	if !strings.Contains(body, "vmess://") || !strings.Contains(body, "trojan://") {
 		t.Fatalf("unexpected subscribe payload: %q", body)
+	}
+}
+
+func TestRouterClientSubscribeClashEndpointUsesAttachmentHeader(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		subscribe: user.Subscribe{
+			U:              11,
+			D:              22,
+			TransferEnable: 100,
+			ExpiredAt:      int64Ptr(1234567890),
+			UUID:           "user-uuid",
+		},
+		servers: []map[string]any{
+			{
+				"type":    "vmess",
+				"name":    "VMess-1",
+				"host":    "node.example.com",
+				"port":    int64(443),
+				"network": "ws",
+				"tls":     int64(1),
+				"tls_settings": map[string]any{
+					"server_name": "node.example.com",
+				},
+				"network_settings": map[string]any{
+					"path": "/ws",
+					"headers": map[string]any{
+						"Host": "node.example.com",
+					},
+				},
+			},
+		},
+	}
+	router := NewRouter(config.Config{AppName: "Forest", PublicDir: "../public"}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1&flag=clash", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("content-disposition"); !strings.Contains(got, "attachment;") {
+		t.Fatalf("expected clash subscribe to keep attachment header, got %q", got)
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "yaml") {
+		t.Fatalf("expected yaml content type, got %q", contentType)
+	}
+	if !strings.Contains(rec.Body.String(), "proxies:") {
+		t.Fatalf("expected clash yaml body, got %q", rec.Body.String())
 	}
 }
 
