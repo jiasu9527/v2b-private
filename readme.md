@@ -223,7 +223,6 @@ ADMIN_PASSWORD='change-me'
 - 支付联调可直接用 `BASE_URL=http://127.0.0.1:8080 ./scripts/verify-demo-payment-api.sh` 校验支付方式、订单详情和 checkout。
 - 支付回调联调可直接用 `BASE_URL=http://127.0.0.1:8080 ./scripts/verify-demo-payment-notify.sh` 校验 `EPay`，也可通过 `PAYMENT_GATEWAY=CoinPayments PENDING_TRADE_NO=seed-demo-order-cpay-pending-01` 或 `PAYMENT_GATEWAY=StripeCheckout PENDING_TRADE_NO=seed-demo-order-stchk-pending-01` 校验其他已种子化回调。
 - 短时只读压测可直接用 `BASE_URL=http://127.0.0.1:8080 DURATION_SEC=15 CONCURRENCY=8 ./scripts/soak-demo-api.sh` 看错误率、延迟和 RSS 采样；可额外传 `SUMMARY_JSON=/tmp/soak.json`、`MAX_P95_MS=50`、`MAX_RSS_DELTA_KB=2048` 做阈值验收。
-- 新旧架构同口径对比可直接用 `GO_BASE_URL=http://127.0.0.1:8080 LEGACY_BASE_URL=http://127.0.0.1:9501 ./scripts/compare-api-bench.sh`，会输出 Go 版和旧版的请求数、p50/p95、RSS 增量，以及吞吐提升/P95下降/RSS下降摘要。
 
 ## Demo
 [Demo_user](https://v2bdemo.v-50.me/)
