@@ -49,6 +49,10 @@ prepare_go_env() {
   export GOPATH="${GOPATH:-${LOCAL_GO_PATH}}"
   export GOMODCACHE="${GOMODCACHE:-${LOCAL_GO_MOD_CACHE}}"
   export GOCACHE="${GOCACHE:-${LOCAL_GO_BUILD_CACHE}}"
+  export GOPROXY="${GOPROXY:-https://goproxy.cn,direct}"
+  if [[ " ${GOFLAGS:-} " != *" -modcacherw "* ]]; then
+    export GOFLAGS="${GOFLAGS:+${GOFLAGS} }-modcacherw"
+  fi
   mkdir -p "${HOME}" "${GOPATH}" "${GOMODCACHE}" "${GOCACHE}"
 }
 
@@ -940,6 +944,7 @@ stop_local_process_pid() {
 }
 
 restart_running_service_after_update() {
+  local previous_pid="${1:-}"
   if systemd_service_active; then
     run_systemctl_checked restart "${FOREST_SERVICE_NAME}" >/dev/null
     local systemd_pid
@@ -955,13 +960,21 @@ restart_running_service_after_update() {
     return 0
   fi
 
-  local old_pid
-  old_pid="$(pid_file_service_pid || process_scan_service_pid || true)"
+  local old_pid current_pid
+  old_pid="${previous_pid}"
+  if [[ -z "${old_pid}" ]]; then
+    old_pid="$(pid_file_service_pid || process_scan_service_pid || true)"
+  fi
   if [[ -z "${old_pid}" ]]; then
     return 1
   fi
 
-  cmd_stop >/dev/null
+  current_pid="$(pid_file_service_pid || process_scan_service_pid || true)"
+  if [[ -n "${current_pid}" ]]; then
+    cmd_stop >/dev/null
+  else
+    rm -f "${PID_PATH}"
+  fi
   start_binary
   echo "检测到 Go API 正在运行，已自动重启，PID $(cat "${PID_PATH}")"
   return 0
@@ -1159,6 +1172,11 @@ cmd_install_legacy() {
 }
 
 cmd_update() {
+  local previous_pid=""
+  if ! systemd_service_active; then
+    previous_pid="$(pid_file_service_pid || process_scan_service_pid || true)"
+  fi
+
   update_source_code_from_git
   ensure_go
   cleanup_legacy_runtime_artifacts true
@@ -1175,7 +1193,7 @@ cmd_update() {
   if ensure_systemd_service_running; then
     return 0
   fi
-  restart_running_service_after_update || warn_if_service_stopped_after_update
+  restart_running_service_after_update "${previous_pid}" || warn_if_service_stopped_after_update
 }
 
 cmd_start() {

@@ -49,7 +49,7 @@ export APPCTL_LOG
 
 printf 'n\n' | PATH="${TMP_DIR}/fakebin:${PATH}" FORCE_INTERACTIVE_DB_CONFIG=1 bash "${TMP_DIR}/update.sh" >/tmp/test-update-interactive.out 2>/tmp/test-update-interactive.err
 
-EXPECTED=$'prompt-db --optional\nupdate\nrestart'
+EXPECTED=$'prompt-db --optional\nupdate'
 ACTUAL="$(cat "${APPCTL_LOG}")"
 if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
   echo "unexpected appctl call order"

@@ -63,7 +63,7 @@ if [[ "${ACTUAL_GO}" != "${EXPECTED_GO}" ]]; then
   exit 1
 fi
 
-EXPECTED_SYSTEMCTL=$'daemon-reload\nis-active --quiet forest-go-api\nrestart forest-go-api\nshow -p MainPID --value forest-go-api'
+EXPECTED_SYSTEMCTL=$'is-active --quiet forest-go-api\ndaemon-reload\nis-active --quiet forest-go-api\nrestart forest-go-api\nshow -p MainPID --value forest-go-api'
 ACTUAL_SYSTEMCTL="$(cat "${SYSTEMCTL_LOG}")"
 if [[ "${ACTUAL_SYSTEMCTL}" != "${EXPECTED_SYSTEMCTL}" ]]; then
   echo "unexpected systemctl call order for update"
