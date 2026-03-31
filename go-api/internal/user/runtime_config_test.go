@@ -45,8 +45,8 @@ func TestSubscribeUsesRuntimeAllowNewPeriod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subscribe before reload: %v", err)
 	}
-	if subscribe.AllowNewPeriod != 0 {
-		t.Fatalf("expected allow_new_period=0 before reload, got %d", subscribe.AllowNewPeriod)
+	if subscribe.AllowNewPeriod != "0" {
+		t.Fatalf("expected allow_new_period=\"0\" before reload, got %q", subscribe.AllowNewPeriod)
 	}
 
 	writeRuntimeAdminJSON(t, root, map[string]any{
@@ -69,8 +69,8 @@ func TestSubscribeUsesRuntimeAllowNewPeriod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subscribe after reload: %v", err)
 	}
-	if subscribe.AllowNewPeriod != 1 {
-		t.Fatalf("expected allow_new_period=1 after reload, got %d", subscribe.AllowNewPeriod)
+	if subscribe.AllowNewPeriod != "1" {
+		t.Fatalf("expected allow_new_period=\"1\" after reload, got %q", subscribe.AllowNewPeriod)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

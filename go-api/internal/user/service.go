@@ -94,7 +94,7 @@ type Subscribe struct {
 	AliveIP        int64          `json:"alive_ip"`
 	SubscribeURL   string         `json:"subscribe_url"`
 	ResetDay       *int64         `json:"reset_day"`
-	AllowNewPeriod int64          `json:"allow_new_period"`
+	AllowNewPeriod string         `json:"allow_new_period"`
 }
 
 type OrderSaveRequest struct {
@@ -411,7 +411,7 @@ LIMIT 1`, userID).Scan(
 		subscribe.AliveIP = subscribeAliveIPCount(raw)
 	}
 	runtimeValues := s.runtimeValues()
-	subscribe.AllowNewPeriod = boolToInt64(runtimeValues.AllowNewPeriod)
+	subscribe.AllowNewPeriod = strconv.FormatInt(boolToInt64(runtimeValues.AllowNewPeriod), 10)
 
 	if subscribe.PlanID != nil {
 		plan, err := s.findPlanMap(ctx, *subscribe.PlanID)

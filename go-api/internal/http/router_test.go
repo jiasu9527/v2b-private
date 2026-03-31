@@ -1658,8 +1658,9 @@ func TestRouterUserGetSubscribeEndpoint(t *testing.T) {
 	sessionService := &fakeSessionService{user: &session.Identity{ID: 10}}
 	userService := &fakeUserService{
 		subscribe: user.Subscribe{
-			Token:        "token-1",
-			SubscribeURL: "/api/v1/client/subscribe?token=token-1",
+			Token:          "token-1",
+			SubscribeURL:   "/api/v1/client/subscribe?token=token-1",
+			AllowNewPeriod: "1",
 		},
 	}
 	router := NewRouter(
@@ -1677,6 +1678,9 @@ func TestRouterUserGetSubscribeEndpoint(t *testing.T) {
 	}
 	if userService.lastUserID != 10 {
 		t.Fatalf("expected subscribe service to be called with user id 10, got %d", userService.lastUserID)
+	}
+	if !strings.Contains(rec.Body.String(), `"allow_new_period":"1"`) {
+		t.Fatalf("expected allow_new_period string payload, got %s", rec.Body.String())
 	}
 }
 
