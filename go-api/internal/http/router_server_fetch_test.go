@@ -205,6 +205,143 @@ func TestRouterServerUniProxyConfigEndpointKeepsVlessPrivateKeys(t *testing.T) {
 	}
 }
 
+func TestRouterServerUniProxyConfigEndpointAdditionalProtocols(t *testing.T) {
+	tests := []struct {
+		name     string
+		nodeType string
+		fields   map[string]any
+		check    func(t *testing.T, payload map[string]any)
+	}{
+		{
+			name:     "shadowsocks",
+			nodeType: "shadowsocks",
+			fields: map[string]any{
+				"server_port": int64(18866),
+				"cipher":      "chacha20-ietf-poly1305",
+				"obfs":        "http",
+				"obfs_settings": map[string]any{
+					"host": "cdn.example.com",
+				},
+			},
+			check: func(t *testing.T, payload map[string]any) {
+				t.Helper()
+				if payload["server_port"] != float64(18866) || payload["cipher"] != "chacha20-ietf-poly1305" || payload["obfs"] != "http" {
+					t.Fatalf("unexpected shadowsocks payload: %#v", payload)
+				}
+				obfsSettings, ok := payload["obfs_settings"].(map[string]any)
+				if !ok || obfsSettings["host"] != "cdn.example.com" {
+					t.Fatalf("unexpected shadowsocks obfs settings: %#v", payload["obfs_settings"])
+				}
+			},
+		},
+		{
+			name:     "trojan",
+			nodeType: "trojan",
+			fields: map[string]any{
+				"host":        "edge.example.com",
+				"network":     "tcp",
+				"server_port": int64(12521),
+				"server_name": "m.ctrip.com",
+			},
+			check: func(t *testing.T, payload map[string]any) {
+				t.Helper()
+				if payload["host"] != "edge.example.com" || payload["network"] != "tcp" || payload["server_port"] != float64(12521) || payload["server_name"] != "m.ctrip.com" {
+					t.Fatalf("unexpected trojan payload: %#v", payload)
+				}
+			},
+		},
+		{
+			name:     "tuic",
+			nodeType: "tuic",
+			fields: map[string]any{
+				"server_port":        int64(12330),
+				"server_name":        "m.ctrip.com",
+				"congestion_control": "cubic",
+				"zero_rtt_handshake": int64(1),
+			},
+			check: func(t *testing.T, payload map[string]any) {
+				t.Helper()
+				if payload["server_port"] != float64(12330) || payload["server_name"] != "m.ctrip.com" || payload["congestion_control"] != "cubic" || payload["zero_rtt_handshake"] != true {
+					t.Fatalf("unexpected tuic payload: %#v", payload)
+				}
+			},
+		},
+		{
+			name:     "hysteria",
+			nodeType: "hysteria",
+			fields: map[string]any{
+				"version":         int64(2),
+				"host":            "156.229.160.135(Ureq)",
+				"server_port":     int64(443),
+				"server_name":     "download.example.com",
+				"up_mbps":         int64(0),
+				"down_mbps":       int64(0),
+				"obfs":            "",
+				"obfs_password":   "",
+			},
+			check: func(t *testing.T, payload map[string]any) {
+				t.Helper()
+				if payload["version"] != float64(2) || payload["server_port"] != float64(443) || payload["ignore_client_bandwidth"] != true {
+					t.Fatalf("unexpected hysteria payload: %#v", payload)
+				}
+			},
+		},
+		{
+			name:     "anytls",
+			nodeType: "anytls",
+			fields: map[string]any{
+				"server_port":  int64(443),
+				"server_name":  "m.ctrip.com",
+				"padding_scheme": []any{"stop=8"},
+			},
+			check: func(t *testing.T, payload map[string]any) {
+				t.Helper()
+				if payload["server_port"] != float64(443) || payload["server_name"] != "m.ctrip.com" {
+					t.Fatalf("unexpected anytls payload: %#v", payload)
+				}
+				padding, ok := payload["padding_scheme"].([]any)
+				if !ok || len(padding) != 1 || padding[0] != "stop=8" {
+					t.Fatalf("unexpected anytls padding_scheme: %#v", payload["padding_scheme"])
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nodeService := &fakeNodeService{
+				server: nodeapi.ServerRecord{
+					ID:       7,
+					NodeType: tt.nodeType,
+					Fields:   tt.fields,
+				},
+			}
+			router := NewRouter(
+				config.Config{AppName: "forest-go", ServerToken: "secret"},
+				WithNodeService(nodeService),
+			)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/server/UniProxy/config?token=secret&node_type="+tt.nodeType+"&node_id=7", nil)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+
+			var payload map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("expected json body: %v", err)
+			}
+			baseConfig, ok := payload["base_config"].(map[string]any)
+			if !ok || baseConfig["push_interval"] != float64(60) || baseConfig["pull_interval"] != float64(60) {
+				t.Fatalf("unexpected base config: %#v", payload["base_config"])
+			}
+			tt.check(t, payload)
+		})
+	}
+}
+
 func TestRouterServerUniProxyAliveListEndpoint(t *testing.T) {
 	nodeService := &fakeNodeService{
 		server: nodeapi.ServerRecord{ID: 7, NodeType: "vmess"},
