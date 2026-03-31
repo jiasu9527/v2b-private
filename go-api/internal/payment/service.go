@@ -334,7 +334,7 @@ func parseGatewayConfig(raw string) (map[string]string, error) {
 }
 
 func (s *DBService) notifyURL(paymentMethod paymentRecord) string {
-	path := "/api/v1/guest/payment/notify/" + paymentMethod.Payment + "/" + paymentMethod.UUID
+	path := "/api/v1/guest/payment/notify/" + strings.TrimSpace(paymentMethod.Payment) + "/" + strings.TrimSpace(paymentMethod.UUID)
 	if paymentMethod.NotifyDomain.Valid && strings.TrimSpace(paymentMethod.NotifyDomain.String) != "" {
 		return strings.TrimRight(strings.TrimSpace(paymentMethod.NotifyDomain.String), "/") + path
 	}

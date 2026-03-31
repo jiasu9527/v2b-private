@@ -194,6 +194,20 @@ func TestBuildGatewayCheckoutEpusdtPay(t *testing.T) {
 	}
 }
 
+func TestNotifyURLTrimsGatewayAndUUID(t *testing.T) {
+	service := &DBService{cfg: config.Config{AppURL: "https://forest.example.com"}}
+
+	got := service.notifyURL(paymentRecord{
+		Payment: " EPay ",
+		UUID:    " uuid123 ",
+	})
+
+	want := "https://forest.example.com/api/v1/guest/payment/notify/EPay/uuid123"
+	if got != want {
+		t.Fatalf("expected trimmed notify url %q, got %q", want, got)
+	}
+}
+
 func TestBuildGatewayCheckoutCoinPayments(t *testing.T) {
 	result, err := buildGatewayCheckout(
 		context.Background(),

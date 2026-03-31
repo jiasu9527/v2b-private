@@ -32108,9 +32108,10 @@
                                 send_email_mass: "\u90ae\u4ef6\u7fa4\u53d1\u961f\u5217",
                                 send_telegram: "Telegram\u6d88\u606f\u961f\u5217",
                                 stat: "\u7edf\u8ba1\u961f\u5217",
+                                stat_refresh: "\u7edf\u8ba1\u5237\u65b0\u961f\u5217",
                                 traffic_fetch: "\u6d41\u91cf\u6d88\u8d39\u961f\u5217"
                             };
-                            return t[e]
+                            return t[e] || e
                         }
                     }, {
                         title: "\u4f5c\u4e1a\u91cf",
