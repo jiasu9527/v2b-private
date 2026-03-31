@@ -8,7 +8,7 @@ trap 'rm -rf "${TMP_DIR}"' EXIT
 mkdir -p "${TMP_DIR}/scripts" "${TMP_DIR}/go-api/run"
 cp "${REPO_ROOT}/menu.sh" "${TMP_DIR}/menu.sh"
 chmod +x "${TMP_DIR}/menu.sh"
-touch "${TMP_DIR}/go-api/run/forest-go-api.log"
+touch "${TMP_DIR}/go-api/run/forest.log"
 
 cat > "${TMP_DIR}/scripts/appctl" <<'APPCTL'
 #!/usr/bin/env bash
@@ -77,8 +77,8 @@ fi
 
 : > "${APPCTL_LOG}"
 : > "${HELPER_LOG}"
-printf '3\n2\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" LOG_PATH="${TMP_DIR}/go-api/run/forest-go-api.log" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-log.out 2>/tmp/test-menu-helper-log.err
-if [[ "$(cat "${HELPER_LOG}")" != "tail -n 200 ${TMP_DIR}/go-api/run/forest-go-api.log" ]]; then
+printf '3\n2\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" LOG_PATH="${TMP_DIR}/go-api/run/forest.log" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-log.out 2>/tmp/test-menu-helper-log.err
+if [[ "$(cat "${HELPER_LOG}")" != "tail -n 200 ${TMP_DIR}/go-api/run/forest.log" ]]; then
   echo "expected tail helper"
   cat "${HELPER_LOG}"
   exit 1
@@ -95,7 +95,7 @@ fi
 
 : > "${APPCTL_LOG}"
 : > "${HELPER_LOG}"
-printf '3\n5\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" PID_PATH="${TMP_DIR}/go-api/run/forest-go-api.pid" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-ps.out 2>/tmp/test-menu-helper-ps.err
+printf '3\n5\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" PID_PATH="${TMP_DIR}/go-api/run/forest.pid" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-ps.out 2>/tmp/test-menu-helper-ps.err
 if [[ "$(grep -c '^status$' "${APPCTL_LOG}")" -lt 1 ]]; then
   echo "expected status action before ps"
   cat "${APPCTL_LOG}"
@@ -119,7 +119,7 @@ fi
 : > "${APPCTL_LOG}"
 : > "${HELPER_LOG}"
 printf '3\n7\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" SYSTEMCTL_BIN="${TMP_DIR}/fake-systemctl" JOURNALCTL_BIN="${TMP_DIR}/fake-journalctl" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-systemd-status.out 2>/tmp/test-menu-helper-systemd-status.err
-if [[ "$(cat "${HELPER_LOG}")" != "systemctl status forest-go-api --no-pager -l" ]]; then
+if [[ "$(cat "${HELPER_LOG}")" != "systemctl status forest --no-pager -l" ]]; then
   echo "expected systemctl status helper"
   cat "${HELPER_LOG}"
   exit 1
@@ -128,7 +128,7 @@ fi
 : > "${APPCTL_LOG}"
 : > "${HELPER_LOG}"
 printf '3\n8\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" TAIL_BIN="${TMP_DIR}/fake-tail" PS_BIN="${TMP_DIR}/fake-ps" SS_BIN="${TMP_DIR}/fake-ss" SYSTEMCTL_BIN="${TMP_DIR}/fake-systemctl" JOURNALCTL_BIN="${TMP_DIR}/fake-journalctl" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-helper-systemd-journal.out 2>/tmp/test-menu-helper-systemd-journal.err
-if [[ "$(cat "${HELPER_LOG}")" != "journalctl -u forest-go-api -n 200 --no-pager" ]]; then
+if [[ "$(cat "${HELPER_LOG}")" != "journalctl -u forest -n 200 --no-pager" ]]; then
   echo "expected journalctl helper"
   cat "${HELPER_LOG}"
   exit 1

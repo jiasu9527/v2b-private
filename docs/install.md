@@ -16,6 +16,7 @@
 
 - 不要求系统预装 Go
 - `install.sh` 会自动拉取或更新仓库，然后继续执行安装
+- 在线安装默认目录是 `/etc/forest`，需要自定义时可设置 `FOREST_INSTALL_DIR`
 - `./init.sh` 和 `./update.sh` 在缺少 Go 时会自动下载本地工具链到项目目录 `.local/go`
 - 如果你机器里本来就有 Go，也会优先直接用系统 Go
 - 当前可直接使用 GitHub raw 地址在线安装
@@ -141,7 +142,7 @@ forest status
 
 - 运行环境：`.env.go`
 - 后台主配置：`config/admin.json`
-- 日志：`go-api/run/forest-go-api.log`
+- 日志：`go-api/run/forest.log`
 
 ## 安装后启动
 
@@ -154,9 +155,9 @@ forest status
 常驻运行：
 
 ```bash
-./scripts/appctl service-template > /etc/systemd/system/forest-go-api.service
+./scripts/appctl service-template > /etc/systemd/system/forest.service
 systemctl daemon-reload
-systemctl enable --now forest-go-api
+systemctl enable --now forest
 ```
 
 ## 宝塔 / Nginx 反代

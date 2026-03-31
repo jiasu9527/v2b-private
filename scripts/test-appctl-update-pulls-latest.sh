@@ -76,7 +76,7 @@ if [[ "${ACTUAL_GIT}" != "${EXPECTED_GIT}" ]]; then
   exit 1
 fi
 
-EXPECTED_GO=$'run ./cmd/ops migrate-config --target-root ..\nrun ./cmd/ops update --sql ../database/update.pgsql.sql --dsn host=127.0.0.1 port=5432 user=gitpulluser dbname=forest sslmode=disable password=gitpullpass\nmod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest-go-api ./cmd/server'
+EXPECTED_GO=$'run ./cmd/ops migrate-config --target-root ..\nrun ./cmd/ops update --sql ../database/update.pgsql.sql --dsn host=127.0.0.1 port=5432 user=gitpulluser dbname=forest sslmode=disable password=gitpullpass\nmod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest ./cmd/server'
 ACTUAL_GO="$(cat "${GO_LOG}")"
 if [[ "${ACTUAL_GO}" != "${EXPECTED_GO}" ]]; then
   echo "unexpected go update command order"

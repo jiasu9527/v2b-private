@@ -42,7 +42,7 @@ export GO_LOG
 
 PATH="/usr/bin:/bin" "${TMP_DIR}/scripts/appctl" start >/tmp/test-appctl-update-restarts-start.out 2>/tmp/test-appctl-update-restarts-start.err
 
-OLD_PID="$(cat "${TMP_DIR}/go-api/run/forest-go-api.pid")"
+OLD_PID="$(cat "${TMP_DIR}/go-api/run/forest.pid")"
 if ! kill -0 "${OLD_PID}" 2>/dev/null; then
   echo "expected old service process to be running"
   exit 1
@@ -51,7 +51,7 @@ fi
 : > "${GO_LOG}"
 PATH="/usr/bin:/bin" "${TMP_DIR}/scripts/appctl" update >/tmp/test-appctl-update-restarts.out 2>/tmp/test-appctl-update-restarts.err
 
-EXPECTED=$'run ./cmd/ops migrate-config --target-root ..\nrun ./cmd/ops update --sql ../database/update.pgsql.sql --dsn host=127.0.0.1 port=5432 user=updateuser dbname=forest sslmode=disable password=updatepass\nmod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest-go-api ./cmd/server'
+EXPECTED=$'run ./cmd/ops migrate-config --target-root ..\nrun ./cmd/ops update --sql ../database/update.pgsql.sql --dsn host=127.0.0.1 port=5432 user=updateuser dbname=forest sslmode=disable password=updatepass\nmod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest ./cmd/server'
 ACTUAL="$(cat "${GO_LOG}")"
 if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
   echo "unexpected update command order"
@@ -65,7 +65,7 @@ if ! rg -n '检测到 Go API 正在运行，已自动重启，PID ' /tmp/test-ap
   exit 1
 fi
 
-NEW_PID="$(cat "${TMP_DIR}/go-api/run/forest-go-api.pid")"
+NEW_PID="$(cat "${TMP_DIR}/go-api/run/forest.pid")"
 if [[ "${NEW_PID}" == "${OLD_PID}" ]]; then
   echo "expected update to restart running service with a new pid"
   cat /tmp/test-appctl-update-restarts.out

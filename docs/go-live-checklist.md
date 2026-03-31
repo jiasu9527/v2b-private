@@ -29,10 +29,10 @@
 ## 3. 生成并托管 systemd 服务
 
 ```bash
-./scripts/appctl service-template > /etc/systemd/system/forest-go-api.service
+./scripts/appctl service-template > /etc/systemd/system/forest.service
 systemctl daemon-reload
-systemctl enable --now forest-go-api
-systemctl status forest-go-api --no-pager
+systemctl enable --now forest
+systemctl status forest --no-pager
 ```
 
 如果你是宝塔装 PostgreSQL、程序自己纯命令跑，这一步就是推荐方式。
@@ -76,13 +76,13 @@ NODE_TYPE=vmess \
 ## 7. 切流后盯日志
 
 ```bash
-tail -f go-api/run/forest-go-api.log
+tail -f go-api/run/forest.log
 ```
 
 如果你用的是 systemd，同时看：
 
 ```bash
-journalctl -u forest-go-api -n 100 --no-pager
+journalctl -u forest -n 100 --no-pager
 ```
 
 ## 8. 出问题先查什么
@@ -93,6 +93,6 @@ journalctl -u forest-go-api -n 100 --no-pager
 2. `curl -fsS http://127.0.0.1:8080/readyz`
 3. `curl -fsS http://127.0.0.1:8080/monitor/api/stats`
 4. `./scripts/smoke-node-api.sh`
-5. `tail -f go-api/run/forest-go-api.log`
+5. `tail -f go-api/run/forest.log`
 
 这样能很快把问题定位到配置、数据库、队列运行态、节点接口、还是业务日志。

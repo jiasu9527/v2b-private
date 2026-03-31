@@ -29,10 +29,10 @@ cat > "${TMP_DIR}/fake-systemctl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "${SYSTEMCTL_LOG}"
-if [[ "${1:-}" == "is-active" && "${2:-}" == "--quiet" && "${3:-}" == "forest-go-api" ]]; then
+if [[ "${1:-}" == "is-active" && "${2:-}" == "--quiet" && "${3:-}" == "forest" ]]; then
   exit 0
 fi
-if [[ "${1:-}" == "show" && "${2:-}" == "-p" && "${3:-}" == "MainPID" && "${4:-}" == "--value" && "${5:-}" == "forest-go-api" ]]; then
+if [[ "${1:-}" == "show" && "${2:-}" == "-p" && "${3:-}" == "MainPID" && "${4:-}" == "--value" && "${5:-}" == "forest" ]]; then
   echo "43210"
   exit 0
 fi
@@ -40,10 +40,10 @@ exit 0
 EOF
 chmod +x "${TMP_DIR}/fake-systemctl"
 
-SERVICE_FILE="${TMP_DIR}/forest-go-api.service"
+SERVICE_FILE="${TMP_DIR}/forest.service"
 cat > "${SERVICE_FILE}" <<'EOF'
 [Unit]
-Description=forest-go-api
+Description=forest
 EOF
 
 GO_LOG="${TMP_DIR}/go.log"
@@ -55,7 +55,7 @@ SYSTEMCTL_BIN="${TMP_DIR}/fake-systemctl" \
 PATH="/usr/bin:/bin" \
 "${TMP_DIR}/scripts/appctl" update >/tmp/test-appctl-update-systemd.out 2>/tmp/test-appctl-update-systemd.err
 
-EXPECTED_GO=$'run ./cmd/ops migrate-config --target-root ..\nrun ./cmd/ops update --sql ../database/update.pgsql.sql --dsn host=127.0.0.1 port=5432 user=updateuser dbname=forest sslmode=disable password=updatepass\nmod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest-go-api ./cmd/server'
+EXPECTED_GO=$'run ./cmd/ops migrate-config --target-root ..\nrun ./cmd/ops update --sql ../database/update.pgsql.sql --dsn host=127.0.0.1 port=5432 user=updateuser dbname=forest sslmode=disable password=updatepass\nmod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest ./cmd/server'
 ACTUAL_GO="$(cat "${GO_LOG}")"
 if [[ "${ACTUAL_GO}" != "${EXPECTED_GO}" ]]; then
   echo "unexpected update command order in systemd mode"
@@ -63,7 +63,7 @@ if [[ "${ACTUAL_GO}" != "${EXPECTED_GO}" ]]; then
   exit 1
 fi
 
-EXPECTED_SYSTEMCTL=$'is-active --quiet forest-go-api\ndaemon-reload\nis-active --quiet forest-go-api\nrestart forest-go-api\nshow -p MainPID --value forest-go-api'
+EXPECTED_SYSTEMCTL=$'is-active --quiet forest\ndaemon-reload\nis-active --quiet forest\nrestart forest\nshow -p MainPID --value forest'
 ACTUAL_SYSTEMCTL="$(cat "${SYSTEMCTL_LOG}")"
 if [[ "${ACTUAL_SYSTEMCTL}" != "${EXPECTED_SYSTEMCTL}" ]]; then
   echo "unexpected systemctl call order for update"

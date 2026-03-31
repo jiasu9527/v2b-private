@@ -149,18 +149,18 @@ FORCE_INTERACTIVE_DB_CONFIG=1 ./update.sh
 ## 4. 用 systemd 常驻
 
 ```bash
-./scripts/appctl service-template > /etc/systemd/system/forest-go-api.service
+./scripts/appctl service-template > /etc/systemd/system/forest.service
 systemctl daemon-reload
-systemctl enable --now forest-go-api
-systemctl status forest-go-api --no-pager
+systemctl enable --now forest
+systemctl status forest --no-pager
 ```
 
 后续常用命令：
 
 ```bash
-systemctl restart forest-go-api
-systemctl stop forest-go-api
-journalctl -u forest-go-api -n 100 --no-pager
+systemctl restart forest
+systemctl stop forest
+journalctl -u forest -n 100 --no-pager
 ```
 
 ## 5. 宝塔站点怎么配
@@ -176,7 +176,7 @@ journalctl -u forest-go-api -n 100 --no-pager
 - 站点正常保留
 - PHP 项目类型无所谓，但不要再依赖 PHP 处理请求
 - 打开站点的“反向代理”
-- 代理名称随便填，比如 `forest-go`
+- 代理名称随便填，比如 `forest`
 - 目标 URL 填：`http://127.0.0.1:8080`
 - 发送域名：默认即可
 - 提交后保存 Nginx 配置
@@ -225,8 +225,8 @@ curl -fsS http://127.0.0.1:8080/monitor/api/stats
 ## 7. 出问题先查哪里
 
 ```bash
-tail -f go-api/run/forest-go-api.log
-journalctl -u forest-go-api -f
+tail -f go-api/run/forest.log
+journalctl -u forest -f
 ```
 
 再配合：

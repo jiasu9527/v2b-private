@@ -30,7 +30,7 @@ export GO_LOG
 
 GO_BIN="${TMP_DIR}/fake-go" "${TMP_DIR}/scripts/appctl" update >/tmp/test-appctl-update-warns.out 2>/tmp/test-appctl-update-warns.err
 
-EXPECTED=$'run ./cmd/ops migrate-config --target-root ..\nrun ./cmd/ops update --sql ../database/update.pgsql.sql --dsn host=127.0.0.1 port=5432 user=warnuser dbname=forest sslmode=disable password=warnpass\nmod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest-go-api ./cmd/server'
+EXPECTED=$'run ./cmd/ops migrate-config --target-root ..\nrun ./cmd/ops update --sql ../database/update.pgsql.sql --dsn host=127.0.0.1 port=5432 user=warnuser dbname=forest sslmode=disable password=warnpass\nmod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest ./cmd/server'
 ACTUAL="$(cat "${GO_LOG}")"
 if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
   echo "unexpected update command order when service is stopped"

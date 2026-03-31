@@ -189,12 +189,12 @@ func TestLoadBulkMailConfigFallsBackToAppNameForFromName(t *testing.T) {
 	defer func() { adminProjectRoot = oldRoot }()
 
 	service := &DBService{cfg: cfgpkg.Config{
-		AppName:         "forest-go-api",
+		AppName:         "forest",
 		AppURL:          "http://localhost",
 		MailHost:        "127.0.0.1",
 		MailPort:        25,
 		MailFromAddress: "env@example.com",
-		MailFromName:    "forest-go-api",
+		MailFromName:    "forest",
 	}}
 	mailCfg, err := service.loadBulkMailConfig()
 	if err != nil {

@@ -81,7 +81,7 @@ if [[ ! -s "${TAR_LOG}" ]]; then
   exit 1
 fi
 
-EXPECTED=$'mod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest-go-api ./cmd/server'
+EXPECTED=$'mod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest ./cmd/server'
 ACTUAL="$(cat "${GO_LOG}")"
 if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
   echo "expected bootstrapped go binary to be used"

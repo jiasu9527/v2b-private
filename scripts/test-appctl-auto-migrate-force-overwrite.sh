@@ -51,7 +51,7 @@ if ! rg -n '已启用 FORCE_MYSQL_OVERWRITE=1，开始清空 PostgreSQL 目标�
   exit 1
 fi
 
-EXPECTED=$'run ./cmd/ops migrate-config --target-root ..\nrun ./cmd/ops migrate-mysql --source-env ../.env --install-sql ../database/install.pgsql.sql --target-dsn host=pg.internal port=5432 user=pg_user dbname=forest_go sslmode=disable password=pg_pass --reset-target\nmod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest-go-api ./cmd/server'
+EXPECTED=$'run ./cmd/ops migrate-config --target-root ..\nrun ./cmd/ops migrate-mysql --source-env ../.env --install-sql ../database/install.pgsql.sql --target-dsn host=pg.internal port=5432 user=pg_user dbname=forest_go sslmode=disable password=pg_pass --reset-target\nmod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest ./cmd/server'
 ACTUAL="$(cat "${GO_LOG}")"
 if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
   echo "unexpected force-overwrite command order"

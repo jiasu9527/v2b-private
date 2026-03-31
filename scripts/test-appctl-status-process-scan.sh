@@ -41,8 +41,8 @@ GO_LOG="${TMP_DIR}/go.log"
 export GO_LOG
 
 PATH="/usr/bin:/bin" "${TMP_DIR}/scripts/appctl" start >/tmp/test-appctl-status-process-start.out 2>/tmp/test-appctl-status-process-start.err
-OLD_PID="$(cat "${TMP_DIR}/go-api/run/forest-go-api.pid")"
-rm -f "${TMP_DIR}/go-api/run/forest-go-api.pid"
+OLD_PID="$(cat "${TMP_DIR}/go-api/run/forest.pid")"
+rm -f "${TMP_DIR}/go-api/run/forest.pid"
 
 cat > "${TMP_DIR}/fake-pgrep" <<EOF
 #!/usr/bin/env bash

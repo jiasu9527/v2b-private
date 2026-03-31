@@ -47,7 +47,7 @@ EOF
 chmod +x "${TMP_DIR}/.local/go/bin/go"
 
 GO_LOG="${TMP_DIR}/go.log"
-PID_PATH="${TMP_DIR}/go-api/run/forest-go-api.pid"
+PID_PATH="${TMP_DIR}/go-api/run/forest.pid"
 export GO_LOG PID_PATH
 
 PATH="/usr/bin:/bin" "${TMP_DIR}/scripts/appctl" start >/tmp/test-appctl-update-restarts-previous-start.out 2>/tmp/test-appctl-update-restarts-previous-start.err

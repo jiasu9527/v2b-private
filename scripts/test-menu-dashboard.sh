@@ -22,8 +22,8 @@ exit 0
 APPCTL
 chmod +x "${TMP_DIR}/scripts/appctl"
 
-touch "${TMP_DIR}/go-api/run/forest-go-api.log"
-printf '%s\n' "$$" > "${TMP_DIR}/go-api/run/forest-go-api.pid"
+touch "${TMP_DIR}/go-api/run/forest.log"
+printf '%s\n' "$$" > "${TMP_DIR}/go-api/run/forest.pid"
 
 cat > "${TMP_DIR}/fake-git" <<'GIT'
 #!/usr/bin/env bash
@@ -39,7 +39,7 @@ exit 1
 GIT
 chmod +x "${TMP_DIR}/fake-git"
 
-printf '0\n' | FORCE_COLOR=1 GIT_BIN="${TMP_DIR}/fake-git" PID_PATH="${TMP_DIR}/go-api/run/forest-go-api.pid" LOG_PATH="${TMP_DIR}/go-api/run/forest-go-api.log" APPCTL_BIN="${TMP_DIR}/scripts/appctl" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-dashboard.out 2>/tmp/test-menu-dashboard.err
+printf '0\n' | FORCE_COLOR=1 GIT_BIN="${TMP_DIR}/fake-git" PID_PATH="${TMP_DIR}/go-api/run/forest.pid" LOG_PATH="${TMP_DIR}/go-api/run/forest.log" APPCTL_BIN="${TMP_DIR}/scripts/appctl" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-dashboard.out 2>/tmp/test-menu-dashboard.err
 
 if ! grep -q $'\033\\[32m运行中' /tmp/test-menu-dashboard.out; then
   echo "expected green running status in dashboard"

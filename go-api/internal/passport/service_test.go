@@ -198,11 +198,11 @@ func TestRuntimeMailSettingsFallsBackToAdminAppNameForFromName(t *testing.T) {
 	defer func() { passportProjectRoot = oldRoot }()
 
 	service := NewDBServiceWithConfig(config.Config{
-		AppName:         "forest-go-api",
+		AppName:         "forest",
 		MailHost:        "127.0.0.1",
 		MailPort:        25,
 		MailFromAddress: "env@example.com",
-		MailFromName:    "forest-go-api",
+		MailFromName:    "forest",
 	}, &fakeExecer{})
 
 	settings := service.runtimeMailSettings()

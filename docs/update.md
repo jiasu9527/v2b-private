@@ -92,7 +92,7 @@ FORCE_INTERACTIVE_DB_CONFIG=1 ./update.sh
 ./scripts/appctl doctor
 curl -fsS http://127.0.0.1:8080/readyz
 curl -fsS http://127.0.0.1:8080/monitor/api/stats
-tail -f go-api/run/forest-go-api.log
+tail -f go-api/run/forest.log
 ```
 
 重点看：

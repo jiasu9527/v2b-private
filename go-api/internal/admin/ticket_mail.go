@@ -126,7 +126,7 @@ func (s *DBService) loadBulkMailConfig() (bulkMailConfig, error) {
 	if mailConfig.bulkIntervalSeconds < 0 {
 		mailConfig.bulkIntervalSeconds = 0
 	}
-	if mailConfig.fromName == "" || mailConfig.fromName == "forest-go-api" || mailConfig.fromName == "V2Board" {
+	if mailConfig.fromName == "" || mailConfig.fromName == "forest" || mailConfig.fromName == "forest-go-api" || mailConfig.fromName == "V2Board" {
 		mailConfig.fromName = mailConfig.appName
 	}
 	return mailConfig, nil

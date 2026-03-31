@@ -13,10 +13,10 @@ cat > "${TMP_DIR}/fake-systemctl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "${SYSTEMCTL_LOG}"
-if [[ "${1:-}" == "is-active" && "${2:-}" == "--quiet" && "${3:-}" == "forest-go-api" ]]; then
+if [[ "${1:-}" == "is-active" && "${2:-}" == "--quiet" && "${3:-}" == "forest" ]]; then
   exit 0
 fi
-if [[ "${1:-}" == "show" && "${2:-}" == "-p" && "${3:-}" == "MainPID" && "${4:-}" == "--value" && "${5:-}" == "forest-go-api" ]]; then
+if [[ "${1:-}" == "show" && "${2:-}" == "-p" && "${3:-}" == "MainPID" && "${4:-}" == "--value" && "${5:-}" == "forest" ]]; then
   echo "43210"
   exit 0
 fi
@@ -24,10 +24,10 @@ exit 0
 EOF
 chmod +x "${TMP_DIR}/fake-systemctl"
 
-SERVICE_FILE="${TMP_DIR}/forest-go-api.service"
+SERVICE_FILE="${TMP_DIR}/forest.service"
 cat > "${SERVICE_FILE}" <<'EOF'
 [Unit]
-Description=forest-go-api
+Description=forest
 EOF
 
 SYSTEMCTL_LOG="${TMP_DIR}/systemctl.log"
@@ -43,7 +43,7 @@ if ! rg -n '运行中，PID 43210（systemd）' /tmp/test-appctl-status-systemd.
   exit 1
 fi
 
-EXPECTED=$'is-active --quiet forest-go-api\nshow -p MainPID --value forest-go-api'
+EXPECTED=$'is-active --quiet forest\nshow -p MainPID --value forest'
 ACTUAL="$(cat "${SYSTEMCTL_LOG}")"
 if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
   echo "unexpected systemctl call order for status"

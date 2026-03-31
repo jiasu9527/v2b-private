@@ -226,7 +226,7 @@ Legacy PHP HTTP business routes now have Go route coverage.
 ## Environment
 
 ```bash
-export APP_NAME=forest-go-api
+export APP_NAME=forest
 export APP_ADDR=:8080
 export PUBLIC_DIR=../public
 export POSTGRES_DSN='postgres://user:pass@127.0.0.1:5432/forest?sslmode=disable'
@@ -285,9 +285,9 @@ BASE_URL=http://127.0.0.1:8080 SERVER_TOKEN='your-server-token' NODE_ID=1 NODE_T
 ```bash
 ./scripts/appctl init-env
 vi .env.go
-./scripts/appctl service-template > /etc/systemd/system/forest-go-api.service
+./scripts/appctl service-template > /etc/systemd/system/forest.service
 systemctl daemon-reload
-systemctl enable --now forest-go-api
+systemctl enable --now forest
 ```
 
 This uses `./scripts/appctl run` in foreground mode, which is suitable for `systemd`.

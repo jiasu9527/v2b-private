@@ -46,6 +46,7 @@ wget -qO- https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install
 
 - 不要求系统预装 Go
 - `install.sh` 会自动拉取/更新仓库、初始化环境文件、安装全局 `forest` 命令，然后执行安装
+- 在线安装默认目录是 `/etc/forest`，需要自定义时可设置 `FOREST_INSTALL_DIR`
 - `./init.sh` 和 `./update.sh` 缺少 Go 时会自动下载到项目目录 `.local/go`
 - 当前仓库已公开，可直接使用上面的 GitHub raw 一键安装命令
 - 旧目录迁移安装时，必须能读到旧目录里的 `.env`
@@ -146,7 +147,7 @@ forest status
 
 - 运行环境：`.env.go`
 - 后台主配置：`config/admin.json`
-- 日志与 PID：`go-api/run/forest-go-api.log`、`go-api/run/forest-go-api.pid`
+- 日志与 PID：`go-api/run/forest.log`、`go-api/run/forest.pid`
 
 节点 API 烟雾测试:
 
@@ -169,9 +170,9 @@ ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='new-password' ./scripts/appctl cre
 生成 systemd 服务模板:
 
 ```bash
-./scripts/appctl service-template > /etc/systemd/system/forest-go-api.service
+./scripts/appctl service-template > /etc/systemd/system/forest.service
 systemctl daemon-reload
-systemctl enable --now forest-go-api
+systemctl enable --now forest
 ```
 
 ## 环境变量

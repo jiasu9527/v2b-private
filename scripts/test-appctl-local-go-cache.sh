@@ -22,7 +22,7 @@ export GO_LOG
 
 PATH="/usr/bin:/bin" "${TMP_DIR}/scripts/appctl" build
 
-EXPECTED=$'mod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest-go-api ./cmd/server'
+EXPECTED=$'mod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest ./cmd/server'
 ACTUAL="$(cat "${GO_LOG}")"
 if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
   echo "expected cached local go binary to be used"

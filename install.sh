@@ -50,12 +50,8 @@ default_install_dir() {
     printf '%s\n' "${FOREST_INSTALL_DIR}"
     return 0
   fi
-  if [[ -d "/www/wwwroot" && -w "/www/wwwroot" ]]; then
-    printf '%s\n' "/www/wwwroot/forest"
-    return 0
-  fi
-  if [[ -d "/opt" && -w "/opt" ]]; then
-    printf '%s\n' "/opt/forest"
+  if [[ -d "/etc" && -w "/etc" ]]; then
+    printf '%s\n' "/etc/forest"
     return 0
   fi
   if [[ -n "${HOME:-}" ]]; then
@@ -282,7 +278,7 @@ main() {
 项目目录: ${install_dir}
 环境文件: ${env_path}
 后台主配置: ${install_dir}/config/admin.json
-日志文件: ${install_dir}/go-api/run/forest-go-api.log
+日志文件: ${install_dir}/go-api/run/forest.log
 EOF
 }
 

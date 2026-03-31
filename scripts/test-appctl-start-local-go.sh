@@ -42,7 +42,7 @@ export GO_LOG
 
 PATH="/usr/bin:/bin" "${TMP_DIR}/scripts/appctl" start >/tmp/test-appctl-start-local-go.out 2>/tmp/test-appctl-start-local-go.err
 
-EXPECTED=$'run ./cmd/ops migrate-config --target-root ..\nmod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest-go-api ./cmd/server'
+EXPECTED=$'run ./cmd/ops migrate-config --target-root ..\nmod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest ./cmd/server'
 ACTUAL="$(cat "${GO_LOG}")"
 if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
   echo "expected start to use cached local go binary for migrate-config and build"
@@ -56,7 +56,7 @@ if ! rg -n '已启动，PID ' /tmp/test-appctl-start-local-go.out >/dev/null 2>&
   exit 1
 fi
 
-if [[ ! -f "${TMP_DIR}/go-api/run/forest-go-api.pid" ]]; then
+if [[ ! -f "${TMP_DIR}/go-api/run/forest.pid" ]]; then
   echo "expected pid file to be created"
   exit 1
 fi

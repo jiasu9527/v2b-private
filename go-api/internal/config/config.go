@@ -111,7 +111,7 @@ func Load() Config {
 	defaultWithdrawMethods := []string{"支付宝", "USDT", "Paypal"}
 
 	return Config{
-		AppName:                      getEnv("APP_NAME", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "app_name", "forest-go-api")),
+		AppName:                      getEnv("APP_NAME", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "app_name", "forest")),
 		Addr:                         getEnv("APP_ADDR", ":8080"),
 		PublicDir:                    getEnv("PUBLIC_DIR", "../public"),
 		AdminPath:                    getEnv("ADMIN_PATH", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "secure_path", "localadmin")),

@@ -14,7 +14,7 @@ APP_NAME=legacy-template
 EOF
 
 cat > "${TMP_DIR}/.env.go.example" <<'EOF'
-APP_NAME=forest-go-api
+APP_NAME=forest
 APP_KEY=
 POSTGRES_DSN=
 ADMIN_EMAIL=admin@example.com
@@ -43,7 +43,7 @@ if [[ ! -f "${TMP_DIR}/.env.go" ]]; then
   exit 1
 fi
 
-if ! rg -n "^APP_NAME=forest-go-api$" "${TMP_DIR}/.env.go" >/dev/null 2>&1; then
+if ! rg -n "^APP_NAME=forest$" "${TMP_DIR}/.env.go" >/dev/null 2>&1; then
   echo "expected .env.go to be copied from .env.go.example"
   exit 1
 fi

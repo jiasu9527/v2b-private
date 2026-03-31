@@ -59,7 +59,7 @@ if rg -n -F "run ./cmd/ops migrate-mysql" "${GO_LOG}" >/dev/null 2>&1; then
   exit 1
 fi
 
-EXPECTED=$'run ./cmd/ops migrate-config --target-root ..\nrun ./cmd/ops update --sql ../database/update.pgsql.sql --dsn host=pg.internal port=5432 user=pg_user dbname=forest_go sslmode=disable password=pg_pass\nmod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest-go-api ./cmd/server'
+EXPECTED=$'run ./cmd/ops migrate-config --target-root ..\nrun ./cmd/ops update --sql ../database/update.pgsql.sql --dsn host=pg.internal port=5432 user=pg_user dbname=forest_go sslmode=disable password=pg_pass\nmod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest ./cmd/server'
 ACTUAL="$(cat "${GO_LOG}")"
 if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
   echo "unexpected command order when declining legacy migrate"

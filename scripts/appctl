@@ -5,9 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GO_DIR="${ROOT_DIR}/go-api"
 BIN_DIR="${GO_DIR}/bin"
 RUN_DIR="${GO_DIR}/run"
-BIN_PATH="${BIN_DIR}/forest-go-api"
-PID_PATH="${RUN_DIR}/forest-go-api.pid"
-LOG_PATH="${RUN_DIR}/forest-go-api.log"
+BIN_PATH="${BIN_DIR}/forest"
+PID_PATH="${RUN_DIR}/forest.pid"
+LOG_PATH="${RUN_DIR}/forest.log"
 GO_BIN="${GO_BIN:-go}"
 GIT_BIN="${GIT_BIN:-git}"
 PGREP_BIN="${PGREP_BIN:-pgrep}"
@@ -19,7 +19,7 @@ LOCAL_GO_MOD_CACHE="${LOCAL_TOOL_DIR}/gomodcache"
 LOCAL_GO_BUILD_CACHE="${LOCAL_TOOL_DIR}/gocache"
 LOCAL_HOME_DIR="${LOCAL_TOOL_DIR}/home"
 SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
-FOREST_SERVICE_NAME="${FOREST_SERVICE_NAME:-forest-go-api}"
+FOREST_SERVICE_NAME="${FOREST_SERVICE_NAME:-forest}"
 FOREST_SERVICE_FILE_PATH="${FOREST_SERVICE_FILE_PATH:-/etc/systemd/system/${FOREST_SERVICE_NAME}.service}"
 
 mkdir -p "${BIN_DIR}" "${RUN_DIR}"
@@ -1396,7 +1396,7 @@ cmd_service_template() {
   env_path="$(resolve_env_path)"
   cat <<EOF
 [Unit]
-Description=forest-go-api
+Description=forest
 After=network.target
 
 [Service]

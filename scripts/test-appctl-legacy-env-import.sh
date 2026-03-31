@@ -10,7 +10,7 @@ cp "${REPO_ROOT}/scripts/appctl" "${TMP_DIR}/scripts/appctl"
 chmod +x "${TMP_DIR}/scripts/appctl"
 
 cat > "${TMP_DIR}/.env.go.example" <<'EOF'
-APP_NAME=forest-go-api
+APP_NAME=forest
 APP_KEY=
 APP_URL=http://localhost
 POSTGRES_DSN=
