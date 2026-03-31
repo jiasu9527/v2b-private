@@ -88,8 +88,8 @@ func (s *DBService) FetchConfig(_ context.Context, key string) (map[string]any, 
 			"logo":            cfg.nullableStringValue("logo"),
 			"force_https":     cfg.int64Value("force_https", 0),
 			"stop_register":   cfg.int64Value("stop_register", 0),
-			"app_name":        cfg.stringValue("app_name", "V2Board"),
-			"app_description": cfg.stringValue("app_description", "V2Board is best!"),
+			"app_name":        cfg.stringValue("app_name", "Forest"),
+			"app_description": cfg.stringValue("app_description", ""),
 			"app_url":         cfg.nullableStringValue("app_url"),
 			"subscribe_url":   cfg.nullableStringValue("subscribe_url"),
 			"subscribe_path":  cfg.nullableStringValue("subscribe_path"),
@@ -112,7 +112,7 @@ func (s *DBService) FetchConfig(_ context.Context, key string) (map[string]any, 
 			"show_subscribe_expire":      cfg.int64Value("show_subscribe_expire", 5),
 		},
 		"frontend": map[string]any{
-			"frontend_theme":          cfg.stringValue("frontend_theme", "v2board"),
+			"frontend_theme":          cfg.stringValue("frontend_theme", "forest"),
 			"frontend_theme_sidebar":  cfg.stringValue("frontend_theme_sidebar", "light"),
 			"frontend_theme_header":   cfg.stringValue("frontend_theme_header", "dark"),
 			"frontend_theme_color":    cfg.stringValue("frontend_theme_color", "default"),
@@ -314,10 +314,10 @@ func (s *DBService) TestSendMail(_ context.Context, email string) (ConfigMailTes
 		return log, nil
 	}
 
-	body := renderAdminMailBody(mailConfig, "notify", "This is v2board test email", map[string]string{
+	body := renderAdminMailBody(mailConfig, "notify", "This is a Forest test email", map[string]string{
 		"name":    mailConfig.appName,
 		"url":     mailConfig.appURL,
-		"content": "This is v2board test email",
+		"content": "This is a Forest test email",
 	})
 	if err := sendMail(mailConfig.host, int(mailConfig.port), mailConfig.encryption, mailConfig.username, mailConfig.password, mailConfig.from, mailConfig.fromName, email, subject, body); err != nil {
 		log["error"] = err.Error()
@@ -330,7 +330,7 @@ func detectAdminProjectRoot() string {
 	if strings.TrimSpace(adminConfig) != "" {
 		return filepath.Dir(filepath.Dir(adminConfig))
 	}
-	legacyConfig := cfgpkg.ResolveProjectConfigPath("v2board.php")
+	legacyConfig := cfgpkg.ResolveLegacyPHPConfigPath()
 	if strings.TrimSpace(legacyConfig) != "" {
 		return filepath.Dir(filepath.Dir(legacyConfig))
 	}
@@ -345,7 +345,7 @@ func adminConfigPath() string {
 }
 
 func legacyAdminConfigPath() string {
-	return filepath.Join(adminProjectRoot, "config", "v2board.php")
+	return cfgpkg.ResolveLegacyPHPConfigPathFromRoot(adminProjectRoot)
 }
 
 func adminMailTemplatePath() string {

@@ -174,7 +174,7 @@ func (s *Service) handleGetLatestURLCommand(ctx context.Context, message webhook
 	cfg := s.currentConfig()
 	appName := strings.TrimSpace(cfg.AppName)
 	if appName == "" {
-		appName = "V2Board"
+		appName = "Forest"
 	}
 	appURL := strings.TrimSpace(cfg.AppURL)
 	if appURL == "" {

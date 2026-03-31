@@ -5636,7 +5636,7 @@
         class m extends f.a.Component {
             render() {
                 return f.a.createElement("div", {
-                    className: "row ".concat(this.props.isChildren ? "v2board-config-children" : ""),
+                    className: "row ".concat(this.props.isChildren ? "forest-config-children" : ""),
                     style: {
                         padding: "20px",
                         borderBottom: "1px solid #eee"
@@ -6234,8 +6234,8 @@
                     role: "alert"
                 }, f.a.createElement("p", {
                     className: "mb-0"
-                }, "\u5982\u679c\u4f60\u91c7\u7528\u524d\u540e\u5206\u79bb\u7684\u65b9\u5f0f\u90e8\u7f72V2board\u7ba1\u7406\u7aef\uff0c\u90a3\u4e48\u672c\u9875\u914d\u7f6e\u5c06\u4e0d\u4f1a\u751f\u6548\u3002\u4e86\u89e3", f.a.createElement("b", null, f.a.createElement("a", {
-                    href: "https://docs.v2board.com/use/advanced.html#%E5%89%8D%E7%AB%AF%E5%88%86%E7%A6%BB"
+                }, "\u5982\u679c\u4f60\u91c7\u7528\u524d\u540e\u5206\u79bb\u7684\u65b9\u5f0f\u90e8\u7f72Forest\u7ba1\u7406\u7aef\uff0c\u90a3\u4e48\u672c\u9875\u914d\u7f6e\u5c06\u4e0d\u4f1a\u751f\u6548\u3002\u4e86\u89e3", f.a.createElement("b", null, f.a.createElement("a", {
+                    href: "%E5%89%8D%E7%AB%AF%E5%88%86%E7%A6%BB#%E5%89%8D%E7%AB%AF%E5%88%86%E7%A6%BB"
                 }, "\u524d\u540e\u5206\u79bb"))))))), f.a.createElement("div", {
                     className: ""
                 }, f.a.createElement(m, {
@@ -6293,7 +6293,7 @@
                     className: ""
                 }, f.a.createElement(m, {
                     title: "\u901a\u8baf\u5bc6\u94a5",
-                    description: "V2board\u4e0e\u8282\u70b9\u901a\u8baf\u7684\u5bc6\u94a5\uff0c\u4ee5\u4fbf\u6570\u636e\u4e0d\u4f1a\u88ab\u4ed6\u4eba\u83b7\u53d6\u3002"
+                    description: "Forest\u4e0e\u8282\u70b9\u901a\u8baf\u7684\u5bc6\u94a5\uff0c\u4ee5\u4fbf\u6570\u636e\u4e0d\u4f1a\u88ab\u4ed6\u4eba\u83b7\u53d6\u3002"
                 }, f.a.createElement("input", {
                     type: "text",
                     className: "form-control",
@@ -12689,7 +12689,7 @@
                     placement: "top"
                 }, "\u7236\u8282\u70b9 ", d.a.createElement("a", {
                     target: "_blank",
-                    href: "https://docs.v2board.com/use/node.html#\u7236\u8282\u70b9\u4e0e\u5b50\u8282\u70b9\u5173\u7cfb",
+                    href: "#",
                     rel: "noreferrer"
                 }, d.a.createElement(l["a"], {
                     type: "read"
@@ -12724,7 +12724,7 @@
                     }, e.remarks)
                 }
                 )))), d.a.createElement("div", {
-                    className: "v2board-drawer-action"
+                    className: "forest-drawer-action"
                 }, d.a.createElement(i["a"], {
                     style: {
                         marginRight: 8
@@ -18932,8 +18932,8 @@
                     role: "alert"
                 }, l.a.createElement("p", {
                     className: "mb-0"
-                }, "\u5982\u679c\u4f60\u91c7\u7528\u524d\u540e\u5206\u79bb\u7684\u65b9\u5f0f\u90e8\u7f72V2board\uff0c\u90a3\u4e48\u4e3b\u9898\u914d\u7f6e\u5c06\u4e0d\u4f1a\u751f\u6548\u3002\u4e86\u89e3", l.a.createElement("b", null, l.a.createElement("a", {
-                    href: "https://docs.v2board.com/use/advanced.html#%E5%89%8D%E7%AB%AF%E5%88%86%E7%A6%BB"
+                }, "\u5982\u679c\u4f60\u91c7\u7528\u524d\u540e\u5206\u79bb\u7684\u65b9\u5f0f\u90e8\u7f72Forest\uff0c\u90a3\u4e48\u4e3b\u9898\u914d\u7f6e\u5c06\u4e0d\u4f1a\u751f\u6548\u3002\u4e86\u89e3", l.a.createElement("b", null, l.a.createElement("a", {
+                    href: "#"
                 }, "\u524d\u540e\u5206\u79bb")))))), Object.keys(t).map(e=>{
                     var r = t[e];
                     return l.a.createElement("div", {
@@ -21246,7 +21246,7 @@
                     href: "/"
                 }, o.a.createElement("span", {
                     className: "text-white-75"
-                }, window.settings.title ? window.settings.title : "V2Board")), o.a.createElement("div", {
+                }, window.settings.title ? window.settings.title : "Forest")), o.a.createElement("div", {
                     className: "d-lg-none"
                 }, o.a.createElement("a", {
                     className: "text-white ml-2",
@@ -21266,8 +21266,8 @@
                     return this.renderMenu(e.type, e.title, e.href, e.icon)
                 }
                 ))), o.a.createElement("div", {
-                    className: "v2board-copyright"
-                }, window.settings.title ? window.settings.title : "V2Board", " v1.7.5"))
+                    className: "forest-copyright"
+                }, window.settings.title ? window.settings.title : "Forest", " v1.7.5"))
             }
         }
         var u = Object(l["c"])(e=>{
@@ -21358,7 +21358,7 @@
                 }), " ", o.a.createElement("span", {
                     className: "ml-1 d-none d-sm-inline-block"
                 }, "\u641c\u7d22"))), o.a.createElement("div", {
-                    className: "dark" === d.header ? "v2board-container-title text-white" : "v2board-container-title text-black"
+                    className: "dark" === d.header ? "forest-container-title text-white" : "forest-container-title text-black"
                 }, this.props.title), o.a.createElement("div", null, o.a.createElement("div", {
                     className: "dropdown d-inline-block"
                 }, o.a.createElement("button", {
@@ -21452,7 +21452,7 @@
                     onClick: ()=>this.props.dispatch({
                         type: "layout/showNav"
                     }),
-                    className: "v2board-nav-mask",
+                    className: "forest-nav-mask",
                     style: {
                         display: this.props.layout.showNav ? "block" : "none"
                     }
@@ -22549,7 +22549,7 @@
                     defaultValue: t.remarks,
                     onChange: e=>this.formChange("remarks", e.target.value)
                 })))), p.a.createElement("div", {
-                    className: "v2board-drawer-action"
+                    className: "forest-drawer-action"
                 }, p.a.createElement(i["a"], {
                     style: {
                         marginRight: 8
@@ -28378,7 +28378,7 @@
                     placement: "top"
                 }, "\u7236\u8282\u70b9 ", h.a.createElement("a", {
                     target: "_blank",
-                    href: "https://docs.v2board.com/use/node.html#\u7236\u8282\u70b9\u4e0e\u5b50\u8282\u70b9\u5173\u7cfb",
+                    href: "#",
                     rel: "noreferrer"
                 }, "\u66f4\u591a\u89e3\u7b54"))), h.a.createElement(a["a"], {
                     value: e.parent_id || "",
@@ -28411,7 +28411,7 @@
                     }, e.remarks)
                 }
                 )))), h.a.createElement("div", {
-                    className: "v2board-drawer-action"
+                    className: "forest-drawer-action"
                 }, h.a.createElement(i["a"], {
                     style: {
                         marginRight: 8
@@ -38848,7 +38848,7 @@
                             return {
                                 onClick: e=>{
                                     this.props.onContextMenu && (this.props.onContextMenu(void 0),
-                                    document.getElementById("v2board-table-dropdown").style = "display:none;")
+                                    document.getElementById("forest-table-dropdown").style = "display:none;")
                                 }
                                 ,
                                 onDoubleClick: e=>{}
@@ -38857,7 +38857,7 @@
                                     this.props.onContextMenu && (t.preventDefault(),
                                     this.forceUpdate(),
                                     this.props.onContextMenu && this.props.onContextMenu(e),
-                                    document.getElementById("v2board-table-dropdown").style = "top: ".concat(t.clientY, "px; left: ").concat(t.clientX, "px;display:unset;"))
+                                    document.getElementById("forest-table-dropdown").style = "top: ".concat(t.clientY, "px; left: ").concat(t.clientX, "px;display:unset;"))
                                 }
                                 ,
                                 onMouseEnter: e=>{}
@@ -38866,7 +38866,7 @@
                             }
                     }
                 })), s.a.createElement("div", {
-                    id: "v2board-table-dropdown",
+                    id: "forest-table-dropdown",
                     className: "ant-dropdown ant-dropdown-placement-bottomLeft",
                     style: {
                         display: "none",
@@ -38875,7 +38875,7 @@
                         left: 0
                     },
                     onClick: ()=>{
-                        this.props.onContextMenu && (document.getElementById("v2board-table-dropdown").style = "display:none;")
+                        this.props.onContextMenu && (document.getElementById("forest-table-dropdown").style = "display:none;")
                     }
                 }, this.props.children))
             }
@@ -41530,12 +41530,12 @@
                 }, a.a.createElement("main", {
                     id: "main-container"
                 }, a.a.createElement("div", {
-                    className: "v2board-background",
+                    className: "forest-background",
                     style: {
                         backgroundImage: window.settings.background_url && "url(".concat(window.settings.background_url, ")")
                     }
                 }), a.a.createElement("div", {
-                    className: "no-gutters v2board-auth-box"
+                    className: "no-gutters forest-auth-box"
                 }, a.a.createElement("div", {
                     className: "",
                     style: {
@@ -41562,11 +41562,11 @@
                     className: "font-size-h1",
                     href: "javascript:void(0);"
                 }, window.settings.logo ? a.a.createElement("img", {
-                    className: "v2board-logo mb-3",
+                    className: "forest-logo mb-3",
                     src: window.settings.logo
                 }) : a.a.createElement("span", {
                     className: "text-dark"
-                }, window.settings.title || "V2Board")), a.a.createElement("p", {
+                }, window.settings.title || "Forest")), a.a.createElement("p", {
                     className: "font-size-sm text-muted mb-3"
                 }, "\u767b\u5f55\u5230\u7ba1\u7406\u4e2d\u5fc3")), a.a.createElement("div", {
                     className: "form-group"
@@ -71114,7 +71114,7 @@
                 }, g.a.createElement("div", {
                     className: "bg-white"
                 }, g.a.createElement("div", {
-                    className: "v2board-table-action",
+                    className: "forest-table-action",
                     style: {
                         padding: 15
                     }
@@ -71243,7 +71243,7 @@
                         this.forceUpdate()
                     }
                     ,
-                    className: "v2board-table",
+                    className: "forest-table",
                     tableLayout: "auto",
                     dataSource: b,
                     pagination: a()({}, x, {
@@ -78370,7 +78370,7 @@
                     title: "\u8fc7\u6ee4\u5668",
                     visible: this.state.visible,
                     onClose: ()=>this.hide(),
-                    className: "v2board-filter-drawer",
+                    className: "forest-filter-drawer",
                     footer: m.a.createElement(m.a.Fragment, null)
                 }, this.state.filter.length > 0 && this.state.filter.map((e,t)=>{
                     var n = this.props.keys.find(e=>e.key === this.state.filter[t].key);
@@ -78450,7 +78450,7 @@
                 }, m.a.createElement(c["a"], {
                     type: "plus"
                 }), " \u6dfb\u52a0\u6761\u4ef6"), m.a.createElement("div", {
-                    className: "v2board-drawer-action"
+                    className: "forest-drawer-action"
                 }, m.a.createElement(i["a"], {
                     disabled: !this.state.filter.length,
                     type: "danger",
@@ -82814,7 +82814,7 @@
                         })
                     }
                 })), m.a.createElement("div", {
-                    className: "v2board-drawer-action"
+                    className: "forest-drawer-action"
                 }, m.a.createElement("div", {
                     style: {
                         float: "left",
@@ -83892,7 +83892,7 @@
                         }
                     }
                 }))), f.a.createElement("div", {
-                    className: "v2board-drawer-action"
+                    className: "forest-drawer-action"
                 }, f.a.createElement(a["a"], {
                     style: {
                         marginRight: 8
@@ -98533,7 +98533,7 @@
                     className: "col-lg-12 js-appear-enabled animated",
                     "data-toggle": "appear"
                 }, l.a.createElement("div", {
-                    className: "block border-bottom mb-0 v2board-stats-bar"
+                    className: "block border-bottom mb-0 forest-stats-bar"
                 }, l.a.createElement("div", {
                     className: "block-content"
                 }, l.a.createElement("div", {
@@ -98570,7 +98570,7 @@
                     className: "col-lg-12 js-appear-enabled animated",
                     "data-toggle": "appear"
                 }, l.a.createElement("div", {
-                    className: "block border-bottom mb-0 v2board-stats-bar"
+                    className: "block border-bottom mb-0 forest-stats-bar"
                 }, l.a.createElement("div", {
                     className: "block-content block-content-full"
                 }, l.a.createElement("div", {
@@ -104672,7 +104672,7 @@
                     placement: "top"
                 }, "\u7236\u8282\u70b9 ", y.a.createElement("a", {
                     target: "_blank",
-                    href: "https://docs.v2board.com/use/node.html#\u7236\u8282\u70b9\u4e0e\u5b50\u8282\u70b9\u5173\u7cfb",
+                    href: "#",
                     rel: "noreferrer"
                 }, "\u66f4\u591a\u89e3\u7b54"))), y.a.createElement(N["a"], {
                     value: e.parent_id || "",
@@ -104705,7 +104705,7 @@
                     }, e.remarks)
                 }
                 )))), y.a.createElement("div", {
-                    className: "v2board-drawer-action"
+                    className: "forest-drawer-action"
                 }, y.a.createElement(l["a"], {
                     style: {
                         marginRight: 8
@@ -105341,7 +105341,7 @@
                     placement: "top"
                 }, "\u7236\u8282\u70b9 ", y.a.createElement("a", {
                     target: "_blank",
-                    href: "https://docs.v2board.com/use/node.html#\u7236\u8282\u70b9\u4e0e\u5b50\u8282\u70b9\u5173\u7cfb",
+                    href: "#",
                     rel: "noreferrer"
                 }, y.a.createElement(m["a"], {
                     type: "read"
@@ -105376,7 +105376,7 @@
                     }, e.remarks)
                 }
                 )))), y.a.createElement("div", {
-                    className: "v2board-drawer-action"
+                    className: "forest-drawer-action"
                 }, y.a.createElement(l["a"], {
                     style: {
                         marginRight: 8
@@ -105677,7 +105677,7 @@
                 },
                 "\u7236\u8282\u70b9 ", y.a.createElement("a", {
                     target: "_blank",
-                    href: "https://docs.v2board.com/use/node.html#\u7236\u8282\u70b9\u4e0e\u5b50\u8282\u70b9\u5173\u7cfb",
+                    href: "#",
                     rel: "noreferrer"
                 },
                 "\u66f4\u591a\u89e3\u7b54"))), y.a.createElement(N["a"], {
@@ -105714,7 +105714,7 @@
                     },
                     e.remarks)
                 })))), y.a.createElement("div", {
-                    className: "v2board-drawer-action"
+                    className: "forest-drawer-action"
                 },
                 y.a.createElement(l["a"], {
                     style: {
@@ -105973,7 +105973,7 @@
                 },
                 "\u7236\u8282\u70b9 ", y.a.createElement("a", {
                     target: "_blank",
-                    href: "https://docs.v2board.com/use/node.html#\u7236\u8282\u70b9\u4e0e\u5b50\u8282\u70b9\u5173\u7cfb",
+                    href: "#",
                     rel: "noreferrer"
                 },
                 "\u66f4\u591a\u89e3\u7b54"))), y.a.createElement(N["a"], {
@@ -106010,7 +106010,7 @@
                     },
                     e.remarks)
                 })))), y.a.createElement("div", {
-                    className: "v2board-drawer-action"
+                    className: "forest-drawer-action"
                 },
                 y.a.createElement(l["a"], {
                     style: {
@@ -106630,7 +106630,7 @@
                 },
                 "\u7236\u8282\u70b9 ", y.a.createElement("a", {
                     target: "_blank",
-                    href: "https://docs.v2board.com/use/node.html#\u7236\u8282\u70b9\u4e0e\u5b50\u8282\u70b9\u5173\u7cfb",
+                    href: "#",
                     rel: "noreferrer"
                 },
                 "\u66f4\u591a\u89e3\u7b54"))), y.a.createElement(N["a"], {
@@ -106677,7 +106677,7 @@
                         cursor: "text"
                     }
                 }))), y.a.createElement("div", {
-                    className: "v2board-drawer-action"
+                    className: "forest-drawer-action"
                 },
                 y.a.createElement(l["a"], {
                     style: {
@@ -107052,7 +107052,7 @@
                 }, y.a.createElement("div", {
                     className: "bg-white"
                 }, y.a.createElement("div", {
-                    className: "v2board-table-action",
+                    className: "forest-table-action",
                     style: {
                         padding: 15
                     }
@@ -107144,11 +107144,11 @@
                 }, "批量修改地址"), y.a.createElement(l["a"], {
                     onClick: ()=>this.toggleBulkHostEditor(!1)
                 }, "取消"))), Object(L["f"])() ? y.a.createElement(o["a"], {
-                    className: "v2board-table",
+                    className: "forest-table",
                     itemLayout: "vertical",
                     dataSource: N ? E.filter(e=>-1 !== JSON.stringify(e).indexOf(N)) : E,
                     renderItem: e=>y.a.createElement(o["a"].Item, {
-                        className: "v2board_node_mobile ".concat(e.parent_id ? "child_node" : ""),
+                        className: "forest_node_mobile ".concat(e.parent_id ? "child_node" : ""),
                         actions: [y.a.createElement(y.a.Fragment, null, this.getTypeTag(e.type, e.parent_id ? e.id + " => " + e.parent_id : e.id), y.a.createElement(g["a"], null, y.a.createElement(m["a"], {
                             type: "user"
                         }), " ", e.online || 0), y.a.createElement(g["a"], null, e.rate, " x"))],
@@ -113878,7 +113878,7 @@
                     placement: "top"
                 }, "\u7236\u8282\u70b9 ", f.a.createElement("a", {
                     target: "_blank",
-                    href: "https://docs.v2board.com/use/node.html#\u7236\u8282\u70b9\u4e0e\u5b50\u8282\u70b9\u5173\u7cfb",
+                    href: "#",
                     rel: "noreferrer"
                 }, "\u66f4\u591a\u89e3\u7b54"))), f.a.createElement(s["a"], {
                     value: e.parent_id || "",
@@ -113911,7 +113911,7 @@
                     }, e.remarks)
                 }
                 )))), f.a.createElement("div", {
-                    className: "v2board-drawer-action"
+                    className: "forest-drawer-action"
                 }, f.a.createElement(i["a"], {
                     style: {
                         marginRight: 8

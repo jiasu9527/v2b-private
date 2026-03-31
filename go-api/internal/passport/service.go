@@ -1338,7 +1338,7 @@ func (s *DBService) runtimeMailSettings() runtimeMailSettings {
 		settings.Template = "default"
 	}
 	if settings.AppName == "" {
-		settings.AppName = "V2Board"
+		settings.AppName = "Forest"
 	}
 	if settings.FromName == "" || settings.FromName == "forest" || settings.FromName == "forest-go-api" || settings.FromName == "V2Board" {
 		settings.FromName = settings.AppName

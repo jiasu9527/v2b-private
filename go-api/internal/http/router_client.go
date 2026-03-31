@@ -229,7 +229,7 @@ func writeSubscribeMetadataHeaders(w http.ResponseWriter, cfg config.Config, sub
 	w.Header().Set("profile-update-interval", "24")
 	appName := strings.TrimSpace(cfg.AppName)
 	if appName == "" {
-		appName = "V2Board"
+		appName = "Forest"
 	}
 	w.Header().Set("profile-title", "base64:"+base64.StdEncoding.EncodeToString([]byte(appName)))
 	if strings.TrimSpace(cfg.AppURL) != "" {
@@ -240,7 +240,7 @@ func writeSubscribeMetadataHeaders(w http.ResponseWriter, cfg config.Config, sub
 func writeSubscribeDownloadHeaders(w http.ResponseWriter, cfg config.Config) {
 	appName := strings.TrimSpace(cfg.AppName)
 	if appName == "" {
-		appName = "V2Board"
+		appName = "Forest"
 	}
 	w.Header().Set("content-disposition", "attachment;filename*=UTF-8''"+url.PathEscape(appName))
 }

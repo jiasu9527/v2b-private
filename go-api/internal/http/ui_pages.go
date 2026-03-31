@@ -176,7 +176,7 @@ func loadUISiteSettings(cfg config.Config) uiSiteSettings {
 	adminValues := loadUIJSONMap(filepath.Join(projectRoot, "config", "admin.json"))
 
 	return uiSiteSettings{
-		Title:              firstNonEmpty(uiString(adminValues["app_name"]), cfg.AppName, "V2Board"),
+		Title:              firstNonEmpty(uiString(adminValues["app_name"]), cfg.AppName, "Forest"),
 		Logo:               firstNonEmpty(uiString(adminValues["logo"]), cfg.Logo),
 		AdminPath:          normalizeAdminPath(cfg.AdminPath),
 		AdminThemeSidebar:  firstNonEmpty(uiString(adminValues["frontend_theme_sidebar"]), "light"),

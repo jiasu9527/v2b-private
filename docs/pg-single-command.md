@@ -9,14 +9,14 @@ wget -qO- https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install
 ./scripts/appctl install-link
 forest
 forest install
-forest install-legacy /path/to/legacy-v2board
+forest install-legacy /path/to/legacy-project
 forest update
 forest start
 forest status
 ./init.sh
-./init.sh /path/to/legacy-v2board
+./init.sh /path/to/legacy-project
 ./update.sh
-./scripts/appctl install-legacy /path/to/legacy-v2board
+./scripts/appctl install-legacy /path/to/legacy-project
 ./scripts/appctl prompt-db
 ./scripts/appctl migrate-mysql
 ./scripts/appctl build
@@ -78,16 +78,16 @@ Local repo path:
 If the old PHP project is in another directory:
 
 ```bash
-./init.sh /path/to/legacy-v2board
-./scripts/appctl install-legacy /path/to/legacy-v2board
+./init.sh /path/to/legacy-project
+./scripts/appctl install-legacy /path/to/legacy-project
 ```
 
 Legacy path mode only requires:
 
 - `legacy/.env` as the source MySQL connection file
-- optional `legacy/config/v2board.php`
+- optional legacy main PHP config file
 
-It does not need the legacy PHP runtime, Redis, Webman, PM2, `vendor`, or `node_modules`.
+It does not need the legacy PHP runtime, Redis, old daemon files, `vendor`, or `node_modules`.
 
 If you prefer an interactive numbered menu for manual ops:
 
@@ -99,7 +99,7 @@ If `forest` is installed globally, you can also run commands from any directory 
 
 ```bash
 forest install
-forest install-legacy /path/to/legacy-v2board
+forest install-legacy /path/to/legacy-project
 forest update
 forest start
 forest status
@@ -196,7 +196,7 @@ Notes:
 - `ADMIN_EMAIL` is not required for `update`.
 - `APP_KEY` is not used by the SQL update step, but it must already exist before `./update.sh` restarts the Go service, otherwise login/session code will fail at runtime.
 - On first creation of `.env.go` from a legacy MySQL `.env`, shared values such as `APP_KEY`, `APP_URL`, `ADMIN_EMAIL`, and mail settings are copied into `.env.go`.
-- In BaoTa, you do not need PHP-FPM, Redis, Webman, or PM2 for this Go runtime. Keep PostgreSQL, run the Go service with `systemd`, and reverse-proxy your site domain to `127.0.0.1:8080`.
+- In BaoTa, you do not need PHP-FPM, Redis, or old daemon tooling for this Go runtime. Keep PostgreSQL, run the Go service with `systemd`, and reverse-proxy your site domain to `127.0.0.1:8080`.
 - BaoTa single-machine steps are documented in `docs/baota-go-single-machine.md`.
 
 ## Notes

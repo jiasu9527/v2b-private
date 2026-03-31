@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -107,13 +108,13 @@ type Config struct {
 }
 
 const (
-	defaultAdminJSONPath       = "../config/admin.json"
-	defaultLegacyPHPConfigPath = "../config/v2board.php"
+	defaultAdminJSONPath     = "../config/admin.json"
+	defaultLegacyPHPFileName = "legacy.php"
 )
 
 func Load() Config {
 	jsonConfigPath := ResolveProjectConfigPath("admin.json")
-	legacyPHPConfigPath := ResolveProjectConfigPath("v2board.php")
+	legacyPHPConfigPath := ResolveLegacyPHPConfigPath()
 	jsonConfig := loadJSONConfigMap(jsonConfigPath)
 	defaultWithdrawMethods := []string{"支付宝", "USDT", "Paypal"}
 
@@ -134,7 +135,7 @@ func Load() Config {
 	}
 
 	cfg := Config{
-		AppName:                      managedString("APP_NAME", "app_name", "forest"),
+		AppName:                      managedString("APP_NAME", "app_name", "Forest"),
 		Addr:                         getEnv("APP_ADDR", ":8080"),
 		PublicDir:                    getEnv("PUBLIC_DIR", "../public"),
 		AdminPath:                    managedString("ADMIN_PATH", "secure_path", "localadmin"),
@@ -231,7 +232,7 @@ func Load() Config {
 		cfg.MailFromName = strings.TrimSpace(cfg.AppName)
 	}
 	if strings.TrimSpace(cfg.MailFromName) == "" {
-		cfg.MailFromName = "V2Board"
+		cfg.MailFromName = "Forest"
 	}
 
 	return cfg
@@ -340,6 +341,14 @@ func ResolveProjectConfigPath(fileName string) string {
 	return filepath.Join("config", fileName)
 }
 
+func ResolveLegacyPHPConfigPath() string {
+	return resolveLegacyPHPConfigPath("")
+}
+
+func ResolveLegacyPHPConfigPathFromRoot(root string) string {
+	return resolveLegacyPHPConfigPath(root)
+}
+
 func projectConfigCandidates(fileName string) []string {
 	fileName = strings.TrimSpace(fileName)
 	if fileName == "" {
@@ -377,11 +386,93 @@ func projectConfigCandidates(fileName string) []string {
 
 	if fileName == "admin.json" {
 		add(defaultAdminJSONPath)
-	} else if fileName == "v2board.php" {
-		add(defaultLegacyPHPConfigPath)
 	}
 
 	return candidates
+}
+
+func resolveLegacyPHPConfigPath(root string) string {
+	root = strings.TrimSpace(root)
+	if override := strings.TrimSpace(os.Getenv("LEGACY_PHP_CONFIG_PATH")); override != "" {
+		return filepath.Clean(override)
+	}
+
+	for _, dir := range legacyPHPConfigDirs(root) {
+		if candidate := firstPHPConfigInDir(dir); candidate != "" {
+			return candidate
+		}
+	}
+
+	if root != "" {
+		return filepath.Join(root, "config", defaultLegacyPHPFileName)
+	}
+
+	if cwd, err := os.Getwd(); err == nil && strings.TrimSpace(cwd) != "" {
+		return filepath.Join(cwd, "config", defaultLegacyPHPFileName)
+	}
+	return filepath.Join("config", defaultLegacyPHPFileName)
+}
+
+func legacyPHPConfigDirs(root string) []string {
+	seen := map[string]struct{}{}
+	dirs := make([]string, 0, 8)
+	add := func(path string) {
+		path = filepath.Clean(strings.TrimSpace(path))
+		if path == "" {
+			return
+		}
+		if _, ok := seen[path]; ok {
+			return
+		}
+		seen[path] = struct{}{}
+		dirs = append(dirs, path)
+	}
+
+	if root != "" {
+		add(filepath.Join(root, "config"))
+		return dirs
+	}
+
+	if cwd, err := os.Getwd(); err == nil && strings.TrimSpace(cwd) != "" {
+		add(filepath.Join(cwd, "config"))
+		add(filepath.Join(cwd, "..", "config"))
+	}
+
+	if exePath, err := os.Executable(); err == nil && strings.TrimSpace(exePath) != "" {
+		exeDir := filepath.Dir(exePath)
+		add(filepath.Join(exeDir, "config"))
+		add(filepath.Join(exeDir, "..", "config"))
+		add(filepath.Join(exeDir, "..", "..", "config"))
+	}
+
+	add(filepath.Join("config"))
+	add(filepath.Join("..", "config"))
+	return dirs
+}
+
+func firstPHPConfigInDir(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name())
+		if !strings.EqualFold(filepath.Ext(name), ".php") {
+			continue
+		}
+		files = append(files, filepath.Join(dir, name))
+	}
+
+	sort.Strings(files)
+	if len(files) == 0 {
+		return ""
+	}
+	return files[0]
 }
 
 func fileExists(path string) bool {

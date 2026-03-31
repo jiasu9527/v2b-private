@@ -9,7 +9,7 @@ func TestReplaceKnowledgeAccessSections(t *testing.T) {
 	if got == body {
 		t.Fatalf("expected access section to be replaced")
 	}
-	if got != "before <div class=\"v2board-no-access\">You must have a valid subscription to view content in this area</div> after" {
+	if got != "before <div class=\"forest-no-access\">You must have a valid subscription to view content in this area</div> after" {
 		t.Fatalf("unexpected formatted body: %q", got)
 	}
 }

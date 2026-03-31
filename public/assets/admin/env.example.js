@@ -1,6 +1,6 @@
 window.settings = {
   // 站点标题
-  title: 'V2Board',
+  title: 'Forest',
   // API
   host: '',
   // 主题
@@ -12,6 +12,6 @@ window.settings = {
   // 背景
   background_url: '',
   logo: '',
-  // 需与V2Board设置中的后台路径一致
+  // 需与后台设置中的后台路径一致
   secure_path: 'admin'
 }

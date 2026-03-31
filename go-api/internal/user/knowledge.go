@@ -88,7 +88,7 @@ LIMIT 1`, userID).Scan(&token, &banned, &transferEnable, &expiredAt)
 	if err != nil {
 		return nil, err
 	}
-	body = applyKnowledgeTemplate(body, fallbackString(s.currentConfig().AppName, "V2Board"), subscribeURL, token)
+	body = applyKnowledgeTemplate(body, fallbackString(s.currentConfig().AppName, "Forest"), subscribeURL, token)
 	knowledge["body"] = body
 	return knowledge, nil
 }
@@ -145,7 +145,7 @@ func replaceKnowledgeAccessSections(body string) string {
 	const (
 		startMarker = "<!--access start-->"
 		endMarker   = "<!--access end-->"
-		replacement = `<div class="v2board-no-access">You must have a valid subscription to view content in this area</div>`
+		replacement = `<div class="forest-no-access">You must have a valid subscription to view content in this area</div>`
 	)
 
 	for {

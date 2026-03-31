@@ -12,8 +12,8 @@
 
 - PHP-FPM
 - Redis
-- Webman
-- PM2
+- 旧 PHP 常驻进程
+- 旧进程守护工具
 
 ## 1. 宝塔里保留什么
 
@@ -76,16 +76,16 @@ DB_SSLMODE=disable
 如果旧 PHP 项目不在当前仓库目录，也可以直接指定旧目录一键迁移安装：
 
 ```bash
-./init.sh /path/to/legacy-v2board
-./scripts/appctl install-legacy /path/to/legacy-v2board
+./init.sh /path/to/legacy-project
+./scripts/appctl install-legacy /path/to/legacy-project
 ```
 
 旧目录只要求这些内容：
 
 - 必须：`旧目录/.env`
-- 可选：`旧目录/config/v2board.php`
+- 可选：旧目录中的主配置 PHP 文件
 
-不需要把旧目录里的 PHP 运行环境、Redis、Webman、PM2、`vendor`、日志一起搬过来。
+不需要把旧目录里的 PHP 运行环境、Redis、旧常驻进程文件、`vendor`、日志一起搬过来。
 
 ## 3. 更新
 
@@ -112,7 +112,7 @@ forest
 
 ```bash
 forest install
-forest install-legacy /path/to/legacy-v2board
+forest install-legacy /path/to/legacy-project
 forest update
 forest start
 forest status
@@ -201,7 +201,7 @@ location / {
 如果站点原来是 PHP 版本，注意：
 
 - 不要再把请求转给 PHP-FPM
-- 不要再保留原来那套 V2Board PHP 伪静态规则
+- 不要再保留原来那套旧 PHP 面板伪静态规则
 - 只保留上面的反代规则即可
 
 如果你用了宝塔自动生成的反向代理配置，只要目标地址是 `127.0.0.1:8080`，并且请求最终能走到 Go API，就不要求和上面逐字一致。

@@ -150,7 +150,7 @@ func buildClashStandardProfile(cfg config.Config, customFile, defaultFile, userU
 
 	appName := strings.TrimSpace(cfg.AppName)
 	if appName == "" {
-		appName = "V2Board"
+		appName = "Forest"
 	}
 	return strings.ReplaceAll(string(raw), "$app_name", appName), nil
 }

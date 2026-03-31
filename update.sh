@@ -4,14 +4,28 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LEGACY_BACKUP_DIR=""
 
+detect_legacy_config() {
+  local config_dir="${ROOT_DIR}/config"
+
+  if [[ ! -d "${config_dir}" ]]; then
+    return 0
+  fi
+
+  find "${config_dir}" -maxdepth 1 -type f -name '*.php' | LC_ALL=C sort | head -n 1
+}
+
 backup_legacy_config() {
-  local source_config="${ROOT_DIR}/config/v2board.php"
+  local source_config
+  local target_name
   local copied=false
 
+  source_config="$(detect_legacy_config)"
   LEGACY_BACKUP_DIR="$(mktemp -d "${ROOT_DIR}/.legacy-config-backup.XXXXXX")"
 
-  if [[ -f "${source_config}" ]]; then
-    cp "${source_config}" "${LEGACY_BACKUP_DIR}/config/v2board.php"
+  if [[ -n "${source_config}" && -f "${source_config}" ]]; then
+    target_name="$(basename "${source_config}")"
+    mkdir -p "${LEGACY_BACKUP_DIR}/config"
+    cp "${source_config}" "${LEGACY_BACKUP_DIR}/config/${target_name}"
     copied=true
   fi
 

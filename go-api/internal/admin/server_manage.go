@@ -236,6 +236,8 @@ func (s *DBService) v2nodeInstallCommand(item map[string]any) string {
 	cfg, err := loadAdminConfigStore(adminConfigPath())
 	apiHost := strings.TrimSpace(s.currentConfig().AppURL)
 	apiKey := ""
+	scriptURL := ""
+	commandTemplate := ""
 	if err == nil {
 		if value, ok := cfg.nullableStringValue("server_api_url").(string); ok {
 			apiHost = strings.TrimSpace(value)
@@ -243,8 +245,41 @@ func (s *DBService) v2nodeInstallCommand(item map[string]any) string {
 		if value, ok := cfg.nullableStringValue("server_token").(string); ok {
 			apiKey = strings.TrimSpace(value)
 		}
+		if value, ok := cfg.nullableStringValue("server_node_install_script_url").(string); ok {
+			scriptURL = strings.TrimSpace(value)
+		}
+		if value, ok := cfg.nullableStringValue("server_node_install_command_template").(string); ok {
+			commandTemplate = strings.TrimSpace(value)
+		}
 	}
 
 	nodeID := managedServerIDValue(item["id"])
-	return fmt.Sprintf("wget -N https://raw.githubusercontent.com/wyx2685/v2node/master/script/install.sh && bash install.sh --api-host %s --node-id %d --api-key %s", apiHost, nodeID, apiKey)
+	return renderNodeInstallCommand(commandTemplate, scriptURL, apiHost, nodeID, apiKey)
+}
+
+func renderNodeInstallCommand(commandTemplate, scriptURL, apiHost string, nodeID int64, apiKey string) string {
+	if commandTemplate != "" {
+		replacer := strings.NewReplacer(
+			"{{script_url}}", scriptURL,
+			"{{api_host}}", apiHost,
+			"{{node_id}}", strconv.FormatInt(nodeID, 10),
+			"{{api_key}}", apiKey,
+		)
+		return replacer.Replace(commandTemplate)
+	}
+
+	if scriptURL == "" {
+		scriptURL = "https://your-node-installer.example/install.sh"
+	}
+
+	return fmt.Sprintf(
+		"NODE_INSTALL_URL=%q && if command -v curl >/dev/null 2>&1; then curl -fsSL \"$NODE_INSTALL_URL\" | bash -s -- --api-host %s --node-id %d --api-key %s; else wget -qO- \"$NODE_INSTALL_URL\" | bash -s -- --api-host %s --node-id %d --api-key %s; fi",
+		scriptURL,
+		apiHost,
+		nodeID,
+		apiKey,
+		apiHost,
+		nodeID,
+		apiKey,
+	)
 }

@@ -1242,7 +1242,7 @@ func alipayProductName(cfg map[string]string) string {
 	if value := strings.TrimSpace(configValue(cfg, "product_name")); value != "" {
 		return value
 	}
-	return "V2Board - 订阅"
+	return "Forest - 订阅"
 }
 
 func alipaySign(values map[string]string, privateKey string) (string, error) {

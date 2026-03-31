@@ -1,6 +1,6 @@
 # 更新文档
 
-# **V2Board Go Runtime**
+# **Forest Go Runtime**
 
 ## 普通更新
 
@@ -68,14 +68,14 @@ FORCE_INTERACTIVE_DB_CONFIG=1 ./update.sh
 如果旧 PHP 项目和当前 Go 仓库不在同一个目录，可以直接指定旧目录路径走安装迁移：
 
 ```bash
-./init.sh /path/to/legacy-v2board
-./scripts/appctl install-legacy /path/to/legacy-v2board
+./init.sh /path/to/legacy-project
+./scripts/appctl install-legacy /path/to/legacy-project
 ```
 
 这个场景下需要的旧文件只有：
 
 - 必须：`旧目录/.env`
-- 可选：`旧目录/config/v2board.php`
+- 可选：旧目录中的主配置 PHP 文件
 
 ## 手动迁移命令
 

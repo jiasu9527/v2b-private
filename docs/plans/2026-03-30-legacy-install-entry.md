@@ -58,7 +58,7 @@ Expected: FAIL before production code changes.
 - Modify: `docs/baota-go-single-machine.md`
 
 **Step 1: Document the new entry**
-- Show `./init.sh /path/to/legacy-v2board` and `./scripts/appctl install-legacy /path/to/legacy-v2board`.
+- Show `./init.sh /path/to/legacy-project` and `./scripts/appctl install-legacy /path/to/legacy-project`.
 - State exactly which legacy files are required vs optional.
 
 **Step 2: Run regression tests**

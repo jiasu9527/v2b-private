@@ -331,7 +331,7 @@ func buildDeepbworkUsers(users []nodeapi.AvailableUser) []map[string]any {
 			"id": item.ID,
 			"v2ray_user": map[string]any{
 				"uuid":     item.UUID,
-				"email":    item.UUID + "@v2board.user",
+				"email":    item.UUID + "@forest.local",
 				"alter_id": int64(0),
 				"level":    int64(0),
 			},

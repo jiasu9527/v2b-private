@@ -226,7 +226,7 @@ func writeAdminJSONFixture(t *testing.T, root string, values map[string]any) {
 func writeAdminLegacyConfigFixture(t *testing.T, root, content string) {
 	t.Helper()
 	mustMkdirAll(t, filepath.Join(root, "config"))
-	if err := os.WriteFile(filepath.Join(root, "config", "v2board.php"), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "config", "site.php"), []byte(content), 0o644); err != nil {
 		t.Fatalf("write config fixture: %v", err)
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	cfgpkg "forest/go-api/internal/config"
 )
 
 func loadAdminConfigStore(path string) (*phpConfigFile, error) {
@@ -114,7 +116,7 @@ func MigrateLegacyConfig(sourceRoot, targetRoot string) (int, error) {
 	}
 
 	migratedConfig := 0
-	sourceAdminPath := filepath.Join(sourceRoot, "config", "v2board.php")
+	sourceAdminPath := cfgpkg.ResolveLegacyPHPConfigPathFromRoot(sourceRoot)
 	targetAdminPath := filepath.Join(targetRoot, "config", "admin.json")
 	if !fileExists(targetAdminPath) && fileExists(sourceAdminPath) {
 		cfg, err := loadPHPConfigFile(sourceAdminPath)

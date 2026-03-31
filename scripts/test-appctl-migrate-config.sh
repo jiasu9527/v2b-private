@@ -10,7 +10,7 @@ cp "${REPO_ROOT}/scripts/appctl" "${TMP_DIR}/scripts/appctl"
 cp -R "${REPO_ROOT}/go-api" "${TMP_DIR}/go-api"
 chmod +x "${TMP_DIR}/scripts/appctl"
 
-cat > "${TMP_DIR}/config/v2board.php" <<'EOF'
+cat > "${TMP_DIR}/config/site.php" <<'EOF'
 <?php
  return array (
   'secure_path' => 'localadmin',

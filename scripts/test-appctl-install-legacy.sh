@@ -37,7 +37,7 @@ ADMIN_EMAIL=legacy-admin@example.com
 QUEUE_CONNECTION=sync
 ENVLEGACY
 
-cat > "${TMP_DIR}/legacy/config/v2board.php" <<'PHP'
+cat > "${TMP_DIR}/legacy/config/site.php" <<'PHP'
 <?php return ['app_name' => 'legacy'];
 PHP
 

@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Remove the remaining PHP/Laravel/Webman runtime and repository dependencies so the project runs and updates as a Go + PostgreSQL application only.
+**Goal:** Remove the remaining legacy PHP runtime and repository dependencies so the project runs and updates as a Go + PostgreSQL application only.
 
 **Architecture:** Replace legacy PHP-backed config persistence with Go-native JSON config files, add upgrade-time migration from legacy PHP config files into JSON, then delete the old PHP runtime tree and stale SQL/runtime assets. Keep the compiled frontend assets and PostgreSQL deployment flow intact.
 
@@ -50,7 +50,7 @@
 
 **Step 1:** Invoke legacy-config migration before schema update/build.
 
-**Step 2:** Remove or rename remaining PHP/Webman wording from user-facing runtime docs/scripts.
+**Step 2:** Remove or rename remaining legacy PHP runtime wording from user-facing docs/scripts.
 
 **Step 3:** Update docs to JSON config + Go-only runtime wording.
 

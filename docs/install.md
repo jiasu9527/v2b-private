@@ -1,6 +1,6 @@
 # 安装文档
 
-# **V2Board Go Runtime**
+# **Forest Go Runtime**
 
 - Go
 - PostgreSQL
@@ -86,8 +86,8 @@ DB_SSLMODE=disable
 如果旧 PHP 项目不在当前目录，直接把旧目录路径带上即可一键迁移安装：
 
 ```bash
-./init.sh /path/to/legacy-v2board
-./scripts/appctl install-legacy /path/to/legacy-v2board
+./init.sh /path/to/legacy-project
+./scripts/appctl install-legacy /path/to/legacy-project
 ```
 
 这个入口会自动做几件事：
@@ -101,7 +101,7 @@ DB_SSLMODE=disable
 迁移旧目录时需要这些文件：
 
 - 必须：`旧目录/.env`
-- 可选：`旧目录/config/v2board.php`
+- 可选：旧目录中的主配置 PHP 文件
 
 这些旧文件不需要：
 
@@ -109,7 +109,7 @@ DB_SSLMODE=disable
 - `node_modules`
 - `storage/logs`
 - Redis 数据目录
-- Webman / PM2 运行文件
+- 旧常驻进程运行文件
 
 注意：
 
@@ -134,7 +134,7 @@ forest
 
 ```bash
 forest install
-forest install-legacy /path/to/legacy-v2board
+forest install-legacy /path/to/legacy-project
 forest update
 forest start
 forest status

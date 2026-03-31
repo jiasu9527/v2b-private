@@ -441,7 +441,7 @@ func TestRouterServerDeepbworkUserEndpoint(t *testing.T) {
 		t.Fatalf("expected uuid to be omitted, got %#v", user)
 	}
 	v2rayUser, ok := user["v2ray_user"].(map[string]any)
-	if !ok || v2rayUser["uuid"] != "user-uuid" || v2rayUser["email"] != "user-uuid@v2board.user" {
+	if !ok || v2rayUser["uuid"] != "user-uuid" || v2rayUser["email"] != "user-uuid@forest.local" {
 		t.Fatalf("unexpected v2ray payload: %#v", user["v2ray_user"])
 	}
 }

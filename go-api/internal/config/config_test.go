@@ -136,6 +136,47 @@ func TestLoadAdminJSONFallbacksFromProjectRootWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestResolveLegacyPHPConfigPathAutoDetectsGenericPHPFile(t *testing.T) {
+	dir := t.TempDir()
+	configRoot := filepath.Join(dir, "config")
+	workDir := filepath.Join(dir, "go-api")
+	if err := os.MkdirAll(configRoot, 0o755); err != nil {
+		t.Fatalf("mkdir config root: %v", err)
+	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir work dir: %v", err)
+	}
+
+	expected := filepath.Join(configRoot, "site.php")
+	if err := os.WriteFile(expected, []byte("<?php return [];"), 0o644); err != nil {
+		t.Fatalf("write legacy config: %v", err)
+	}
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(prevWD)
+	}()
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatalf("chdir work dir: %v", err)
+	}
+
+	got := ResolveLegacyPHPConfigPath()
+	expectedResolved, err := filepath.EvalSymlinks(expected)
+	if err != nil {
+		t.Fatalf("eval expected symlinks: %v", err)
+	}
+	gotResolved, err := filepath.EvalSymlinks(got)
+	if err != nil {
+		t.Fatalf("eval actual symlinks: %v", err)
+	}
+	if gotResolved != expectedResolved {
+		t.Fatalf("expected auto-detected legacy config path %q, got %q", expectedResolved, gotResolved)
+	}
+}
+
 func TestLoadAdminJSONInviteCampaignTryOutFallbacks(t *testing.T) {
 	dir := t.TempDir()
 	configRoot := filepath.Join(dir, "config")

@@ -4,7 +4,7 @@
 
 **Goal:** Finish the remaining Go admin stat compatibility endpoints so the Go router covers the legacy admin stat surface without PHP fallback.
 
-**Architecture:** Extend the Go admin service with three legacy-compatible stat methods and wire them into the HTTP router under the existing admin auth flow. Keep the payload shape aligned with the historical Laravel behavior and remove the stale "not yet migrated" doc note once the routes are covered.
+**Architecture:** Extend the Go admin service with three legacy-compatible stat methods and wire them into the HTTP router under the existing admin auth flow. Keep the payload shape aligned with the historical PHP panel behavior and remove the stale "not yet migrated" doc note once the routes are covered.
 
 **Tech Stack:** Go 1.25, `net/http`, PostgreSQL via `database/sql`, existing Go router/admin service test patterns.
 

@@ -24,7 +24,7 @@ func (s *DBService) notifyTicketReply(ctx context.Context, email, ticketSubject,
 
 	appName := strings.TrimSpace(mailConfig.appName)
 	if appName == "" {
-		appName = "V2Board"
+		appName = "Forest"
 	}
 	subject := fmt.Sprintf("您在%s的工单得到了回复", appName)
 	body := buildTicketReplyMailBody(strings.TrimSpace(ticketSubject), strings.TrimSpace(replyMessage), strings.TrimSpace(mailConfig.appURL))
@@ -116,7 +116,7 @@ func (s *DBService) loadBulkMailConfig() (bulkMailConfig, error) {
 		mailConfig.appName = strings.TrimSpace(runtimeCfg.AppName)
 	}
 	if mailConfig.appName == "" {
-		mailConfig.appName = "V2Board"
+		mailConfig.appName = "Forest"
 	}
 	if mailConfig.appURL == "" {
 		mailConfig.appURL = strings.TrimSpace(runtimeCfg.AppURL)

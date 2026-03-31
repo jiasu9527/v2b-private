@@ -19,9 +19,9 @@ chmod +x "${TMP_DIR}/scripts/appctl"
 APPCTL_LOG="${TMP_DIR}/appctl.log"
 export APPCTL_LOG
 
-bash "${TMP_DIR}/init.sh" "/data/legacy-v2board"
+bash "${TMP_DIR}/init.sh" "/data/legacy-project"
 
-if [[ "$(cat "${APPCTL_LOG}")" != "install-legacy /data/legacy-v2board" ]]; then
+if [[ "$(cat "${APPCTL_LOG}")" != "install-legacy /data/legacy-project" ]]; then
   echo "expected init.sh to delegate to install-legacy"
   cat "${APPCTL_LOG}"
   exit 1
