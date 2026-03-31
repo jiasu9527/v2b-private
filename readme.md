@@ -49,7 +49,7 @@ wget -qO- <public-install-url>/install.sh | bash
 - `./init.sh` 和 `./update.sh` 缺少 Go 时会自动下载到项目目录 `.local/go`
 - 如果你现在只推到 `private/master`，GitHub raw 匿名访问会返回 `404`，这一行命令需要等脚本放到公开地址后再用
 - 旧目录迁移安装时，必须能读到旧目录里的 `.env`
-- 如果旧目录里还有 `config/v2board.php` 和 `config/theme/*.php`，也会一并迁移到新的 JSON 配置
+- 如果旧目录里还有 `config/v2board.php`，也会一并迁移到新的 JSON 配置
 - 不需要旧目录里的 `vendor`、`node_modules`、`storage/logs`、Redis、Webman、PM2
 
 更新:
@@ -146,7 +146,6 @@ forest status
 
 - 运行环境：`.env.go`
 - 后台主配置：`config/admin.json`
-- 主题配置：`config/theme/*.json`
 - 日志与 PID：`go-api/run/forest-go-api.log`、`go-api/run/forest-go-api.pid`
 
 节点 API 烟雾测试:
@@ -210,7 +209,7 @@ ADMIN_PASSWORD='change-me'
 - 安装和更新的根入口分别是 `./init.sh` 和 `./update.sh`，内部统一调用 `./scripts/appctl`。
 - 旧 MySQL 单库首次升级时，也可以手动执行 `./scripts/appctl migrate-mysql`。
 - 单机常驻建议直接使用 `systemd` 配合 `./scripts/appctl service-template`。
-- 后台配置已经切到 `config/admin.json` 和 `config/theme/*.json`。
+- 后台配置已经切到 `config/admin.json`。
 - 仓库中的旧运行树已移除，当前部署链路是 Go + PostgreSQL。
 - 宝塔单机部署说明见 `docs/baota-go-single-machine.md`。
 - 安装文档见 `docs/install.md`。

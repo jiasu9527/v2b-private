@@ -5,7 +5,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
-mkdir -p "${TMP_DIR}/scripts" "${TMP_DIR}/go-api" "${TMP_DIR}/database" "${TMP_DIR}/legacy/config/theme"
+mkdir -p "${TMP_DIR}/scripts" "${TMP_DIR}/go-api" "${TMP_DIR}/database" "${TMP_DIR}/legacy/config"
 cp "${REPO_ROOT}/scripts/appctl" "${TMP_DIR}/scripts/appctl"
 chmod +x "${TMP_DIR}/scripts/appctl"
 

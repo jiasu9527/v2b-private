@@ -5671,7 +5671,7 @@
                     type: "config/getEmailTemplate"
                 }),
                 this.props.dispatch({
-                    type: "config/getThemeTemplate"
+                    type: "__removed__/configTemplate"
                 })
             }
             set(e, t, n) {
@@ -16997,7 +16997,7 @@
                         }, e)
                     })()
                 },
-                getThemeTemplate(e, t) {
+                getRemovedConfigTemplate(e, t) {
                     var n = t.put;
                     return u().mark(function e() {
                         var t;
@@ -17006,7 +17006,7 @@
                                 switch (e.prev = e.next) {
                                 case 0:
                                     return e.next = 2,
-                                    Object(c["a"])("/" + window.settings.secure_path + "/config/getThemeTemplate");
+                                    Object(c["a"])("/" + window.settings.secure_path + "/__removed__/configTemplate");
                                 case 2:
                                     if (t = e.sent,
                                     200 === t.code) {
@@ -18370,7 +18370,7 @@
             getConfig() {
                 var e = this.props.keyName;
                 this.props.dispatch({
-                    type: "theme/getThemeConfig",
+                    type: "__removed__/getConfig",
                     name: e,
                     complete: e=>{
                         this.setState({
@@ -18382,7 +18382,7 @@
             saveThemeConfig() {
                 var e = this.props.keyName;
                 this.props.dispatch({
-                    type: "theme/saveThemeConfig",
+                    type: "__removed__/saveConfig",
                     config: window.btoa(unescape(encodeURIComponent(JSON.stringify(this.state.params)))),
                     name: e,
                     complete: e=>{
@@ -18882,7 +18882,7 @@
             }
             componentDidMount() {
                 this.props.dispatch({
-                    type: "theme/getThemes"
+                    type: "__removed__/list"
                 })
             }
             activeTheme(e) {
@@ -18906,7 +18906,7 @@
                                 return n.abrupt("return");
                             case 5:
                                 t.props.dispatch({
-                                    type: "theme/getThemes"
+                                    type: "__removed__/list"
                                 });
                             case 6:
                             case "end":
@@ -21086,13 +21086,6 @@
                         href: "/config/payment",
                         icon: o.a.createElement("i", {
                             className: "nav-main-link-icon si si-credit-card"
-                        })
-                    }, {
-                        title: "\u4e3b\u9898\u914d\u7f6e",
-                        type: "item",
-                        href: "/config/theme",
-                        icon: o.a.createElement("i", {
-                            className: "nav-main-link-icon si si-magic-wand"
                         })
                     }, {
                         title: "\u670d\u52a1\u5668",
@@ -38367,7 +38360,7 @@
                                     });
                                 case 2:
                                     return e.next = 4,
-                                    Object(o["a"])("/" + window.settings.secure_path + "/theme/getThemes");
+                                    Object(o["a"])("/" + window.settings.secure_path + "/__removed__/list");
                                 case 4:
                                     return i = e.sent,
                                     e.next = 7,
@@ -38418,7 +38411,7 @@
                                     });
                                 case 2:
                                     return e.next = 4,
-                                    Object(o["b"])("/" + window.settings.secure_path + "/theme/getThemeConfig", {
+                                    Object(o["b"])("/" + window.settings.secure_path + "/__removed__/getConfig", {
                                         name: n
                                     });
                                 case 4:
@@ -38465,7 +38458,7 @@
                                     });
                                 case 2:
                                     return e.next = 4,
-                                    Object(o["b"])("/" + window.settings.secure_path + "/theme/saveThemeConfig", {
+                                    Object(o["b"])("/" + window.settings.secure_path + "/__removed__/saveConfig", {
                                         config: n,
                                         name: r
                                     });
@@ -82364,10 +82357,6 @@
             path: "/config/system",
             exact: !0,
             component: n("1dM+").default
-        }, {
-            path: "/config/theme",
-            exact: !0,
-            component: n("8drl").default
         }, {
             path: "/coupon",
             exact: !0,

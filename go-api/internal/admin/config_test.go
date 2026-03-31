@@ -19,11 +19,9 @@ func TestDBServiceFetchConfigAndTemplates(t *testing.T) {
 		"email_bulk_interval":        3,
 		"email_whitelist_suffix":     []string{"qq.com"},
 		"secure_path":                "localadmin",
-		"frontend_theme":             "default",
 	})
 	mustMkdirAll(t, filepath.Join(root, "resources", "views", "mail", "default"))
 	mustMkdirAll(t, filepath.Join(root, "resources", "views", "mail", "classic"))
-	mustMkdirAll(t, filepath.Join(root, "public", "theme", "default"))
 
 	oldRoot := adminProjectRoot
 	adminProjectRoot = root
@@ -60,14 +58,6 @@ func TestDBServiceFetchConfigAndTemplates(t *testing.T) {
 	}
 	if len(emailTemplates) != 2 || emailTemplates[0] != "classic" || emailTemplates[1] != "default" {
 		t.Fatalf("unexpected email templates: %#v", emailTemplates)
-	}
-
-	themeTemplates, err := service.ListThemeTemplates(context.Background())
-	if err != nil {
-		t.Fatalf("list theme templates: %v", err)
-	}
-	if len(themeTemplates) != 1 || themeTemplates[0] != "default" {
-		t.Fatalf("unexpected theme templates: %#v", themeTemplates)
 	}
 }
 

@@ -6,22 +6,13 @@ LEGACY_BACKUP_DIR=""
 
 backup_legacy_config() {
   local source_config="${ROOT_DIR}/config/v2board.php"
-  local source_theme_dir="${ROOT_DIR}/config/theme"
   local copied=false
 
   LEGACY_BACKUP_DIR="$(mktemp -d "${ROOT_DIR}/.legacy-config-backup.XXXXXX")"
-  mkdir -p "${LEGACY_BACKUP_DIR}/config/theme"
 
   if [[ -f "${source_config}" ]]; then
     cp "${source_config}" "${LEGACY_BACKUP_DIR}/config/v2board.php"
     copied=true
-  fi
-
-  if [[ -d "${source_theme_dir}" ]]; then
-    while IFS= read -r file; do
-      cp "${file}" "${LEGACY_BACKUP_DIR}/config/theme/"
-      copied=true
-    done < <(find "${source_theme_dir}" -maxdepth 1 -type f -name '*.php' | sort)
   fi
 
   if [[ "${copied}" != "true" ]]; then

@@ -21,18 +21,6 @@ func loadAdminConfigStore(path string) (*phpConfigFile, error) {
 	return loadPHPConfigFile(legacyAdminConfigPath())
 }
 
-func loadThemeConfigStore(path string) (*phpConfigFile, error) {
-	cfg, err := loadJSONConfigFile(path)
-	if err != nil {
-		return nil, err
-	}
-	if fileExists(path) || len(cfg.values) > 0 {
-		return cfg, nil
-	}
-	legacyPath := strings.TrimSuffix(path, filepath.Ext(path)) + ".php"
-	return loadPHPConfigFile(legacyPath)
-}
-
 func loadJSONConfigFile(path string) (*phpConfigFile, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -115,7 +103,7 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func MigrateLegacyConfig(sourceRoot, targetRoot string) (int, int, error) {
+func MigrateLegacyConfig(sourceRoot, targetRoot string) (int, error) {
 	sourceRoot = strings.TrimSpace(sourceRoot)
 	targetRoot = strings.TrimSpace(targetRoot)
 	if targetRoot == "" {
@@ -131,37 +119,13 @@ func MigrateLegacyConfig(sourceRoot, targetRoot string) (int, int, error) {
 	if !fileExists(targetAdminPath) && fileExists(sourceAdminPath) {
 		cfg, err := loadPHPConfigFile(sourceAdminPath)
 		if err != nil {
-			return 0, 0, err
+			return 0, err
 		}
 		if err := writeJSONConfigFile(targetAdminPath, cfg); err != nil {
-			return 0, 0, err
+			return 0, err
 		}
 		migratedConfig = 1
 	}
 
-	migratedThemes := 0
-	themeMatches, err := filepath.Glob(filepath.Join(sourceRoot, "config", "theme", "*.php"))
-	if err != nil {
-		return migratedConfig, 0, err
-	}
-	for _, sourceThemePath := range themeMatches {
-		name := strings.TrimSuffix(filepath.Base(sourceThemePath), filepath.Ext(sourceThemePath))
-		if strings.TrimSpace(name) == "" {
-			continue
-		}
-		targetThemePath := filepath.Join(targetRoot, "config", "theme", name+".json")
-		if fileExists(targetThemePath) {
-			continue
-		}
-		cfg, err := loadPHPConfigFile(sourceThemePath)
-		if err != nil {
-			return migratedConfig, migratedThemes, err
-		}
-		if err := writeJSONConfigFile(targetThemePath, cfg); err != nil {
-			return migratedConfig, migratedThemes, err
-		}
-		migratedThemes++
-	}
-
-	return migratedConfig, migratedThemes, nil
+	return migratedConfig, nil
 }

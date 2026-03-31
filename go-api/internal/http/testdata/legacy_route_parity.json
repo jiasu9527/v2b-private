@@ -9,10 +9,6 @@
       "path": "/api/v1/<admin_path>/config/getEmailTemplate"
     },
     {
-      "method": "GET",
-      "path": "/api/v1/<admin_path>/config/getThemeTemplate"
-    },
-    {
       "method": "POST",
       "path": "/api/v1/<admin_path>/config/save"
     },
@@ -403,18 +399,6 @@
     {
       "method": "GET",
       "path": "/api/v1/<admin_path>/system/getSystemStatus"
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/<admin_path>/theme/getThemeConfig"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/<admin_path>/theme/getThemes"
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/<admin_path>/theme/saveThemeConfig"
     },
     {
       "method": "POST",

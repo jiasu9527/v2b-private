@@ -218,10 +218,6 @@ func (s *DBService) ListEmailTemplates(_ context.Context) ([]string, error) {
 	return listTemplateEntries(adminMailTemplatePath())
 }
 
-func (s *DBService) ListThemeTemplates(_ context.Context) ([]string, error) {
-	return listTemplateEntries(adminThemeTemplatePath())
-}
-
 func (s *DBService) SetTelegramWebhook(_ context.Context, token string) (bool, error) {
 	token = strings.TrimSpace(token)
 	cfg, err := loadAdminConfigStore(adminConfigPath())
@@ -329,10 +325,6 @@ func legacyAdminConfigPath() string {
 
 func adminMailTemplatePath() string {
 	return filepath.Join(adminProjectRoot, "resources", "views", "mail")
-}
-
-func adminThemeTemplatePath() string {
-	return filepath.Join(adminProjectRoot, "public", "theme")
 }
 
 func fallbackAdminPath(path string) string {

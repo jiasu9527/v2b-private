@@ -167,11 +167,11 @@ func runMigrateConfig(args []string) error {
 		return err
 	}
 
-	migratedConfig, migratedThemes, err := adminsvc.MigrateLegacyConfig(*sourceRoot, *targetRoot)
+	migratedConfig, err := adminsvc.MigrateLegacyConfig(*sourceRoot, *targetRoot)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("config migration finished: admin=%d themes=%d\n", migratedConfig, migratedThemes)
+	fmt.Printf("config migration finished: admin=%d\n", migratedConfig)
 	return nil
 }
 

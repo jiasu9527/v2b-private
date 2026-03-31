@@ -91,7 +91,7 @@ DB_SSLMODE=disable
 
 - 从旧目录读取 MySQL 源库配置
 - 把共享环境变量写入新的 `.env.go`
-- 迁移旧后台配置到 `config/admin.json` 和 `config/theme/*.json`
+- 迁移旧后台配置到 `config/admin.json`
 - 初始化 PostgreSQL 并导入旧 MySQL 数据
 - 构建 Go 二进制
 
@@ -99,7 +99,6 @@ DB_SSLMODE=disable
 
 - 必须：`旧目录/.env`
 - 可选：`旧目录/config/v2board.php`
-- 可选：`旧目录/config/theme/*.php`
 
 这些旧文件不需要：
 
@@ -142,7 +141,6 @@ forest status
 
 - 运行环境：`.env.go`
 - 后台主配置：`config/admin.json`
-- 主题配置：`config/theme/*.json`
 - 日志：`go-api/run/forest-go-api.log`
 
 ## 安装后启动

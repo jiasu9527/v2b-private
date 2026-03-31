@@ -105,12 +105,8 @@ NODE_TYPE=vmess \
 - `GET /api/v1/<admin_path>/config/fetch`
 - `POST /api/v1/<admin_path>/config/save`
 - `GET /api/v1/<admin_path>/config/getEmailTemplate`
-- `GET /api/v1/<admin_path>/config/getThemeTemplate`
 - `POST /api/v1/<admin_path>/config/setTelegramWebhook`
 - `POST /api/v1/<admin_path>/config/testSendMail`
-- `GET /api/v1/<admin_path>/theme/getThemes`
-- `POST /api/v1/<admin_path>/theme/getThemeConfig`
-- `POST /api/v1/<admin_path>/theme/saveThemeConfig`
 - `GET /api/v1/<admin_path>/plan/fetch`
 - `POST /api/v1/<admin_path>/plan/save`
 - `POST /api/v1/<admin_path>/plan/drop`
@@ -217,13 +213,13 @@ Legacy PHP HTTP business routes now have Go route coverage.
 - Payment checkout in Go currently supports all registered gateways in `go-api/internal/payment/forms.go`: `AlipayF2F`, `BEasyPaymentUSDT`, `BTCPay`, `CoinPayments`, `Coinbase`, `EPay`, `EpusdtPay`, `MGate`, `StripeALL`, `StripeAlipay`, `StripeCheckout`, `StripeCredit`, `StripeWepay`, `WechatPayNative`.
 - Payment callback notify in Go currently supports the same gateway set.
 - Zero-amount or balance-covered order checkout is handled in Go.
-- Admin `system/config/theme/plan/user/invite-campaign/notice/coupon/giftcard/knowledge/ticket/order/payment` is now in Go.
+- Admin `system/config/plan/user/invite-campaign/notice/coupon/giftcard/knowledge/ticket/order/payment` is now in Go.
 - Admin `server/group`, `server/route`, and `server/manage` are now in Go.
 - Legacy runtime entry files have been removed from the deployment path.
 - Remaining differences are compatibility semantics, not missing business routes. Example: `/api/v1/<admin_path>/system/getQueueMasters` is currently served from the Go queue workload snapshot instead of the old Horizon master list output.
 - Staff `plan/notice/ticket/user` is now in Go, with staff-only auth and forced `is_admin=0/is_staff=0` scope on staff user actions.
 - `admin_path` defaults to `config/admin.json` `secure_path`, or can be overridden by `ADMIN_PATH`.
-- Admin config persistence writes `config/admin.json`; theme persistence writes `config/theme/*.json`.
+- Admin config persistence writes `config/admin.json`.
 - Invite campaign admin list/detail/records are now served from Go; campaign setting toggles still go through admin config endpoints.
 - Existing deployments can import old config files once with `./scripts/appctl migrate-config` during upgrade.
 

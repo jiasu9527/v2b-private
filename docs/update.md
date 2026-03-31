@@ -76,7 +76,6 @@ FORCE_INTERACTIVE_DB_CONFIG=1 ./update.sh
 
 - 必须：`旧目录/.env`
 - 可选：`旧目录/config/v2board.php`
-- 可选：`旧目录/config/theme/*.php`
 
 ## 手动迁移命令
 

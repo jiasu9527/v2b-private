@@ -11,9 +11,9 @@ import (
 	"forest/go-api/internal/config"
 )
 
-func TestRouterServesFrontendShell(t *testing.T) {
+func TestRouterDoesNotServeFrontendShell(t *testing.T) {
 	root := t.TempDir()
-	writeUIFixture(t, root, "default")
+	writeUIFixture(t, root)
 
 	router := NewRouter(config.Config{
 		AppName:        "Forest Site",
@@ -28,32 +28,14 @@ func TestRouterServesFrontendShell(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "text/html") {
-		t.Fatalf("expected html content-type, got %q", contentType)
-	}
-
-	body := rec.Body.String()
-	for _, needle := range []string{
-		"<title>Forest Site</title>",
-		`/theme/default/assets/umi.js`,
-		`/theme/default/assets/custom.js`,
-		`<div id="root"></div>`,
-		`window.settings = `,
-		`https://cdn.example.com/logo.png`,
-		`<footer>hello</footer>`,
-	} {
-		if !strings.Contains(body, needle) {
-			t.Fatalf("expected frontend shell to contain %q, body=%s", needle, body)
-		}
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
 	}
 }
 
-func TestRouterFallsBackToDefaultThemeShell(t *testing.T) {
+func TestRouterDoesNotFallbackToDefaultThemeShell(t *testing.T) {
 	root := t.TempDir()
-	writeUIFixture(t, root, "missing-theme")
+	writeUIFixture(t, root)
 
 	router := NewRouter(config.Config{
 		AppName:        "Forest Site",
@@ -68,21 +50,14 @@ func TestRouterFallsBackToDefaultThemeShell(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, `/theme/default/assets/umi.js`) {
-		t.Fatalf("expected default theme fallback, body=%s", body)
-	}
-	if strings.Contains(body, `/theme/missing-theme/assets/umi.js`) {
-		t.Fatalf("expected missing theme asset path to be avoided, body=%s", body)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
 	}
 }
 
 func TestRouterServesAdminShellAndCatchAll(t *testing.T) {
 	root := t.TempDir()
-	writeUIFixture(t, root, "default")
+	writeUIFixture(t, root)
 
 	router := NewRouter(config.Config{
 		AppName:        "Forest Site",
@@ -115,9 +90,9 @@ func TestRouterServesAdminShellAndCatchAll(t *testing.T) {
 	}
 }
 
-func TestRouterServesInviteCampaignPages(t *testing.T) {
+func TestRouterServesOnlyAdminInviteCampaignPage(t *testing.T) {
 	root := t.TempDir()
-	writeUIFixture(t, root, "default")
+	writeUIFixture(t, root)
 
 	router := NewRouter(config.Config{
 		AppName:        "Forest Site",
@@ -130,26 +105,27 @@ func TestRouterServesInviteCampaignPages(t *testing.T) {
 
 	cases := []struct {
 		path   string
+		code   int
 		needle string
 	}{
-		{path: "/invite-campaign", needle: `InviteCampaignUserPage`},
-		{path: "/localadmin/invite-campaign", needle: `InviteCampaignAdminPage`},
+		{path: "/invite-campaign", code: http.StatusNotFound},
+		{path: "/localadmin/invite-campaign", code: http.StatusOK, needle: `InviteCampaignAdminPage`},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 for %s, got %d", tc.path, rec.Code)
+		if rec.Code != tc.code {
+			t.Fatalf("expected %d for %s, got %d", tc.code, tc.path, rec.Code)
 		}
-		if !strings.Contains(rec.Body.String(), tc.needle) {
+		if tc.needle != "" && !strings.Contains(rec.Body.String(), tc.needle) {
 			t.Fatalf("expected %s page to contain %q, body=%s", tc.path, tc.needle, rec.Body.String())
 		}
 	}
 }
 
-func writeUIFixture(t *testing.T, root, frontendTheme string) {
+func writeUIFixture(t *testing.T, root string) {
 	t.Helper()
 
 	mustWriteFile(t, filepath.Join(root, "config", "admin.json"), `{
@@ -157,27 +133,12 @@ func writeUIFixture(t *testing.T, root, frontendTheme string) {
   "app_description": "Fast and stable",
   "app_url": "https://forest.test",
   "logo": "https://cdn.example.com/logo.png",
-  "frontend_theme": "`+frontendTheme+`",
   "frontend_theme_sidebar": "light",
   "frontend_theme_header": "dark",
   "frontend_theme_color": "green",
   "frontend_background_url": "https://cdn.example.com/bg.jpg"
 }`)
-	mustWriteFile(t, filepath.Join(root, "config", "theme", "default.json"), `{
-  "theme_color": "green",
-  "theme_sidebar": "light",
-  "theme_header": "dark",
-  "background_url": "https://cdn.example.com/bg.jpg",
-  "custom_html": "<footer>hello</footer>"
-}`)
-	mustWriteFile(t, filepath.Join(root, "public", "theme", "default", "config.json"), `{"name":"default"}`)
 	for _, path := range []string{
-		filepath.Join(root, "public", "theme", "default", "assets", "vendors.async.js"),
-		filepath.Join(root, "public", "theme", "default", "assets", "components.async.js"),
-		filepath.Join(root, "public", "theme", "default", "assets", "umi.js"),
-		filepath.Join(root, "public", "theme", "default", "assets", "umi.css"),
-		filepath.Join(root, "public", "theme", "default", "assets", "components.chunk.css"),
-		filepath.Join(root, "public", "theme", "default", "assets", "custom.js"),
 		filepath.Join(root, "public", "assets", "admin", "vendors.async.js"),
 		filepath.Join(root, "public", "assets", "admin", "components.async.js"),
 		filepath.Join(root, "public", "assets", "admin", "umi.js"),

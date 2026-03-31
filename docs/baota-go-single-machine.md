@@ -83,7 +83,6 @@ DB_SSLMODE=disable
 
 - 必须：`旧目录/.env`
 - 可选：`旧目录/config/v2board.php`
-- 可选：`旧目录/config/theme/*.php`
 
 不需要把旧目录里的 PHP 运行环境、Redis、Webman、PM2、`vendor`、日志一起搬过来。
 

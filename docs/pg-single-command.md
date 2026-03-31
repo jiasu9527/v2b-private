@@ -74,7 +74,6 @@ Legacy path mode only requires:
 
 - `legacy/.env` as the source MySQL connection file
 - optional `legacy/config/v2board.php`
-- optional `legacy/config/theme/*.php`
 
 It does not need the legacy PHP runtime, Redis, Webman, PM2, `vendor`, or `node_modules`.
 
@@ -203,7 +202,7 @@ Notes:
 - If `POSTGRES_DSN` is not set, `appctl` builds it from `DB_HOST/DB_PORT/DB_DATABASE/DB_USERNAME/DB_PASSWORD`.
 - `install` auto-generates `APP_KEY` when it is empty.
 - `install` also creates or updates the admin account using `ADMIN_EMAIL` and `ADMIN_PASSWORD`.
-- Upgrades can import old config files into `config/admin.json` and `config/theme/*.json` with `./scripts/appctl migrate-config`.
+- Upgrades can import old config files into `config/admin.json` with `./scripts/appctl migrate-config`.
 - For a long-running single-machine deployment, generate a `systemd` unit with `./scripts/appctl service-template`.
 - Go-live steps are documented in `docs/go-live-checklist.md`.
 - BaoTa deployment steps are documented in `docs/baota-go-single-machine.md`.

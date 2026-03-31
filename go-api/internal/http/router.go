@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha1"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -657,28 +656,12 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminConfigEmailTemplate(w, r, state.session, state.admin) {
 				return
 			}
-		case r.URL.Path == adminPrefix+"/config/getThemeTemplate":
-			if handleAdminConfigThemeTemplate(w, r, state.session, state.admin) {
-				return
-			}
 		case r.URL.Path == adminPrefix+"/config/setTelegramWebhook":
 			if handleAdminConfigSetTelegramWebhook(w, r, state.session, state.admin) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/config/testSendMail":
 			if handleAdminConfigTestSendMail(w, r, state.session, state.admin) {
-				return
-			}
-		case r.URL.Path == adminPrefix+"/theme/getThemes":
-			if handleAdminThemeGetThemes(w, r, state.session, state.admin) {
-				return
-			}
-		case r.URL.Path == adminPrefix+"/theme/getThemeConfig":
-			if handleAdminThemeGetThemeConfig(w, r, state.session, state.admin) {
-				return
-			}
-		case r.URL.Path == adminPrefix+"/theme/saveThemeConfig":
-			if handleAdminThemeSaveThemeConfig(w, r, state.session, state.admin) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/plan/fetch":
@@ -3995,23 +3978,6 @@ func handleAdminConfigEmailTemplate(w http.ResponseWriter, r *http.Request, sess
 	return true
 }
 
-func handleAdminConfigThemeTemplate(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
-	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
-		return true
-	}
-	if adminService == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
-		return true
-	}
-
-	templates, err := adminService.ListThemeTemplates(r.Context())
-	if err != nil {
-		return handleAdminError(w, err)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": templates})
-	return true
-}
-
 func handleAdminConfigSetTelegramWebhook(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
 	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
 		return true
@@ -4053,93 +4019,6 @@ func handleAdminConfigTestSendMail(w http.ResponseWriter, r *http.Request, sessi
 		"data": true,
 		"log":  log,
 	})
-	return true
-}
-
-func handleAdminThemeGetThemes(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
-	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
-		return true
-	}
-	if adminService == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
-		return true
-	}
-
-	data, err := adminService.ListThemes(r.Context())
-	if err != nil {
-		return handleAdminError(w, err)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": data})
-	return true
-}
-
-func handleAdminThemeGetThemeConfig(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
-	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
-		return true
-	}
-	if adminService == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
-		return true
-	}
-
-	inputs, err := readInputs(r)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
-		return true
-	}
-	name := strings.TrimSpace(inputs["name"])
-	if name == "" {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "参数有误"})
-		return true
-	}
-
-	data, err := adminService.GetThemeConfig(r.Context(), name)
-	if err != nil {
-		return handleAdminError(w, err)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": data})
-	return true
-}
-
-func handleAdminThemeSaveThemeConfig(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
-	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
-		return true
-	}
-	if adminService == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
-		return true
-	}
-
-	inputs, err := readInputs(r)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
-		return true
-	}
-	name := strings.TrimSpace(inputs["name"])
-	if name == "" {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "参数有误"})
-		return true
-	}
-
-	rawConfig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(inputs["config"]))
-	if err != nil || len(rawConfig) == 0 {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "参数有误"})
-		return true
-	}
-
-	var payload map[string]any
-	decoder := json.NewDecoder(strings.NewReader(string(rawConfig)))
-	decoder.UseNumber()
-	if err := decoder.Decode(&payload); err != nil || len(payload) == 0 {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "参数有误"})
-		return true
-	}
-
-	data, err := adminService.SaveThemeConfig(r.Context(), name, payload)
-	if err != nil {
-		return handleAdminError(w, err)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": data})
 	return true
 }
 

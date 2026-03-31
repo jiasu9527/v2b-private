@@ -282,7 +282,6 @@ main() {
 项目目录: ${install_dir}
 环境文件: ${env_path}
 后台主配置: ${install_dir}/config/admin.json
-主题配置目录: ${install_dir}/config/theme
 日志文件: ${install_dir}/go-api/run/forest-go-api.log
 EOF
 }

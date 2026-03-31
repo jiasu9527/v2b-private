@@ -641,10 +641,7 @@ type fakeAdminService struct {
 	managedServers     []map[string]any
 	hostUpdateResult   admin.ManagedServerHostUpdateResult
 	configData         map[string]any
-	themeListData      map[string]any
-	themeConfigData    map[string]any
 	emailTemplates     []string
-	themeTemplates     []string
 	mailTestLog        admin.ConfigMailTestLog
 	plans              []admin.PlanRecord
 	notices            []admin.NoticeRecord
@@ -732,8 +729,6 @@ type fakeAdminService struct {
 	lastNodeCopyID     int64
 	lastConfigKey      string
 	lastConfigSave     map[string]any
-	lastThemeName      string
-	lastThemeSave      map[string]any
 	lastWebhookToken   string
 	lastMailTestEmail  string
 	userList           admin.UserListResult
@@ -1004,27 +999,8 @@ func (f *fakeAdminService) SaveConfig(_ context.Context, values map[string]any) 
 	return true, f.err
 }
 
-func (f *fakeAdminService) ListThemes(_ context.Context) (map[string]any, error) {
-	return f.themeListData, f.err
-}
-
-func (f *fakeAdminService) GetThemeConfig(_ context.Context, name string) (map[string]any, error) {
-	f.lastThemeName = name
-	return f.themeConfigData, f.err
-}
-
-func (f *fakeAdminService) SaveThemeConfig(_ context.Context, name string, values map[string]any) (map[string]any, error) {
-	f.lastThemeName = name
-	f.lastThemeSave = values
-	return values, f.err
-}
-
 func (f *fakeAdminService) ListEmailTemplates(_ context.Context) ([]string, error) {
 	return f.emailTemplates, f.err
-}
-
-func (f *fakeAdminService) ListThemeTemplates(_ context.Context) ([]string, error) {
-	return f.themeTemplates, f.err
 }
 
 func (f *fakeAdminService) SetTelegramWebhook(_ context.Context, token string) (bool, error) {
@@ -4404,24 +4380,18 @@ func TestRouterAdminConfigThemeTemplateEndpoint(t *testing.T) {
 	sessionService := &fakeSessionService{
 		user: &session.Identity{ID: 1, IsAdmin: 1},
 	}
-	adminService := &fakeAdminService{
-		themeTemplates: []string{"default"},
-	}
 	router := NewRouter(
 		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
 		WithSessionService(sessionService),
-		WithAdminService(adminService),
+		WithAdminService(&fakeAdminService{}),
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/config/getThemeTemplate?auth_data=jwt-admin", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), `"default"`) {
-		t.Fatalf("expected theme templates in body, got %s", rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
 	}
 }
 
@@ -4488,31 +4458,18 @@ func TestRouterAdminThemeGetThemesEndpoint(t *testing.T) {
 	sessionService := &fakeSessionService{
 		user: &session.Identity{ID: 1, IsAdmin: 1},
 	}
-	adminService := &fakeAdminService{
-		themeListData: map[string]any{
-			"themes": map[string]any{
-				"default": map[string]any{
-					"name": "default",
-				},
-			},
-			"active": "default",
-		},
-	}
 	router := NewRouter(
 		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
 		WithSessionService(sessionService),
-		WithAdminService(adminService),
+		WithAdminService(&fakeAdminService{}),
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/theme/getThemes?auth_data=jwt-admin", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), `"active":"default"`) {
-		t.Fatalf("expected active theme in body, got %s", rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
 	}
 }
 
@@ -4520,16 +4477,10 @@ func TestRouterAdminThemeGetThemeConfigEndpoint(t *testing.T) {
 	sessionService := &fakeSessionService{
 		user: &session.Identity{ID: 1, IsAdmin: 1},
 	}
-	adminService := &fakeAdminService{
-		themeConfigData: map[string]any{
-			"theme_color":  "darkblue",
-			"theme_header": "light",
-		},
-	}
 	router := NewRouter(
 		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
 		WithSessionService(sessionService),
-		WithAdminService(adminService),
+		WithAdminService(&fakeAdminService{}),
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/theme/getThemeConfig", strings.NewReader(`{"auth_data":"jwt-admin","name":"default"}`))
@@ -4537,14 +4488,8 @@ func TestRouterAdminThemeGetThemeConfigEndpoint(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-	if adminService.lastThemeName != "default" {
-		t.Fatalf("expected theme name default, got %q", adminService.lastThemeName)
-	}
-	if !strings.Contains(rec.Body.String(), `"theme_color":"darkblue"`) {
-		t.Fatalf("expected theme config in body, got %s", rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
 	}
 }
 
@@ -4552,11 +4497,10 @@ func TestRouterAdminThemeSaveThemeConfigEndpoint(t *testing.T) {
 	sessionService := &fakeSessionService{
 		user: &session.Identity{ID: 1, IsAdmin: 1},
 	}
-	adminService := &fakeAdminService{}
 	router := NewRouter(
 		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
 		WithSessionService(sessionService),
-		WithAdminService(adminService),
+		WithAdminService(&fakeAdminService{}),
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/theme/saveThemeConfig", strings.NewReader(`{"auth_data":"jwt-admin","name":"default","config":"eyJ0aGVtZV9jb2xvciI6ImdyZWVuIiwiY3VzdG9tX2h0bWwiOiI8Yj5oaTwvYj4ifQ=="}`))
@@ -4564,17 +4508,8 @@ func TestRouterAdminThemeSaveThemeConfigEndpoint(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-	if adminService.lastThemeName != "default" {
-		t.Fatalf("expected theme name default, got %q", adminService.lastThemeName)
-	}
-	if adminService.lastThemeSave["theme_color"] != "green" {
-		t.Fatalf("expected theme_color green, got %#v", adminService.lastThemeSave["theme_color"])
-	}
-	if adminService.lastThemeSave["custom_html"] != "<b>hi</b>" {
-		t.Fatalf("expected custom_html saved, got %#v", adminService.lastThemeSave["custom_html"])
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
 	}
 }
 
