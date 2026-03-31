@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -97,6 +98,7 @@ type Config struct {
 	MailEncryption               string
 	MailFromAddress              string
 	MailFromName                 string
+	MailTemplate                 string
 	TryOutPlanID                 int64
 	TryOutHour                   float64
 	InviteTryOutPlanID           int64
@@ -110,55 +112,71 @@ const (
 )
 
 func Load() Config {
-	jsonConfigPath := defaultAdminJSONPath
-	legacyPHPConfigPath := defaultLegacyPHPConfigPath
+	jsonConfigPath := ResolveProjectConfigPath("admin.json")
+	legacyPHPConfigPath := ResolveProjectConfigPath("v2board.php")
 	jsonConfig := loadJSONConfigMap(jsonConfigPath)
 	defaultWithdrawMethods := []string{"支付宝", "USDT", "Paypal"}
 
-	return Config{
-		AppName:                      getEnv("APP_NAME", loadConfigString(jsonConfig, legacyPHPConfigPath, "app_name", "forest")),
+	managedString := func(envKey, key, fallback string) string {
+		return loadManagedString(jsonConfig, legacyPHPConfigPath, envKey, key, fallback)
+	}
+	managedBool := func(envKey, key string, fallback bool) bool {
+		return loadManagedBool(jsonConfig, legacyPHPConfigPath, envKey, key, fallback)
+	}
+	managedInt64 := func(envKey, key string, fallback int64) int64 {
+		return loadManagedInt64(jsonConfig, legacyPHPConfigPath, envKey, key, fallback)
+	}
+	managedFloat64 := func(envKey, key string, fallback float64) float64 {
+		return loadManagedFloat64(jsonConfig, legacyPHPConfigPath, envKey, key, fallback)
+	}
+	managedList := func(envKey, key string, fallback []string) []string {
+		return loadManagedStringList(jsonConfig, legacyPHPConfigPath, envKey, key, fallback)
+	}
+
+	cfg := Config{
+		AppName:                      managedString("APP_NAME", "app_name", "forest"),
 		Addr:                         getEnv("APP_ADDR", ":8080"),
 		PublicDir:                    getEnv("PUBLIC_DIR", "../public"),
-		AdminPath:                    getEnv("ADMIN_PATH", loadConfigString(jsonConfig, legacyPHPConfigPath, "secure_path", "localadmin")),
-		PlanChangeEnable:             getEnvBool("PLAN_CHANGE_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "plan_change_enable", 1) != 0),
-		SurplusEnable:                getEnvBool("SURPLUS_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "surplus_enable", 1) != 0),
-		InviteCommission:             getEnvInt64("INVITE_COMMISSION", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "invite_commission", 10)),
-		InviteGenLimit:               getEnvInt64("INVITE_GEN_LIMIT", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "invite_gen_limit", 5)),
-		InviteCampaignEnable:         getEnvBool("INVITE_CAMPAIGN_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "invite_campaign_enable", 1) != 0),
-		InviteCampaignRewardAmount:   getEnvInt64("INVITE_CAMPAIGN_REWARD_AMOUNT", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "invite_campaign_reward_amount", 1000)),
-		InviteCampaignExpireHours:    getEnvInt64("INVITE_CAMPAIGN_EXPIRE_HOURS", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "invite_campaign_expire_hours", 48)),
-		CommissionDistEnabled:        getEnvBool("COMMISSION_DISTRIBUTION_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "commission_distribution_enable", 0) != 0),
-		CommissionDistL1:             getEnvInt64("COMMISSION_DISTRIBUTION_L1", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "commission_distribution_l1", 30)),
-		CommissionDistL2:             getEnvInt64("COMMISSION_DISTRIBUTION_L2", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "commission_distribution_l2", 10)),
-		CommissionDistL3:             getEnvInt64("COMMISSION_DISTRIBUTION_L3", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "commission_distribution_l3", 5)),
-		CommissionWithdrawLimit:      getEnvInt64("COMMISSION_WITHDRAW_LIMIT", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "commission_withdraw_limit", 100)),
-		CommissionWithdrawMethods:    getEnvList("COMMISSION_WITHDRAW_METHOD", loadConfigStringList(jsonConfig, legacyPHPConfigPath, "commission_withdraw_method", defaultWithdrawMethods)),
-		WithdrawCloseEnable:          getEnvBool("WITHDRAW_CLOSE_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "withdraw_close_enable", 0) != 0),
-		TicketStatus:                 getEnvInt64("TICKET_STATUS", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "ticket_status", 0)),
-		CommissionFirstTime:          getEnvBool("COMMISSION_FIRST_TIME_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "commission_first_time_enable", 1) != 0),
-		OrderCancelRecoverTTL:        getEnvInt64("ORDER_CANCEL_RECOVER_TTL", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "order_cancel_recover_ttl", 1800)),
-		SubscribeURL:                 getEnv("SUBSCRIBE_URL", loadConfigString(jsonConfig, legacyPHPConfigPath, "subscribe_url", "")),
-		SubscribePath:                getEnv("SUBSCRIBE_PATH", loadConfigString(jsonConfig, legacyPHPConfigPath, "subscribe_path", "/api/v1/client/subscribe")),
-		ShowInfoToServerEnable:       getEnvBool("SHOW_INFO_TO_SERVER_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "show_info_to_server_enable", 0) != 0),
-		AllowNewPeriod:               getEnvBool("ALLOW_NEW_PERIOD", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "allow_new_period", 0) != 0),
-		ShowSubscribeMethod:          getEnvInt64("SHOW_SUBSCRIBE_METHOD", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "show_subscribe_method", 0)),
-		ShowSubscribeExpire:          getEnvInt64("SHOW_SUBSCRIBE_EXPIRE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "show_subscribe_expire", 5)),
-		ResetTrafficMethod:           getEnvInt64("RESET_TRAFFIC_METHOD", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "reset_traffic_method", 0)),
-		ServerToken:                  getEnv("SERVER_TOKEN", loadConfigString(jsonConfig, legacyPHPConfigPath, "server_token", "")),
-		ServerPullInterval:           getEnvInt64("SERVER_PULL_INTERVAL", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "server_pull_interval", 60)),
-		ServerPushInterval:           getEnvInt64("SERVER_PUSH_INTERVAL", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "server_push_interval", 60)),
-		ServerNodeReportMinTraffic:   getEnvInt64("SERVER_NODE_REPORT_MIN_TRAFFIC", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "server_node_report_min_traffic", 0)),
-		ServerDeviceOnlineMinTraffic: getEnvInt64("SERVER_DEVICE_ONLINE_MIN_TRAFFIC", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "server_device_online_min_traffic", 0)),
-		DeviceLimitMode:              getEnvInt64("DEVICE_LIMIT_MODE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "device_limit_mode", 0)),
-		ServerLogEnable:              getEnvBool("SERVER_LOG_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "server_log_enable", 0) != 0),
-		ServerV2RayDomain:            getEnv("SERVER_V2RAY_DOMAIN", loadConfigString(jsonConfig, legacyPHPConfigPath, "server_v2ray_domain", "")),
-		ServerV2RayProtocol:          getEnv("SERVER_V2RAY_PROTOCOL", loadConfigString(jsonConfig, legacyPHPConfigPath, "server_v2ray_protocol", "")),
-		WindowsVersion:               getEnv("WINDOWS_VERSION", loadConfigString(jsonConfig, legacyPHPConfigPath, "windows_version", "")),
-		WindowsDownloadURL:           getEnv("WINDOWS_DOWNLOAD_URL", loadConfigString(jsonConfig, legacyPHPConfigPath, "windows_download_url", "")),
-		MacOSVersion:                 getEnv("MACOS_VERSION", loadConfigString(jsonConfig, legacyPHPConfigPath, "macos_version", "")),
-		MacOSDownloadURL:             getEnv("MACOS_DOWNLOAD_URL", loadConfigString(jsonConfig, legacyPHPConfigPath, "macos_download_url", "")),
-		AndroidVersion:               getEnv("ANDROID_VERSION", loadConfigString(jsonConfig, legacyPHPConfigPath, "android_version", "")),
-		AndroidDownloadURL:           getEnv("ANDROID_DOWNLOAD_URL", loadConfigString(jsonConfig, legacyPHPConfigPath, "android_download_url", "")),
+		AdminPath:                    managedString("ADMIN_PATH", "secure_path", "localadmin"),
+		PlanChangeEnable:             managedBool("PLAN_CHANGE_ENABLE", "plan_change_enable", true),
+		SurplusEnable:                managedBool("SURPLUS_ENABLE", "surplus_enable", true),
+		InviteCommission:             managedInt64("INVITE_COMMISSION", "invite_commission", 10),
+		InviteGenLimit:               managedInt64("INVITE_GEN_LIMIT", "invite_gen_limit", 5),
+		InviteCampaignEnable:         managedBool("INVITE_CAMPAIGN_ENABLE", "invite_campaign_enable", true),
+		InviteCampaignRewardAmount:   managedInt64("INVITE_CAMPAIGN_REWARD_AMOUNT", "invite_campaign_reward_amount", 1000),
+		InviteCampaignExpireHours:    managedInt64("INVITE_CAMPAIGN_EXPIRE_HOURS", "invite_campaign_expire_hours", 48),
+		CommissionDistEnabled:        managedBool("COMMISSION_DISTRIBUTION_ENABLE", "commission_distribution_enable", false),
+		CommissionDistL1:             managedInt64("COMMISSION_DISTRIBUTION_L1", "commission_distribution_l1", 30),
+		CommissionDistL2:             managedInt64("COMMISSION_DISTRIBUTION_L2", "commission_distribution_l2", 10),
+		CommissionDistL3:             managedInt64("COMMISSION_DISTRIBUTION_L3", "commission_distribution_l3", 5),
+		CommissionWithdrawLimit:      managedInt64("COMMISSION_WITHDRAW_LIMIT", "commission_withdraw_limit", 100),
+		CommissionWithdrawMethods:    managedList("COMMISSION_WITHDRAW_METHOD", "commission_withdraw_method", defaultWithdrawMethods),
+		WithdrawCloseEnable:          managedBool("WITHDRAW_CLOSE_ENABLE", "withdraw_close_enable", false),
+		TicketStatus:                 managedInt64("TICKET_STATUS", "ticket_status", 0),
+		CommissionFirstTime:          managedBool("COMMISSION_FIRST_TIME_ENABLE", "commission_first_time_enable", true),
+		OrderCancelRecoverTTL:        managedInt64("ORDER_CANCEL_RECOVER_TTL", "order_cancel_recover_ttl", 1800),
+		SubscribeURL:                 managedString("SUBSCRIBE_URL", "subscribe_url", ""),
+		SubscribePath:                managedString("SUBSCRIBE_PATH", "subscribe_path", "/api/v1/client/subscribe"),
+		ShowInfoToServerEnable:       managedBool("SHOW_INFO_TO_SERVER_ENABLE", "show_info_to_server_enable", false),
+		AllowNewPeriod:               managedBool("ALLOW_NEW_PERIOD", "allow_new_period", false),
+		ShowSubscribeMethod:          managedInt64("SHOW_SUBSCRIBE_METHOD", "show_subscribe_method", 0),
+		ShowSubscribeExpire:          managedInt64("SHOW_SUBSCRIBE_EXPIRE", "show_subscribe_expire", 5),
+		ResetTrafficMethod:           managedInt64("RESET_TRAFFIC_METHOD", "reset_traffic_method", 0),
+		ServerToken:                  managedString("SERVER_TOKEN", "server_token", ""),
+		ServerPullInterval:           managedInt64("SERVER_PULL_INTERVAL", "server_pull_interval", 60),
+		ServerPushInterval:           managedInt64("SERVER_PUSH_INTERVAL", "server_push_interval", 60),
+		ServerNodeReportMinTraffic:   managedInt64("SERVER_NODE_REPORT_MIN_TRAFFIC", "server_node_report_min_traffic", 0),
+		ServerDeviceOnlineMinTraffic: managedInt64("SERVER_DEVICE_ONLINE_MIN_TRAFFIC", "server_device_online_min_traffic", 0),
+		DeviceLimitMode:              managedInt64("DEVICE_LIMIT_MODE", "device_limit_mode", 0),
+		ServerLogEnable:              managedBool("SERVER_LOG_ENABLE", "server_log_enable", false),
+		ServerV2RayDomain:            managedString("SERVER_V2RAY_DOMAIN", "server_v2ray_domain", ""),
+		ServerV2RayProtocol:          managedString("SERVER_V2RAY_PROTOCOL", "server_v2ray_protocol", ""),
+		WindowsVersion:               managedString("WINDOWS_VERSION", "windows_version", ""),
+		WindowsDownloadURL:           managedString("WINDOWS_DOWNLOAD_URL", "windows_download_url", ""),
+		MacOSVersion:                 managedString("MACOS_VERSION", "macos_version", ""),
+		MacOSDownloadURL:             managedString("MACOS_DOWNLOAD_URL", "macos_download_url", ""),
+		AndroidVersion:               managedString("ANDROID_VERSION", "android_version", ""),
+		AndroidDownloadURL:           managedString("ANDROID_DOWNLOAD_URL", "android_download_url", ""),
 		PostgresDSN:                  os.Getenv("POSTGRES_DSN"),
 		QueueWorkers:                 int(getEnvInt64("QUEUE_WORKERS", 4)),
 		AppKey:                       os.Getenv("APP_KEY"),
@@ -167,46 +185,56 @@ func Load() Config {
 		ReadTimeout:                  10 * time.Second,
 		WriteTimeout:                 15 * time.Second,
 		ShutdownTimeout:              10 * time.Second,
-		TOSURL:                       os.Getenv("TOS_URL"),
-		EmailVerify:                  getEnvBool("EMAIL_VERIFY", false),
-		InviteForce:                  getEnvBool("INVITE_FORCE", false),
-		InviteNeverExpire:            getEnvBool("INVITE_NEVER_EXPIRE", false),
-		StopRegister:                 getEnvBool("STOP_REGISTER", false),
+		TOSURL:                       managedString("TOS_URL", "tos_url", ""),
+		EmailVerify:                  managedBool("EMAIL_VERIFY", "email_verify", false),
+		InviteForce:                  managedBool("INVITE_FORCE", "invite_force", false),
+		InviteNeverExpire:            managedBool("INVITE_NEVER_EXPIRE", "invite_never_expire", false),
+		StopRegister:                 managedBool("STOP_REGISTER", "stop_register", false),
 		LoginWithMailLink:            getEnvBool("LOGIN_WITH_MAIL_LINK_ENABLE", false),
-		EmailWhitelist:               getEnvList("EMAIL_WHITELIST_SUFFIX", loadConfigStringList(jsonConfig, legacyPHPConfigPath, "email_whitelist_suffix", nil)),
-		EmailWhitelistEnabled:        getEnvBool("EMAIL_WHITELIST_ENABLE", false),
-		EmailGmailLimitEnabled:       getEnvBool("EMAIL_GMAIL_LIMIT_ENABLE", false),
-		Recaptcha:                    getEnvBool("RECAPTCHA_ENABLE", false),
-		RecaptchaKey:                 os.Getenv("RECAPTCHA_KEY"),
-		RecaptchaSiteKey:             os.Getenv("RECAPTCHA_SITE_KEY"),
-		AppDescription:               getEnv("APP_DESCRIPTION", loadConfigString(jsonConfig, legacyPHPConfigPath, "app_description", "")),
-		AppURL:                       getEnv("APP_URL", loadConfigString(jsonConfig, legacyPHPConfigPath, "app_url", "")),
-		Logo:                         getEnv("LOGO_URL", loadConfigString(jsonConfig, legacyPHPConfigPath, "logo", "")),
-		RegisterLimitByIP:            getEnvBool("REGISTER_LIMIT_BY_IP_ENABLE", false),
-		RegisterLimitCount:           getEnvInt64("REGISTER_LIMIT_COUNT", 3),
-		RegisterLimitExpireMin:       getEnvInt64("REGISTER_LIMIT_EXPIRE", 60),
-		PasswordLimitEnabled:         getEnvBool("PASSWORD_LIMIT_ENABLE", true),
-		PasswordLimitCount:           getEnvInt64("PASSWORD_LIMIT_COUNT", 5),
-		PasswordLimitExpireMin:       getEnvInt64("PASSWORD_LIMIT_EXPIRE", 60),
-		TelegramBotEnable:            getEnvBool("TELEGRAM_BOT_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "telegram_bot_enable", 0) != 0),
-		TelegramBotToken:             getEnv("TELEGRAM_BOT_TOKEN", loadConfigString(jsonConfig, legacyPHPConfigPath, "telegram_bot_token", "")),
-		TelegramDiscussLink:          getEnv("TELEGRAM_DISCUSS_LINK", loadConfigString(jsonConfig, legacyPHPConfigPath, "telegram_discuss_link", "")),
-		StripePKLive:                 getEnv("STRIPE_PK_LIVE", loadConfigString(jsonConfig, legacyPHPConfigPath, "stripe_pk_live", "")),
-		Currency:                     getEnv("CURRENCY", loadConfigString(jsonConfig, legacyPHPConfigPath, "currency", "CNY")),
-		CurrencySymbol:               getEnv("CURRENCY_SYMBOL", loadConfigString(jsonConfig, legacyPHPConfigPath, "currency_symbol", "¥")),
-		MailHost:                     getEnv("EMAIL_HOST", getEnv("MAIL_HOST", "127.0.0.1")),
-		MailPort:                     getEnvInt64("EMAIL_PORT", getEnvInt64("MAIL_PORT", 25)),
-		MailUsername:                 getEnv("EMAIL_USERNAME", os.Getenv("MAIL_USERNAME")),
-		MailPassword:                 getEnv("EMAIL_PASSWORD", os.Getenv("MAIL_PASSWORD")),
-		MailEncryption:               getEnv("EMAIL_ENCRYPTION", os.Getenv("MAIL_ENCRYPTION")),
-		MailFromAddress:              getEnv("EMAIL_FROM_ADDRESS", getEnv("MAIL_FROM_ADDRESS", "")),
-		MailFromName:                 getEnv("EMAIL_FROM_NAME", getEnv("APP_NAME", "V2Board")),
-		TryOutPlanID:                 getEnvInt64("TRY_OUT_PLAN_ID", 0),
-		TryOutHour:                   getEnvFloat64("TRY_OUT_HOUR", 0),
-		InviteTryOutPlanID:           getEnvInt64("INVITE_CAMPAIGN_TRY_OUT_PLAN_ID", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "invite_campaign_try_out_plan_id", 0)),
-		InviteTryOutTransferGB:       getEnvFloat64("INVITE_CAMPAIGN_TRY_OUT_TRANSFER_GB", loadConfigFloat64(jsonConfig, legacyPHPConfigPath, "invite_campaign_try_out_transfer_gb", 0)),
-		InviteTryOutHours:            getEnvFloat64("INVITE_CAMPAIGN_TRY_OUT_HOURS", loadConfigFloat64(jsonConfig, legacyPHPConfigPath, "invite_campaign_try_out_hours", 0)),
+		EmailWhitelist:               managedList("EMAIL_WHITELIST_SUFFIX", "email_whitelist_suffix", nil),
+		EmailWhitelistEnabled:        managedBool("EMAIL_WHITELIST_ENABLE", "email_whitelist_enable", false),
+		EmailGmailLimitEnabled:       managedBool("EMAIL_GMAIL_LIMIT_ENABLE", "email_gmail_limit_enable", false),
+		Recaptcha:                    managedBool("RECAPTCHA_ENABLE", "recaptcha_enable", false),
+		RecaptchaKey:                 managedString("RECAPTCHA_KEY", "recaptcha_key", ""),
+		RecaptchaSiteKey:             managedString("RECAPTCHA_SITE_KEY", "recaptcha_site_key", ""),
+		AppDescription:               managedString("APP_DESCRIPTION", "app_description", ""),
+		AppURL:                       managedString("APP_URL", "app_url", ""),
+		Logo:                         managedString("LOGO_URL", "logo", ""),
+		RegisterLimitByIP:            managedBool("REGISTER_LIMIT_BY_IP_ENABLE", "register_limit_by_ip_enable", false),
+		RegisterLimitCount:           managedInt64("REGISTER_LIMIT_COUNT", "register_limit_count", 3),
+		RegisterLimitExpireMin:       managedInt64("REGISTER_LIMIT_EXPIRE", "register_limit_expire", 60),
+		PasswordLimitEnabled:         managedBool("PASSWORD_LIMIT_ENABLE", "password_limit_enable", true),
+		PasswordLimitCount:           managedInt64("PASSWORD_LIMIT_COUNT", "password_limit_count", 5),
+		PasswordLimitExpireMin:       managedInt64("PASSWORD_LIMIT_EXPIRE", "password_limit_expire", 60),
+		TelegramBotEnable:            managedBool("TELEGRAM_BOT_ENABLE", "telegram_bot_enable", false),
+		TelegramBotToken:             managedString("TELEGRAM_BOT_TOKEN", "telegram_bot_token", ""),
+		TelegramDiscussLink:          managedString("TELEGRAM_DISCUSS_LINK", "telegram_discuss_link", ""),
+		StripePKLive:                 managedString("STRIPE_PK_LIVE", "stripe_pk_live", ""),
+		Currency:                     managedString("CURRENCY", "currency", "CNY"),
+		CurrencySymbol:               managedString("CURRENCY_SYMBOL", "currency_symbol", "¥"),
+		MailHost:                     managedString("EMAIL_HOST", "email_host", getEnv("MAIL_HOST", "127.0.0.1")),
+		MailPort:                     managedInt64("EMAIL_PORT", "email_port", getEnvInt64("MAIL_PORT", 25)),
+		MailUsername:                 managedString("EMAIL_USERNAME", "email_username", os.Getenv("MAIL_USERNAME")),
+		MailPassword:                 managedString("EMAIL_PASSWORD", "email_password", os.Getenv("MAIL_PASSWORD")),
+		MailEncryption:               managedString("EMAIL_ENCRYPTION", "email_encryption", os.Getenv("MAIL_ENCRYPTION")),
+		MailFromAddress:              managedString("EMAIL_FROM_ADDRESS", "email_from_address", getEnv("MAIL_FROM_ADDRESS", "")),
+		MailFromName:                 managedString("EMAIL_FROM_NAME", "email_from_name", ""),
+		MailTemplate:                 managedString("EMAIL_TEMPLATE", "email_template", "default"),
+		TryOutPlanID:                 managedInt64("TRY_OUT_PLAN_ID", "try_out_plan_id", 0),
+		TryOutHour:                   managedFloat64("TRY_OUT_HOUR", "try_out_hour", 0),
+		InviteTryOutPlanID:           managedInt64("INVITE_CAMPAIGN_TRY_OUT_PLAN_ID", "invite_campaign_try_out_plan_id", 0),
+		InviteTryOutTransferGB:       managedFloat64("INVITE_CAMPAIGN_TRY_OUT_TRANSFER_GB", "invite_campaign_try_out_transfer_gb", 0),
+		InviteTryOutHours:            managedFloat64("INVITE_CAMPAIGN_TRY_OUT_HOURS", "invite_campaign_try_out_hours", 0),
 	}
+
+	if strings.TrimSpace(cfg.MailFromName) == "" {
+		cfg.MailFromName = strings.TrimSpace(cfg.AppName)
+	}
+	if strings.TrimSpace(cfg.MailFromName) == "" {
+		cfg.MailFromName = "V2Board"
+	}
+
+	return cfg
 }
 
 func getEnv(key, fallback string) string {
@@ -297,6 +325,127 @@ func getEnvDurationMS(key string, fallback time.Duration) time.Duration {
 		return 0
 	}
 	return time.Duration(parsed) * time.Millisecond
+}
+
+func ResolveProjectConfigPath(fileName string) string {
+	candidates := projectConfigCandidates(fileName)
+	for _, candidate := range candidates {
+		if fileExists(candidate) {
+			return candidate
+		}
+	}
+	if len(candidates) > 0 {
+		return candidates[0]
+	}
+	return filepath.Join("config", fileName)
+}
+
+func projectConfigCandidates(fileName string) []string {
+	fileName = strings.TrimSpace(fileName)
+	if fileName == "" {
+		return nil
+	}
+
+	seen := map[string]struct{}{}
+	candidates := make([]string, 0, 8)
+	add := func(path string) {
+		path = filepath.Clean(strings.TrimSpace(path))
+		if path == "" {
+			return
+		}
+		if _, ok := seen[path]; ok {
+			return
+		}
+		seen[path] = struct{}{}
+		candidates = append(candidates, path)
+	}
+
+	if cwd, err := os.Getwd(); err == nil && strings.TrimSpace(cwd) != "" {
+		add(filepath.Join(cwd, "config", fileName))
+		add(filepath.Join(cwd, "..", "config", fileName))
+	}
+
+	if exePath, err := os.Executable(); err == nil && strings.TrimSpace(exePath) != "" {
+		exeDir := filepath.Dir(exePath)
+		add(filepath.Join(exeDir, "config", fileName))
+		add(filepath.Join(exeDir, "..", "config", fileName))
+		add(filepath.Join(exeDir, "..", "..", "config", fileName))
+	}
+
+	add(filepath.Join("config", fileName))
+	add(filepath.Join("..", "config", fileName))
+
+	if fileName == "admin.json" {
+		add(defaultAdminJSONPath)
+	} else if fileName == "v2board.php" {
+		add(defaultLegacyPHPConfigPath)
+	}
+
+	return candidates
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func loadManagedString(values map[string]any, legacyPath, envKey, key, fallback string) string {
+	if raw, ok := values[key]; ok {
+		return strings.TrimSpace(jsonValueString(raw))
+	}
+	if hasLegacyConfigKey(legacyPath, key) {
+		return loadConfigString(values, legacyPath, key, fallback)
+	}
+	return getEnv(envKey, fallback)
+}
+
+func loadManagedBool(values map[string]any, legacyPath, envKey, key string, fallback bool) bool {
+	if raw, ok := values[key]; ok {
+		if parsed, ok := jsonValueBool(raw); ok {
+			return parsed
+		}
+		return fallback
+	}
+	if hasLegacyConfigKey(legacyPath, key) {
+		return loadConfigInt64(values, legacyPath, key, boolToInt64(fallback)) != 0
+	}
+	return getEnvBool(envKey, fallback)
+}
+
+func loadManagedInt64(values map[string]any, legacyPath, envKey, key string, fallback int64) int64 {
+	if raw, ok := values[key]; ok {
+		if parsed, ok := jsonValueInt64(raw); ok {
+			return parsed
+		}
+		return fallback
+	}
+	if hasLegacyConfigKey(legacyPath, key) {
+		return loadConfigInt64(values, legacyPath, key, fallback)
+	}
+	return getEnvInt64(envKey, fallback)
+}
+
+func loadManagedFloat64(values map[string]any, legacyPath, envKey, key string, fallback float64) float64 {
+	if raw, ok := values[key]; ok {
+		if parsed, ok := jsonValueFloat64(raw); ok {
+			return parsed
+		}
+		return fallback
+	}
+	if hasLegacyConfigKey(legacyPath, key) {
+		return loadConfigFloat64(values, legacyPath, key, fallback)
+	}
+	return getEnvFloat64(envKey, fallback)
+}
+
+func loadManagedStringList(values map[string]any, legacyPath, envKey, key string, fallback []string) []string {
+	if raw, ok := values[key]; ok {
+		return jsonValueStringList(raw)
+	}
+	if hasLegacyConfigKey(legacyPath, key) {
+		return loadConfigStringList(values, legacyPath, key, fallback)
+	}
+	return getEnvList(envKey, fallback)
 }
 
 func loadJSONConfigMap(path string) map[string]any {
@@ -403,6 +552,81 @@ func jsonValueString(value any) string {
 	default:
 		return strings.TrimSpace(fmt.Sprint(value))
 	}
+}
+
+func jsonValueBool(value any) (bool, bool) {
+	switch strings.TrimSpace(strings.ToLower(jsonValueString(value))) {
+	case "1", "true", "yes", "on":
+		return true, true
+	case "0", "false", "no", "off", "":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func jsonValueInt64(value any) (int64, bool) {
+	raw := strings.TrimSpace(jsonValueString(value))
+	if raw == "" {
+		return 0, true
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func jsonValueFloat64(value any) (float64, bool) {
+	raw := strings.TrimSpace(jsonValueString(value))
+	if raw == "" {
+		return 0, true
+	}
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func jsonValueStringList(value any) []string {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case []any:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			next := strings.TrimSpace(jsonValueString(item))
+			if next != "" {
+				result = append(result, next)
+			}
+		}
+		return result
+	case []string:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				result = append(result, item)
+			}
+		}
+		return result
+	default:
+		next := strings.TrimSpace(jsonValueString(typed))
+		if next == "" {
+			return nil
+		}
+		return []string{next}
+	}
+}
+
+func hasLegacyConfigKey(path, key string) bool {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	pattern := regexp.MustCompile(`'` + regexp.QuoteMeta(key) + `'\s*=>`)
+	return pattern.Match(content)
 }
 
 func loadPHPConfigString(path, key, fallback string) string {

@@ -60,6 +60,7 @@ type orderManager interface {
 
 type DBService struct {
 	cfg    config.Config
+	runtime *config.RuntimeState
 	db     *sql.DB
 	client *http.Client
 	orders orderManager
@@ -104,6 +105,21 @@ func NewDBService(cfg config.Config, db *sql.DB, orders orderManager) *DBService
 		},
 		orders: orders,
 	}
+}
+
+func (s *DBService) WithRuntimeConfig(runtime *config.RuntimeState) *DBService {
+	s.runtime = runtime
+	return s
+}
+
+func (s *DBService) currentConfig() config.Config {
+	if s == nil {
+		return config.Config{}
+	}
+	if s.runtime == nil {
+		return s.cfg
+	}
+	return s.runtime.CurrentConfig()
 }
 
 func (s *DBService) Checkout(ctx context.Context, userID int64, req CheckoutRequest) (CheckoutResult, error) {
@@ -338,7 +354,7 @@ func (s *DBService) notifyURL(paymentMethod paymentRecord) string {
 	if paymentMethod.NotifyDomain.Valid && strings.TrimSpace(paymentMethod.NotifyDomain.String) != "" {
 		return strings.TrimRight(strings.TrimSpace(paymentMethod.NotifyDomain.String), "/") + path
 	}
-	base := strings.TrimRight(strings.TrimSpace(s.cfg.AppURL), "/")
+	base := strings.TrimRight(strings.TrimSpace(s.currentConfig().AppURL), "/")
 	if base == "" {
 		base = "http://127.0.0.1"
 	}
@@ -348,7 +364,7 @@ func (s *DBService) notifyURL(paymentMethod paymentRecord) string {
 func (s *DBService) returnURL(requestBaseURL, tradeNo string) string {
 	base := strings.TrimRight(normalizePublicBase(requestBaseURL), "/")
 	if base == "" {
-		base = strings.TrimRight(strings.TrimSpace(s.cfg.AppURL), "/")
+		base = strings.TrimRight(strings.TrimSpace(s.currentConfig().AppURL), "/")
 	}
 	if base == "" {
 		base = "http://127.0.0.1"

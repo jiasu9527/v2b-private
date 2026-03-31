@@ -19,7 +19,7 @@ import (
 )
 
 func (s *DBService) TelegramBotInfo(ctx context.Context) (map[string]any, error) {
-	token := strings.TrimSpace(s.cfg.TelegramBotToken)
+	token := strings.TrimSpace(s.currentConfig().TelegramBotToken)
 	if token == "" {
 		return nil, errors.New("Request failed")
 	}

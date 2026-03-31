@@ -35,6 +35,7 @@ type telegramWebhookService interface {
 
 type routerState struct {
 	readyCheck func(context.Context) error
+	runtime    *config.RuntimeState
 	guest      guest.Service
 	passport   passport.Service
 	session    session.Service
@@ -60,6 +61,12 @@ var managedServerRouterTypes = map[string]struct{}{
 func WithReadyCheck(fn func(context.Context) error) Option {
 	return func(state *routerState) {
 		state.readyCheck = fn
+	}
+}
+
+func WithRuntimeConfig(runtime *config.RuntimeState) Option {
+	return func(state *routerState) {
+		state.runtime = runtime
 	}
 }
 
@@ -173,9 +180,14 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 		})
 	})
 	fileServer := http.FileServer(http.Dir(cfg.PublicDir))
-	adminPrefix := "/api/v1/" + strings.Trim(strings.TrimSpace(cfg.AdminPath), "/")
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfg := cfg
+		if state.runtime != nil {
+			cfg = state.runtime.CurrentConfig()
+		}
+		adminPrefix := "/api/v1/" + strings.Trim(strings.TrimSpace(cfg.AdminPath), "/")
+
 		switch {
 		case r.URL.Path == "/healthz", r.URL.Path == "/readyz", r.URL.Path == "/api/_meta/runtime", r.URL.Path == "/monitor/api/stats":
 			mux.ServeHTTP(w, r)

@@ -13,12 +13,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	cfgpkg "forest/go-api/internal/config"
 	"forest/go-api/internal/platform/smtpcompat"
 )
 
@@ -153,7 +153,7 @@ func (s *DBService) FetchConfig(_ context.Context, key string) (map[string]any, 
 		"safe": map[string]any{
 			"email_verify":                cfg.int64Value("email_verify", 0),
 			"safe_mode_enable":            cfg.int64Value("safe_mode_enable", 0),
-			"secure_path":                 cfg.stringValue("secure_path", fallbackAdminPath(s.cfg.AdminPath)),
+			"secure_path":                 cfg.stringValue("secure_path", fallbackAdminPath(s.currentConfig().AdminPath)),
 			"email_whitelist_enable":      cfg.int64Value("email_whitelist_enable", 0),
 			"email_whitelist_suffix":      cfg.stringSliceValue("email_whitelist_suffix", []string{"gmail.com", "qq.com", "163.com", "yahoo.com", "sina.com", "126.com", "outlook.com", "yeah.net", "foxmail.com"}),
 			"email_gmail_limit_enable":    cfg.int64Value("email_gmail_limit_enable", 0),
@@ -251,7 +251,7 @@ func (s *DBService) SetTelegramWebhook(_ context.Context, token string) (bool, e
 
 	appURL := strings.TrimSpace(valueToString(cfg.values["app_url"]))
 	if appURL == "" {
-		appURL = strings.TrimSpace(s.cfg.AppURL)
+		appURL = strings.TrimSpace(s.currentConfig().AppURL)
 	}
 	if appURL == "" {
 		return false, errors.New("站点URL格式不正确，必须携带http(s)://")
@@ -326,11 +326,18 @@ func (s *DBService) TestSendMail(_ context.Context, email string) (ConfigMailTes
 }
 
 func detectAdminProjectRoot() string {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		return "."
+	adminConfig := cfgpkg.ResolveProjectConfigPath("admin.json")
+	if strings.TrimSpace(adminConfig) != "" {
+		return filepath.Dir(filepath.Dir(adminConfig))
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	legacyConfig := cfgpkg.ResolveProjectConfigPath("v2board.php")
+	if strings.TrimSpace(legacyConfig) != "" {
+		return filepath.Dir(filepath.Dir(legacyConfig))
+	}
+	if cwd, err := os.Getwd(); err == nil && strings.TrimSpace(cwd) != "" {
+		return filepath.Clean(cwd)
+	}
+	return "."
 }
 
 func adminConfigPath() string {

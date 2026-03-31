@@ -171,11 +171,12 @@ func (s *Service) handleTrafficCommand(ctx context.Context, message webhookMessa
 }
 
 func (s *Service) handleGetLatestURLCommand(ctx context.Context, message webhookMessage) error {
-	appName := strings.TrimSpace(s.cfg.AppName)
+	cfg := s.currentConfig()
+	appName := strings.TrimSpace(cfg.AppName)
 	if appName == "" {
 		appName = "V2Board"
 	}
-	appURL := strings.TrimSpace(s.cfg.AppURL)
+	appURL := strings.TrimSpace(cfg.AppURL)
 	if appURL == "" {
 		appURL = "未配置"
 	}

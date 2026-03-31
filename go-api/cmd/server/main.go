@@ -55,12 +55,12 @@ func main() {
 	defer jobQueue.Shutdown(context.Background())
 	if db != nil {
 		userDBService := usersvc.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
-		telegramService = telegram.NewService(cfg, db).WithQueueRuntime(jobQueue)
+		telegramService = telegram.NewService(cfg, db).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue)
 		userDBService = userDBService.WithAdminNotifier(telegramService)
-		passportService = passport.NewDBServiceWithConfig(cfg, db).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
+		passportService = passport.NewDBServiceWithConfig(cfg, db).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
 		sessionService = session.NewDBService(cfg, db).WithAuthCache(authCache)
 		userService = userDBService
-		paymentService = payment.NewDBService(cfg, db, userDBService)
+		paymentService = payment.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig)
 		adminDBService := admin.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
 		telegramService = telegramService.WithUserResolver(userDBService.ResolveClientUserID).WithAdminService(adminDBService)
 		adminService = adminDBService
@@ -72,8 +72,9 @@ func main() {
 		Addr: cfg.Addr,
 		Handler: httpapi.NewRouter(
 			cfg,
+			httpapi.WithRuntimeConfig(runtimeConfig),
 			httpapi.WithReadyCheck(dbReadyCheck(db)),
-			httpapi.WithGuestService(guest.NewDBService(cfg, db)),
+			httpapi.WithGuestService(guest.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig)),
 			httpapi.WithPassportService(passportService),
 			httpapi.WithSessionService(sessionService),
 			httpapi.WithUserService(userService),

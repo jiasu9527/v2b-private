@@ -66,6 +66,7 @@ type beginner interface {
 
 type DBService struct {
 	cfg        config.Config
+	runtime    *config.RuntimeState
 	db         execer
 	jobs       queue.Enqueuer
 	authCache  *session.AuthCache
@@ -145,6 +146,21 @@ func (s *DBService) WithAuthCache(cache *session.AuthCache) *DBService {
 	return s
 }
 
+func (s *DBService) WithRuntimeConfig(runtime *config.RuntimeState) *DBService {
+	s.runtime = runtime
+	return s
+}
+
+func (s *DBService) currentConfig() config.Config {
+	if s == nil {
+		return config.Config{}
+	}
+	if s.runtime == nil {
+		return s.cfg
+	}
+	return s.runtime.CurrentConfig()
+}
+
 func (s *DBService) PV(ctx context.Context, inviteCode string) error {
 	inviteCode = strings.TrimSpace(inviteCode)
 	if inviteCode == "" {
@@ -171,6 +187,7 @@ func (s *DBService) SendEmailVerify(ctx context.Context, req SendEmailVerifyRequ
 	if err := s.ensureRuntimeTables(ctx); err != nil {
 		return err
 	}
+	cfg := s.currentConfig()
 
 	email := strings.TrimSpace(strings.ToLower(req.Email))
 	if err := validateEmail(email); err != nil {
@@ -187,7 +204,7 @@ func (s *DBService) SendEmailVerify(ctx context.Context, req SendEmailVerifyRequ
 		}
 	}
 
-	if s.cfg.Recaptcha {
+	if cfg.Recaptcha {
 		if err := s.verifyRecaptcha(ctx, req.RecaptchaData); err != nil {
 			return err
 		}
@@ -198,10 +215,10 @@ func (s *DBService) SendEmailVerify(ctx context.Context, req SendEmailVerifyRequ
 		return err
 	}
 
-	if s.cfg.EmailWhitelistEnabled && !emailSuffixAllowed(email, s.cfg.EmailWhitelist) {
+	if cfg.EmailWhitelistEnabled && !emailSuffixAllowed(email, cfg.EmailWhitelist) {
 		return NewHTTPError(http.StatusInternalServerError, "Email suffix is not in the Whitelist")
 	}
-	if s.cfg.EmailGmailLimitEnabled && gmailAlias(email) {
+	if cfg.EmailGmailLimitEnabled && gmailAlias(email) {
 		return NewHTTPError(http.StatusInternalServerError, "Gmail alias is not supported")
 	}
 
@@ -244,6 +261,7 @@ func (s *DBService) Register(ctx context.Context, req RegisterRequest) (AuthData
 	if err := s.ensureRuntimeTables(ctx); err != nil {
 		return AuthData{}, err
 	}
+	cfg := s.currentConfig()
 
 	email := strings.TrimSpace(strings.ToLower(req.Email))
 	password := strings.TrimSpace(req.Password)
@@ -255,42 +273,42 @@ func (s *DBService) Register(ctx context.Context, req RegisterRequest) (AuthData
 		return AuthData{}, NewHTTPError(http.StatusInternalServerError, "Password must be greater than 8 digits")
 	}
 
-	if s.cfg.RegisterLimitByIP && req.IP != "" {
+	if cfg.RegisterLimitByIP && req.IP != "" {
 		key := cacheKey(cacheRegisterIPRateLimit, req.IP)
 		count, err := s.kvGetInt(ctx, key)
 		if err != nil {
 			return AuthData{}, err
 		}
-		if count >= s.cfg.RegisterLimitCount {
+		if count >= cfg.RegisterLimitCount {
 			return AuthData{}, NewHTTPError(
 				http.StatusInternalServerError,
-				fmt.Sprintf("Register frequently, please try again after %d minute", s.cfg.RegisterLimitExpireMin),
+				fmt.Sprintf("Register frequently, please try again after %d minute", cfg.RegisterLimitExpireMin),
 			)
 		}
 	}
 
-	if s.cfg.Recaptcha {
+	if cfg.Recaptcha {
 		if err := s.verifyRecaptcha(ctx, req.RecaptchaData); err != nil {
 			return AuthData{}, err
 		}
 	}
 
-	if s.cfg.EmailWhitelistEnabled && !emailSuffixAllowed(email, s.cfg.EmailWhitelist) {
+	if cfg.EmailWhitelistEnabled && !emailSuffixAllowed(email, cfg.EmailWhitelist) {
 		return AuthData{}, NewHTTPError(http.StatusInternalServerError, "Email suffix is not in the Whitelist")
 	}
-	if s.cfg.EmailGmailLimitEnabled && gmailAlias(email) {
+	if cfg.EmailGmailLimitEnabled && gmailAlias(email) {
 		return AuthData{}, NewHTTPError(http.StatusInternalServerError, "Gmail alias is not supported")
 	}
-	if s.cfg.StopRegister {
+	if cfg.StopRegister {
 		return AuthData{}, NewHTTPError(http.StatusInternalServerError, "Registration has closed")
 	}
 
 	inviteCodeInput := strings.TrimSpace(req.InviteCode)
-	if s.cfg.InviteForce && inviteCodeInput == "" {
+	if cfg.InviteForce && inviteCodeInput == "" {
 		return AuthData{}, NewHTTPError(http.StatusInternalServerError, "You must use the invitation code to register")
 	}
 
-	if s.cfg.EmailVerify {
+	if cfg.EmailVerify {
 		if strings.TrimSpace(req.EmailCode) == "" {
 			return AuthData{}, NewHTTPError(http.StatusInternalServerError, "Email verification code cannot be empty")
 		}
@@ -329,7 +347,7 @@ func (s *DBService) Register(ctx context.Context, req RegisterRequest) (AuthData
 			return AuthData{}, err
 		}
 		if inviteCode == nil {
-			if s.cfg.InviteForce {
+			if cfg.InviteForce {
 				return AuthData{}, NewHTTPError(http.StatusInternalServerError, "Invalid invitation code")
 			}
 		} else {
@@ -338,7 +356,7 @@ func (s *DBService) Register(ctx context.Context, req RegisterRequest) (AuthData
 			if err != nil {
 				return AuthData{}, err
 			}
-			if !s.cfg.InviteNeverExpire {
+			if !cfg.InviteNeverExpire {
 				if _, err := tx.ExecContext(ctx, `UPDATE v2_invite_code SET status = 1, updated_at = $1 WHERE id = $2`, now, inviteCode.ID); err != nil {
 					return AuthData{}, fmt.Errorf("expire invite code: %w", err)
 				}
@@ -405,14 +423,14 @@ RETURNING id, email, password, password_algo, password_salt, token, is_admin, is
 		return AuthData{}, fmt.Errorf("commit register transaction: %w", err)
 	}
 
-	if s.cfg.EmailVerify {
+	if cfg.EmailVerify {
 		_ = s.kvDelete(ctx, cacheKey(cacheEmailVerifyCode, email))
 	}
-	if s.cfg.RegisterLimitByIP && req.IP != "" {
+	if cfg.RegisterLimitByIP && req.IP != "" {
 		key := cacheKey(cacheRegisterIPRateLimit, req.IP)
 		count, err := s.kvGetInt(ctx, key)
 		if err == nil {
-			_ = s.kvSet(ctx, key, strconv.FormatInt(count+1, 10), s.cfg.RegisterLimitExpireMin*3600)
+			_ = s.kvSet(ctx, key, strconv.FormatInt(count+1, 10), cfg.RegisterLimitExpireMin*3600)
 		}
 	}
 
@@ -427,6 +445,7 @@ func (s *DBService) Login(ctx context.Context, req LoginRequest) (AuthData, erro
 	if err := s.ensureRuntimeTables(ctx); err != nil {
 		return AuthData{}, err
 	}
+	cfg := s.currentConfig()
 
 	email := strings.TrimSpace(strings.ToLower(req.Email))
 	password := strings.TrimSpace(req.Password)
@@ -438,15 +457,15 @@ func (s *DBService) Login(ctx context.Context, req LoginRequest) (AuthData, erro
 	}
 
 	passwordErrKey := cacheKey(cachePasswordErrorLimit, email)
-	if s.cfg.PasswordLimitEnabled {
+	if cfg.PasswordLimitEnabled {
 		passwordErrCount, err := s.kvGetInt(ctx, passwordErrKey)
 		if err != nil {
 			return AuthData{}, err
 		}
-		if passwordErrCount >= s.cfg.PasswordLimitCount {
+		if passwordErrCount >= cfg.PasswordLimitCount {
 			return AuthData{}, NewHTTPError(
 				http.StatusInternalServerError,
-				fmt.Sprintf("There are too many password errors, please try again after %d minutes.", s.cfg.PasswordLimitExpireMin),
+				fmt.Sprintf("There are too many password errors, please try again after %d minutes.", cfg.PasswordLimitExpireMin),
 			)
 		}
 	}
@@ -460,8 +479,8 @@ func (s *DBService) Login(ctx context.Context, req LoginRequest) (AuthData, erro
 	}
 
 	if !verifyPassword(user.PasswordAlgo, user.PasswordSalt, password, user.Password) {
-		if s.cfg.PasswordLimitEnabled {
-			_, _ = s.kvIncrWithBase(ctx, passwordErrKey, s.cfg.PasswordLimitExpireMin*60, 0)
+		if cfg.PasswordLimitEnabled {
+			_, _ = s.kvIncrWithBase(ctx, passwordErrKey, cfg.PasswordLimitExpireMin*60, 0)
 		}
 		return AuthData{}, NewHTTPError(http.StatusInternalServerError, "Incorrect email or password")
 	}
@@ -623,8 +642,9 @@ func (s *DBService) LoginWithMailLink(ctx context.Context, req LoginWithMailLink
 	if err := s.ensureRuntimeTables(ctx); err != nil {
 		return nil, err
 	}
+	cfg := s.currentConfig()
 
-	if !s.cfg.LoginWithMailLink {
+	if !cfg.LoginWithMailLink {
 		return nil, NewHTTPError(http.StatusNotFound, "Not Found")
 	}
 
@@ -798,10 +818,11 @@ func (s *DBService) resolveTryOutProfileTx(ctx context.Context, tx *sql.Tx, camp
 }
 
 func (s *DBService) defaultTryOutProfileTx(ctx context.Context, tx *sql.Tx, now int64) (tryOutProfile, error) {
-	if s.cfg.TryOutPlanID <= 0 {
+	cfg := s.currentConfig()
+	if cfg.TryOutPlanID <= 0 {
 		return tryOutProfile{}, nil
 	}
-	plan, err := findPlanTx(ctx, tx, s.cfg.TryOutPlanID)
+	plan, err := findPlanTx(ctx, tx, cfg.TryOutPlanID)
 	if err != nil {
 		return tryOutProfile{}, err
 	}
@@ -809,7 +830,7 @@ func (s *DBService) defaultTryOutProfileTx(ctx context.Context, tx *sql.Tx, now 
 		return tryOutProfile{}, nil
 	}
 	transferBytes := convertGBToBytes(plan.TransferEnable)
-	expiredAt := now + int64(math.Round(s.cfg.TryOutHour*3600))
+	expiredAt := now + int64(math.Round(cfg.TryOutHour*3600))
 	return tryOutProfile{
 		TransferEnable: transferBytes,
 		DeviceLimit:    plan.DeviceLimit,
@@ -821,10 +842,11 @@ func (s *DBService) defaultTryOutProfileTx(ctx context.Context, tx *sql.Tx, now 
 }
 
 func (s *DBService) campaignTryOutProfileTx(ctx context.Context, tx *sql.Tx, now int64) (tryOutProfile, error) {
-	if s.cfg.InviteTryOutPlanID <= 0 {
+	cfg := s.currentConfig()
+	if cfg.InviteTryOutPlanID <= 0 {
 		return tryOutProfile{}, nil
 	}
-	plan, err := findPlanTx(ctx, tx, s.cfg.InviteTryOutPlanID)
+	plan, err := findPlanTx(ctx, tx, cfg.InviteTryOutPlanID)
 	if err != nil {
 		return tryOutProfile{}, err
 	}
@@ -832,11 +854,11 @@ func (s *DBService) campaignTryOutProfileTx(ctx context.Context, tx *sql.Tx, now
 		return tryOutProfile{}, nil
 	}
 
-	transferGB := s.cfg.InviteTryOutTransferGB
+	transferGB := cfg.InviteTryOutTransferGB
 	if transferGB <= 0 {
 		transferGB = plan.TransferEnable
 	}
-	hours := s.cfg.InviteTryOutHours
+	hours := cfg.InviteTryOutHours
 	if hours <= 0 {
 		hours = 24
 	}
@@ -1096,14 +1118,15 @@ ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = EXCLUDED.expire_at, up
 }
 
 func (s *DBService) verifyRecaptcha(ctx context.Context, token string) error {
+	cfg := s.currentConfig()
 	token = strings.TrimSpace(token)
-	if token == "" || strings.TrimSpace(s.cfg.RecaptchaKey) == "" {
+	if token == "" || strings.TrimSpace(cfg.RecaptchaKey) == "" {
 		return NewHTTPError(http.StatusInternalServerError, "Invalid code is incorrect")
 	}
 
 	client := &http.Client{Timeout: 8 * time.Second}
 	resp, err := client.PostForm("https://www.google.com/recaptcha/api/siteverify", url.Values{
-		"secret":   {s.cfg.RecaptchaKey},
+		"secret":   {cfg.RecaptchaKey},
 		"response": {token},
 	})
 	if err != nil {
@@ -1232,7 +1255,7 @@ func (s *DBService) smtpSender() func(to, subject, body string) error {
 }
 
 func (s *DBService) buildFrontendURL(path string) string {
-	appURL := strings.TrimSpace(s.cfg.AppURL)
+	appURL := strings.TrimSpace(s.currentConfig().AppURL)
 	if appURL == "" {
 		return path
 	}
@@ -1257,17 +1280,22 @@ type runtimeMailSettings struct {
 }
 
 func (s *DBService) runtimeMailSettings() runtimeMailSettings {
+	cfg := s.currentConfig()
+	template := strings.TrimSpace(cfg.MailTemplate)
+	if template == "" {
+		template = "default"
+	}
 	settings := runtimeMailSettings{
-		Host:       strings.TrimSpace(s.cfg.MailHost),
-		Port:       s.cfg.MailPort,
-		Username:   strings.TrimSpace(s.cfg.MailUsername),
-		Password:   s.cfg.MailPassword,
-		Encryption: strings.TrimSpace(s.cfg.MailEncryption),
-		From:       strings.TrimSpace(s.cfg.MailFromAddress),
-		FromName:   strings.TrimSpace(s.cfg.MailFromName),
-		Template:   "default",
-		AppName:    strings.TrimSpace(s.cfg.AppName),
-		AppURL:     strings.TrimSpace(s.cfg.AppURL),
+		Host:       strings.TrimSpace(cfg.MailHost),
+		Port:       cfg.MailPort,
+		Username:   strings.TrimSpace(cfg.MailUsername),
+		Password:   cfg.MailPassword,
+		Encryption: strings.TrimSpace(cfg.MailEncryption),
+		From:       strings.TrimSpace(cfg.MailFromAddress),
+		FromName:   strings.TrimSpace(cfg.MailFromName),
+		Template:   template,
+		AppName:    strings.TrimSpace(cfg.AppName),
+		AppURL:     strings.TrimSpace(cfg.AppURL),
 	}
 
 	if values, err := loadPassportAdminJSONValues(); err == nil {
@@ -1292,8 +1320,8 @@ func (s *DBService) runtimeMailSettings() runtimeMailSettings {
 		if fromName := strings.TrimSpace(passportStringValue(values["email_from_name"])); fromName != "" {
 			settings.FromName = fromName
 		}
-		if template := strings.TrimSpace(passportStringValue(values["email_template"])); template != "" {
-			settings.Template = template
+		if jsonTemplate := strings.TrimSpace(passportStringValue(values["email_template"])); jsonTemplate != "" {
+			settings.Template = jsonTemplate
 		}
 		if appName := strings.TrimSpace(passportStringValue(values["app_name"])); appName != "" {
 			settings.AppName = appName

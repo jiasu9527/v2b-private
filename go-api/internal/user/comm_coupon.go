@@ -11,23 +11,24 @@ import (
 )
 
 func (s *DBService) CommConfig(context.Context) (map[string]any, error) {
-	withdrawMethods := s.cfg.CommissionWithdrawMethods
+	cfg := s.currentConfig()
+	withdrawMethods := cfg.CommissionWithdrawMethods
 	if len(withdrawMethods) == 0 {
 		withdrawMethods = []string{"支付宝", "USDT", "Paypal"}
 	}
 
 	return map[string]any{
-		"is_telegram":                    boolToInt64(s.cfg.TelegramBotEnable),
-		"telegram_discuss_link":          emptyStringToNil(s.cfg.TelegramDiscussLink),
-		"stripe_pk":                      s.cfg.StripePKLive,
+		"is_telegram":                    boolToInt64(cfg.TelegramBotEnable),
+		"telegram_discuss_link":          emptyStringToNil(cfg.TelegramDiscussLink),
+		"stripe_pk":                      cfg.StripePKLive,
 		"withdraw_methods":               withdrawMethods,
-		"withdraw_close":                 boolToInt64(s.cfg.WithdrawCloseEnable),
-		"currency":                       fallbackString(s.cfg.Currency, "CNY"),
-		"currency_symbol":                fallbackString(s.cfg.CurrencySymbol, "¥"),
-		"commission_distribution_enable": boolToInt64(s.cfg.CommissionDistEnabled),
-		"commission_distribution_l1":     s.cfg.CommissionDistL1,
-		"commission_distribution_l2":     s.cfg.CommissionDistL2,
-		"commission_distribution_l3":     s.cfg.CommissionDistL3,
+		"withdraw_close":                 boolToInt64(cfg.WithdrawCloseEnable),
+		"currency":                       fallbackString(cfg.Currency, "CNY"),
+		"currency_symbol":                fallbackString(cfg.CurrencySymbol, "¥"),
+		"commission_distribution_enable": boolToInt64(cfg.CommissionDistEnabled),
+		"commission_distribution_l1":     cfg.CommissionDistL1,
+		"commission_distribution_l2":     cfg.CommissionDistL2,
+		"commission_distribution_l3":     cfg.CommissionDistL3,
 	}, nil
 }
 

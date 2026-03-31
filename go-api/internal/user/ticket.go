@@ -86,7 +86,7 @@ func (s *DBService) CreateTicket(ctx context.Context, userID int64, req TicketCr
 		return false, errors.New("There are other unresolved tickets")
 	}
 
-	switch s.cfg.TicketStatus {
+	switch s.currentConfig().TicketStatus {
 	case 0:
 	case 1:
 		var hasPaidOrder bool
@@ -226,11 +226,12 @@ func (s *DBService) WithdrawTicket(ctx context.Context, userID int64, method, ac
 	if account == "" {
 		return false, errors.New("The withdrawal account cannot be empty")
 	}
-	if s.cfg.WithdrawCloseEnable {
+	cfg := s.currentConfig()
+	if cfg.WithdrawCloseEnable {
 		return false, errors.New("user.ticket.withdraw.not_support_withdraw")
 	}
 
-	allowedMethods := s.cfg.CommissionWithdrawMethods
+	allowedMethods := cfg.CommissionWithdrawMethods
 	if len(allowedMethods) == 0 {
 		allowedMethods = []string{"支付宝", "USDT", "Paypal"}
 	}
@@ -252,8 +253,8 @@ func (s *DBService) WithdrawTicket(ctx context.Context, userID int64, method, ac
 		return false, errors.New("Failed to open ticket")
 	}
 
-	if s.cfg.CommissionWithdrawLimit > (commissionBalance / 100) {
-		return false, fmt.Errorf("The current required minimum withdrawal commission is %d", s.cfg.CommissionWithdrawLimit)
+	if cfg.CommissionWithdrawLimit > (commissionBalance / 100) {
+		return false, fmt.Errorf("The current required minimum withdrawal commission is %d", cfg.CommissionWithdrawLimit)
 	}
 
 	now := time.Now().Unix()

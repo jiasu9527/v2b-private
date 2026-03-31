@@ -230,11 +230,22 @@ func (s *DBService) WithAuthCache(cache *session.AuthCache) *DBService {
 	return s
 }
 
+func (s *DBService) currentConfig() config.Config {
+	if s == nil {
+		return config.Config{}
+	}
+	if s.runtime == nil {
+		return s.cfg
+	}
+	return s.runtime.CurrentConfig()
+}
+
 func (s *DBService) runtimeValues() config.RuntimeValues {
 	if s.runtime == nil {
+		cfg := s.currentConfig()
 		return config.RuntimeValues{
-			AllowNewPeriod:     s.cfg.AllowNewPeriod,
-			ResetTrafficMethod: s.cfg.ResetTrafficMethod,
+			AllowNewPeriod:     cfg.AllowNewPeriod,
+			ResetTrafficMethod: cfg.ResetTrafficMethod,
 		}
 	}
 	return s.runtime.Current()
@@ -304,6 +315,7 @@ func (s *DBService) ResolveClientUserID(ctx context.Context, token string) (int6
 	if s.db == nil {
 		return 0, ErrUnavailable
 	}
+	cfg := s.currentConfig()
 
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -311,7 +323,7 @@ func (s *DBService) ResolveClientUserID(ctx context.Context, token string) (int6
 	}
 
 	resolvedToken := token
-	switch s.cfg.ShowSubscribeMethod {
+	switch cfg.ShowSubscribeMethod {
 	case 1:
 		value, ok, err := s.kvGet(ctx, "otpn_"+token)
 		if err != nil {
@@ -341,7 +353,7 @@ func (s *DBService) ResolveClientUserID(ctx context.Context, token string) (int6
 		if err != nil {
 			return 0, err
 		}
-		ttl := s.cfg.ShowSubscribeExpire
+		ttl := cfg.ShowSubscribeExpire
 		if ttl <= 0 {
 			ttl = 5
 		}
@@ -560,7 +572,7 @@ func (s *DBService) OrderDetail(ctx context.Context, userID int64, tradeNo strin
 		return nil, ErrPlanNotFound
 	}
 	order["plan"] = plan
-	order["try_out_plan_id"] = s.cfg.TryOutPlanID
+	order["try_out_plan_id"] = s.currentConfig().TryOutPlanID
 
 	ids := parseIDList(order["surplus_order_ids"])
 	if len(ids) > 0 {
@@ -690,12 +702,13 @@ func (s *DBService) planMapForOrders(ctx context.Context, orders []map[string]an
 }
 
 func (s *DBService) buildSubscribeURL(ctx context.Context, userID int64, token string) (string, error) {
-	path := normalizeSubscribePath(s.cfg.SubscribePath)
-	baseURL := selectSubscribeBaseURL(s.cfg.SubscribeURL)
+	cfg := s.currentConfig()
+	path := normalizeSubscribePath(cfg.SubscribePath)
+	baseURL := selectSubscribeBaseURL(cfg.SubscribeURL)
 	if baseURL == "" {
-		baseURL = strings.TrimSpace(s.cfg.AppURL)
+		baseURL = strings.TrimSpace(cfg.AppURL)
 	}
-	switch s.cfg.ShowSubscribeMethod {
+	switch cfg.ShowSubscribeMethod {
 	case 1:
 		newToken, err := s.oneTimeSubscribeToken(ctx, token)
 		if err != nil {
@@ -703,7 +716,7 @@ func (s *DBService) buildSubscribeURL(ctx context.Context, userID int64, token s
 		}
 		return appendTokenToURL(baseURL, path, newToken), nil
 	case 2:
-		ttl := s.cfg.ShowSubscribeExpire
+		ttl := cfg.ShowSubscribeExpire
 		if ttl <= 0 {
 			ttl = 5
 		}
@@ -769,7 +782,7 @@ func (s *DBService) resolveTimedClientToken(ctx context.Context, token string) (
 		return 0, "", err
 	}
 
-	ttl := s.cfg.ShowSubscribeExpire
+	ttl := s.currentConfig().ShowSubscribeExpire
 	if ttl <= 0 {
 		ttl = 5
 	}

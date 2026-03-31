@@ -397,7 +397,7 @@ func (s *DBService) CancelOrder(ctx context.Context, userID int64, tradeNo strin
 		return false, fmt.Errorf("commit cancel order: %w", err)
 	}
 
-	ttl := s.cfg.OrderCancelRecoverTTL
+	ttl := s.currentConfig().OrderCancelRecoverTTL
 	if ttl <= 0 {
 		ttl = 1800
 	}
@@ -513,11 +513,12 @@ func (s *DBService) setOrderTypeTx(ctx context.Context, tx *sql.Tx, userRow user
 	case order.Period == "reset_price":
 		order.Type = 4
 	case userRow.PlanID.Valid && userRow.PlanID.Int64 != order.PlanID && (!userRow.ExpiredAt.Valid || userRow.ExpiredAt.Int64 > now):
-		if !s.cfg.PlanChangeEnable {
+		cfg := s.currentConfig()
+		if !cfg.PlanChangeEnable {
 			return ErrPlanChangeDisabled
 		}
 		order.Type = 3
-		if s.cfg.SurplusEnable {
+		if cfg.SurplusEnable {
 			if err := s.applySurplusValueTx(ctx, tx, userRow, order); err != nil {
 				return err
 			}
@@ -743,7 +744,7 @@ func (s *DBService) setInviteTx(ctx context.Context, tx *sql.Tx, userRow userRec
 		if err != nil {
 			return err
 		}
-		isCommission = !s.cfg.CommissionFirstTime || !hasValidOrder
+		isCommission = !s.currentConfig().CommissionFirstTime || !hasValidOrder
 	case 1:
 		isCommission = true
 	case 2:
@@ -757,7 +758,7 @@ func (s *DBService) setInviteTx(ctx context.Context, tx *sql.Tx, userRow userRec
 		return nil
 	}
 
-	rate := s.cfg.InviteCommission
+	rate := s.currentConfig().InviteCommission
 	if inviter.CommissionRate.Valid && inviter.CommissionRate.Int64 > 0 {
 		rate = inviter.CommissionRate.Int64
 	}

@@ -41,29 +41,46 @@ func (s StaticService) InvitePreview(context.Context, string) (map[string]any, e
 }
 
 type DBService struct {
-	cfg config.Config
-	db  *sql.DB
+	cfg     config.Config
+	runtime *config.RuntimeState
+	db      *sql.DB
 }
 
-func NewDBService(cfg config.Config, db *sql.DB) DBService {
-	return DBService{cfg: cfg, db: db}
+func NewDBService(cfg config.Config, db *sql.DB) *DBService {
+	return &DBService{cfg: cfg, db: db}
 }
 
-func (s DBService) Config(context.Context) (map[string]any, error) {
+func (s *DBService) WithRuntimeConfig(runtime *config.RuntimeState) *DBService {
+	s.runtime = runtime
+	return s
+}
+
+func (s *DBService) currentConfig() config.Config {
+	if s == nil {
+		return config.Config{}
+	}
+	if s.runtime == nil {
+		return s.cfg
+	}
+	return s.runtime.CurrentConfig()
+}
+
+func (s *DBService) Config(context.Context) (map[string]any, error) {
+	cfg := s.currentConfig()
 	return map[string]any{
-		"tos_url":                s.cfg.TOSURL,
-		"is_email_verify":        boolToInt(s.cfg.EmailVerify),
-		"is_invite_force":        boolToInt(s.cfg.InviteForce),
-		"email_whitelist_suffix": whitelistValue(s.cfg.EmailWhitelist),
-		"is_recaptcha":           boolToInt(s.cfg.Recaptcha),
-		"recaptcha_site_key":     s.cfg.RecaptchaSiteKey,
-		"app_description":        s.cfg.AppDescription,
-		"app_url":                s.cfg.AppURL,
-		"logo":                   s.cfg.Logo,
+		"tos_url":                cfg.TOSURL,
+		"is_email_verify":        boolToInt(cfg.EmailVerify),
+		"is_invite_force":        boolToInt(cfg.InviteForce),
+		"email_whitelist_suffix": whitelistValue(cfg.EmailWhitelist),
+		"is_recaptcha":           boolToInt(cfg.Recaptcha),
+		"recaptcha_site_key":     cfg.RecaptchaSiteKey,
+		"app_description":        cfg.AppDescription,
+		"app_url":                cfg.AppURL,
+		"logo":                   cfg.Logo,
 	}, nil
 }
 
-func (s DBService) Plans(ctx context.Context) ([]map[string]any, error) {
+func (s *DBService) Plans(ctx context.Context) ([]map[string]any, error) {
 	if s.db == nil {
 		return nil, ErrUnavailable
 	}
@@ -105,7 +122,7 @@ func (s DBService) Plans(ctx context.Context) ([]map[string]any, error) {
 	return plans, nil
 }
 
-func (s DBService) InvitePreview(ctx context.Context, code string) (map[string]any, error) {
+func (s *DBService) InvitePreview(ctx context.Context, code string) (map[string]any, error) {
 	code = strings.TrimSpace(code)
 	if code == "" {
 		return buildPreviewPayload(code, "invalid", 0, 0, nil), nil
@@ -146,7 +163,7 @@ type campaignRow struct {
 	expiredAt int64
 }
 
-func (s DBService) lookupInviteCode(ctx context.Context, code string) (*inviteCodeRow, error) {
+func (s *DBService) lookupInviteCode(ctx context.Context, code string) (*inviteCodeRow, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT code, user_id FROM v2_invite_code WHERE code = $1 AND status = 0 LIMIT 1`, code)
 	result := &inviteCodeRow{}
 	if err := row.Scan(&result.code, &result.userID); err != nil {
@@ -159,7 +176,7 @@ func (s DBService) lookupInviteCode(ctx context.Context, code string) (*inviteCo
 	return result, nil
 }
 
-func (s DBService) lookupCampaign(ctx context.Context, userID int64, inviteCode string) (*campaignRow, error) {
+func (s *DBService) lookupCampaign(ctx context.Context, userID int64, inviteCode string) (*campaignRow, error) {
 	row := s.db.QueryRowContext(
 		ctx,
 		`SELECT status, expired_at FROM v2_invite_campaign WHERE user_id = $1 AND invite_code = $2 AND status IN (0, 1) ORDER BY id DESC LIMIT 1`,
@@ -176,26 +193,28 @@ func (s DBService) lookupCampaign(ctx context.Context, userID int64, inviteCode 
 	return result, nil
 }
 
-func (s DBService) defaultTryOutProfile(ctx context.Context) (float64, float64) {
-	if s.cfg.TryOutPlanID <= 0 {
+func (s *DBService) defaultTryOutProfile(ctx context.Context) (float64, float64) {
+	cfg := s.currentConfig()
+	if cfg.TryOutPlanID <= 0 {
 		return 0, 0
 	}
 
-	transferGB := s.lookupPlanTransferGB(ctx, s.cfg.TryOutPlanID)
-	return transferGB, s.cfg.TryOutHour
+	transferGB := s.lookupPlanTransferGB(ctx, cfg.TryOutPlanID)
+	return transferGB, cfg.TryOutHour
 }
 
-func (s DBService) campaignTryOutProfile(ctx context.Context) (float64, float64) {
-	if s.cfg.InviteTryOutPlanID <= 0 {
+func (s *DBService) campaignTryOutProfile(ctx context.Context) (float64, float64) {
+	cfg := s.currentConfig()
+	if cfg.InviteTryOutPlanID <= 0 {
 		return 0, 0
 	}
 
-	transferGB := s.cfg.InviteTryOutTransferGB
+	transferGB := cfg.InviteTryOutTransferGB
 	if transferGB <= 0 {
-		transferGB = s.lookupPlanTransferGB(ctx, s.cfg.InviteTryOutPlanID)
+		transferGB = s.lookupPlanTransferGB(ctx, cfg.InviteTryOutPlanID)
 	}
 
-	hours := s.cfg.InviteTryOutHours
+	hours := cfg.InviteTryOutHours
 	if hours <= 0 {
 		hours = 24
 	}
@@ -203,7 +222,7 @@ func (s DBService) campaignTryOutProfile(ctx context.Context) (float64, float64)
 	return transferGB, hours
 }
 
-func (s DBService) lookupPlanTransferGB(ctx context.Context, planID int64) float64 {
+func (s *DBService) lookupPlanTransferGB(ctx context.Context, planID int64) float64 {
 	if planID <= 0 || s.db == nil {
 		return 0
 	}

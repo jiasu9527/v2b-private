@@ -76,7 +76,8 @@ func (s *DBService) CreateInviteCode(ctx context.Context, userID int64) (bool, e
 		return false, ErrNotFound
 	}
 
-	limit := s.cfg.InviteGenLimit
+	cfg := s.currentConfig()
+	limit := cfg.InviteGenLimit
 	if limit <= 0 {
 		limit = 5
 	}
@@ -150,15 +151,16 @@ WHERE status = 3 AND commission_status = 0 AND invite_user_id = $1`, userID)
 	if err != nil {
 		return nil, err
 	}
-	if s.cfg.CommissionDistEnabled {
-		rate := s.cfg.CommissionDistL1
+	cfg := s.currentConfig()
+	if cfg.CommissionDistEnabled {
+		rate := cfg.CommissionDistL1
 		if rate <= 0 {
 			rate = 30
 		}
 		pendingCommission = pendingCommission * rate / 100
 	}
 
-	rate := s.cfg.InviteCommission
+	rate := cfg.InviteCommission
 	if commissionRate.Valid {
 		rate = commissionRate.Int64
 	}

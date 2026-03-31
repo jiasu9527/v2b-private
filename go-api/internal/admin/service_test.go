@@ -1,10 +1,14 @@
 package admin
 
 import (
+	"context"
 	"database/sql"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	cfgpkg "forest/go-api/internal/config"
 	"forest/go-api/internal/queue"
 )
 
@@ -138,5 +142,84 @@ func TestAdminUserJSONMapQueryUsesNonConflictingAlias(t *testing.T) {
 	}
 	if !strings.Contains(query, "row_to_json(user_row)") {
 		t.Fatalf("expected user map query to use user_row alias, got %s", query)
+	}
+}
+
+func TestBuildAdminUserSubscribeURLUsesRuntimeConfig(t *testing.T) {
+	root := t.TempDir()
+	writeAdminJSONFixture(t, root, map[string]any{
+		"subscribe_url":         "https://old.example.com",
+		"subscribe_path":        "/old-sub",
+		"show_subscribe_method": 0,
+	})
+	mustMkdirAll(t, filepath.Join(root, "go-api"))
+
+	oldRoot := adminProjectRoot
+	adminProjectRoot = root
+	defer func() { adminProjectRoot = oldRoot }()
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() { _ = os.Chdir(prevWD) }()
+	if err := os.Chdir(filepath.Join(root, "go-api")); err != nil {
+		t.Fatalf("chdir work dir: %v", err)
+	}
+
+	cfg := cfgpkg.Load()
+	runtimeState := cfgpkg.NewRuntimeState(cfg)
+	service := (&DBService{cfg: cfg}).WithRuntimeConfig(runtimeState)
+
+	writeAdminJSONFixture(t, root, map[string]any{
+		"subscribe_url":         "https://sub.example.com",
+		"subscribe_path":        "/custom-sub",
+		"show_subscribe_method": 0,
+	})
+	runtimeState.Reload()
+
+	got, err := service.buildAdminUserSubscribeURL(context.Background(), 1, "token-1")
+	if err != nil {
+		t.Fatalf("build admin subscribe url: %v", err)
+	}
+	want := "https://sub.example.com/custom-sub?token=token-1"
+	if got != want {
+		t.Fatalf("expected runtime subscribe url %q, got %q", want, got)
+	}
+}
+
+func TestNotifyURLUsesRuntimeConfig(t *testing.T) {
+	root := t.TempDir()
+	writeAdminJSONFixture(t, root, map[string]any{
+		"app_url": "https://old.example.com",
+	})
+	mustMkdirAll(t, filepath.Join(root, "go-api"))
+
+	oldRoot := adminProjectRoot
+	adminProjectRoot = root
+	defer func() { adminProjectRoot = oldRoot }()
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() { _ = os.Chdir(prevWD) }()
+	if err := os.Chdir(filepath.Join(root, "go-api")); err != nil {
+		t.Fatalf("chdir work dir: %v", err)
+	}
+
+	cfg := cfgpkg.Load()
+	runtimeState := cfgpkg.NewRuntimeState(cfg)
+	service := (&DBService{cfg: cfg}).WithRuntimeConfig(runtimeState)
+
+	writeAdminJSONFixture(t, root, map[string]any{
+		"app_url": "https://panel.example.com",
+	})
+	runtimeState.Reload()
+
+	got := service.notifyURL("stripe", "pay-uuid", sql.NullString{})
+	want := "https://panel.example.com/api/v1/guest/payment/notify/stripe/pay-uuid"
+	if got != want {
+		t.Fatalf("expected runtime notify url %q, got %q", want, got)
 	}
 }

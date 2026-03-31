@@ -87,7 +87,7 @@ func (s *DBService) handleQueuedOrder(ctx context.Context, tradeNo string) error
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit queued cancel order: %w", err)
 		}
-		ttl := s.cfg.OrderCancelRecoverTTL
+		ttl := s.currentConfig().OrderCancelRecoverTTL
 		if ttl <= 0 {
 			ttl = 1800
 		}

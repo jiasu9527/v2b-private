@@ -88,7 +88,7 @@ LIMIT 1`, userID).Scan(&token, &banned, &transferEnable, &expiredAt)
 	if err != nil {
 		return nil, err
 	}
-	body = applyKnowledgeTemplate(body, fallbackString(s.cfg.AppName, "V2Board"), subscribeURL, token)
+	body = applyKnowledgeTemplate(body, fallbackString(s.currentConfig().AppName, "V2Board"), subscribeURL, token)
 	knowledge["body"] = body
 	return knowledge, nil
 }

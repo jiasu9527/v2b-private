@@ -342,6 +342,13 @@ func (s *DBService) WithRuntimeConfig(runtime *config.RuntimeState) *DBService {
 	return s
 }
 
+func (s *DBService) currentConfig() config.Config {
+	if s == nil || s.runtime == nil {
+		return s.cfg
+	}
+	return s.runtime.CurrentConfig()
+}
+
 func (s *DBService) WithAuthCache(cache *session.AuthCache) *DBService {
 	s.authCache = cache
 	return s
@@ -682,7 +689,7 @@ func (s *DBService) SavePayment(ctx context.Context, req PaymentSaveRequest) (bo
 	if s.db == nil {
 		return false, ErrUnavailable
 	}
-	if strings.TrimSpace(s.cfg.AppURL) == "" {
+	if strings.TrimSpace(s.currentConfig().AppURL) == "" {
 		return false, errors.New("请在站点配置中配置站点地址")
 	}
 	req.Name = strings.TrimSpace(req.Name)
@@ -903,10 +910,11 @@ func (s *DBService) notifyURL(gateway, uuid string, notifyDomain sql.NullString)
 	if notifyDomain.Valid && strings.TrimSpace(notifyDomain.String) != "" {
 		return strings.TrimRight(strings.TrimSpace(notifyDomain.String), "/") + path
 	}
-	if strings.TrimSpace(s.cfg.AppURL) == "" {
+	cfg := s.currentConfig()
+	if strings.TrimSpace(cfg.AppURL) == "" {
 		return path
 	}
-	return strings.TrimRight(strings.TrimSpace(s.cfg.AppURL), "/") + path
+	return strings.TrimRight(strings.TrimSpace(cfg.AppURL), "/") + path
 }
 
 func scanPaymentRow(scanner interface{ Scan(...any) error }) (paymentRow, error) {

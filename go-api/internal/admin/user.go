@@ -1236,13 +1236,14 @@ func (s *DBService) findInviteUserIDByEmail(ctx context.Context, operator, value
 }
 
 func (s *DBService) buildAdminUserSubscribeURL(ctx context.Context, userID int64, token string) (string, error) {
-	path := strings.TrimSpace(s.cfg.SubscribePath)
+	cfg := s.currentConfig()
+	path := strings.TrimSpace(cfg.SubscribePath)
 	if path == "" {
 		path = "/api/v1/client/subscribe"
 	}
-	baseURL := strings.TrimSpace(s.cfg.SubscribeURL)
+	baseURL := strings.TrimSpace(cfg.SubscribeURL)
 
-	switch s.cfg.ShowSubscribeMethod {
+	switch cfg.ShowSubscribeMethod {
 	case 1:
 		newToken, err := s.adminOneTimeSubscribeToken(ctx, token)
 		if err != nil {
@@ -1250,7 +1251,7 @@ func (s *DBService) buildAdminUserSubscribeURL(ctx context.Context, userID int64
 		}
 		return appendAdminTokenToURL(baseURL, path, newToken), nil
 	case 2:
-		ttl := s.cfg.ShowSubscribeExpire
+		ttl := cfg.ShowSubscribeExpire
 		if ttl <= 0 {
 			ttl = 5
 		}

@@ -11,10 +11,11 @@ type RuntimeState struct {
 	base   Config
 	mu     sync.RWMutex
 	values RuntimeValues
+	cfg    Config
 }
 
 func NewRuntimeState(base Config) *RuntimeState {
-	state := &RuntimeState{base: base}
+	state := &RuntimeState{base: base, cfg: base}
 	state.Reload()
 	return state
 }
@@ -24,8 +25,10 @@ func (s *RuntimeState) Reload() RuntimeValues {
 		return RuntimeValues{}
 	}
 
-	values := loadRuntimeValues(s.base)
+	cfg := Load()
+	values := loadRuntimeValues(cfg)
 	s.mu.Lock()
+	s.cfg = cfg
 	s.values = values
 	s.mu.Unlock()
 	return values
@@ -42,14 +45,21 @@ func (s *RuntimeState) Current() RuntimeValues {
 	return values
 }
 
-func loadRuntimeValues(base Config) RuntimeValues {
-	jsonConfig := loadJSONConfigMap(defaultAdminJSONPath)
+func (s *RuntimeState) CurrentConfig() Config {
+	if s == nil {
+		return Config{}
+	}
+
+	s.mu.RLock()
+	cfg := s.cfg
+	s.mu.RUnlock()
+	return cfg
+}
+
+func loadRuntimeValues(cfg Config) RuntimeValues {
 	return RuntimeValues{
-		AllowNewPeriod: getEnvBool("ALLOW_NEW_PERIOD", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "allow_new_period", boolToInt64(base.AllowNewPeriod)) != 0),
-		ResetTrafficMethod: getEnvInt64(
-			"RESET_TRAFFIC_METHOD",
-			loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "reset_traffic_method", base.ResetTrafficMethod),
-		),
+		AllowNewPeriod:     cfg.AllowNewPeriod,
+		ResetTrafficMethod: cfg.ResetTrafficMethod,
 	}
 }
 

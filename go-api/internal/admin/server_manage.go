@@ -234,7 +234,7 @@ func managedServerInt64Value(value any) (int64, bool) {
 
 func (s *DBService) v2nodeInstallCommand(item map[string]any) string {
 	cfg, err := loadAdminConfigStore(adminConfigPath())
-	apiHost := strings.TrimSpace(s.cfg.AppURL)
+	apiHost := strings.TrimSpace(s.currentConfig().AppURL)
 	apiKey := ""
 	if err == nil {
 		if value, ok := cfg.nullableStringValue("server_api_url").(string); ok {

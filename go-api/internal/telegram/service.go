@@ -23,6 +23,7 @@ type ticketReplyService interface {
 
 type Service struct {
 	cfg               config.Config
+	runtime           *config.RuntimeState
 	db                *sql.DB
 	jobs              queue.Enqueuer
 	client            *http.Client
@@ -52,6 +53,11 @@ func (s *Service) WithQueueRuntime(jobs queue.Enqueuer) *Service {
 	return s
 }
 
+func (s *Service) WithRuntimeConfig(runtime *config.RuntimeState) *Service {
+	s.runtime = runtime
+	return s
+}
+
 func (s *Service) WithUserResolver(fn func(context.Context, string) (int64, error)) *Service {
 	s.resolveUserID = fn
 	return s
@@ -62,8 +68,19 @@ func (s *Service) WithAdminService(service ticketReplyService) *Service {
 	return s
 }
 
+func (s *Service) currentConfig() config.Config {
+	if s == nil {
+		return config.Config{}
+	}
+	if s.runtime == nil {
+		return s.cfg
+	}
+	return s.runtime.CurrentConfig()
+}
+
 func (s *Service) NotifyAdmins(ctx context.Context, message string, includeStaff bool) error {
-	if s == nil || !s.cfg.TelegramBotEnable || strings.TrimSpace(s.cfg.TelegramBotToken) == "" {
+	cfg := s.currentConfig()
+	if s == nil || !cfg.TelegramBotEnable || strings.TrimSpace(cfg.TelegramBotToken) == "" {
 		return nil
 	}
 	message = strings.TrimSpace(message)
@@ -152,9 +169,10 @@ func (s *Service) declineJoinNow(ctx context.Context, chatID, userID int64) erro
 }
 
 func (s *Service) postForm(ctx context.Context, method string, values url.Values) error {
-	endpoint := "https://api.telegram.org/bot" + strings.TrimSpace(s.cfg.TelegramBotToken) + "/sendMessage"
+	token := strings.TrimSpace(s.currentConfig().TelegramBotToken)
+	endpoint := "https://api.telegram.org/bot" + token + "/sendMessage"
 	if strings.TrimSpace(method) != "" {
-		endpoint = "https://api.telegram.org/bot" + strings.TrimSpace(s.cfg.TelegramBotToken) + "/" + strings.TrimSpace(method)
+		endpoint = "https://api.telegram.org/bot" + token + "/" + strings.TrimSpace(method)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(values.Encode()))
 	if err != nil {

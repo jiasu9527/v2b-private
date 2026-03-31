@@ -102,6 +102,40 @@ func TestLoadAdminJSONFallbacks(t *testing.T) {
 	}
 }
 
+func TestLoadAdminJSONFallbacksFromProjectRootWorkingDirectory(t *testing.T) {
+	dir := t.TempDir()
+	configRoot := filepath.Join(dir, "config")
+	if err := os.MkdirAll(configRoot, 0o755); err != nil {
+		t.Fatalf("mkdir config root: %v", err)
+	}
+
+	raw, err := json.MarshalIndent(map[string]any{
+		"secure_path": "rootadmin",
+	}, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal admin json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configRoot, "admin.json"), raw, 0o644); err != nil {
+		t.Fatalf("write admin json: %v", err)
+	}
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(prevWD)
+	}()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir project root: %v", err)
+	}
+
+	cfg := Load()
+	if cfg.AdminPath != "rootadmin" {
+		t.Fatalf("expected admin path from project-root config/admin.json, got %q", cfg.AdminPath)
+	}
+}
+
 func TestLoadAdminJSONInviteCampaignTryOutFallbacks(t *testing.T) {
 	dir := t.TempDir()
 	configRoot := filepath.Join(dir, "config")
@@ -208,5 +242,180 @@ func TestLoadAdminJSONSiteFallbacks(t *testing.T) {
 	}
 	if !cfg.ShowInfoToServerEnable {
 		t.Fatal("expected show_info_to_server_enable from admin.json")
+	}
+}
+
+func TestLoadAdminJSONSafeFallbacks(t *testing.T) {
+	dir := t.TempDir()
+	configRoot := filepath.Join(dir, "config")
+	workDir := filepath.Join(dir, "go-api")
+	if err := os.MkdirAll(configRoot, 0o755); err != nil {
+		t.Fatalf("mkdir config root: %v", err)
+	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir work dir: %v", err)
+	}
+
+	raw, err := json.MarshalIndent(map[string]any{
+		"tos_url":                     "https://forest.test/tos",
+		"email_verify":                1,
+		"invite_force":                1,
+		"invite_never_expire":         1,
+		"stop_register":               1,
+		"email_whitelist_enable":      1,
+		"email_whitelist_suffix":      []string{"forest.test", "example.com"},
+		"email_gmail_limit_enable":    1,
+		"recaptcha_enable":            1,
+		"recaptcha_key":               "secret-key",
+		"recaptcha_site_key":          "site-key",
+		"register_limit_by_ip_enable": 1,
+		"register_limit_count":        8,
+		"register_limit_expire":       120,
+		"password_limit_enable":       0,
+		"password_limit_count":        9,
+		"password_limit_expire":       240,
+	}, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal admin json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configRoot, "admin.json"), raw, 0o644); err != nil {
+		t.Fatalf("write admin json: %v", err)
+	}
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(prevWD)
+	}()
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatalf("chdir work dir: %v", err)
+	}
+
+	t.Setenv("TOS_URL", "")
+	t.Setenv("EMAIL_VERIFY", "")
+	t.Setenv("INVITE_FORCE", "")
+	t.Setenv("INVITE_NEVER_EXPIRE", "")
+	t.Setenv("STOP_REGISTER", "")
+	t.Setenv("EMAIL_WHITELIST_ENABLE", "")
+	t.Setenv("EMAIL_WHITELIST_SUFFIX", "")
+	t.Setenv("EMAIL_GMAIL_LIMIT_ENABLE", "")
+	t.Setenv("RECAPTCHA_ENABLE", "")
+	t.Setenv("RECAPTCHA_KEY", "")
+	t.Setenv("RECAPTCHA_SITE_KEY", "")
+	t.Setenv("REGISTER_LIMIT_BY_IP_ENABLE", "")
+	t.Setenv("REGISTER_LIMIT_COUNT", "")
+	t.Setenv("REGISTER_LIMIT_EXPIRE", "")
+	t.Setenv("PASSWORD_LIMIT_ENABLE", "")
+	t.Setenv("PASSWORD_LIMIT_COUNT", "")
+	t.Setenv("PASSWORD_LIMIT_EXPIRE", "")
+
+	cfg := Load()
+	if cfg.TOSURL != "https://forest.test/tos" {
+		t.Fatalf("expected tos_url from admin.json, got %q", cfg.TOSURL)
+	}
+	if !cfg.EmailVerify {
+		t.Fatal("expected email_verify from admin.json")
+	}
+	if !cfg.InviteForce {
+		t.Fatal("expected invite_force from admin.json")
+	}
+	if !cfg.InviteNeverExpire {
+		t.Fatal("expected invite_never_expire from admin.json")
+	}
+	if !cfg.StopRegister {
+		t.Fatal("expected stop_register from admin.json")
+	}
+	if !cfg.EmailWhitelistEnabled {
+		t.Fatal("expected email_whitelist_enable from admin.json")
+	}
+	if len(cfg.EmailWhitelist) != 2 || cfg.EmailWhitelist[0] != "forest.test" || cfg.EmailWhitelist[1] != "example.com" {
+		t.Fatalf("unexpected email whitelist: %#v", cfg.EmailWhitelist)
+	}
+	if !cfg.EmailGmailLimitEnabled {
+		t.Fatal("expected email_gmail_limit_enable from admin.json")
+	}
+	if !cfg.Recaptcha {
+		t.Fatal("expected recaptcha_enable from admin.json")
+	}
+	if cfg.RecaptchaKey != "secret-key" {
+		t.Fatalf("expected recaptcha_key from admin.json, got %q", cfg.RecaptchaKey)
+	}
+	if cfg.RecaptchaSiteKey != "site-key" {
+		t.Fatalf("expected recaptcha_site_key from admin.json, got %q", cfg.RecaptchaSiteKey)
+	}
+	if !cfg.RegisterLimitByIP {
+		t.Fatal("expected register_limit_by_ip_enable from admin.json")
+	}
+	if cfg.RegisterLimitCount != 8 {
+		t.Fatalf("expected register_limit_count 8, got %d", cfg.RegisterLimitCount)
+	}
+	if cfg.RegisterLimitExpireMin != 120 {
+		t.Fatalf("expected register_limit_expire 120, got %d", cfg.RegisterLimitExpireMin)
+	}
+	if cfg.PasswordLimitEnabled {
+		t.Fatal("expected password_limit_enable disabled from admin.json")
+	}
+	if cfg.PasswordLimitCount != 9 {
+		t.Fatalf("expected password_limit_count 9, got %d", cfg.PasswordLimitCount)
+	}
+	if cfg.PasswordLimitExpireMin != 240 {
+		t.Fatalf("expected password_limit_expire 240, got %d", cfg.PasswordLimitExpireMin)
+	}
+}
+
+func TestLoadAdminJSONSafeFallbacksIgnoreLegacyEnvOverrides(t *testing.T) {
+	dir := t.TempDir()
+	configRoot := filepath.Join(dir, "config")
+	workDir := filepath.Join(dir, "go-api")
+	if err := os.MkdirAll(configRoot, 0o755); err != nil {
+		t.Fatalf("mkdir config root: %v", err)
+	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir work dir: %v", err)
+	}
+
+	raw, err := json.MarshalIndent(map[string]any{
+		"email_verify": 1,
+		"invite_force": 1,
+		"app_url":      "https://forest-hot.example.com",
+		"app_name":     "Forest Hot",
+	}, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal admin json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configRoot, "admin.json"), raw, 0o644); err != nil {
+		t.Fatalf("write admin json: %v", err)
+	}
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(prevWD)
+	}()
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatalf("chdir work dir: %v", err)
+	}
+
+	t.Setenv("EMAIL_VERIFY", "false")
+	t.Setenv("INVITE_FORCE", "false")
+	t.Setenv("APP_URL", "http://old-env.example.com")
+	t.Setenv("APP_NAME", "Old Env")
+
+	cfg := Load()
+	if !cfg.EmailVerify {
+		t.Fatal("expected admin.json email_verify to override legacy env")
+	}
+	if !cfg.InviteForce {
+		t.Fatal("expected admin.json invite_force to override legacy env")
+	}
+	if cfg.AppURL != "https://forest-hot.example.com" {
+		t.Fatalf("expected admin.json app_url to override legacy env, got %q", cfg.AppURL)
+	}
+	if cfg.AppName != "Forest Hot" {
+		t.Fatalf("expected admin.json app_name to override legacy env, got %q", cfg.AppName)
 	}
 }
