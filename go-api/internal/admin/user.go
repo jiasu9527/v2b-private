@@ -397,6 +397,9 @@ func (s *DBService) UpdateUser(ctx context.Context, req UserUpdateRequest) (bool
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit admin user update transaction: %w", err)
 	}
+	if bannedValue == 1 && s.authCache != nil {
+		s.authCache.InvalidateUser(req.ID)
+	}
 	return true, nil
 }
 
@@ -761,6 +764,11 @@ func (s *DBService) BanUsers(ctx context.Context, filters []UserFilter) (bool, e
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit admin user ban transaction: %w", err)
 	}
+	if s.authCache != nil {
+		for _, id := range ids {
+			s.authCache.InvalidateUser(id)
+		}
+	}
 	return true, nil
 }
 
@@ -823,6 +831,9 @@ func (s *DBService) DeleteUser(ctx context.Context, id int64) (bool, error) {
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit admin user delete transaction: %w", err)
 	}
+	if s.authCache != nil {
+		s.authCache.InvalidateUser(id)
+	}
 	return true, nil
 }
 
@@ -850,6 +861,11 @@ func (s *DBService) DeleteUsers(ctx context.Context, filters []UserFilter) (bool
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit admin user bulk delete transaction: %w", err)
+	}
+	if s.authCache != nil {
+		for _, id := range ids {
+			s.authCache.InvalidateUser(id)
+		}
 	}
 	return true, nil
 }

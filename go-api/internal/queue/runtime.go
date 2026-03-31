@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"errors"
+	"log"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -291,6 +292,7 @@ func (r *Runtime) markFinished(queueName string, startedAt time.Time, duration t
 	event := jobEvent{queueName: queueName, at: startedAt, duration: duration}
 	if err != nil {
 		r.failedEvents = append(r.failedEvents, event)
+		log.Printf("queue job failed: queue=%s duration=%s err=%v", queueName, duration, err)
 		return
 	}
 

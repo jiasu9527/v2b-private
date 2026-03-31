@@ -8,7 +8,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestDBServiceGetStatOverrideUsesPaidAtForIncome(t *testing.T) {
+func TestDBServiceGetStatOverrideUsesCreatedAtForIncome(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -18,7 +18,7 @@ func TestDBServiceGetStatOverrideUsesPaidAtForIncome(t *testing.T) {
 	service := &DBService{db: db}
 
 	expectInt64Query(mock, `SELECT COUNT(*) FROM v2_user WHERE t >= $1`, 1, 11)
-	expectInt64Query(mock, `SELECT COALESCE(SUM(total_amount), 0) FROM v2_order WHERE paid_at >= $1 AND paid_at < $2 AND status NOT IN (0, 2)`, 2, 1200)
+	expectInt64Query(mock, `SELECT COALESCE(SUM(total_amount), 0) FROM v2_order WHERE created_at >= $1 AND created_at < $2 AND status NOT IN (0, 2)`, 2, 1200)
 	expectInt64Query(mock, `SELECT COUNT(*) FROM v2_user WHERE created_at >= $1 AND created_at < $2`, 2, 21)
 	expectInt64Query(mock, `SELECT COUNT(*) FROM v2_user WHERE created_at >= $1 AND created_at < $2`, 2, 22)
 	expectInt64Query(mock, `SELECT COUNT(*)
@@ -46,8 +46,8 @@ AND EXISTS (
 	expectInt64Query(mock, `SELECT COUNT(*) FROM v2_user WHERE created_at >= $1 AND created_at < $2`, 2, 41)
 	expectInt64Query(mock, `SELECT COUNT(*) FROM v2_ticket WHERE status = 0 AND reply_status = 0`, 0, 51)
 	expectInt64Query(mock, `SELECT COUNT(*) FROM v2_order WHERE commission_status = 0 AND invite_user_id IS NOT NULL AND status NOT IN (0, 2) AND commission_balance > 0`, 0, 61)
-	expectInt64Query(mock, `SELECT COALESCE(SUM(total_amount), 0) FROM v2_order WHERE paid_at >= $1 AND paid_at < $2 AND status NOT IN (0, 2)`, 2, 2200)
-	expectInt64Query(mock, `SELECT COALESCE(SUM(total_amount), 0) FROM v2_order WHERE paid_at >= $1 AND paid_at < $2 AND status NOT IN (0, 2)`, 2, 3200)
+	expectInt64Query(mock, `SELECT COALESCE(SUM(total_amount), 0) FROM v2_order WHERE created_at >= $1 AND created_at < $2 AND status NOT IN (0, 2)`, 2, 2200)
+	expectInt64Query(mock, `SELECT COALESCE(SUM(total_amount), 0) FROM v2_order WHERE created_at >= $1 AND created_at < $2 AND status NOT IN (0, 2)`, 2, 3200)
 	expectInt64Query(mock, `SELECT COALESCE(SUM(get_amount), 0) FROM v2_commission_log WHERE created_at >= $1 AND created_at < $2`, 2, 71)
 	expectInt64Query(mock, `SELECT COALESCE(SUM(get_amount), 0) FROM v2_commission_log WHERE created_at >= $1 AND created_at < $2`, 2, 72)
 

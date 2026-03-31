@@ -72,7 +72,7 @@ func (s *DBService) applyTrafficFetch(ctx context.Context, report TrafficReport)
 	values := make([]string, 0, len(changes))
 	for idx, item := range changes {
 		base := idx*3 + 1
-		values = append(values, fmt.Sprintf("($%d, $%d, $%d)", base, base+1, base+2))
+		values = append(values, fmt.Sprintf("($%d::bigint, $%d::bigint, $%d::bigint)", base, base+1, base+2))
 		args = append(args, item.userID, item.u, item.d)
 	}
 	now := time.Now().Unix()

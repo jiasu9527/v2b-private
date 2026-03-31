@@ -39,6 +39,7 @@ wget -qO- https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install
 
 脚本会自动安装全局 `forest` 命令，后续就不需要再进入站点目录。
 当前仓库已公开，可直接使用上面的 GitHub raw 一键安装命令。
+如果后面仓库重新改回私有，GitHub raw 会 `404`，那就改回 `git clone` 安装。
 
 先生成 Go 环境文件：
 

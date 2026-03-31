@@ -86,7 +86,7 @@ func (s *DBService) GetStatOverride(ctx context.Context) (map[string]any, error)
 	if err != nil {
 		return nil, err
 	}
-	monthIncome, err := s.sumQuery(ctx, `SELECT COALESCE(SUM(total_amount), 0) FROM v2_order WHERE paid_at >= $1 AND paid_at < $2 AND status NOT IN (0, 2)`, currentMonthStart, nowUnix)
+	monthIncome, err := s.sumQuery(ctx, `SELECT COALESCE(SUM(total_amount), 0) FROM v2_order WHERE created_at >= $1 AND created_at < $2 AND status NOT IN (0, 2)`, currentMonthStart, nowUnix)
 	if err != nil {
 		return nil, err
 	}
@@ -118,11 +118,11 @@ func (s *DBService) GetStatOverride(ctx context.Context) (map[string]any, error)
 	if err != nil {
 		return nil, err
 	}
-	dayIncome, err := s.sumQuery(ctx, `SELECT COALESCE(SUM(total_amount), 0) FROM v2_order WHERE paid_at >= $1 AND paid_at < $2 AND status NOT IN (0, 2)`, dayStart, nowUnix)
+	dayIncome, err := s.sumQuery(ctx, `SELECT COALESCE(SUM(total_amount), 0) FROM v2_order WHERE created_at >= $1 AND created_at < $2 AND status NOT IN (0, 2)`, dayStart, nowUnix)
 	if err != nil {
 		return nil, err
 	}
-	lastMonthIncome, err := s.sumQuery(ctx, `SELECT COALESCE(SUM(total_amount), 0) FROM v2_order WHERE paid_at >= $1 AND paid_at < $2 AND status NOT IN (0, 2)`, lastMonthStart, currentMonthStart)
+	lastMonthIncome, err := s.sumQuery(ctx, `SELECT COALESCE(SUM(total_amount), 0) FROM v2_order WHERE created_at >= $1 AND created_at < $2 AND status NOT IN (0, 2)`, lastMonthStart, currentMonthStart)
 	if err != nil {
 		return nil, err
 	}

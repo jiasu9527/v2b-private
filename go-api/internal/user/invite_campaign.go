@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"forest/go-api/internal/config"
 )
 
 const (
@@ -42,7 +44,8 @@ func (s *DBService) CreateInviteCampaign(ctx context.Context, userID, planID int
 	if s.db == nil {
 		return nil, ErrUnavailable
 	}
-	if !s.cfg.InviteCampaignEnable {
+	cfg := s.inviteCampaignConfig()
+	if !cfg.InviteCampaignEnable {
 		return nil, errors.New("Invite campaign is disabled")
 	}
 
@@ -88,12 +91,13 @@ func (s *DBService) CreateInviteCampaign(ctx context.Context, userID, planID int
 	}
 
 	now := time.Now().Unix()
-	expireAt := now + s.inviteCampaignExpireSeconds()
+	rewardAmount := inviteCampaignRewardAmountFromConfig(cfg)
+	expireAt := now + inviteCampaignExpireSecondsFromConfig(cfg)
 	var campaignID int64
 	err = tx.QueryRowContext(ctx, `INSERT INTO v2_invite_campaign (user_id, plan_id, period, reward_amount, target_amount, current_amount, invite_count, status, started_at, expired_at, invite_code_id, invite_code, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, 0, 0, $6, $7, $8, $9, $10, $7, $7)
 RETURNING id`,
-		userID, planID, strings.TrimSpace(period), s.inviteCampaignRewardAmount(), targetAmount, inviteCampaignStatusActive, now, expireAt, inviteCodeID, inviteCode,
+		userID, planID, strings.TrimSpace(period), rewardAmount, targetAmount, inviteCampaignStatusActive, now, expireAt, inviteCodeID, inviteCode,
 	).Scan(&campaignID)
 	if err != nil {
 		return nil, fmt.Errorf("insert invite campaign: %w", err)
@@ -109,13 +113,14 @@ func (s *DBService) InviteCampaign(ctx context.Context, userID int64) (map[strin
 	if s.db == nil {
 		return nil, ErrUnavailable
 	}
+	cfg := s.inviteCampaignConfig()
 	campaign, err := s.currentInviteCampaign(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{
-		"enabled":  s.cfg.InviteCampaignEnable,
-		"settings": s.inviteCampaignSettings(),
+		"enabled":  cfg.InviteCampaignEnable,
+		"settings": s.inviteCampaignSettings(cfg),
 		"data":     s.serializeInviteCampaign(ctx, campaign),
 	}, nil
 }
@@ -297,7 +302,7 @@ FROM v2_invite_code
 WHERE user_id = $1 AND status = 0
 ORDER BY id ASC
 LIMIT 1
-	FOR UPDATE`, userID).Scan(&id, &code)
+FOR UPDATE`, userID).Scan(&id, &code)
 	if err == nil {
 		return id, strings.TrimSpace(code), nil
 	}
@@ -319,13 +324,13 @@ RETURNING id`, userID, code, now).Scan(&id)
 	return id, code, nil
 }
 
-func (s *DBService) inviteCampaignSettings() map[string]any {
+func (s *DBService) inviteCampaignSettings(cfg config.Config) map[string]any {
 	return map[string]any{
-		"reward_amount":               s.inviteCampaignRewardAmount(),
-		"expire_hours":                s.inviteCampaignExpireHours(),
-		"invitee_try_out_plan_id":     s.cfg.InviteTryOutPlanID,
-		"invitee_try_out_transfer_gb": s.cfg.InviteTryOutTransferGB,
-		"invitee_try_out_hours":       s.cfg.InviteTryOutHours,
+		"reward_amount":               inviteCampaignRewardAmountFromConfig(cfg),
+		"expire_hours":                inviteCampaignExpireHoursFromConfig(cfg),
+		"invitee_try_out_plan_id":     cfg.InviteTryOutPlanID,
+		"invitee_try_out_transfer_gb": cfg.InviteTryOutTransferGB,
+		"invitee_try_out_hours":       cfg.InviteTryOutHours,
 	}
 }
 
@@ -423,19 +428,35 @@ func trimNullStringAny(value sql.NullString) any {
 }
 
 func (s *DBService) inviteCampaignRewardAmount() int64 {
-	if s.cfg.InviteCampaignRewardAmount > 0 {
-		return s.cfg.InviteCampaignRewardAmount
-	}
-	return 1000
+	return inviteCampaignRewardAmountFromConfig(s.inviteCampaignConfig())
 }
 
 func (s *DBService) inviteCampaignExpireHours() int64 {
-	if s.cfg.InviteCampaignExpireHours > 0 {
-		return s.cfg.InviteCampaignExpireHours
-	}
-	return 48
+	return inviteCampaignExpireHoursFromConfig(s.inviteCampaignConfig())
 }
 
 func (s *DBService) inviteCampaignExpireSeconds() int64 {
 	return s.inviteCampaignExpireHours() * 3600
+}
+
+func (s *DBService) inviteCampaignConfig() config.Config {
+	return config.Load()
+}
+
+func inviteCampaignRewardAmountFromConfig(cfg config.Config) int64 {
+	if cfg.InviteCampaignRewardAmount > 0 {
+		return cfg.InviteCampaignRewardAmount
+	}
+	return 1000
+}
+
+func inviteCampaignExpireHoursFromConfig(cfg config.Config) int64 {
+	if cfg.InviteCampaignExpireHours > 0 {
+		return cfg.InviteCampaignExpireHours
+	}
+	return 48
+}
+
+func inviteCampaignExpireSecondsFromConfig(cfg config.Config) int64 {
+	return inviteCampaignExpireHoursFromConfig(cfg) * 3600
 }

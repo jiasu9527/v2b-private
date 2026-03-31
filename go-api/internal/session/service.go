@@ -12,6 +12,7 @@ import (
 	"forest/go-api/internal/config"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/sync/singleflight"
 )
 
 var (
@@ -40,12 +41,21 @@ type Service interface {
 }
 
 type DBService struct {
-	cfg config.Config
-	db  *sql.DB
+	cfg       config.Config
+	db        *sql.DB
+	authCache *AuthCache
+	authGroup singleflight.Group
 }
+
+const defaultAuthLookupTimeout = 10 * time.Second
 
 func NewDBService(cfg config.Config, db *sql.DB) *DBService {
 	return &DBService{cfg: cfg, db: db}
+}
+
+func (s *DBService) WithAuthCache(cache *AuthCache) *DBService {
+	s.authCache = cache
+	return s
 }
 
 func (s *DBService) Authenticate(ctx context.Context, authToken string, requireAdmin bool) (*Identity, error) {
@@ -53,47 +63,69 @@ func (s *DBService) Authenticate(ctx context.Context, authToken string, requireA
 		return nil, ErrUnavailable
 	}
 	authToken = cleanAuthToken(authToken)
-	if authToken == "" || strings.TrimSpace(s.cfg.AppKey) == "" {
+	if authToken == "" {
 		return nil, ErrUnauthorized
 	}
 
-	parsed, err := jwt.Parse(authToken, func(token *jwt.Token) (any, error) {
-		if token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
-			return nil, fmt.Errorf("unexpected signing method %s", token.Method.Alg())
+	if s.authCache != nil {
+		if identity, ok := s.authCache.Get(authToken); ok {
+			if requireAdmin && identity.IsAdmin == 0 {
+				return nil, ErrUnauthorized
+			}
+			return identity, nil
 		}
-		return []byte(s.cfg.AppKey), nil
-	})
-	if err != nil || !parsed.Valid {
+	}
+
+	if strings.TrimSpace(s.cfg.AppKey) == "" {
 		return nil, ErrUnauthorized
 	}
 
-	claims, ok := parsed.Claims.(jwt.MapClaims)
-	if !ok {
-		return nil, ErrUnauthorized
-	}
-
-	userID, err := mapClaimInt64(claims["id"])
+	identity, err := s.authenticateSlowPath(ctx, authToken)
 	if err != nil {
-		return nil, ErrUnauthorized
-	}
-	sessionID, ok := claims["session"].(string)
-	if !ok || strings.TrimSpace(sessionID) == "" {
-		return nil, ErrUnauthorized
-	}
-
-	if ok, err := s.sessionExists(ctx, userID, sessionID); err != nil || !ok {
-		return nil, ErrUnauthorized
-	}
-
-	identity, err := s.findIdentity(ctx, userID)
-	if err != nil || identity == nil {
-		return nil, ErrUnauthorized
+		return nil, err
 	}
 	if requireAdmin && identity.IsAdmin == 0 {
 		return nil, ErrUnauthorized
 	}
 
 	return identity, nil
+}
+
+func (s *DBService) authenticateSlowPath(ctx context.Context, authToken string) (*Identity, error) {
+	resultCh := s.authGroup.DoChan(authToken, func() (any, error) {
+		if s.authCache != nil {
+			if identity, ok := s.authCache.Get(authToken); ok {
+				return cloneIdentity(identity), nil
+			}
+		}
+
+		lookupCtx, cancel := s.newAuthLookupContext()
+		defer cancel()
+
+		identity, sessionID, err := s.findIdentityForAuthToken(lookupCtx, authToken)
+		if err != nil {
+			return nil, err
+		}
+		if s.authCache != nil {
+			s.authCache.Store(authToken, sessionID, identity)
+		}
+		return cloneIdentity(identity), nil
+	})
+
+	select {
+	case <-ctx.Done():
+		return nil, ErrUnauthorized
+	case result := <-resultCh:
+		if result.Err != nil {
+			return nil, result.Err
+		}
+
+		identity, ok := result.Val.(*Identity)
+		if !ok || identity == nil {
+			return nil, ErrUnauthorized
+		}
+		return cloneIdentity(identity), nil
+	}
 }
 
 func (s *DBService) ListSessions(ctx context.Context, userID int64) (map[string]SessionMeta, error) {
@@ -136,38 +168,61 @@ func (s *DBService) RemoveSession(ctx context.Context, userID int64, sessionID s
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM v2_auth_session WHERE user_id = $1 AND session_id = $2`, userID, sessionID); err != nil {
 		return false, fmt.Errorf("remove auth session: %w", err)
 	}
+	if s.authCache != nil {
+		s.authCache.InvalidateSession(userID, sessionID)
+	}
 	return true, nil
 }
 
-func (s *DBService) sessionExists(ctx context.Context, userID int64, sessionID string) (bool, error) {
-	var exists bool
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(
-SELECT 1 FROM v2_auth_session
-WHERE user_id = $1 AND session_id = $2 AND (expire_at = 0 OR expire_at > $3)
-)`, userID, sessionID, time.Now().Unix()).Scan(&exists)
-	if err != nil {
-		return false, fmt.Errorf("check auth session: %w", err)
-	}
-	return exists, nil
-}
-
-func (s *DBService) findIdentity(ctx context.Context, userID int64) (*Identity, error) {
+func (s *DBService) findIdentityBySession(ctx context.Context, userID int64, sessionID string) (*Identity, error) {
 	var identity Identity
-	var banned int64
-	err := s.db.QueryRowContext(ctx, `SELECT id, email, is_admin, is_staff, banned
-FROM v2_user
-WHERE id = $1
-LIMIT 1`, userID).Scan(&identity.ID, &identity.Email, &identity.IsAdmin, &identity.IsStaff, &banned)
+	err := s.db.QueryRowContext(ctx, `SELECT u.id, u.email, u.is_admin, u.is_staff
+FROM v2_auth_session s
+JOIN v2_user u ON u.id = s.user_id
+WHERE s.user_id = $1 AND s.session_id = $2 AND (s.expire_at = 0 OR s.expire_at > $3) AND u.banned = 0
+LIMIT 1`, userID, sessionID, time.Now().Unix()).Scan(&identity.ID, &identity.Email, &identity.IsAdmin, &identity.IsStaff)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("find auth identity: %w", err)
-	}
-	if banned != 0 {
-		return nil, nil
+		return nil, fmt.Errorf("find auth identity by session: %w", err)
 	}
 	return &identity, nil
+}
+
+func (s *DBService) findIdentityForAuthToken(ctx context.Context, authToken string) (*Identity, string, error) {
+	parsed, err := jwt.Parse(authToken, func(token *jwt.Token) (any, error) {
+		if token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+			return nil, fmt.Errorf("unexpected signing method %s", token.Method.Alg())
+		}
+		return []byte(s.cfg.AppKey), nil
+	})
+	if err != nil || !parsed.Valid {
+		return nil, "", ErrUnauthorized
+	}
+
+	claims, ok := parsed.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, "", ErrUnauthorized
+	}
+
+	userID, err := mapClaimInt64(claims["id"])
+	if err != nil {
+		return nil, "", ErrUnauthorized
+	}
+	sessionID, ok := claims["session"].(string)
+	if !ok || strings.TrimSpace(sessionID) == "" {
+		return nil, "", ErrUnauthorized
+	}
+
+	identity, err := s.findIdentityBySession(ctx, userID, sessionID)
+	if err != nil {
+		return nil, "", fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	if identity == nil {
+		return nil, "", ErrUnauthorized
+	}
+	return identity, sessionID, nil
 }
 
 func cleanAuthToken(token string) string {
@@ -191,4 +246,20 @@ func mapClaimInt64(value any) (int64, error) {
 	default:
 		return 0, fmt.Errorf("unsupported claim type %T", value)
 	}
+}
+
+func cloneIdentity(identity *Identity) *Identity {
+	if identity == nil {
+		return nil
+	}
+	cloned := *identity
+	return &cloned
+}
+
+func (s *DBService) newAuthLookupContext() (context.Context, context.CancelFunc) {
+	timeout := s.cfg.ReadTimeout
+	if timeout <= 0 {
+		timeout = defaultAuthLookupTimeout
+	}
+	return context.WithTimeout(context.Background(), timeout)
 }

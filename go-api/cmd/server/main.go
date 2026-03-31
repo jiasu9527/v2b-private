@@ -49,18 +49,19 @@ func main() {
 	var nodeService nodeapi.Service
 	var telegramService *telegram.Service
 	var backgroundRunner *background.Runner
+	authCache := session.NewAuthCache(session.DefaultAuthCacheTTL)
 	jobQueue := queue.NewRuntime(cfg.QueueWorkers, 0)
 	jobQueue.Start()
 	defer jobQueue.Shutdown(context.Background())
 	if db != nil {
-		userDBService := usersvc.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue)
+		userDBService := usersvc.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
 		telegramService = telegram.NewService(cfg, db).WithQueueRuntime(jobQueue)
 		userDBService = userDBService.WithAdminNotifier(telegramService)
-		passportService = passport.NewDBServiceWithConfig(cfg, db).WithQueueRuntime(jobQueue)
-		sessionService = session.NewDBService(cfg, db)
+		passportService = passport.NewDBServiceWithConfig(cfg, db).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
+		sessionService = session.NewDBService(cfg, db).WithAuthCache(authCache)
 		userService = userDBService
 		paymentService = payment.NewDBService(cfg, db, userDBService)
-		adminDBService := admin.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue)
+		adminDBService := admin.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
 		telegramService = telegramService.WithUserResolver(userDBService.ResolveClientUserID).WithAdminService(adminDBService)
 		adminService = adminDBService
 		nodeService = nodeapi.NewDBService(cfg, db, userDBService)

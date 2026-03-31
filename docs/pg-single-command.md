@@ -47,6 +47,10 @@ Dedicated install walkthrough: `docs/install.md`
 
 Fast path:
 
+- `<public-install-url>` is a placeholder
+- It only works after `install.sh` is published to a public anonymous URL
+- While the repository is still private, use the clone flow below instead
+
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh)
 ```
@@ -55,6 +59,14 @@ Or:
 
 ```bash
 wget -qO- https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh | bash
+```
+
+Private GitHub repo flow:
+
+```bash
+git clone https://github.com/jiasu9527/v2b-private.git forest
+cd forest
+bash install.sh
 ```
 
 Local repo path:

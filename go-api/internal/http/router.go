@@ -851,7 +851,7 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 		}
 	})
 
-	return withMiddleware(handler)
+	return withMiddleware(cfg, handler)
 }
 
 func clientSubscribePath(cfg config.Config) string {

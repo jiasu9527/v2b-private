@@ -17,6 +17,7 @@ import (
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/payment"
 	"forest/go-api/internal/queue"
+	"forest/go-api/internal/session"
 )
 
 var ErrUnavailable = errors.New("admin service unavailable")
@@ -247,7 +248,11 @@ type Service interface {
 	CopyManagedServer(ctx context.Context, serverType string, id int64) (bool, error)
 	FetchConfig(ctx context.Context, key string) (map[string]any, error)
 	SaveConfig(ctx context.Context, values map[string]any) (bool, error)
+	ListThemes(ctx context.Context) (map[string]any, error)
+	GetThemeConfig(ctx context.Context, name string) (map[string]any, error)
+	SaveThemeConfig(ctx context.Context, name string, values map[string]any) (map[string]any, error)
 	ListEmailTemplates(ctx context.Context) ([]string, error)
+	ListThemeTemplates(ctx context.Context) ([]string, error)
 	SetTelegramWebhook(ctx context.Context, token string) (bool, error)
 	TestSendMail(ctx context.Context, email string) (ConfigMailTestLog, error)
 	ListPlans(ctx context.Context) ([]PlanRecord, error)
@@ -298,6 +303,7 @@ type DBService struct {
 	db         *sql.DB
 	orders     orderRuntime
 	jobs       queue.Enqueuer
+	authCache  *session.AuthCache
 	mailSender func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error
 	sleep      func(context.Context, time.Duration) error
 }
@@ -333,6 +339,11 @@ func (s *DBService) WithQueueRuntime(jobs queue.Enqueuer) *DBService {
 
 func (s *DBService) WithRuntimeConfig(runtime *config.RuntimeState) *DBService {
 	s.runtime = runtime
+	return s
+}
+
+func (s *DBService) WithAuthCache(cache *session.AuthCache) *DBService {
+	s.authCache = cache
 	return s
 }
 

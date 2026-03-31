@@ -28,6 +28,7 @@ import (
 	"forest/go-api/internal/platform/mailtmpl"
 	"forest/go-api/internal/platform/smtpcompat"
 	"forest/go-api/internal/queue"
+	"forest/go-api/internal/session"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
@@ -67,6 +68,7 @@ type DBService struct {
 	cfg        config.Config
 	db         execer
 	jobs       queue.Enqueuer
+	authCache  *session.AuthCache
 	mailSender func(to, subject, body string) error
 	ensureErr  error
 	ensureOne  sync.Once
@@ -135,6 +137,11 @@ func NewDBServiceWithConfig(cfg config.Config, db execer) *DBService {
 
 func (s *DBService) WithQueueRuntime(jobs queue.Enqueuer) *DBService {
 	s.jobs = jobs
+	return s
+}
+
+func (s *DBService) WithAuthCache(cache *session.AuthCache) *DBService {
+	s.authCache = cache
 	return s
 }
 
@@ -865,6 +872,14 @@ func (s *DBService) createAuthData(ctx context.Context, user userRow, ip, userAg
 	if err := s.saveSession(ctx, user.ID, sessionID, authData, ip, userAgent); err != nil {
 		return AuthData{}, err
 	}
+	if s.authCache != nil {
+		s.authCache.Store(authData, sessionID, &session.Identity{
+			ID:      user.ID,
+			Email:   user.Email,
+			IsAdmin: user.IsAdmin,
+			IsStaff: user.IsStaff,
+		})
+	}
 
 	return AuthData{
 		Token:    user.Token,
@@ -959,6 +974,9 @@ func (s *DBService) removeAllSessions(ctx context.Context, userID int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM v2_auth_session WHERE user_id = $1`, userID)
 	if err != nil {
 		return fmt.Errorf("remove auth sessions: %w", err)
+	}
+	if s.authCache != nil {
+		s.authCache.InvalidateUser(userID)
 	}
 	return nil
 }

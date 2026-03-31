@@ -219,6 +219,9 @@ WHERE id = $3`, string(hashedPassword), now, userID); err != nil {
 	if err := tx.Commit(); err != nil {
 		return false, errors.New("Save failed")
 	}
+	if s.authCache != nil {
+		s.authCache.InvalidateUser(userID)
+	}
 	return true, nil
 }
 

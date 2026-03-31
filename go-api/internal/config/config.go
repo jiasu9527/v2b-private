@@ -35,6 +35,7 @@ type Config struct {
 	OrderCancelRecoverTTL        int64
 	SubscribeURL                 string
 	SubscribePath                string
+	ShowInfoToServerEnable       bool
 	AllowNewPeriod               bool
 	ShowSubscribeMethod          int64
 	ShowSubscribeExpire          int64
@@ -57,6 +58,8 @@ type Config struct {
 	PostgresDSN                  string
 	QueueWorkers                 int
 	AppKey                       string
+	AccessLogEnabled             bool
+	SlowRequestLogThreshold      time.Duration
 	ReadTimeout                  time.Duration
 	WriteTimeout                 time.Duration
 	ShutdownTimeout              time.Duration
@@ -107,55 +110,60 @@ const (
 )
 
 func Load() Config {
-	jsonConfig := loadJSONConfigMap(defaultAdminJSONPath)
+	jsonConfigPath := defaultAdminJSONPath
+	legacyPHPConfigPath := defaultLegacyPHPConfigPath
+	jsonConfig := loadJSONConfigMap(jsonConfigPath)
 	defaultWithdrawMethods := []string{"支付宝", "USDT", "Paypal"}
 
 	return Config{
-		AppName:                      getEnv("APP_NAME", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "app_name", "forest")),
+		AppName:                      getEnv("APP_NAME", loadConfigString(jsonConfig, legacyPHPConfigPath, "app_name", "forest")),
 		Addr:                         getEnv("APP_ADDR", ":8080"),
 		PublicDir:                    getEnv("PUBLIC_DIR", "../public"),
-		AdminPath:                    getEnv("ADMIN_PATH", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "secure_path", "localadmin")),
-		PlanChangeEnable:             getEnvBool("PLAN_CHANGE_ENABLE", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "plan_change_enable", 1) != 0),
-		SurplusEnable:                getEnvBool("SURPLUS_ENABLE", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "surplus_enable", 1) != 0),
-		InviteCommission:             getEnvInt64("INVITE_COMMISSION", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "invite_commission", 10)),
-		InviteGenLimit:               getEnvInt64("INVITE_GEN_LIMIT", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "invite_gen_limit", 5)),
-		InviteCampaignEnable:         getEnvBool("INVITE_CAMPAIGN_ENABLE", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "invite_campaign_enable", 1) != 0),
-		InviteCampaignRewardAmount:   getEnvInt64("INVITE_CAMPAIGN_REWARD_AMOUNT", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "invite_campaign_reward_amount", 1000)),
-		InviteCampaignExpireHours:    getEnvInt64("INVITE_CAMPAIGN_EXPIRE_HOURS", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "invite_campaign_expire_hours", 48)),
-		CommissionDistEnabled:        getEnvBool("COMMISSION_DISTRIBUTION_ENABLE", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "commission_distribution_enable", 0) != 0),
-		CommissionDistL1:             getEnvInt64("COMMISSION_DISTRIBUTION_L1", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "commission_distribution_l1", 30)),
-		CommissionDistL2:             getEnvInt64("COMMISSION_DISTRIBUTION_L2", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "commission_distribution_l2", 10)),
-		CommissionDistL3:             getEnvInt64("COMMISSION_DISTRIBUTION_L3", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "commission_distribution_l3", 5)),
-		CommissionWithdrawLimit:      getEnvInt64("COMMISSION_WITHDRAW_LIMIT", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "commission_withdraw_limit", 100)),
-		CommissionWithdrawMethods:    getEnvList("COMMISSION_WITHDRAW_METHOD", loadConfigStringList(jsonConfig, defaultLegacyPHPConfigPath, "commission_withdraw_method", defaultWithdrawMethods)),
-		WithdrawCloseEnable:          getEnvBool("WITHDRAW_CLOSE_ENABLE", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "withdraw_close_enable", 0) != 0),
-		TicketStatus:                 getEnvInt64("TICKET_STATUS", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "ticket_status", 0)),
-		CommissionFirstTime:          getEnvBool("COMMISSION_FIRST_TIME_ENABLE", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "commission_first_time_enable", 1) != 0),
-		OrderCancelRecoverTTL:        getEnvInt64("ORDER_CANCEL_RECOVER_TTL", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "order_cancel_recover_ttl", 1800)),
-		SubscribeURL:                 getEnv("SUBSCRIBE_URL", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "subscribe_url", "")),
-		SubscribePath:                getEnv("SUBSCRIBE_PATH", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "subscribe_path", "/api/v1/client/subscribe")),
-		AllowNewPeriod:               getEnvBool("ALLOW_NEW_PERIOD", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "allow_new_period", 0) != 0),
-		ShowSubscribeMethod:          getEnvInt64("SHOW_SUBSCRIBE_METHOD", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "show_subscribe_method", 0)),
-		ShowSubscribeExpire:          getEnvInt64("SHOW_SUBSCRIBE_EXPIRE", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "show_subscribe_expire", 5)),
-		ResetTrafficMethod:           getEnvInt64("RESET_TRAFFIC_METHOD", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "reset_traffic_method", 0)),
-		ServerToken:                  getEnv("SERVER_TOKEN", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "server_token", "")),
-		ServerPullInterval:           getEnvInt64("SERVER_PULL_INTERVAL", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "server_pull_interval", 60)),
-		ServerPushInterval:           getEnvInt64("SERVER_PUSH_INTERVAL", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "server_push_interval", 60)),
-		ServerNodeReportMinTraffic:   getEnvInt64("SERVER_NODE_REPORT_MIN_TRAFFIC", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "server_node_report_min_traffic", 0)),
-		ServerDeviceOnlineMinTraffic: getEnvInt64("SERVER_DEVICE_ONLINE_MIN_TRAFFIC", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "server_device_online_min_traffic", 0)),
-		DeviceLimitMode:              getEnvInt64("DEVICE_LIMIT_MODE", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "device_limit_mode", 0)),
-		ServerLogEnable:              getEnvBool("SERVER_LOG_ENABLE", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "server_log_enable", 0) != 0),
-		ServerV2RayDomain:            getEnv("SERVER_V2RAY_DOMAIN", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "server_v2ray_domain", "")),
-		ServerV2RayProtocol:          getEnv("SERVER_V2RAY_PROTOCOL", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "server_v2ray_protocol", "")),
-		WindowsVersion:               getEnv("WINDOWS_VERSION", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "windows_version", "")),
-		WindowsDownloadURL:           getEnv("WINDOWS_DOWNLOAD_URL", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "windows_download_url", "")),
-		MacOSVersion:                 getEnv("MACOS_VERSION", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "macos_version", "")),
-		MacOSDownloadURL:             getEnv("MACOS_DOWNLOAD_URL", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "macos_download_url", "")),
-		AndroidVersion:               getEnv("ANDROID_VERSION", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "android_version", "")),
-		AndroidDownloadURL:           getEnv("ANDROID_DOWNLOAD_URL", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "android_download_url", "")),
+		AdminPath:                    getEnv("ADMIN_PATH", loadConfigString(jsonConfig, legacyPHPConfigPath, "secure_path", "localadmin")),
+		PlanChangeEnable:             getEnvBool("PLAN_CHANGE_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "plan_change_enable", 1) != 0),
+		SurplusEnable:                getEnvBool("SURPLUS_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "surplus_enable", 1) != 0),
+		InviteCommission:             getEnvInt64("INVITE_COMMISSION", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "invite_commission", 10)),
+		InviteGenLimit:               getEnvInt64("INVITE_GEN_LIMIT", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "invite_gen_limit", 5)),
+		InviteCampaignEnable:         getEnvBool("INVITE_CAMPAIGN_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "invite_campaign_enable", 1) != 0),
+		InviteCampaignRewardAmount:   getEnvInt64("INVITE_CAMPAIGN_REWARD_AMOUNT", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "invite_campaign_reward_amount", 1000)),
+		InviteCampaignExpireHours:    getEnvInt64("INVITE_CAMPAIGN_EXPIRE_HOURS", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "invite_campaign_expire_hours", 48)),
+		CommissionDistEnabled:        getEnvBool("COMMISSION_DISTRIBUTION_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "commission_distribution_enable", 0) != 0),
+		CommissionDistL1:             getEnvInt64("COMMISSION_DISTRIBUTION_L1", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "commission_distribution_l1", 30)),
+		CommissionDistL2:             getEnvInt64("COMMISSION_DISTRIBUTION_L2", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "commission_distribution_l2", 10)),
+		CommissionDistL3:             getEnvInt64("COMMISSION_DISTRIBUTION_L3", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "commission_distribution_l3", 5)),
+		CommissionWithdrawLimit:      getEnvInt64("COMMISSION_WITHDRAW_LIMIT", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "commission_withdraw_limit", 100)),
+		CommissionWithdrawMethods:    getEnvList("COMMISSION_WITHDRAW_METHOD", loadConfigStringList(jsonConfig, legacyPHPConfigPath, "commission_withdraw_method", defaultWithdrawMethods)),
+		WithdrawCloseEnable:          getEnvBool("WITHDRAW_CLOSE_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "withdraw_close_enable", 0) != 0),
+		TicketStatus:                 getEnvInt64("TICKET_STATUS", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "ticket_status", 0)),
+		CommissionFirstTime:          getEnvBool("COMMISSION_FIRST_TIME_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "commission_first_time_enable", 1) != 0),
+		OrderCancelRecoverTTL:        getEnvInt64("ORDER_CANCEL_RECOVER_TTL", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "order_cancel_recover_ttl", 1800)),
+		SubscribeURL:                 getEnv("SUBSCRIBE_URL", loadConfigString(jsonConfig, legacyPHPConfigPath, "subscribe_url", "")),
+		SubscribePath:                getEnv("SUBSCRIBE_PATH", loadConfigString(jsonConfig, legacyPHPConfigPath, "subscribe_path", "/api/v1/client/subscribe")),
+		ShowInfoToServerEnable:       getEnvBool("SHOW_INFO_TO_SERVER_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "show_info_to_server_enable", 0) != 0),
+		AllowNewPeriod:               getEnvBool("ALLOW_NEW_PERIOD", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "allow_new_period", 0) != 0),
+		ShowSubscribeMethod:          getEnvInt64("SHOW_SUBSCRIBE_METHOD", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "show_subscribe_method", 0)),
+		ShowSubscribeExpire:          getEnvInt64("SHOW_SUBSCRIBE_EXPIRE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "show_subscribe_expire", 5)),
+		ResetTrafficMethod:           getEnvInt64("RESET_TRAFFIC_METHOD", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "reset_traffic_method", 0)),
+		ServerToken:                  getEnv("SERVER_TOKEN", loadConfigString(jsonConfig, legacyPHPConfigPath, "server_token", "")),
+		ServerPullInterval:           getEnvInt64("SERVER_PULL_INTERVAL", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "server_pull_interval", 60)),
+		ServerPushInterval:           getEnvInt64("SERVER_PUSH_INTERVAL", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "server_push_interval", 60)),
+		ServerNodeReportMinTraffic:   getEnvInt64("SERVER_NODE_REPORT_MIN_TRAFFIC", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "server_node_report_min_traffic", 0)),
+		ServerDeviceOnlineMinTraffic: getEnvInt64("SERVER_DEVICE_ONLINE_MIN_TRAFFIC", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "server_device_online_min_traffic", 0)),
+		DeviceLimitMode:              getEnvInt64("DEVICE_LIMIT_MODE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "device_limit_mode", 0)),
+		ServerLogEnable:              getEnvBool("SERVER_LOG_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "server_log_enable", 0) != 0),
+		ServerV2RayDomain:            getEnv("SERVER_V2RAY_DOMAIN", loadConfigString(jsonConfig, legacyPHPConfigPath, "server_v2ray_domain", "")),
+		ServerV2RayProtocol:          getEnv("SERVER_V2RAY_PROTOCOL", loadConfigString(jsonConfig, legacyPHPConfigPath, "server_v2ray_protocol", "")),
+		WindowsVersion:               getEnv("WINDOWS_VERSION", loadConfigString(jsonConfig, legacyPHPConfigPath, "windows_version", "")),
+		WindowsDownloadURL:           getEnv("WINDOWS_DOWNLOAD_URL", loadConfigString(jsonConfig, legacyPHPConfigPath, "windows_download_url", "")),
+		MacOSVersion:                 getEnv("MACOS_VERSION", loadConfigString(jsonConfig, legacyPHPConfigPath, "macos_version", "")),
+		MacOSDownloadURL:             getEnv("MACOS_DOWNLOAD_URL", loadConfigString(jsonConfig, legacyPHPConfigPath, "macos_download_url", "")),
+		AndroidVersion:               getEnv("ANDROID_VERSION", loadConfigString(jsonConfig, legacyPHPConfigPath, "android_version", "")),
+		AndroidDownloadURL:           getEnv("ANDROID_DOWNLOAD_URL", loadConfigString(jsonConfig, legacyPHPConfigPath, "android_download_url", "")),
 		PostgresDSN:                  os.Getenv("POSTGRES_DSN"),
 		QueueWorkers:                 int(getEnvInt64("QUEUE_WORKERS", 4)),
 		AppKey:                       os.Getenv("APP_KEY"),
+		AccessLogEnabled:             getEnvBool("ACCESS_LOG_ENABLE", false),
+		SlowRequestLogThreshold:      getEnvDurationMS("SLOW_REQUEST_LOG_THRESHOLD_MS", 500*time.Millisecond),
 		ReadTimeout:                  10 * time.Second,
 		WriteTimeout:                 15 * time.Second,
 		ShutdownTimeout:              10 * time.Second,
@@ -165,27 +173,27 @@ func Load() Config {
 		InviteNeverExpire:            getEnvBool("INVITE_NEVER_EXPIRE", false),
 		StopRegister:                 getEnvBool("STOP_REGISTER", false),
 		LoginWithMailLink:            getEnvBool("LOGIN_WITH_MAIL_LINK_ENABLE", false),
-		EmailWhitelist:               getEnvList("EMAIL_WHITELIST_SUFFIX", loadConfigStringList(jsonConfig, defaultLegacyPHPConfigPath, "email_whitelist_suffix", nil)),
+		EmailWhitelist:               getEnvList("EMAIL_WHITELIST_SUFFIX", loadConfigStringList(jsonConfig, legacyPHPConfigPath, "email_whitelist_suffix", nil)),
 		EmailWhitelistEnabled:        getEnvBool("EMAIL_WHITELIST_ENABLE", false),
 		EmailGmailLimitEnabled:       getEnvBool("EMAIL_GMAIL_LIMIT_ENABLE", false),
 		Recaptcha:                    getEnvBool("RECAPTCHA_ENABLE", false),
 		RecaptchaKey:                 os.Getenv("RECAPTCHA_KEY"),
 		RecaptchaSiteKey:             os.Getenv("RECAPTCHA_SITE_KEY"),
-		AppDescription:               getEnv("APP_DESCRIPTION", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "app_description", "")),
-		AppURL:                       getEnv("APP_URL", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "app_url", "")),
-		Logo:                         getEnv("LOGO_URL", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "logo", "")),
+		AppDescription:               getEnv("APP_DESCRIPTION", loadConfigString(jsonConfig, legacyPHPConfigPath, "app_description", "")),
+		AppURL:                       getEnv("APP_URL", loadConfigString(jsonConfig, legacyPHPConfigPath, "app_url", "")),
+		Logo:                         getEnv("LOGO_URL", loadConfigString(jsonConfig, legacyPHPConfigPath, "logo", "")),
 		RegisterLimitByIP:            getEnvBool("REGISTER_LIMIT_BY_IP_ENABLE", false),
 		RegisterLimitCount:           getEnvInt64("REGISTER_LIMIT_COUNT", 3),
 		RegisterLimitExpireMin:       getEnvInt64("REGISTER_LIMIT_EXPIRE", 60),
 		PasswordLimitEnabled:         getEnvBool("PASSWORD_LIMIT_ENABLE", true),
 		PasswordLimitCount:           getEnvInt64("PASSWORD_LIMIT_COUNT", 5),
 		PasswordLimitExpireMin:       getEnvInt64("PASSWORD_LIMIT_EXPIRE", 60),
-		TelegramBotEnable:            getEnvBool("TELEGRAM_BOT_ENABLE", loadConfigInt64(jsonConfig, defaultLegacyPHPConfigPath, "telegram_bot_enable", 0) != 0),
-		TelegramBotToken:             getEnv("TELEGRAM_BOT_TOKEN", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "telegram_bot_token", "")),
-		TelegramDiscussLink:          getEnv("TELEGRAM_DISCUSS_LINK", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "telegram_discuss_link", "")),
-		StripePKLive:                 getEnv("STRIPE_PK_LIVE", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "stripe_pk_live", "")),
-		Currency:                     getEnv("CURRENCY", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "currency", "CNY")),
-		CurrencySymbol:               getEnv("CURRENCY_SYMBOL", loadConfigString(jsonConfig, defaultLegacyPHPConfigPath, "currency_symbol", "¥")),
+		TelegramBotEnable:            getEnvBool("TELEGRAM_BOT_ENABLE", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "telegram_bot_enable", 0) != 0),
+		TelegramBotToken:             getEnv("TELEGRAM_BOT_TOKEN", loadConfigString(jsonConfig, legacyPHPConfigPath, "telegram_bot_token", "")),
+		TelegramDiscussLink:          getEnv("TELEGRAM_DISCUSS_LINK", loadConfigString(jsonConfig, legacyPHPConfigPath, "telegram_discuss_link", "")),
+		StripePKLive:                 getEnv("STRIPE_PK_LIVE", loadConfigString(jsonConfig, legacyPHPConfigPath, "stripe_pk_live", "")),
+		Currency:                     getEnv("CURRENCY", loadConfigString(jsonConfig, legacyPHPConfigPath, "currency", "CNY")),
+		CurrencySymbol:               getEnv("CURRENCY_SYMBOL", loadConfigString(jsonConfig, legacyPHPConfigPath, "currency_symbol", "¥")),
 		MailHost:                     getEnv("EMAIL_HOST", getEnv("MAIL_HOST", "127.0.0.1")),
 		MailPort:                     getEnvInt64("EMAIL_PORT", getEnvInt64("MAIL_PORT", 25)),
 		MailUsername:                 getEnv("EMAIL_USERNAME", os.Getenv("MAIL_USERNAME")),
@@ -195,9 +203,9 @@ func Load() Config {
 		MailFromName:                 getEnv("EMAIL_FROM_NAME", getEnv("APP_NAME", "V2Board")),
 		TryOutPlanID:                 getEnvInt64("TRY_OUT_PLAN_ID", 0),
 		TryOutHour:                   getEnvFloat64("TRY_OUT_HOUR", 0),
-		InviteTryOutPlanID:           getEnvInt64("INVITE_CAMPAIGN_TRY_OUT_PLAN_ID", 0),
-		InviteTryOutTransferGB:       getEnvFloat64("INVITE_CAMPAIGN_TRY_OUT_TRANSFER_GB", 0),
-		InviteTryOutHours:            getEnvFloat64("INVITE_CAMPAIGN_TRY_OUT_HOURS", 0),
+		InviteTryOutPlanID:           getEnvInt64("INVITE_CAMPAIGN_TRY_OUT_PLAN_ID", loadConfigInt64(jsonConfig, legacyPHPConfigPath, "invite_campaign_try_out_plan_id", 0)),
+		InviteTryOutTransferGB:       getEnvFloat64("INVITE_CAMPAIGN_TRY_OUT_TRANSFER_GB", loadConfigFloat64(jsonConfig, legacyPHPConfigPath, "invite_campaign_try_out_transfer_gb", 0)),
+		InviteTryOutHours:            getEnvFloat64("INVITE_CAMPAIGN_TRY_OUT_HOURS", loadConfigFloat64(jsonConfig, legacyPHPConfigPath, "invite_campaign_try_out_hours", 0)),
 	}
 }
 
@@ -275,6 +283,22 @@ func getEnvFloat64(key string, fallback float64) float64 {
 	return parsed
 }
 
+func getEnvDurationMS(key string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return fallback
+	}
+	if parsed <= 0 {
+		return 0
+	}
+	return time.Duration(parsed) * time.Millisecond
+}
+
 func loadJSONConfigMap(path string) map[string]any {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -343,6 +367,16 @@ func loadConfigStringList(values map[string]any, legacyPath, key string, fallbac
 	return loadPHPConfigStringList(legacyPath, key, fallback)
 }
 
+func loadConfigFloat64(values map[string]any, legacyPath, key string, fallback float64) float64 {
+	raw := strings.TrimSpace(jsonValueString(values[key]))
+	if raw != "" {
+		if parsed, err := strconv.ParseFloat(raw, 64); err == nil {
+			return parsed
+		}
+	}
+	return loadPHPConfigFloat64(legacyPath, key, fallback)
+}
+
 func jsonValueString(value any) string {
 	switch typed := value.(type) {
 	case nil:
@@ -396,6 +430,18 @@ func loadPHPConfigInt64(path, key string, fallback int64) int64 {
 		return fallback
 	}
 	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func loadPHPConfigFloat64(path, key string, fallback float64) float64 {
+	value := loadPHPConfigString(path, key, "")
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
 	if err != nil {
 		return fallback
 	}

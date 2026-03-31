@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -200,11 +201,127 @@ func TestRouterClientSubscribeClashEndpointUsesAttachmentHeader(t *testing.T) {
 	if got := rec.Header().Get("content-disposition"); !strings.Contains(got, "attachment;") {
 		t.Fatalf("expected clash subscribe to keep attachment header, got %q", got)
 	}
+	if got := rec.Header().Get("profile-title"); got != "base64:"+base64.StdEncoding.EncodeToString([]byte("Forest")) {
+		t.Fatalf("expected clash subscribe to keep legacy profile-title header, got %q", got)
+	}
 	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "yaml") {
 		t.Fatalf("expected yaml content type, got %q", contentType)
 	}
 	if !strings.Contains(rec.Body.String(), "proxies:") {
 		t.Fatalf("expected clash yaml body, got %q", rec.Body.String())
+	}
+}
+
+func TestRouterClientSubscribeShadowrocketEndpointUsesLegacyStatusLine(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		subscribe: user.Subscribe{
+			U:              1024 * 1024 * 1024,
+			D:              2 * 1024 * 1024 * 1024,
+			TransferEnable: 10 * 1024 * 1024 * 1024,
+			ExpiredAt:      int64Ptr(1735689600),
+			UUID:           "user-uuid",
+		},
+		servers: []map[string]any{
+			{
+				"type":    "vmess",
+				"name":    "VMess-1",
+				"host":    "node.example.com",
+				"port":    int64(443),
+				"network": "ws",
+				"tls":     int64(1),
+				"tls_settings": map[string]any{
+					"server_name": "node.example.com",
+				},
+				"network_settings": map[string]any{
+					"path": "/ws",
+					"headers": map[string]any{
+						"Host": "node.example.com",
+					},
+				},
+			},
+		},
+	}
+	router := NewRouter(config.Config{AppName: "Forest"}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1&flag=shadowrocket", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(rec.Body.String()))
+	if err != nil {
+		t.Fatalf("expected base64 shadowrocket body: %v", err)
+	}
+	body := string(decoded)
+	if !strings.Contains(body, "STATUS=") {
+		t.Fatalf("expected shadowrocket body to keep legacy status line, got %q", body)
+	}
+	if !strings.Contains(body, "Expires:2025-01-01") {
+		t.Fatalf("expected shadowrocket body to include legacy expiry text, got %q", body)
+	}
+	if !strings.Contains(body, "remark=VMess-1") {
+		t.Fatalf("expected shadowrocket body to keep legacy vmess format, got %q", body)
+	}
+}
+
+func TestRouterClientSubscribeClashEndpointCanInjectInfoServers(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		subscribe: user.Subscribe{
+			U:              1024,
+			D:              2048,
+			TransferEnable: 10 * 1024 * 1024 * 1024,
+			ExpiredAt:      int64Ptr(1735689600),
+			ResetDay:       int64Ptr(3),
+			UUID:           "user-uuid",
+		},
+		servers: []map[string]any{
+			{
+				"type":    "vmess",
+				"name":    "VMess-1",
+				"host":    "node.example.com",
+				"port":    int64(443),
+				"network": "ws",
+				"tls":     int64(1),
+				"tls_settings": map[string]any{
+					"server_name": "node.example.com",
+				},
+				"network_settings": map[string]any{
+					"path": "/ws",
+					"headers": map[string]any{
+						"Host": "node.example.com",
+					},
+				},
+			},
+		},
+	}
+	router := NewRouter(config.Config{
+		AppName:                "Forest",
+		PublicDir:              "../public",
+		ShowInfoToServerEnable: true,
+	}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1&flag=clash", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "剩余流量：") {
+		t.Fatalf("expected clash profile to inject remaining traffic server, got %q", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "套餐到期：2025-01-01") {
+		t.Fatalf("expected clash profile to inject expiry server, got %q", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "距离下次重置剩余：3 天") {
+		t.Fatalf("expected clash profile to inject reset day server, got %q", rec.Body.String())
 	}
 }
 
@@ -305,5 +422,94 @@ func TestRouterServerV2ConfigEndpoint(t *testing.T) {
 	}
 	if baseConfig["push_interval"] != float64(90) || baseConfig["node_report_min_traffic"] != float64(2048) || baseConfig["device_online_min_traffic"] != float64(4096) {
 		t.Fatalf("unexpected base config: %#v", baseConfig)
+	}
+}
+
+func TestRouterServerV2ConfigEndpointKeepsPrivateKeys(t *testing.T) {
+	nodeService := &fakeNodeService{
+		server: nodeapi.ServerRecord{
+			ID:       9,
+			NodeType: "v2node",
+			Fields: map[string]any{
+				"listen_ip":    "0.0.0.0",
+				"server_port":  int64(443),
+				"network":      "tcp",
+				"protocol":     "vless",
+				"tls":          int64(2),
+				"tls_settings": map[string]any{"private_key": "tls-private", "public_key": "tls-public"},
+				"encryption":   "none",
+				"encryption_settings": map[string]any{"private_key": "enc-private", "public_key": "enc-public"},
+			},
+		},
+	}
+	cfg := config.Load()
+	cfg.ServerToken = "secret"
+	router := NewRouter(cfg, WithNodeService(nodeService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/server/config?token=secret&node_id=9", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("expected json body: %v", err)
+	}
+	tlsSettings, ok := payload["tls_settings"].(map[string]any)
+	if !ok || tlsSettings["private_key"] != "tls-private" {
+		t.Fatalf("expected tls private key kept, got %#v", payload["tls_settings"])
+	}
+	encryptionSettings, ok := payload["encryption_settings"].(map[string]any)
+	if !ok || encryptionSettings["private_key"] != "enc-private" {
+		t.Fatalf("expected encryption private key kept, got %#v", payload["encryption_settings"])
+	}
+}
+
+func TestRouterServerV2ConfigEndpointMissingTokenKeepsLegacyFailureShape(t *testing.T) {
+	router := NewRouter(config.Config{AppName: "forest-go"}, WithNodeService(&fakeNodeService{}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/server/config?node_id=9", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("expected json body: %v", err)
+	}
+	if payload["status"] != "fail" || payload["message"] != "token is null" {
+		t.Fatalf("unexpected payload: %#v", payload)
+	}
+}
+
+func TestRouterServerV2ConfigEndpointServerMissingKeepsLegacyFailureShape(t *testing.T) {
+	nodeService := &fakeNodeService{err: errors.New("server is not exist")}
+	cfg := config.Load()
+	cfg.ServerToken = "secret"
+	router := NewRouter(cfg, WithNodeService(nodeService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/server/config?token=secret&node_id=9", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("expected json body: %v", err)
+	}
+	if payload["status"] != "fail" || payload["message"] != "server is not exist" {
+		t.Fatalf("unexpected payload: %#v", payload)
 	}
 }

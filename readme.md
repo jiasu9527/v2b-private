@@ -50,7 +50,7 @@ wget -qO- https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install
 - `./init.sh` 和 `./update.sh` 缺少 Go 时会自动下载到项目目录 `.local/go`
 - 当前仓库已公开，可直接使用上面的 GitHub raw 一键安装命令
 - 旧目录迁移安装时，必须能读到旧目录里的 `.env`
-- 如果旧目录里还有 `config/v2board.php`，也会一并迁移到新的 JSON 配置
+- 如果旧目录里还有 `config/v2board.php` 和 `config/theme/*.php`，也会一并迁移到新的 JSON 配置
 - 不需要旧目录里的 `vendor`、`node_modules`、`storage/logs`、Redis、Webman、PM2
 
 更新:

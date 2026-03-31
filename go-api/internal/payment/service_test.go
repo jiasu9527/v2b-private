@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -300,6 +301,19 @@ func TestDBServiceReturnURLFallsBackToAppURLWhenCurrentAccessDomainMissing(t *te
 	got := service.returnURL("", "T901")
 	if got != "https://site.example.com/#/order/T901" {
 		t.Fatalf("unexpected return url: %s", got)
+	}
+}
+
+func TestDBServiceNotifyURLTrimsPaddedGatewayUUID(t *testing.T) {
+	service := NewDBService(config.Config{}, nil, nil)
+
+	got := service.notifyURL(paymentRecord{
+		Payment:      "EPay",
+		UUID:         "A63Mqhyi                        ",
+		NotifyDomain: sql.NullString{String: "https://forest788.com", Valid: true},
+	})
+	if got != "https://forest788.com/api/v1/guest/payment/notify/EPay/A63Mqhyi" {
+		t.Fatalf("unexpected notify url: %q", got)
 	}
 }
 

@@ -155,6 +155,56 @@ func TestRouterServerUniProxyConfigEndpoint(t *testing.T) {
 	}
 }
 
+func TestRouterServerUniProxyConfigEndpointKeepsVlessPrivateKeys(t *testing.T) {
+	nodeService := &fakeNodeService{
+		server: nodeapi.ServerRecord{
+			ID:       7,
+			NodeType: "vless",
+			Fields: map[string]any{
+				"server_port": int64(8443),
+				"network":     "tcp",
+				"tls":         int64(2),
+				"flow":        "xtls-rprx-vision",
+				"tls_settings": map[string]any{
+					"private_key": "tls-private",
+					"public_key":  "tls-public",
+				},
+				"encryption": "none",
+				"encryption_settings": map[string]any{
+					"private_key": "enc-private",
+					"public_key":  "enc-public",
+				},
+			},
+		},
+	}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", ServerToken: "secret"},
+		WithNodeService(nodeService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/server/UniProxy/config?token=secret&node_type=vless&node_id=7", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("expected json body: %v", err)
+	}
+	tlsSettings, ok := payload["tls_settings"].(map[string]any)
+	if !ok || tlsSettings["private_key"] != "tls-private" {
+		t.Fatalf("expected tls private key kept, got %#v", payload["tls_settings"])
+	}
+	encryptionSettings, ok := payload["encryption_settings"].(map[string]any)
+	if !ok || encryptionSettings["private_key"] != "enc-private" {
+		t.Fatalf("expected encryption private key kept, got %#v", payload["encryption_settings"])
+	}
+}
+
 func TestRouterServerUniProxyAliveListEndpoint(t *testing.T) {
 	nodeService := &fakeNodeService{
 		server: nodeapi.ServerRecord{ID: 7, NodeType: "vmess"},
@@ -382,6 +432,79 @@ func TestRouterServerDeepbworkConfigEndpoint(t *testing.T) {
 	inbounds, ok := payload["inbounds"].([]any)
 	if !ok || len(inbounds) < 2 {
 		t.Fatalf("unexpected inbounds: %#v", payload["inbounds"])
+	}
+}
+
+func TestRouterServerDeepbworkConfigEndpointUsesSnakeCaseFields(t *testing.T) {
+	nodeService := &fakeNodeService{
+		server: nodeapi.ServerRecord{
+			ID:       8,
+			NodeType: "vmess",
+			Fields: map[string]any{
+				"server_port":   int64(8443),
+				"network":       "ws",
+				"network_settings": map[string]any{"path": "/ws-snake"},
+				"tls":           int64(1),
+				"tls_settings":  map[string]any{"serverName": "edge.example.com", "allowInsecure": int64(1)},
+				"dns_settings":  map[string]any{"servers": []any{"8.8.8.8"}},
+				"rule_settings": map[string]any{"domain": []any{"geosite:google"}},
+			},
+		},
+	}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", ServerToken: "secret"},
+		WithNodeService(nodeService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/server/Deepbwork/config?token=secret&node_id=8&local_port=23333", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("expected config json: %v", err)
+	}
+
+	inbounds, ok := payload["inbounds"].([]any)
+	if !ok || len(inbounds) < 1 {
+		t.Fatalf("unexpected inbounds: %#v", payload["inbounds"])
+	}
+	proxy, ok := inbounds[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected proxy inbound: %#v", inbounds[0])
+	}
+	streamSettings, ok := proxy["streamSettings"].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected stream settings: %#v", proxy["streamSettings"])
+	}
+	wsSettings, ok := streamSettings["wsSettings"].(map[string]any)
+	if !ok || wsSettings["path"] != "/ws-snake" {
+		t.Fatalf("expected snake_case network settings to be used, got %#v", streamSettings["wsSettings"])
+	}
+	tlsSettings, ok := streamSettings["tlsSettings"].(map[string]any)
+	if !ok || tlsSettings["serverName"] != "edge.example.com" || tlsSettings["allowInsecure"] != true {
+		t.Fatalf("expected snake_case tls settings to be used, got %#v", streamSettings["tlsSettings"])
+	}
+	dnsSettings, ok := payload["dns"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected dns settings, got %#v", payload["dns"])
+	}
+	servers, ok := dnsSettings["servers"].([]any)
+	if !ok || len(servers) == 0 || servers[0] != "8.8.8.8" {
+		t.Fatalf("expected snake_case dns settings to be used, got %#v", dnsSettings["servers"])
+	}
+	routing, ok := payload["routing"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected routing settings, got %#v", payload["routing"])
+	}
+	rules, ok := routing["rules"].([]any)
+	if !ok || len(rules) < 2 {
+		t.Fatalf("expected extra routing rule, got %#v", routing["rules"])
 	}
 }
 

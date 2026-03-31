@@ -263,7 +263,7 @@ func buildUniProxyConfig(cfg config.Config, server nodeapi.ServerRecord, routes 
 	case "vmess":
 		payload["server_port"] = fieldInt64(server, "server_port")
 		payload["network"] = fieldString(server, "network")
-		payload["networkSettings"] = fieldMap(server, "networkSettings")
+		payload["networkSettings"] = fieldMapFirst(server, "networkSettings", "network_settings")
 		payload["tls"] = fieldInt64(server, "tls")
 	case "vless":
 		payload["server_port"] = fieldInt64(server, "server_port")
@@ -271,9 +271,9 @@ func buildUniProxyConfig(cfg config.Config, server nodeapi.ServerRecord, routes 
 		payload["networkSettings"] = fieldMap(server, "network_settings")
 		payload["tls"] = fieldInt64(server, "tls")
 		payload["flow"] = fieldString(server, "flow")
-		payload["tls_settings"] = stripPrivateKey(fieldMap(server, "tls_settings"))
+		payload["tls_settings"] = fieldMap(server, "tls_settings")
 		payload["encryption"] = fieldString(server, "encryption")
-		payload["encryption_settings"] = stripPrivateKey(fieldMap(server, "encryption_settings"))
+		payload["encryption_settings"] = fieldMap(server, "encryption_settings")
 	case "trojan":
 		payload["host"] = fieldString(server, "host")
 		payload["network"] = fieldString(server, "network")
@@ -400,8 +400,8 @@ func buildDeepbworkConfig(cfg config.Config, server nodeapi.ServerRecord, localP
 		streamSettings := ensureMap(proxy, "streamSettings")
 		network := fieldString(server, "network")
 		streamSettings["network"] = network
-		applyDeepbworkNetwork(streamSettings, network, fieldMap(server, "networkSettings"))
-		applyDeepbworkTLS(streamSettings, fieldInt64(server, "tls"), fieldMap(server, "tlsSettings"))
+		applyDeepbworkNetwork(streamSettings, network, fieldMapFirst(server, "networkSettings", "network_settings"))
+		applyDeepbworkTLS(streamSettings, fieldInt64(server, "tls"), fieldMapFirst(server, "tlsSettings", "tls_settings"))
 		if len(inbounds) > 0 {
 			inbounds[0] = proxy
 			inbounds[1] = api
@@ -409,8 +409,8 @@ func buildDeepbworkConfig(cfg config.Config, server nodeapi.ServerRecord, localP
 		payload["inbounds"] = inbounds
 	}
 
-	applyDeepbworkDNS(payload, fieldMap(server, "dnsSettings"))
-	applyDeepbworkRules(cfg, payload, fieldMap(server, "ruleSettings"))
+	applyDeepbworkDNS(payload, fieldMapFirst(server, "dnsSettings", "dns_settings"))
+	applyDeepbworkRules(cfg, payload, fieldMapFirst(server, "ruleSettings", "rule_settings"))
 	return payload, nil
 }
 
@@ -642,6 +642,15 @@ func fieldMap(server nodeapi.ServerRecord, key string) map[string]any {
 	return cloneMap(value)
 }
 
+func fieldMapFirst(server nodeapi.ServerRecord, keys ...string) map[string]any {
+	for _, key := range keys {
+		if value := fieldMap(server, key); len(value) > 0 {
+			return value
+		}
+	}
+	return map[string]any{}
+}
+
 func fieldMapValue(values map[string]any, key string) string {
 	if values == nil {
 		return ""
@@ -741,6 +750,17 @@ func cloneMap(value map[string]any) map[string]any {
 		cloned[key] = item
 	}
 	return cloned
+}
+
+func mapKeys(value map[string]any) []string {
+	if len(value) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(value))
+	for key := range value {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func stripPrivateKey(value map[string]any) map[string]any {

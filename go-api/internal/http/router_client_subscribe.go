@@ -4,15 +4,18 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/nodeapi"
+	usersvc "forest/go-api/internal/user"
 
 	"gopkg.in/yaml.v3"
 )
@@ -23,6 +26,101 @@ func buildGeneralSubscribePayload(userUUID string, servers []map[string]any) str
 		builder.WriteString(buildSubscribeURI(userUUID, server))
 	}
 	return base64.StdEncoding.EncodeToString([]byte(builder.String()))
+}
+
+func buildShadowrocketPayload(subscribe usersvc.Subscribe, servers []map[string]any) string {
+	var builder strings.Builder
+	builder.WriteString(buildShadowrocketStatusLine(subscribe))
+	for _, server := range servers {
+		serverType, normalized := normalizeSubscribeServer(server)
+		if serverType == "vmess" {
+			builder.WriteString(buildShadowrocketVmessURI(subscribe.UUID, normalized))
+			continue
+		}
+		builder.WriteString(buildSubscribeURI(subscribe.UUID, normalized))
+	}
+	return base64.StdEncoding.EncodeToString([]byte(builder.String()))
+}
+
+func buildShadowrocketStatusLine(subscribe usersvc.Subscribe) string {
+	expiredDate := "长期有效"
+	if subscribe.ExpiredAt != nil && *subscribe.ExpiredAt > 0 {
+		expiredDate = formatSubscribeDate(*subscribe.ExpiredAt)
+	}
+
+	return fmt.Sprintf(
+		"STATUS=🚀↑:%sGB,↓:%sGB,TOT:%sGB💡Expires:%s\r\n",
+		formatShadowrocketTrafficGB(subscribe.U),
+		formatShadowrocketTrafficGB(subscribe.D),
+		formatShadowrocketTrafficGB(subscribe.TransferEnable),
+		expiredDate,
+	)
+}
+
+func buildShadowrocketVmessURI(userUUID string, server map[string]any) string {
+	userinfo := base64.StdEncoding.EncodeToString([]byte(
+		"auto:" + userUUID + "@" + formatHost(serverString(server, "host")) + ":" + strconv.FormatInt(serverInt64(server, "port"), 10),
+	))
+
+	params := url.Values{}
+	params.Set("tfo", "1")
+	params.Set("remark", serverString(server, "name"))
+	params.Set("alterId", "0")
+
+	if serverBool(server, "tls") {
+		params.Set("tls", "1")
+		tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+		if serverMapBool(tlsSettings, "allow_insecure", "allowInsecure") {
+			params.Set("allowInsecure", "1")
+		}
+		if peer := firstNonEmptyString(
+			strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"])),
+			strings.TrimSpace(fmt.Sprint(tlsSettings["serverName"])),
+		); peer != "" {
+			params.Set("peer", peer)
+		}
+	}
+
+	network := serverString(server, "network")
+	settings := firstNonEmptyMap(serverMap(server, "network_settings"), serverMap(server, "networkSettings"))
+	switch network {
+	case "tcp":
+		header := nestedMap(settings, "header")
+		if obfs := strings.TrimSpace(fmt.Sprint(header["type"])); obfs != "" {
+			params.Set("obfs", obfs)
+		}
+		request := nestedMap(header, "request")
+		if paths := nestedAnySlice(request, "path"); len(paths) > 0 {
+			params.Set("path", strings.TrimSpace(fmt.Sprint(paths[0])))
+		}
+		if hosts := nestedAnySlice(nestedMap(request, "headers"), "Host"); len(hosts) > 0 {
+			params.Set("obfsParam", strings.TrimSpace(fmt.Sprint(hosts[0])))
+		}
+	case "ws":
+		params.Set("obfs", "websocket")
+		if path := strings.TrimSpace(fmt.Sprint(settings["path"])); path != "" {
+			params.Set("path", path)
+		}
+		if host := strings.TrimSpace(fmt.Sprint(nestedMap(settings, "headers")["Host"])); host != "" {
+			params.Set("obfsParam", host)
+		}
+		if method := strings.TrimSpace(fmt.Sprint(settings["security"])); method != "" && method != "<nil>" {
+			params.Set("method", method)
+		}
+	case "grpc":
+		params.Set("obfs", "grpc")
+		if serviceName := strings.TrimSpace(fmt.Sprint(settings["serviceName"])); serviceName != "" {
+			params.Set("path", serviceName)
+		}
+		if host := firstNonEmptyString(
+			strings.TrimSpace(fmt.Sprint(firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))["server_name"])),
+			serverString(server, "host"),
+		); host != "" {
+			params.Set("host", host)
+		}
+	}
+
+	return "vmess://" + userinfo + "?" + params.Encode() + "\r\n"
 }
 
 func buildClashStandardProfile(cfg config.Config, customFile, defaultFile, userUUID string, servers []map[string]any) (string, error) {
@@ -705,6 +803,34 @@ func truncateString(value string, length int) string {
 		return value
 	}
 	return value[:length]
+}
+
+func formatSubscribeTrafficBytes(value int64) string {
+	if value < 0 {
+		value = 0
+	}
+
+	units := []string{"B", "KB", "MB", "GB", "TB", "PB"}
+	size := float64(value)
+	index := 0
+	for size >= 1024 && index < len(units)-1 {
+		size /= 1024
+		index++
+	}
+	if index == 0 {
+		return fmt.Sprintf("%d %s", value, units[index])
+	}
+	return fmt.Sprintf("%.2f %s", size, units[index])
+}
+
+func formatSubscribeDate(unix int64) string {
+	return time.Unix(unix, 0).UTC().Format("2006-01-02")
+}
+
+func formatShadowrocketTrafficGB(value int64) string {
+	gb := float64(value) / float64(1024*1024*1024)
+	gb = math.Round(gb*100) / 100
+	return strconv.FormatFloat(gb, 'f', -1, 64)
 }
 
 func asAnySlice(value any) []any {

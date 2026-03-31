@@ -21,6 +21,7 @@ import (
 
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/queue"
+	"forest/go-api/internal/session"
 )
 
 var (
@@ -197,11 +198,12 @@ type TrafficReport struct {
 }
 
 type DBService struct {
-	cfg      config.Config
-	runtime  *config.RuntimeState
-	db       *sql.DB
-	notifier ticketAdminNotifier
-	jobs     queue.Enqueuer
+	cfg       config.Config
+	runtime   *config.RuntimeState
+	db        *sql.DB
+	notifier  ticketAdminNotifier
+	jobs      queue.Enqueuer
+	authCache *session.AuthCache
 }
 
 func NewDBService(cfg config.Config, db *sql.DB) *DBService {
@@ -213,13 +215,18 @@ func (s *DBService) WithAdminNotifier(notifier ticketAdminNotifier) *DBService {
 	return s
 }
 
+func (s *DBService) WithQueueRuntime(jobs queue.Enqueuer) *DBService {
+	s.jobs = jobs
+	return s
+}
+
 func (s *DBService) WithRuntimeConfig(runtime *config.RuntimeState) *DBService {
 	s.runtime = runtime
 	return s
 }
 
-func (s *DBService) WithQueueRuntime(jobs queue.Enqueuer) *DBService {
-	s.jobs = jobs
+func (s *DBService) WithAuthCache(cache *session.AuthCache) *DBService {
+	s.authCache = cache
 	return s
 }
 
