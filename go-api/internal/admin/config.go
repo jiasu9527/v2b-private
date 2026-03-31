@@ -208,6 +208,9 @@ func (s *DBService) SaveConfig(_ context.Context, values map[string]any) (bool, 
 	if err := writeJSONConfigFile(adminConfigPath(), cfg); err != nil {
 		return false, errors.New("修改失败")
 	}
+	if s.runtime != nil {
+		s.runtime.Reload()
+	}
 	return true, nil
 }
 

@@ -298,6 +298,7 @@ type Service interface {
 
 type DBService struct {
 	cfg        config.Config
+	runtime    *config.RuntimeState
 	db         *sql.DB
 	orders     orderRuntime
 	jobs       queue.Enqueuer
@@ -331,6 +332,11 @@ func NewDBService(cfg config.Config, db *sql.DB, orders ...orderRuntime) *DBServ
 
 func (s *DBService) WithQueueRuntime(jobs queue.Enqueuer) *DBService {
 	s.jobs = jobs
+	return s
+}
+
+func (s *DBService) WithRuntimeConfig(runtime *config.RuntimeState) *DBService {
+	s.runtime = runtime
 	return s
 }
 

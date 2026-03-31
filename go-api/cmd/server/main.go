@@ -26,6 +26,7 @@ import (
 
 func main() {
 	cfg := config.Load()
+	runtimeConfig := config.NewRuntimeState(cfg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -52,14 +53,14 @@ func main() {
 	jobQueue.Start()
 	defer jobQueue.Shutdown(context.Background())
 	if db != nil {
-		userDBService := usersvc.NewDBService(cfg, db).WithQueueRuntime(jobQueue)
+		userDBService := usersvc.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue)
 		telegramService = telegram.NewService(cfg, db).WithQueueRuntime(jobQueue)
 		userDBService = userDBService.WithAdminNotifier(telegramService)
 		passportService = passport.NewDBServiceWithConfig(cfg, db).WithQueueRuntime(jobQueue)
 		sessionService = session.NewDBService(cfg, db)
 		userService = userDBService
 		paymentService = payment.NewDBService(cfg, db, userDBService)
-		adminDBService := admin.NewDBService(cfg, db, userDBService).WithQueueRuntime(jobQueue)
+		adminDBService := admin.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue)
 		telegramService = telegramService.WithUserResolver(userDBService.ResolveClientUserID).WithAdminService(adminDBService)
 		adminService = adminDBService
 		nodeService = nodeapi.NewDBService(cfg, db, userDBService)

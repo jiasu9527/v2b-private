@@ -85,7 +85,7 @@ func (s *DBService) NewPeriod(ctx context.Context, userID int64) (bool, error) {
 	if s.db == nil {
 		return false, ErrUnavailable
 	}
-	if !s.cfg.AllowNewPeriod {
+	if !s.runtimeValues().AllowNewPeriod {
 		return false, errors.New("Renewal is not allowed")
 	}
 
@@ -278,7 +278,7 @@ func (s *DBService) calculateResetDayForPlan(plan planRecord, expiredAt sql.Null
 		return nil
 	}
 
-	method := s.cfg.ResetTrafficMethod
+	method := s.runtimeValues().ResetTrafficMethod
 	if plan.ResetTrafficMethod.Valid {
 		method = plan.ResetTrafficMethod.Int64
 	}
@@ -307,7 +307,7 @@ func (s *DBService) calculateResetPeriodForPlan(plan planRecord, expiredAt sql.N
 		return nil
 	}
 
-	method := s.cfg.ResetTrafficMethod
+	method := s.runtimeValues().ResetTrafficMethod
 	if plan.ResetTrafficMethod.Valid {
 		method = plan.ResetTrafficMethod.Int64
 	}

@@ -128,6 +128,61 @@ func TestDBServiceSaveConfigPersistsJSONValues(t *testing.T) {
 	}
 }
 
+func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
+	root := t.TempDir()
+	writeAdminJSONFixture(t, root, map[string]any{
+		"secure_path":          "localadmin",
+		"allow_new_period":     0,
+		"reset_traffic_method": 0,
+	})
+	mustMkdirAll(t, filepath.Join(root, "go-api"))
+
+	oldRoot := adminProjectRoot
+	adminProjectRoot = root
+	defer func() { adminProjectRoot = oldRoot }()
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() { _ = os.Chdir(prevWD) }()
+	if err := os.Chdir(filepath.Join(root, "go-api")); err != nil {
+		t.Fatalf("chdir work dir: %v", err)
+	}
+
+	t.Setenv("ALLOW_NEW_PERIOD", "")
+	t.Setenv("RESET_TRAFFIC_METHOD", "")
+
+	cfg := cfgpkg.Load()
+	runtimeState := cfgpkg.NewRuntimeState(cfg)
+	service := (&DBService{cfg: cfg}).WithRuntimeConfig(runtimeState)
+
+	if runtimeState.Current().AllowNewPeriod {
+		t.Fatalf("expected allow_new_period disabled before save")
+	}
+	if runtimeState.Current().ResetTrafficMethod != 0 {
+		t.Fatalf("expected reset_traffic_method=0 before save, got %d", runtimeState.Current().ResetTrafficMethod)
+	}
+
+	ok, err := service.SaveConfig(context.Background(), map[string]any{
+		"allow_new_period":     1,
+		"reset_traffic_method": 4,
+	})
+	if err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected save config success")
+	}
+
+	if !runtimeState.Current().AllowNewPeriod {
+		t.Fatalf("expected allow_new_period enabled after save")
+	}
+	if runtimeState.Current().ResetTrafficMethod != 4 {
+		t.Fatalf("expected reset_traffic_method=4 after save, got %d", runtimeState.Current().ResetTrafficMethod)
+	}
+}
+
 func TestLoadBulkMailConfigFallsBackToAppNameForFromName(t *testing.T) {
 	root := t.TempDir()
 	writeAdminJSONFixture(t, root, map[string]any{

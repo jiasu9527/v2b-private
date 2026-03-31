@@ -198,6 +198,7 @@ type TrafficReport struct {
 
 type DBService struct {
 	cfg      config.Config
+	runtime  *config.RuntimeState
 	db       *sql.DB
 	notifier ticketAdminNotifier
 	jobs     queue.Enqueuer
@@ -212,9 +213,24 @@ func (s *DBService) WithAdminNotifier(notifier ticketAdminNotifier) *DBService {
 	return s
 }
 
+func (s *DBService) WithRuntimeConfig(runtime *config.RuntimeState) *DBService {
+	s.runtime = runtime
+	return s
+}
+
 func (s *DBService) WithQueueRuntime(jobs queue.Enqueuer) *DBService {
 	s.jobs = jobs
 	return s
+}
+
+func (s *DBService) runtimeValues() config.RuntimeValues {
+	if s.runtime == nil {
+		return config.RuntimeValues{
+			AllowNewPeriod:     s.cfg.AllowNewPeriod,
+			ResetTrafficMethod: s.cfg.ResetTrafficMethod,
+		}
+	}
+	return s.runtime.Current()
 }
 
 func (s *DBService) Info(ctx context.Context, userID int64) (Info, error) {
@@ -394,7 +410,8 @@ LIMIT 1`, userID).Scan(
 	} else if ok {
 		subscribe.AliveIP = subscribeAliveIPCount(raw)
 	}
-	subscribe.AllowNewPeriod = boolToInt64(s.cfg.AllowNewPeriod)
+	runtimeValues := s.runtimeValues()
+	subscribe.AllowNewPeriod = boolToInt64(runtimeValues.AllowNewPeriod)
 
 	if subscribe.PlanID != nil {
 		plan, err := s.findPlanMap(ctx, *subscribe.PlanID)
@@ -828,7 +845,7 @@ func (s *DBService) calculateResetDay(plan map[string]any, expiredAt *int64) *in
 		return nil
 	}
 	resetMethod := mapNullableInt64(plan["reset_traffic_method"])
-	method := s.cfg.ResetTrafficMethod
+	method := s.runtimeValues().ResetTrafficMethod
 	if resetMethod != nil {
 		method = *resetMethod
 	}
