@@ -73,7 +73,13 @@ if [[ ! -f "${SERVICE_FILE}" ]]; then
   exit 1
 fi
 
-if ! rg -n '已通过 systemd 启动并设置开机自启，PID 43210' /tmp/test-appctl-update-systemd-missing.out >/dev/null 2>&1; then
+if ! rg -n -F '更新完成' /tmp/test-appctl-update-systemd-missing.out >/dev/null 2>&1; then
+  echo "expected update to install and start systemd service"
+  cat /tmp/test-appctl-update-systemd-missing.out
+  exit 1
+fi
+
+if ! rg -n -F '服务已启动完成' /tmp/test-appctl-update-systemd-missing.out >/dev/null 2>&1; then
   echo "expected update to install and start systemd service"
   cat /tmp/test-appctl-update-systemd-missing.out
   exit 1

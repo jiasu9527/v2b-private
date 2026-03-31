@@ -85,7 +85,13 @@ if [[ ! -f "${TMP_DIR}/forest.service" ]]; then
   exit 1
 fi
 
-if ! rg -n '已通过 systemd 启动并设置开机自启，PID 43210' /tmp/test-appctl-update-legacy-systemd.out >/dev/null 2>&1; then
+if ! rg -n -F '更新完成' /tmp/test-appctl-update-legacy-systemd.out >/dev/null 2>&1; then
+  echo "expected legacy systemd service to migrate and start forest"
+  cat /tmp/test-appctl-update-legacy-systemd.out
+  exit 1
+fi
+
+if ! rg -n -F '服务已重启完成' /tmp/test-appctl-update-legacy-systemd.out >/dev/null 2>&1; then
   echo "expected legacy systemd service to migrate and start forest"
   cat /tmp/test-appctl-update-legacy-systemd.out
   exit 1

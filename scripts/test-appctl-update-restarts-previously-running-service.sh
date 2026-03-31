@@ -61,7 +61,13 @@ fi
 : > "${GO_LOG}"
 PATH="/usr/bin:/bin" "${TMP_DIR}/scripts/appctl" update >/tmp/test-appctl-update-restarts-previous.out 2>/tmp/test-appctl-update-restarts-previous.err
 
-if ! rg -n '检测到 Go API 正在运行，已自动重启，PID ' /tmp/test-appctl-update-restarts-previous.out >/dev/null 2>&1; then
+if ! rg -n -F '更新完成' /tmp/test-appctl-update-restarts-previous.out >/dev/null 2>&1; then
+  echo "expected auto restart message for previously running service"
+  cat /tmp/test-appctl-update-restarts-previous.out
+  exit 1
+fi
+
+if ! rg -n -F '服务已重启完成' /tmp/test-appctl-update-restarts-previous.out >/dev/null 2>&1; then
   echo "expected auto restart message for previously running service"
   cat /tmp/test-appctl-update-restarts-previous.out
   exit 1

@@ -38,7 +38,19 @@ if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
   exit 1
 fi
 
-if ! rg -n '当前 Go API 未运行，更新已完成，如需立即生效请执行 ./scripts/appctl start' /tmp/test-appctl-update-warns.out >/dev/null 2>&1; then
+if ! rg -n -F '[1/5] 拉取最新代码' /tmp/test-appctl-update-warns.out >/dev/null 2>&1; then
+  echo "expected progress step output during update"
+  cat /tmp/test-appctl-update-warns.out
+  exit 1
+fi
+
+if ! rg -n -F '更新完成' /tmp/test-appctl-update-warns.out >/dev/null 2>&1; then
+  echo "expected stopped-service warning after update"
+  cat /tmp/test-appctl-update-warns.out
+  exit 1
+fi
+
+if ! rg -n -F '服务当前未启动，如需立即生效请执行 ./scripts/appctl start' /tmp/test-appctl-update-warns.out >/dev/null 2>&1; then
   echo "expected stopped-service warning after update"
   cat /tmp/test-appctl-update-warns.out
   exit 1

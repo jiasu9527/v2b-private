@@ -71,7 +71,19 @@ if [[ "${ACTUAL_SYSTEMCTL}" != "${EXPECTED_SYSTEMCTL}" ]]; then
   exit 1
 fi
 
-if ! rg -n '检测到 systemd 服务正在运行，已自动重启，PID 43210' /tmp/test-appctl-update-systemd.out >/dev/null 2>&1; then
+if ! rg -n -F '[1/5] 拉取最新代码' /tmp/test-appctl-update-systemd.out >/dev/null 2>&1; then
+  echo "expected progress step output during update"
+  cat /tmp/test-appctl-update-systemd.out
+  exit 1
+fi
+
+if ! rg -n -F '更新完成' /tmp/test-appctl-update-systemd.out >/dev/null 2>&1; then
+  echo "expected systemd auto restart message after update"
+  cat /tmp/test-appctl-update-systemd.out
+  exit 1
+fi
+
+if ! rg -n -F '服务已重启完成' /tmp/test-appctl-update-systemd.out >/dev/null 2>&1; then
   echo "expected systemd auto restart message after update"
   cat /tmp/test-appctl-update-systemd.out
   exit 1

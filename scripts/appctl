@@ -163,6 +163,28 @@ update_source_code_from_git() {
   echo "代码拉取完成"
 }
 
+print_update_step() {
+  local step="$1"
+  local message="$2"
+  printf '[%s] %s\n' "${step}" "${message}"
+}
+
+print_update_summary() {
+  local result="$1"
+  echo "更新完成"
+  case "${result}" in
+    restarted)
+      echo "服务已重启完成"
+      ;;
+    started)
+      echo "服务已启动完成"
+      ;;
+    stopped)
+      echo "服务当前未启动，如需立即生效请执行 ./scripts/appctl start"
+      ;;
+  esac
+}
+
 bootstrap_local_go() {
   local version os arch url archive extract_dir
   version="${GO_BOOTSTRAP_VERSION:-$(required_go_version)}"
@@ -1018,16 +1040,6 @@ restart_running_service_after_update() {
   local previous_pid="${1:-}"
   if systemd_service_active; then
     run_systemctl_checked restart "${FOREST_SERVICE_NAME}" >/dev/null
-    local systemd_pid
-    systemd_pid="$(run_systemctl_checked show -p MainPID --value "${FOREST_SERVICE_NAME}" 2>/dev/null || true)"
-    if [[ ! "${systemd_pid}" =~ ^[0-9]+$ ]] || [[ "${systemd_pid}" == "0" ]]; then
-      systemd_pid=""
-    fi
-    if [[ -n "${systemd_pid}" ]]; then
-      echo "检测到 systemd 服务正在运行，已自动重启，PID ${systemd_pid}"
-    else
-      echo "检测到 systemd 服务正在运行，已自动重启"
-    fi
     return 0
   fi
 
@@ -1047,12 +1059,11 @@ restart_running_service_after_update() {
     rm -f "${PID_PATH}"
   fi
   start_binary
-  echo "检测到 Go API 正在运行，已自动重启，PID $(cat "${PID_PATH}")"
   return 0
 }
 
 warn_if_service_stopped_after_update() {
-  echo "当前 Go API 未运行，更新已完成，如需立即生效请执行 ./scripts/appctl start"
+  print_update_summary stopped
 }
 
 run_ops_install() {
@@ -1244,27 +1255,64 @@ cmd_install_legacy() {
 
 cmd_update() {
   local previous_pid=""
+  local had_running_service=false
   if ! systemd_service_active; then
     previous_pid="$(pid_file_service_pid || process_scan_service_pid || true)"
+  else
+    had_running_service=true
+  fi
+  if [[ -n "${previous_pid}" ]]; then
+    had_running_service=true
   fi
 
+  print_update_step "1/5" "拉取最新代码"
   update_source_code_from_git
+
+  print_update_step "2/5" "检查运行环境"
   ensure_go
   cleanup_legacy_runtime_artifacts true
   load_env
+
+  print_update_step "3/5" "同步运行配置"
   run_ops_migrate_config
+
+  print_update_step "4/5" "执行数据库更新"
   if auto_migrate_legacy_mysql_if_needed; then
+    print_update_step "5/5" "构建并应用更新"
     build
-    restart_running_service_after_update || warn_if_service_stopped_after_update
+    if ensure_systemd_service_running >/dev/null; then
+      if [[ "${had_running_service}" == "true" ]]; then
+        print_update_summary restarted
+      else
+        print_update_summary started
+      fi
+      return 0
+    fi
+    if restart_running_service_after_update "${previous_pid}" >/dev/null; then
+      print_update_summary restarted
+    else
+      warn_if_service_stopped_after_update
+    fi
     return 0
   fi
   resolve_postgres_dsn
   run_ops_update
+
+  print_update_step "5/5" "构建并应用更新"
   build
-  if ensure_systemd_service_running; then
+  if ensure_systemd_service_running >/dev/null; then
+    if [[ "${had_running_service}" == "true" ]]; then
+      print_update_summary restarted
+    else
+      print_update_summary started
+    fi
     return 0
   fi
-  restart_running_service_after_update "${previous_pid}" || warn_if_service_stopped_after_update
+  if restart_running_service_after_update "${previous_pid}" >/dev/null; then
+    print_update_summary restarted
+  else
+    warn_if_service_stopped_after_update
+  fi
 }
 
 cmd_start() {

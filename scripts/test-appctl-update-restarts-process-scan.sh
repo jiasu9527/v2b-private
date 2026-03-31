@@ -63,7 +63,13 @@ if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
   exit 1
 fi
 
-if ! rg -n '检测到 Go API 正在运行，已自动重启，PID ' /tmp/test-appctl-update-process.out >/dev/null 2>&1; then
+if ! rg -n -F '更新完成' /tmp/test-appctl-update-process.out >/dev/null 2>&1; then
+  echo "expected auto restart message after process-scan update"
+  cat /tmp/test-appctl-update-process.out
+  exit 1
+fi
+
+if ! rg -n -F '服务已重启完成' /tmp/test-appctl-update-process.out >/dev/null 2>&1; then
   echo "expected auto restart message after process-scan update"
   cat /tmp/test-appctl-update-process.out
   exit 1
