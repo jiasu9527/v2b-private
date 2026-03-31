@@ -155,6 +155,7 @@ func (s DBService) lookupInviteCode(ctx context.Context, code string) (*inviteCo
 		}
 		return nil, fmt.Errorf("query invite code: %w", err)
 	}
+	result.code = strings.TrimSpace(result.code)
 	return result, nil
 }
 
@@ -243,7 +244,7 @@ func whitelistValue(items []string) any {
 
 func buildPreviewPayload(code, previewType string, giftTransferGB, giftHours float64, countdownExpiredAt *int64) map[string]any {
 	return map[string]any{
-		"code":                 code,
+		"code":                 strings.TrimSpace(code),
 		"type":                 previewType,
 		"gift_transfer_gb":     normalizeFloat(giftTransferGB),
 		"gift_hours":           normalizeFloat(giftHours),

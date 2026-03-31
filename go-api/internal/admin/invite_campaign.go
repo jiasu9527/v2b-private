@@ -170,6 +170,7 @@ LIMIT $2 OFFSET $3`, req.CampaignID, req.PageSize, (req.Current-1)*req.PageSize)
 		if err := rows.Scan(&id, &campaignID, &inviteeUserID, &inviteCode, &rewardAmount, &createdAt, &updatedAt); err != nil {
 			return InviteCampaignRecordListResult{}, fmt.Errorf("scan invite campaign record: %w", err)
 		}
+		inviteCode = strings.TrimSpace(inviteCode)
 		email, _ := s.fetchUserEmail(ctx, inviteeUserID)
 		var inviteeEmail any
 		if email != "" {
@@ -282,7 +283,18 @@ func scanInviteCampaignRow(scanner interface{ Scan(...any) error }) (inviteCampa
 	); err != nil {
 		return inviteCampaignRow{}, err
 	}
+	row.Period = strings.TrimSpace(row.Period)
+	if row.InviteCode.Valid {
+		row.InviteCode.String = strings.TrimSpace(row.InviteCode.String)
+	}
 	return row, nil
+}
+
+func trimNullStringValue(value sql.NullString) any {
+	if !value.Valid {
+		return nil
+	}
+	return strings.TrimSpace(value.String)
 }
 
 func (s *DBService) refreshInviteCampaignStatus(ctx context.Context, row *inviteCampaignRow) error {
@@ -331,9 +343,9 @@ func serializeInviteCampaign(row inviteCampaignRow, plan map[string]any) map[str
 		"id":               row.ID,
 		"user_id":          row.UserID,
 		"plan_id":          row.PlanID,
-		"period":           row.Period,
+		"period":           strings.TrimSpace(row.Period),
 		"invite_code_id":   nullInt64Any(row.InviteCodeID),
-		"invite_code":      nullStringValue(row.InviteCode),
+		"invite_code":      trimNullStringValue(row.InviteCode),
 		"reward_amount":    row.RewardAmount,
 		"target_amount":    targetAmount,
 		"current_amount":   currentAmount,

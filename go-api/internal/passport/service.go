@@ -1565,6 +1565,7 @@ func findInviteCodeTx(ctx context.Context, tx *sql.Tx, code string) (*inviteCode
 		}
 		return nil, fmt.Errorf("query invite code: %w", err)
 	}
+	invite.Code = strings.TrimSpace(invite.Code)
 	return &invite, nil
 }
 
@@ -1591,6 +1592,7 @@ LIMIT 1`, userID, inviteCode)
 		}
 		return nil, fmt.Errorf("query invite campaign: %w", err)
 	}
+	campaign.InviteCode = strings.TrimSpace(campaign.InviteCode)
 
 	if campaign.Status != 0 {
 		return nil, nil

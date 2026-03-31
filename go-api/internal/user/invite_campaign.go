@@ -155,6 +155,7 @@ LIMIT $2 OFFSET $3`, campaign.ID, pageSize, (current-1)*pageSize)
 		return nil, fmt.Errorf("query invite campaign records: %w", err)
 	}
 	for i := range rows {
+		rows[i]["invite_code"] = strings.TrimSpace(fmt.Sprint(rows[i]["invite_code"]))
 		email, _ := s.fetchInviteCampaignUserEmail(ctx, mapInt64(rows[i]["invitee_user_id"]))
 		if email != "" {
 			rows[i]["invitee_email"] = email
@@ -296,9 +297,9 @@ FROM v2_invite_code
 WHERE user_id = $1 AND status = 0
 ORDER BY id ASC
 LIMIT 1
-FOR UPDATE`, userID).Scan(&id, &code)
+	FOR UPDATE`, userID).Scan(&id, &code)
 	if err == nil {
-		return id, code, nil
+		return id, strings.TrimSpace(code), nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return 0, "", fmt.Errorf("query invite code: %w", err)
@@ -349,9 +350,9 @@ func (s *DBService) serializeInviteCampaign(ctx context.Context, row *inviteCamp
 		"id":               row.ID,
 		"user_id":          row.UserID,
 		"plan_id":          row.PlanID,
-		"period":           row.Period,
+		"period":           strings.TrimSpace(row.Period),
 		"invite_code_id":   nullInt64Any(row.InviteCodeID),
-		"invite_code":      nullStringAny(row.InviteCode),
+		"invite_code":      trimNullStringAny(row.InviteCode),
 		"reward_amount":    row.RewardAmount,
 		"target_amount":    targetAmount,
 		"current_amount":   currentAmount,
@@ -407,7 +408,18 @@ func scanInviteCampaignRow(scanner interface{ Scan(...any) error }) (inviteCampa
 	); err != nil {
 		return inviteCampaignRow{}, err
 	}
+	row.Period = strings.TrimSpace(row.Period)
+	if row.InviteCode.Valid {
+		row.InviteCode.String = strings.TrimSpace(row.InviteCode.String)
+	}
 	return row, nil
+}
+
+func trimNullStringAny(value sql.NullString) any {
+	if !value.Valid {
+		return nil
+	}
+	return strings.TrimSpace(value.String)
 }
 
 func (s *DBService) inviteCampaignRewardAmount() int64 {

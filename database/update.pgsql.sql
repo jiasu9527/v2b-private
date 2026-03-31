@@ -71,3 +71,16 @@ CREATE TABLE IF NOT EXISTS "v2_auth_session" (
 );
 
 CREATE INDEX IF NOT EXISTS "idx_v2_auth_session_user_id" ON "v2_auth_session" ("user_id");
+
+ALTER TABLE IF EXISTS "v2_invite_code"
+  ALTER COLUMN "code" TYPE varchar(32) USING BTRIM("code");
+
+ALTER TABLE IF EXISTS "v2_invite_campaign"
+  ALTER COLUMN "invite_code" TYPE varchar(32)
+  USING CASE
+    WHEN "invite_code" IS NULL THEN NULL
+    ELSE BTRIM("invite_code")
+  END;
+
+ALTER TABLE IF EXISTS "v2_invite_campaign_record"
+  ALTER COLUMN "invite_code" TYPE varchar(32) USING BTRIM("invite_code");
