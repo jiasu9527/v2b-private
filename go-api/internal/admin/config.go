@@ -214,8 +214,26 @@ func (s *DBService) SaveConfig(_ context.Context, values map[string]any) (bool, 
 	return true, nil
 }
 
+func (s *DBService) ListThemes(_ context.Context) (map[string]any, error) {
+	return map[string]any{}, nil
+}
+
+func (s *DBService) GetThemeConfig(_ context.Context, name string) (map[string]any, error) {
+	_ = strings.TrimSpace(name)
+	return map[string]any{}, nil
+}
+
+func (s *DBService) SaveThemeConfig(_ context.Context, name string, values map[string]any) (map[string]any, error) {
+	_ = strings.TrimSpace(name)
+	return cloneMap(values), nil
+}
+
 func (s *DBService) ListEmailTemplates(_ context.Context) ([]string, error) {
 	return listTemplateEntries(adminMailTemplatePath())
+}
+
+func (s *DBService) ListThemeTemplates(_ context.Context) ([]string, error) {
+	return []string{}, nil
 }
 
 func (s *DBService) SetTelegramWebhook(_ context.Context, token string) (bool, error) {

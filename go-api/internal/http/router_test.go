@@ -641,7 +641,10 @@ type fakeAdminService struct {
 	managedServers     []map[string]any
 	hostUpdateResult   admin.ManagedServerHostUpdateResult
 	configData         map[string]any
+	themes             map[string]any
+	themeConfig        map[string]any
 	emailTemplates     []string
+	themeTemplates     []string
 	mailTestLog        admin.ConfigMailTestLog
 	plans              []admin.PlanRecord
 	notices            []admin.NoticeRecord
@@ -999,8 +1002,24 @@ func (f *fakeAdminService) SaveConfig(_ context.Context, values map[string]any) 
 	return true, f.err
 }
 
+func (f *fakeAdminService) ListThemes(_ context.Context) (map[string]any, error) {
+	return f.themes, f.err
+}
+
+func (f *fakeAdminService) GetThemeConfig(_ context.Context, _ string) (map[string]any, error) {
+	return f.themeConfig, f.err
+}
+
+func (f *fakeAdminService) SaveThemeConfig(_ context.Context, _ string, values map[string]any) (map[string]any, error) {
+	return values, f.err
+}
+
 func (f *fakeAdminService) ListEmailTemplates(_ context.Context) ([]string, error) {
 	return f.emailTemplates, f.err
+}
+
+func (f *fakeAdminService) ListThemeTemplates(_ context.Context) ([]string, error) {
+	return f.themeTemplates, f.err
 }
 
 func (f *fakeAdminService) SetTelegramWebhook(_ context.Context, token string) (bool, error) {
