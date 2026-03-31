@@ -21,6 +21,8 @@ LOCAL_HOME_DIR="${LOCAL_TOOL_DIR}/home"
 SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
 FOREST_SERVICE_NAME="${FOREST_SERVICE_NAME:-forest}"
 FOREST_SERVICE_FILE_PATH="${FOREST_SERVICE_FILE_PATH:-/etc/systemd/system/${FOREST_SERVICE_NAME}.service}"
+LEGACY_FOREST_SERVICE_NAME="${LEGACY_FOREST_SERVICE_NAME:-forest-go-api}"
+LEGACY_FOREST_SERVICE_FILE_PATH="${LEGACY_FOREST_SERVICE_FILE_PATH:-/etc/systemd/system/${LEGACY_FOREST_SERVICE_NAME}.service}"
 
 mkdir -p "${BIN_DIR}" "${RUN_DIR}"
 
@@ -794,32 +796,71 @@ run_systemctl_checked() {
   "${SYSTEMCTL_BIN}" "$@"
 }
 
-systemd_service_managed() {
+current_systemd_service_managed() {
   systemctl_available || return 1
   [[ -e "${FOREST_SERVICE_FILE_PATH}" ]]
 }
 
-systemd_service_active() {
-  systemd_service_managed || return 1
+legacy_systemd_service_supported() {
+  [[ -n "${LEGACY_FOREST_SERVICE_NAME}" ]] || return 1
+  [[ "${LEGACY_FOREST_SERVICE_NAME}" != "${FOREST_SERVICE_NAME}" ]]
+}
+
+legacy_systemd_service_managed() {
+  systemctl_available || return 1
+  legacy_systemd_service_supported || return 1
+  [[ -e "${LEGACY_FOREST_SERVICE_FILE_PATH}" ]]
+}
+
+current_systemd_service_active() {
+  current_systemd_service_managed || return 1
   "${SYSTEMCTL_BIN}" is-active --quiet "${FOREST_SERVICE_NAME}" >/dev/null 2>&1
 }
 
-systemd_service_pid() {
-  systemd_service_active || return 1
+legacy_systemd_service_active() {
+  legacy_systemd_service_managed || return 1
+  "${SYSTEMCTL_BIN}" is-active --quiet "${LEGACY_FOREST_SERVICE_NAME}" >/dev/null 2>&1
+}
+
+systemd_service_managed() {
+  current_systemd_service_managed && return 0
+  legacy_systemd_service_managed
+}
+
+active_systemd_service_name() {
+  if current_systemd_service_active; then
+    printf '%s\n' "${FOREST_SERVICE_NAME}"
+    return 0
+  fi
+  if legacy_systemd_service_active; then
+    printf '%s\n' "${LEGACY_FOREST_SERVICE_NAME}"
+    return 0
+  fi
+  return 1
+}
+
+systemd_service_active() {
+  active_systemd_service_name >/dev/null 2>&1
+}
+
+systemd_service_main_pid_for_name() {
+  local service_name="$1"
   local pid
-  pid="$("${SYSTEMCTL_BIN}" show -p MainPID --value "${FOREST_SERVICE_NAME}" 2>/dev/null || true)"
+  pid="$("${SYSTEMCTL_BIN}" show -p MainPID --value "${service_name}" 2>/dev/null || true)"
   [[ "${pid}" =~ ^[0-9]+$ ]] || return 1
   [[ "${pid}" != "0" ]] || return 1
   printf '%s\n' "${pid}"
 }
 
+systemd_service_pid() {
+  local service_name
+  service_name="$(active_systemd_service_name || true)"
+  [[ -n "${service_name}" ]] || return 1
+  systemd_service_main_pid_for_name "${service_name}"
+}
+
 systemd_service_main_pid() {
-  systemctl_available || return 1
-  local pid
-  pid="$("${SYSTEMCTL_BIN}" show -p MainPID --value "${FOREST_SERVICE_NAME}" 2>/dev/null || true)"
-  [[ "${pid}" =~ ^[0-9]+$ ]] || return 1
-  [[ "${pid}" != "0" ]] || return 1
-  printf '%s\n' "${pid}"
+  systemd_service_main_pid_for_name "${FOREST_SERVICE_NAME}"
 }
 
 pid_file_service_pid() {
@@ -881,17 +922,47 @@ install_or_refresh_systemd_service() {
   return 0
 }
 
+migrate_legacy_systemd_service() {
+  legacy_systemd_service_supported || return 0
+
+  local migrated=false
+
+  if legacy_systemd_service_active; then
+    if ! run_systemctl_checked stop "${LEGACY_FOREST_SERVICE_NAME}" >/dev/null; then
+      return 1
+    fi
+    migrated=true
+  fi
+
+  if legacy_systemd_service_managed; then
+    run_systemctl_safe disable --now "${LEGACY_FOREST_SERVICE_NAME}"
+    rm -f "${LEGACY_FOREST_SERVICE_FILE_PATH}"
+    migrated=true
+  fi
+
+  if [[ "${migrated}" == "true" ]]; then
+    if ! run_systemctl_checked daemon-reload >/dev/null; then
+      return 1
+    fi
+  fi
+
+  return 0
+}
+
 ensure_systemd_service_running() {
+  if ! migrate_legacy_systemd_service; then
+    return 1
+  fi
   if ! install_or_refresh_systemd_service; then
     return 1
   fi
 
-  if systemd_service_active; then
+  if current_systemd_service_active; then
     if ! run_systemctl_checked restart "${FOREST_SERVICE_NAME}" >/dev/null; then
       return 1
     fi
     local restart_pid
-    restart_pid="$(systemd_service_main_pid || true)"
+    restart_pid="$(systemd_service_main_pid_for_name "${FOREST_SERVICE_NAME}" || true)"
     if [[ -n "${restart_pid}" ]]; then
       echo "检测到 systemd 服务正在运行，已自动重启，PID ${restart_pid}"
     else
@@ -904,7 +975,7 @@ ensure_systemd_service_running() {
     return 1
   fi
   local enabled_pid
-  enabled_pid="$(systemd_service_main_pid || true)"
+  enabled_pid="$(systemd_service_main_pid_for_name "${FOREST_SERVICE_NAME}" || true)"
   if [[ -n "${enabled_pid}" ]]; then
     echo "已通过 systemd 启动并设置开机自启，PID ${enabled_pid}"
   else
@@ -1224,8 +1295,10 @@ cmd_run() {
 }
 
 cmd_stop() {
-  if systemd_service_active; then
-    run_systemctl_checked stop "${FOREST_SERVICE_NAME}" >/dev/null
+  local systemd_name=""
+  systemd_name="$(active_systemd_service_name || true)"
+  if [[ -n "${systemd_name}" ]]; then
+    run_systemctl_checked stop "${systemd_name}" >/dev/null
     rm -f "${PID_PATH}"
     echo "已停止（systemd）"
     return 0
@@ -1495,8 +1568,17 @@ cmd_uninstall() {
   if [[ -e "${FOREST_SERVICE_FILE_PATH}" ]]; then
     run_systemctl_safe disable --now "${FOREST_SERVICE_NAME}"
     rm -f "${FOREST_SERVICE_FILE_PATH}"
-    run_systemctl_safe daemon-reload
     removed_service=true
+  fi
+
+  if legacy_systemd_service_managed; then
+    run_systemctl_safe disable --now "${LEGACY_FOREST_SERVICE_NAME}"
+    rm -f "${LEGACY_FOREST_SERVICE_FILE_PATH}"
+    removed_service=true
+  fi
+
+  if [[ "${removed_service}" == "true" ]]; then
+    run_systemctl_safe daemon-reload
   fi
 
   removed_links="$(remove_managed_forest_links)"
