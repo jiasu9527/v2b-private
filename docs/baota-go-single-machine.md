@@ -28,17 +28,17 @@
 最省事的方式是一行命令直接拉起安装：
 
 ```bash
-bash <(curl -fsSL <public-install-url>/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh)
 ```
 
 或者：
 
 ```bash
-wget -qO- <public-install-url>/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh | bash
 ```
 
 脚本会自动安装全局 `forest` 命令，后续就不需要再进入站点目录。
-如果脚本当前只在私有 GitHub 仓库里，匿名 `curl/wget raw` 默认会 `404`，需要先放到公开地址。
+当前仓库已公开，可直接使用上面的 GitHub raw 一键安装命令。
 
 先生成 Go 环境文件：
 

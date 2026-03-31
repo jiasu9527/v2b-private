@@ -3,8 +3,8 @@
 This repository now uses a unified Go runtime entrypoint:
 
 ```bash
-bash <(curl -fsSL <public-install-url>/install.sh)
-wget -qO- <public-install-url>/install.sh | bash
+bash <(curl -fsSL https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh)
+wget -qO- https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh | bash
 ./menu.sh
 ./scripts/appctl install-link
 forest
@@ -48,13 +48,13 @@ Dedicated install walkthrough: `docs/install.md`
 Fast path:
 
 ```bash
-bash <(curl -fsSL <public-install-url>/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh)
 ```
 
 Or:
 
 ```bash
-wget -qO- <public-install-url>/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh | bash
 ```
 
 Local repo path:

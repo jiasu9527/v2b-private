@@ -18,18 +18,18 @@
 - `install.sh` 会自动拉取或更新仓库，然后继续执行安装
 - `./init.sh` 和 `./update.sh` 在缺少 Go 时会自动下载本地工具链到项目目录 `.local/go`
 - 如果你机器里本来就有 Go，也会优先直接用系统 Go
-- 如果脚本当前只在私有 GitHub 仓库里，匿名 `curl/wget raw` 默认会 `404`，需要先放到公开地址
+- 当前可直接使用 GitHub raw 地址在线安装
 
 ## 一行命令安装
 
 ```bash
-bash <(curl -fsSL <public-install-url>/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh)
 ```
 
 或者：
 
 ```bash
-wget -qO- <public-install-url>/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh | bash
 ```
 
 脚本会自动做这些事：

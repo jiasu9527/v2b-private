@@ -20,13 +20,13 @@
 在线一键安装:
 
 ```bash
-bash <(curl -fsSL <public-install-url>/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh)
 ```
 
 或者：
 
 ```bash
-wget -qO- <public-install-url>/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/jiasu9527/v2b-private/master/install.sh | bash
 ```
 
 本地仓库安装:
@@ -47,7 +47,7 @@ wget -qO- <public-install-url>/install.sh | bash
 - 不要求系统预装 Go
 - `install.sh` 会自动拉取/更新仓库、初始化环境文件、安装全局 `forest` 命令，然后执行安装
 - `./init.sh` 和 `./update.sh` 缺少 Go 时会自动下载到项目目录 `.local/go`
-- 如果你现在只推到 `private/master`，GitHub raw 匿名访问会返回 `404`，这一行命令需要等脚本放到公开地址后再用
+- 当前仓库已公开，可直接使用上面的 GitHub raw 一键安装命令
 - 旧目录迁移安装时，必须能读到旧目录里的 `.env`
 - 如果旧目录里还有 `config/v2board.php`，也会一并迁移到新的 JSON 配置
 - 不需要旧目录里的 `vendor`、`node_modules`、`storage/logs`、Redis、Webman、PM2
