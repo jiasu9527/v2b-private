@@ -1544,6 +1544,32 @@ func TestRouterUserCheckLoginEndpoint(t *testing.T) {
 	}
 }
 
+func TestRouterUserCheckLoginReturnsServiceUnavailableOnSessionError(t *testing.T) {
+	sessionService := &fakeSessionService{
+		authErr: session.ErrUnavailable,
+	}
+	router := NewRouter(
+		config.Config{AppName: "forest-go"},
+		WithSessionService(sessionService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/user/checkLogin?auth_data=jwt-x", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("expected json response: %v", err)
+	}
+	if payload["message"] != "会话服务不可用" {
+		t.Fatalf("unexpected session unavailable payload: %#v", payload)
+	}
+}
+
 func TestRouterUserInfoEndpoint(t *testing.T) {
 	sessionService := &fakeSessionService{
 		user: &session.Identity{ID: 10},
@@ -1888,7 +1914,7 @@ func TestRouterUserChangePasswordRejectsShortPassword(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "Password must be greater than 8 digits") {
+	if !strings.Contains(rec.Body.String(), "密码长度不能少于 8 位") {
 		t.Fatalf("expected password validation message, got %s", rec.Body.String())
 	}
 }
@@ -1938,7 +1964,7 @@ func TestRouterUserTransferRejectsInvalidAmount(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "The transfer amount parameter is wrong") {
+	if !strings.Contains(rec.Body.String(), "划转金额参数错误") {
 		t.Fatalf("expected transfer validation message, got %s", rec.Body.String())
 	}
 	if userService.lastTransferAmount != 0 {
@@ -2413,7 +2439,7 @@ func TestRouterUserTicketWithdrawEndpointRequiresMethod(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "The withdrawal method cannot be empty") {
+	if !strings.Contains(rec.Body.String(), "提现方式不能为空") {
 		t.Fatalf("expected withdraw method validation message, got %s", rec.Body.String())
 	}
 }
@@ -2514,7 +2540,7 @@ func TestRouterUserCouponCheckEndpointRequiresCode(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "Coupon cannot be empty") {
+	if !strings.Contains(rec.Body.String(), "优惠券不能为空") {
 		t.Fatalf("expected coupon validation message, got %s", rec.Body.String())
 	}
 }
@@ -2766,7 +2792,7 @@ func TestRouterUserOrderSaveUnsupportedPaymentGatewayMessage(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), `"Payment gateway is unsupported"`) {
+	if !strings.Contains(rec.Body.String(), `"不支持当前支付网关"`) {
 		t.Fatalf("expected unsupported gateway message, got %s", rec.Body.String())
 	}
 }
@@ -2820,7 +2846,7 @@ func TestRouterUserOrderCheckoutUnsupportedPaymentGatewayMessage(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), `"Payment gateway is unsupported"`) {
+	if !strings.Contains(rec.Body.String(), `"不支持当前支付网关"`) {
 		t.Fatalf("expected unsupported gateway message, got %s", rec.Body.String())
 	}
 }

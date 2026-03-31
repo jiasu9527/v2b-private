@@ -381,7 +381,7 @@ func resolveThemeColorMeta(color string) string {
 func renderHTML(w http.ResponseWriter, tmpl *template.Template, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := tmpl.Execute(w, data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writePlainText(w, http.StatusInternalServerError, err.Error())
 	}
 }
 
