@@ -863,7 +863,9 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			return
 		default:
 			if shouldReturnForbiddenUIPage(r) {
-				writePlainText(w, http.StatusForbidden, "Forbidden")
+				if !closeUIConnection(w) {
+					writePlainText(w, http.StatusForbidden, "Forbidden")
+				}
 				return
 			}
 			http.NotFound(w, r)

@@ -278,6 +278,19 @@ func shouldReturnForbiddenUIPage(r *http.Request) bool {
 	return !strings.Contains(filepath.Base(cleanPath), ".")
 }
 
+func closeUIConnection(w http.ResponseWriter) bool {
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		return false
+	}
+	conn, _, err := hijacker.Hijack()
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
 func resolvePublicDir(publicDir string) string {
 	if filepath.IsAbs(publicDir) {
 		return filepath.Clean(publicDir)
