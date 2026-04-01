@@ -57,10 +57,18 @@ func (s *DBService) handleQueuedCommission(ctx context.Context, tradeNo string) 
 	}
 
 	actualAmount := order.CommissionBalance
-	if cfg.WithdrawCloseEnable {
-		inviter.Balance += actualAmount
-	} else {
-		inviter.CommissionBalance += actualAmount
+	creditedAmount := actualAmount
+	if inviter.CommissionBalance < 0 {
+		repaid := minInt64(creditedAmount, -inviter.CommissionBalance)
+		inviter.CommissionBalance += repaid
+		creditedAmount -= repaid
+	}
+	if creditedAmount > 0 {
+		if cfg.WithdrawCloseEnable {
+			inviter.Balance += creditedAmount
+		} else {
+			inviter.CommissionBalance += creditedAmount
+		}
 	}
 	if err := s.updateUserSubscriptionTx(ctx, tx, inviter); err != nil {
 		return err

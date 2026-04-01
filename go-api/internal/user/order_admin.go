@@ -387,15 +387,11 @@ func (s *DBService) rollbackCommissionForRefundTx(ctx context.Context, tx *sql.T
 			rollbackAmount = order.ActualCommissionBalance.Int64
 		}
 
-		if inviter.CommissionBalance >= rollbackAmount {
-			inviter.CommissionBalance -= rollbackAmount
-		} else {
-			remaining := rollbackAmount - inviter.CommissionBalance
-			inviter.CommissionBalance = 0
-			if inviter.Balance < remaining {
-				return ErrCommissionRollbackInsufficient
-			}
-			inviter.Balance -= remaining
+		inviter.CommissionBalance -= rollbackAmount
+		if inviter.CommissionBalance < 0 && inviter.Balance > 0 {
+			recovered := minInt64(inviter.Balance, -inviter.CommissionBalance)
+			inviter.Balance -= recovered
+			inviter.CommissionBalance += recovered
 		}
 		if err := s.updateUserSubscriptionTx(ctx, tx, inviter); err != nil {
 			return err
