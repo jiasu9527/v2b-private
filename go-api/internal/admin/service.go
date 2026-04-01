@@ -514,22 +514,22 @@ func legacyStatWindows(now time.Time) []legacyStatWindow {
 	if current.IsZero() {
 		current = time.Now()
 	}
-	todayStart := time.Date(current.Year(), current.Month(), current.Day(), 0, 0, 0, 0, current.Location()).Unix()
+	todayStart := legacyStatTodayStart(current)
 	yesterdayStart := todayStart - 86400
 
-	windows := []legacyStatWindow{{
+	return []legacyStatWindow{{
 		recordAt: yesterdayStart,
 		startAt:  yesterdayStart,
 		endAt:    todayStart,
 	}}
-	if current.Unix() > todayStart {
-		windows = append(windows, legacyStatWindow{
-			recordAt: todayStart,
-			startAt:  todayStart,
-			endAt:    current.Unix(),
-		})
+}
+
+func legacyStatTodayStart(now time.Time) int64 {
+	current := now
+	if current.IsZero() {
+		current = time.Now()
 	}
-	return windows
+	return time.Date(current.Year(), current.Month(), current.Day(), 0, 0, 0, 0, current.Location()).Unix()
 }
 
 func (s *DBService) RefreshLegacyStats(ctx context.Context) error {
@@ -537,7 +537,12 @@ func (s *DBService) RefreshLegacyStats(ctx context.Context) error {
 		return ErrUnavailable
 	}
 
-	for _, window := range legacyStatWindows(time.Now()) {
+	current := time.Now()
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM v2_stat WHERE record_at = $1`, legacyStatTodayStart(current)); err != nil {
+		return fmt.Errorf("delete current day legacy stat: %w", err)
+	}
+
+	for _, window := range legacyStatWindows(current) {
 		summary, err := s.GetStat(ctx, window.startAt, window.endAt)
 		if err != nil {
 			return err
