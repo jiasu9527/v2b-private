@@ -23,6 +23,7 @@ import (
 var ErrUnavailable = errors.New("admin service unavailable")
 
 const scheduleLastCheckKey = "SCHEDULE_LAST_CHECK_AT_"
+const legacyStatBackfillDays = 7
 
 var monitoredQueueWorkloadNames = []string{
 	"order_handle",
@@ -515,13 +516,16 @@ func legacyStatWindows(now time.Time) []legacyStatWindow {
 		current = time.Now()
 	}
 	todayStart := legacyStatTodayStart(current)
-	yesterdayStart := todayStart - 86400
-
-	return []legacyStatWindow{{
-		recordAt: yesterdayStart,
-		startAt:  yesterdayStart,
-		endAt:    todayStart,
-	}}
+	windows := make([]legacyStatWindow, 0, legacyStatBackfillDays)
+	for daysAgo := legacyStatBackfillDays; daysAgo >= 1; daysAgo-- {
+		startAt := todayStart - int64(daysAgo*86400)
+		windows = append(windows, legacyStatWindow{
+			recordAt: startAt,
+			startAt:  startAt,
+			endAt:    startAt + 86400,
+		})
+	}
+	return windows
 }
 
 func legacyStatTodayStart(now time.Time) int64 {
