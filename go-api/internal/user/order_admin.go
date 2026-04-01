@@ -37,7 +37,7 @@ func (s *DBService) RefundManagedOrder(ctx context.Context, tradeNo string) erro
 	if order.Status != 3 {
 		return ErrRefundCompletedOnly
 	}
-	if order.PlanID <= 0 || order.Type == 9 {
+	if order.PlanID <= 0 || order.Type == 9 || order.Period == "reset_price" {
 		return ErrRefundTargetNotSupported
 	}
 
@@ -54,19 +54,18 @@ func (s *DBService) RefundManagedOrder(ctx context.Context, tradeNo string) erro
 	if err != nil {
 		return err
 	}
-	userRow.U = 0
-	userRow.D = 0
-	userRow.TransferEnable = 0
-	userRow.DeviceLimit = sql.NullInt64{}
-	userRow.GroupID = sql.NullInt64{}
-	userRow.PlanID = sql.NullInt64{}
-	userRow.SpeedLimit = sql.NullInt64{}
-	userRow.ExpiredAt = sql.NullInt64{}
 
 	if err := s.rollbackCommissionForRefundTx(ctx, tx, order); err != nil {
 		return err
 	}
-	if err := s.updateUserSubscriptionTx(ctx, tx, userRow); err != nil {
+	if err := s.restoreSurplusOrdersForRefundTx(ctx, tx, order); err != nil {
+		return err
+	}
+	restoredUser, err := s.rebuildSubscriptionAfterRefundTx(ctx, tx, userRow, order)
+	if err != nil {
+		return err
+	}
+	if err := s.updateUserSubscriptionTx(ctx, tx, restoredUser); err != nil {
 		return err
 	}
 
@@ -82,6 +81,171 @@ func (s *DBService) RefundManagedOrder(ctx context.Context, tradeNo string) erro
 		return fmt.Errorf("commit refund transaction: %w", err)
 	}
 	return nil
+}
+
+func (s *DBService) restoreSurplusOrdersForRefundTx(ctx context.Context, tx *sql.Tx, order orderRecord) error {
+	if !order.SurplusOrderIDs.Valid || strings.TrimSpace(order.SurplusOrderIDs.String) == "" {
+		return nil
+	}
+	ids := parseIDList(order.SurplusOrderIDs.String)
+	if len(ids) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(ids))
+	args := make([]any, 0, len(ids)+1)
+	for _, id := range ids {
+		args = append(args, id)
+		parts = append(parts, fmt.Sprintf("$%d", len(args)))
+	}
+	args = append(args, time.Now().Unix())
+	query := fmt.Sprintf(`UPDATE v2_order SET status = 3, updated_at = $%d WHERE status = 4 AND id IN (%s)`, len(args), strings.Join(parts, ","))
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("restore surplus orders: %w", err)
+	}
+	return nil
+}
+
+func (s *DBService) rebuildSubscriptionAfterRefundTx(ctx context.Context, tx *sql.Tx, current userRecord, refunded orderRecord) (userRecord, error) {
+	restored := current
+	restored.U = 0
+	restored.D = 0
+	restored.TransferEnable = 0
+	restored.DeviceLimit = sql.NullInt64{}
+	restored.GroupID = sql.NullInt64{}
+	restored.PlanID = sql.NullInt64{}
+	restored.SpeedLimit = sql.NullInt64{}
+	restored.ExpiredAt = sql.NullInt64{}
+
+	rows, err := tx.QueryContext(ctx, `SELECT
+id, plan_id, type, period, surplus_order_ids, paid_at, created_at
+FROM v2_order
+WHERE user_id = $1 AND status = 3 AND id <> $2 AND plan_id > 0
+ORDER BY COALESCE(paid_at, created_at) ASC, id ASC`, refunded.UserID, refunded.ID)
+	if err != nil {
+		return userRecord{}, fmt.Errorf("query refund replay orders: %w", err)
+	}
+	defer rows.Close()
+
+	planCache := make(map[int64]planRecord)
+	for rows.Next() {
+		var replay orderRecord
+		if err := rows.Scan(&replay.ID, &replay.PlanID, &replay.Type, &replay.Period, &replay.SurplusOrderIDs, &replay.PaidAt, &replay.CreatedAt); err != nil {
+			return userRecord{}, fmt.Errorf("scan refund replay order: %w", err)
+		}
+
+		plan, ok := planCache[replay.PlanID]
+		if !ok {
+			var err error
+			plan, ok, err = s.loadPlanTx(ctx, tx, replay.PlanID)
+			if err != nil {
+				return userRecord{}, err
+			}
+			if !ok {
+				return userRecord{}, ErrPlanNotFound
+			}
+			planCache[replay.PlanID] = plan
+		}
+
+		applyHistoricalOrder(&restored, replay, plan)
+	}
+	if err := rows.Err(); err != nil {
+		return userRecord{}, fmt.Errorf("iterate refund replay orders: %w", err)
+	}
+
+	preserveUserUsage(current, &restored)
+	return restored, nil
+}
+
+func applyHistoricalOrder(userRow *userRecord, order orderRecord, plan planRecord) {
+	effectiveAt := order.CreatedAt
+	if order.PaidAt.Valid && order.PaidAt.Int64 > 0 {
+		effectiveAt = order.PaidAt.Int64
+	}
+
+	switch order.Period {
+	case "onetime_price":
+		transferEnable := plan.TransferEnable
+		if !order.SurplusOrderIDs.Valid {
+			notUsedTraffic := float64(userRow.TransferEnable-(userRow.U+userRow.D)) / float64(trafficGB)
+			if notUsedTraffic > 0 && !userRow.ExpiredAt.Valid {
+				transferEnable += int64(notUsedTraffic)
+			}
+		}
+		userRow.U = 0
+		userRow.D = 0
+		userRow.TransferEnable = transferEnable * trafficGB
+		userRow.DeviceLimit = plan.DeviceLimit
+		userRow.PlanID = sql.NullInt64{Int64: plan.ID, Valid: true}
+		userRow.GroupID = sql.NullInt64{Int64: plan.GroupID, Valid: true}
+		userRow.ExpiredAt = sql.NullInt64{}
+	case "reset_price":
+		userRow.U = 0
+		userRow.D = 0
+		if plan.SpeedLimit.Valid {
+			userRow.SpeedLimit = plan.SpeedLimit
+		} else {
+			userRow.SpeedLimit = sql.NullInt64{}
+		}
+	default:
+		if order.Type == 3 {
+			userRow.ExpiredAt = sql.NullInt64{Int64: effectiveAt, Valid: true}
+		}
+		userRow.TransferEnable = plan.TransferEnable * trafficGB
+		userRow.DeviceLimit = plan.DeviceLimit
+		if !userRow.ExpiredAt.Valid || order.Type == 1 {
+			userRow.U = 0
+			userRow.D = 0
+		}
+		if order.Type == 2 && userRow.ExpiredAt.Valid {
+			expireTime := time.Unix(userRow.ExpiredAt.Int64, 0)
+			orderTime := time.Unix(effectiveAt, 0)
+			if expireTime.Month() == orderTime.Month() && expireTime.Day() == orderTime.Day() {
+				userRow.U = 0
+				userRow.D = 0
+			}
+		}
+		userRow.PlanID = sql.NullInt64{Int64: plan.ID, Valid: true}
+		userRow.GroupID = sql.NullInt64{Int64: plan.GroupID, Valid: true}
+		userRow.ExpiredAt = sql.NullInt64{Int64: nextExpiredAtAt(order.Period, userRow.ExpiredAt, effectiveAt), Valid: true}
+	}
+	if plan.SpeedLimit.Valid {
+		userRow.SpeedLimit = plan.SpeedLimit
+	} else {
+		userRow.SpeedLimit = sql.NullInt64{}
+	}
+}
+
+func nextExpiredAtAt(period string, expiredAt sql.NullInt64, effectiveAt int64) int64 {
+	base := time.Unix(effectiveAt, 0)
+	if expiredAt.Valid && expiredAt.Int64 > effectiveAt {
+		base = time.Unix(expiredAt.Int64, 0)
+	}
+	months, ok := periodMonths(period)
+	if !ok {
+		return base.Unix()
+	}
+	return base.AddDate(0, months, 0).Unix()
+}
+
+func preserveUserUsage(current userRecord, restored *userRecord) {
+	if restored.TransferEnable <= 0 {
+		restored.U = 0
+		restored.D = 0
+		return
+	}
+
+	u := current.U
+	if u > restored.TransferEnable {
+		u = restored.TransferEnable
+	}
+	remaining := restored.TransferEnable - u
+	d := current.D
+	if d > remaining {
+		d = remaining
+	}
+
+	restored.U = u
+	restored.D = d
 }
 
 func (s *DBService) rollbackCommissionForRefundTx(ctx context.Context, tx *sql.Tx, order orderRecord) error {

@@ -1384,9 +1384,14 @@ func (s *DBService) markSurplusOrdersClosedTx(ctx context.Context, tx *sql.Tx, r
 	if len(ids) == 0 {
 		return nil
 	}
-	query, args := buildInt64InQuery(`UPDATE v2_order SET status = 4, updated_at = $%d WHERE id IN (%s)`, ids)
+	parts := make([]string, 0, len(ids))
+	args := make([]any, 0, len(ids)+1)
+	for _, id := range ids {
+		args = append(args, id)
+		parts = append(parts, fmt.Sprintf("$%d", len(args)))
+	}
 	args = append(args, time.Now().Unix())
-	query = fmt.Sprintf(query, len(args))
+	query := fmt.Sprintf(`UPDATE v2_order SET status = 4, updated_at = $%d WHERE id IN (%s)`, len(args), strings.Join(parts, ","))
 	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("close surplus orders: %w", err)
 	}
