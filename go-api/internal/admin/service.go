@@ -542,11 +542,16 @@ func (s *DBService) RefreshLegacyStats(ctx context.Context) error {
 	}
 
 	current := time.Now()
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM v2_stat WHERE record_at = $1`, legacyStatTodayStart(current)); err != nil {
-		return fmt.Errorf("delete current day legacy stat: %w", err)
+	windows := legacyStatWindows(current)
+	if len(windows) == 0 {
+		return nil
 	}
 
-	for _, window := range legacyStatWindows(current) {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM v2_stat WHERE record_type = 'd' AND record_at >= $1 AND record_at < $2`, windows[0].recordAt, legacyStatTodayStart(current)+86400); err != nil {
+		return fmt.Errorf("delete recent legacy daily stats: %w", err)
+	}
+
+	for _, window := range windows {
 		summary, err := s.GetStat(ctx, window.startAt, window.endAt)
 		if err != nil {
 			return err

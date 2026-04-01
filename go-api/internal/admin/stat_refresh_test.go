@@ -33,8 +33,8 @@ func TestRefreshLegacyStatsBackfillsRecentDaysAndDeletesTodaySnapshot(t *testing
 
 	service := &DBService{db: db}
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM v2_stat WHERE record_at = $1`)).
-		WithArgs(sqlmock.AnyArg()).
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM v2_stat WHERE record_type = 'd' AND record_at >= $1 AND record_at < $2`)).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	for i := 0; i < 7; i++ {
 		expectLegacyStatSummaryQueries(mock)

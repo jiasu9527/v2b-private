@@ -10,7 +10,23 @@ import (
 	"time"
 )
 
-const bytesPerGiB = 1073741824.0
+const (
+	bytesPerGiB             = 1073741824.0
+	legacyStatDisplayDays   = 31
+	legacyStatOrderFetchCap = 124
+)
+
+func legacyStatLocation() *time.Location {
+	if time.Local != nil {
+		return time.Local
+	}
+	return time.UTC
+}
+
+func legacyStatAlignedRecordAt(recordAt int64) bool {
+	recordTime := time.Unix(recordAt, 0).In(legacyStatLocation())
+	return recordTime.Hour() == 0 && recordTime.Minute() == 0 && recordTime.Second() == 0
+}
 
 func (s *DBService) GetStat(ctx context.Context, startAt, endAt int64) (map[string]any, error) {
 	if s.db == nil {
@@ -161,13 +177,14 @@ func (s *DBService) GetStatOrder(ctx context.Context) ([]map[string]any, error) 
 FROM v2_stat
 WHERE record_type = 'd'
 ORDER BY record_at DESC
-LIMIT 31`)
+LIMIT 124`)
 	if err != nil {
 		return nil, fmt.Errorf("query stat order: %w", err)
 	}
 	defer rows.Close()
 
 	result := make([]map[string]any, 0)
+	validDays := 0
 	for rows.Next() {
 		var (
 			recordAt        int64
@@ -180,8 +197,11 @@ LIMIT 31`)
 		if err := rows.Scan(&recordAt, &registerCount, &paidTotal, &paidCount, &commissionTotal, &commissionCount); err != nil {
 			return nil, fmt.Errorf("scan stat order: %w", err)
 		}
+		if !legacyStatAlignedRecordAt(recordAt) {
+			continue
+		}
 
-		date := time.Unix(recordAt, 0).Format("01-02")
+		date := time.Unix(recordAt, 0).In(legacyStatLocation()).Format("01-02")
 		result = append(result,
 			map[string]any{"type": "注册人数", "date": date, "value": registerCount},
 			map[string]any{"type": "收款金额", "date": date, "value": float64(paidTotal) / 100},
@@ -189,6 +209,10 @@ LIMIT 31`)
 			map[string]any{"type": "佣金金额(已发放)", "date": date, "value": float64(commissionTotal) / 100},
 			map[string]any{"type": "佣金笔数(已发放)", "date": date, "value": commissionCount},
 		)
+		validDays++
+		if validDays >= legacyStatDisplayDays {
+			break
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate stat order: %w", err)
@@ -284,6 +308,9 @@ ORDER BY record_at ASC`
 		)
 		if err := rows.Scan(&id, &recordAt, &recordType, &orderCount, &orderTotal, &commissionCount, &commissionTotal, &paidCount, &paidTotal, &registerCount, &inviteCount, &transferUsedTotal, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan stat record: %w", err)
+		}
+		if !legacyStatAlignedRecordAt(recordAt) {
+			continue
 		}
 
 		item := map[string]any{
