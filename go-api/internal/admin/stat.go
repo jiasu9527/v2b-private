@@ -159,6 +159,7 @@ func (s *DBService) GetStatOrder(ctx context.Context) ([]map[string]any, error) 
 
 	rows, err := s.db.QueryContext(ctx, `SELECT record_at, register_count, paid_total, paid_count, commission_total, commission_count
 FROM v2_stat
+WHERE record_type = 'd'
 ORDER BY record_at DESC
 LIMIT 31`)
 	if err != nil {
@@ -239,19 +240,19 @@ func (s *DBService) GetStatRecord(ctx context.Context, statType string, startAt,
 		field = "paid_total"
 		query = `SELECT id, record_at, record_type, order_count, order_total, commission_count, commission_total, paid_count, paid_total / 100.0 AS field_value, register_count, invite_count, transfer_used_total, created_at, updated_at
 FROM v2_stat
-WHERE record_at >= $1 AND record_at < $2
+WHERE record_type = 'd' AND record_at >= $1 AND record_at < $2
 ORDER BY record_at ASC`
 	case "commission_total":
 		field = "commission_total"
 		query = `SELECT id, record_at, record_type, order_count, order_total, commission_count, commission_total / 100.0 AS field_value, paid_count, paid_total, register_count, invite_count, transfer_used_total, created_at, updated_at
 FROM v2_stat
-WHERE record_at >= $1 AND record_at < $2
+WHERE record_type = 'd' AND record_at >= $1 AND record_at < $2
 ORDER BY record_at ASC`
 	case "register_count":
 		field = "register_count"
 		query = `SELECT id, record_at, record_type, order_count, order_total, commission_count, commission_total, paid_count, paid_total, register_count, invite_count, transfer_used_total, created_at, updated_at
 FROM v2_stat
-WHERE record_at >= $1 AND record_at < $2
+WHERE record_type = 'd' AND record_at >= $1 AND record_at < $2
 ORDER BY record_at ASC`
 	default:
 		return nil, errors.New("invalid stat record type")
