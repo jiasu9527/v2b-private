@@ -73,7 +73,7 @@ func TestDBServiceGetQueueWorkloadUsesQueueRuntimeSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get queue workload: %v", err)
 	}
-	if len(workload) < 6 {
+	if len(workload) < 7 {
 		t.Fatalf("expected built-in queue workload rows, got %#v", workload)
 	}
 
@@ -102,7 +102,7 @@ func TestDBServiceGetQueueWorkloadIncludesKnownQueuesWhenIdle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get queue workload: %v", err)
 	}
-	if len(workload) < 6 {
+	if len(workload) < 7 {
 		t.Fatalf("expected built-in queue rows when idle, got %#v", workload)
 	}
 
@@ -112,7 +112,7 @@ func TestDBServiceGetQueueWorkloadIncludesKnownQueuesWhenIdle(t *testing.T) {
 		byName[name] = row
 	}
 
-	for _, queueName := range []string{"order_handle", "send_email", "send_email_mass", "send_telegram", "stat", "stat_refresh", "traffic_fetch"} {
+	for _, queueName := range []string{"order_handle", "send_email", "send_email_mass", "send_telegram", "stat", "stat_refresh", "maintenance_cleanup", "traffic_fetch"} {
 		row, ok := byName[queueName]
 		if !ok {
 			t.Fatalf("expected queue %q in idle workload: %#v", queueName, workload)

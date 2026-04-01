@@ -65,7 +65,7 @@ func main() {
 		telegramService = telegramService.WithUserResolver(userDBService.ResolveClientUserID).WithAdminService(adminDBService)
 		adminService = adminDBService
 		nodeService = nodeapi.NewDBService(cfg, db, userDBService)
-		backgroundRunner = background.NewRunner(jobQueue, adminDBService, userDBService, adminDBService)
+		backgroundRunner = background.NewRunner(jobQueue, adminDBService, userDBService, adminDBService, adminDBService)
 	}
 
 	server := &http.Server{

@@ -38,6 +38,13 @@ type Config struct {
 	CommissionFirstTime          bool
 	OrderCancelRecoverTTL        int64
 	OrderKeepDays                int64
+	MailLogKeepDays              int64
+	LogKeepDays                  int64
+	StatUserKeepDays             int64
+	StatServerKeepDays           int64
+	AuthSessionKeepDays          int64
+	RuntimeKVKeepDays            int64
+	FailedJobsKeepDays           int64
 	SubscribeURL                 string
 	SubscribePath                string
 	ShowInfoToServerEnable       bool
@@ -162,6 +169,13 @@ func Load() Config {
 		CommissionFirstTime:          managedBool("COMMISSION_FIRST_TIME_ENABLE", "commission_first_time_enable", true),
 		OrderCancelRecoverTTL:        managedInt64("ORDER_CANCEL_RECOVER_TTL", "order_cancel_recover_ttl", 1800),
 		OrderKeepDays:                managedInt64("ORDER_KEEP_DAYS", "order_keep_days", 0),
+		MailLogKeepDays:              managedInt64("MAIL_LOG_KEEP_DAYS", "mail_log_keep_days", 0),
+		LogKeepDays:                  managedInt64("LOG_KEEP_DAYS", "log_keep_days", 0),
+		StatUserKeepDays:             managedInt64("STAT_USER_KEEP_DAYS", "stat_user_keep_days", 0),
+		StatServerKeepDays:           managedInt64("STAT_SERVER_KEEP_DAYS", "stat_server_keep_days", 0),
+		AuthSessionKeepDays:          managedInt64("AUTH_SESSION_KEEP_DAYS", "auth_session_keep_days", 0),
+		RuntimeKVKeepDays:            managedInt64("RUNTIME_KV_KEEP_DAYS", "runtime_kv_keep_days", 0),
+		FailedJobsKeepDays:           managedInt64("FAILED_JOBS_KEEP_DAYS", "failed_jobs_keep_days", 0),
 		SubscribeURL:                 managedString("SUBSCRIBE_URL", "subscribe_url", ""),
 		SubscribePath:                managedString("SUBSCRIBE_PATH", "subscribe_path", "/api/v1/client/subscribe"),
 		ShowInfoToServerEnable:       managedBool("SHOW_INFO_TO_SERVER_ENABLE", "show_info_to_server_enable", false),

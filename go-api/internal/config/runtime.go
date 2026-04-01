@@ -8,6 +8,13 @@ type RuntimeValues struct {
 	CommissionAutoCheckEnable  bool
 	CommissionAutoCheckMinutes int64
 	OrderKeepDays              int64
+	MailLogKeepDays            int64
+	LogKeepDays                int64
+	StatUserKeepDays           int64
+	StatServerKeepDays         int64
+	AuthSessionKeepDays        int64
+	RuntimeKVKeepDays          int64
+	FailedJobsKeepDays         int64
 }
 
 type RuntimeState struct {
@@ -66,6 +73,13 @@ func loadRuntimeValues(cfg Config) RuntimeValues {
 		CommissionAutoCheckEnable:  cfg.CommissionAutoCheckEnable,
 		CommissionAutoCheckMinutes: cfg.CommissionAutoCheckMinutes,
 		OrderKeepDays:              cfg.OrderKeepDays,
+		MailLogKeepDays:            cfg.MailLogKeepDays,
+		LogKeepDays:                cfg.LogKeepDays,
+		StatUserKeepDays:           cfg.StatUserKeepDays,
+		StatServerKeepDays:         cfg.StatServerKeepDays,
+		AuthSessionKeepDays:        cfg.AuthSessionKeepDays,
+		RuntimeKVKeepDays:          cfg.RuntimeKVKeepDays,
+		FailedJobsKeepDays:         cfg.FailedJobsKeepDays,
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 const defaultInterval = time.Minute
 
 const statRefreshQueueName = "stat_refresh"
+const maintenanceCleanupQueueName = "maintenance_cleanup"
 
 type Heartbeater interface {
 	TouchScheduleHeartbeat(ctx context.Context) error
@@ -24,20 +25,26 @@ type StatProcessor interface {
 	RefreshLegacyStats(ctx context.Context) error
 }
 
+type CleanupProcessor interface {
+	CleanupRetention(ctx context.Context) error
+}
+
 type Runner struct {
 	jobs      queue.Enqueuer
 	heartbeat Heartbeater
 	orders    OrderProcessor
 	stats     StatProcessor
+	cleanup   CleanupProcessor
 	interval  time.Duration
 }
 
-func NewRunner(jobs queue.Enqueuer, heartbeat Heartbeater, orders OrderProcessor, stats StatProcessor) *Runner {
+func NewRunner(jobs queue.Enqueuer, heartbeat Heartbeater, orders OrderProcessor, stats StatProcessor, cleanup CleanupProcessor) *Runner {
 	return &Runner{
 		jobs:      jobs,
 		heartbeat: heartbeat,
 		orders:    orders,
 		stats:     stats,
+		cleanup:   cleanup,
 		interval:  defaultInterval,
 	}
 }
@@ -87,6 +94,14 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 	if r.stats != nil && !r.queueBusy(statRefreshQueueName) {
 		if err := r.jobs.Enqueue(statRefreshQueueName, "stat:refresh", func(jobCtx context.Context) error {
 			return r.stats.RefreshLegacyStats(jobCtx)
+		}); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if r.cleanup != nil && !r.queueBusy(maintenanceCleanupQueueName) {
+		if err := r.jobs.Enqueue(maintenanceCleanupQueueName, "maintenance:cleanup", func(jobCtx context.Context) error {
+			return r.cleanup.CleanupRetention(jobCtx)
 		}); err != nil {
 			errs = append(errs, err)
 		}

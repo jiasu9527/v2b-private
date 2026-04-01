@@ -106,6 +106,13 @@ func (s *DBService) FetchConfig(_ context.Context, key string) (map[string]any, 
 			"surplus_enable":             cfg.int64Value("surplus_enable", 1),
 			"allow_new_period":           cfg.int64Value("allow_new_period", 0),
 			"order_keep_days":            cfg.int64Value("order_keep_days", 0),
+			"mail_log_keep_days":         cfg.int64Value("mail_log_keep_days", 0),
+			"log_keep_days":              cfg.int64Value("log_keep_days", 0),
+			"stat_user_keep_days":        cfg.int64Value("stat_user_keep_days", 0),
+			"stat_server_keep_days":      cfg.int64Value("stat_server_keep_days", 0),
+			"auth_session_keep_days":     cfg.int64Value("auth_session_keep_days", 0),
+			"runtime_kv_keep_days":       cfg.int64Value("runtime_kv_keep_days", 0),
+			"failed_jobs_keep_days":      cfg.int64Value("failed_jobs_keep_days", 0),
 			"new_order_event_id":         cfg.int64Value("new_order_event_id", 0),
 			"renew_order_event_id":       cfg.int64Value("renew_order_event_id", 0),
 			"change_order_event_id":      cfg.int64Value("change_order_event_id", 0),
@@ -616,6 +623,69 @@ func validateConfigValue(key string, value phpConfigValue) error {
 		parsed, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || parsed < 0 {
 			return errors.New("订单保留天数必须为大于等于0的整数")
+		}
+	case "mail_log_keep_days":
+		raw := strings.TrimSpace(valueToString(value))
+		if raw == "" {
+			return nil
+		}
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			return errors.New("邮件日志保留天数必须为大于等于0的整数")
+		}
+	case "log_keep_days":
+		raw := strings.TrimSpace(valueToString(value))
+		if raw == "" {
+			return nil
+		}
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			return errors.New("系统日志保留天数必须为大于等于0的整数")
+		}
+	case "stat_user_keep_days":
+		raw := strings.TrimSpace(valueToString(value))
+		if raw == "" {
+			return nil
+		}
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			return errors.New("用户流量统计保留天数必须为大于等于0的整数")
+		}
+	case "stat_server_keep_days":
+		raw := strings.TrimSpace(valueToString(value))
+		if raw == "" {
+			return nil
+		}
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			return errors.New("节点流量统计保留天数必须为大于等于0的整数")
+		}
+	case "auth_session_keep_days":
+		raw := strings.TrimSpace(valueToString(value))
+		if raw == "" {
+			return nil
+		}
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			return errors.New("登录会话保留天数必须为大于等于0的整数")
+		}
+	case "runtime_kv_keep_days":
+		raw := strings.TrimSpace(valueToString(value))
+		if raw == "" {
+			return nil
+		}
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			return errors.New("运行时缓存保留天数必须为大于等于0的整数")
+		}
+	case "failed_jobs_keep_days":
+		raw := strings.TrimSpace(valueToString(value))
+		if raw == "" {
+			return nil
+		}
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			return errors.New("失败任务保留天数必须为大于等于0的整数")
 		}
 	}
 	return nil

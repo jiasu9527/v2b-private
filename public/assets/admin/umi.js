@@ -7522,6 +7522,146 @@
                                     f.a.createElement(
                                         m,
                                         {
+                                            title: "\u90ae\u4ef6\u65e5\u5fd7\u4fdd\u7559\u5929\u6570",
+                                            description:
+                                                "\u8d85\u8fc7\u4fdd\u7559\u671f\u7684\u90ae\u4ef6\u53d1\u9001\u65e5\u5fd7\u4f1a\u88ab\u7cfb\u7edf\u81ea\u52a8\u6e05\u7406\uff0c0 \u4e3a\u4e0d\u81ea\u52a8\u6e05\u7406\u3002",
+                                        },
+                                        f.a.createElement("input", {
+                                            type: "text",
+                                            className: "form-control",
+                                            placeholder: "\u8bf7\u8f93\u5165",
+                                            defaultValue: r.mail_log_keep_days,
+                                            onChange: (e) =>
+                                                this.set(
+                                                    "subscribe",
+                                                    "mail_log_keep_days",
+                                                    e.target.value,
+                                                ),
+                                        }),
+                                    ),
+                                    f.a.createElement(
+                                        m,
+                                        {
+                                            title: "\u7cfb\u7edf\u65e5\u5fd7\u4fdd\u7559\u5929\u6570",
+                                            description:
+                                                "\u8d85\u8fc7\u4fdd\u7559\u671f\u7684\u7cfb\u7edf\u65e5\u5fd7\u4f1a\u88ab\u7cfb\u7edf\u81ea\u52a8\u6e05\u7406\uff0c0 \u4e3a\u4e0d\u81ea\u52a8\u6e05\u7406\u3002",
+                                        },
+                                        f.a.createElement("input", {
+                                            type: "text",
+                                            className: "form-control",
+                                            placeholder: "\u8bf7\u8f93\u5165",
+                                            defaultValue: r.log_keep_days,
+                                            onChange: (e) =>
+                                                this.set(
+                                                    "subscribe",
+                                                    "log_keep_days",
+                                                    e.target.value,
+                                                ),
+                                        }),
+                                    ),
+                                    f.a.createElement(
+                                        m,
+                                        {
+                                            title: "\u7528\u6237\u6d41\u91cf\u7edf\u8ba1\u4fdd\u7559\u5929\u6570",
+                                            description:
+                                                "\u8d85\u8fc7\u4fdd\u7559\u671f\u7684\u7528\u6237\u6d41\u91cf\u7edf\u8ba1\u660e\u7ec6\u4f1a\u88ab\u7cfb\u7edf\u81ea\u52a8\u6e05\u7406\uff0c0 \u4e3a\u4e0d\u81ea\u52a8\u6e05\u7406\u3002",
+                                        },
+                                        f.a.createElement("input", {
+                                            type: "text",
+                                            className: "form-control",
+                                            placeholder: "\u8bf7\u8f93\u5165",
+                                            defaultValue: r.stat_user_keep_days,
+                                            onChange: (e) =>
+                                                this.set(
+                                                    "subscribe",
+                                                    "stat_user_keep_days",
+                                                    e.target.value,
+                                                ),
+                                        }),
+                                    ),
+                                    f.a.createElement(
+                                        m,
+                                        {
+                                            title: "\u8282\u70b9\u6d41\u91cf\u7edf\u8ba1\u4fdd\u7559\u5929\u6570",
+                                            description:
+                                                "\u8d85\u8fc7\u4fdd\u7559\u671f\u7684\u8282\u70b9\u6d41\u91cf\u7edf\u8ba1\u660e\u7ec6\u4f1a\u88ab\u7cfb\u7edf\u81ea\u52a8\u6e05\u7406\uff0c0 \u4e3a\u4e0d\u81ea\u52a8\u6e05\u7406\u3002",
+                                        },
+                                        f.a.createElement("input", {
+                                            type: "text",
+                                            className: "form-control",
+                                            placeholder: "\u8bf7\u8f93\u5165",
+                                            defaultValue: r.stat_server_keep_days,
+                                            onChange: (e) =>
+                                                this.set(
+                                                    "subscribe",
+                                                    "stat_server_keep_days",
+                                                    e.target.value,
+                                                ),
+                                        }),
+                                    ),
+                                    f.a.createElement(
+                                        m,
+                                        {
+                                            title: "\u767b\u5f55\u4f1a\u8bdd\u4fdd\u7559\u5929\u6570",
+                                            description:
+                                                "\u5df2\u8fc7\u671f\u4f1a\u8bdd\u4f1a\u88ab\u7cfb\u7edf\u81ea\u52a8\u6e05\u7406\uff0c\u5982\u679c\u8bbe\u7f6e\u5927\u4e8e 0\uff0c\u8d85\u8fc7\u4fdd\u7559\u671f\u7684\u4f1a\u8bdd\u8bb0\u5f55\u4e5f\u4f1a\u88ab\u6e05\u7406\u3002",
+                                        },
+                                        f.a.createElement("input", {
+                                            type: "text",
+                                            className: "form-control",
+                                            placeholder: "\u8bf7\u8f93\u5165",
+                                            defaultValue: r.auth_session_keep_days,
+                                            onChange: (e) =>
+                                                this.set(
+                                                    "subscribe",
+                                                    "auth_session_keep_days",
+                                                    e.target.value,
+                                                ),
+                                        }),
+                                    ),
+                                    f.a.createElement(
+                                        m,
+                                        {
+                                            title: "\u8fd0\u884c\u65f6\u7f13\u5b58\u4fdd\u7559\u5929\u6570",
+                                            description:
+                                                "\u5df2\u8fc7\u671f\u7684\u8fd0\u884c\u65f6\u7f13\u5b58\u4f1a\u88ab\u7cfb\u7edf\u81ea\u52a8\u6e05\u7406\uff0c\u5982\u679c\u8bbe\u7f6e\u5927\u4e8e 0\uff0c\u8d85\u8fc7\u4fdd\u7559\u671f\u7684\u6c38\u4e45\u7f13\u5b58\u4e5f\u4f1a\u88ab\u6e05\u7406\u3002",
+                                        },
+                                        f.a.createElement("input", {
+                                            type: "text",
+                                            className: "form-control",
+                                            placeholder: "\u8bf7\u8f93\u5165",
+                                            defaultValue: r.runtime_kv_keep_days,
+                                            onChange: (e) =>
+                                                this.set(
+                                                    "subscribe",
+                                                    "runtime_kv_keep_days",
+                                                    e.target.value,
+                                                ),
+                                        }),
+                                    ),
+                                    f.a.createElement(
+                                        m,
+                                        {
+                                            title: "\u5931\u8d25\u4efb\u52a1\u4fdd\u7559\u5929\u6570",
+                                            description:
+                                                "\u8d85\u8fc7\u4fdd\u7559\u671f\u7684\u5931\u8d25\u961f\u5217\u4efb\u52a1\u4f1a\u88ab\u7cfb\u7edf\u81ea\u52a8\u6e05\u7406\uff0c0 \u4e3a\u4e0d\u81ea\u52a8\u6e05\u7406\u3002",
+                                        },
+                                        f.a.createElement("input", {
+                                            type: "text",
+                                            className: "form-control",
+                                            placeholder: "\u8bf7\u8f93\u5165",
+                                            defaultValue: r.failed_jobs_keep_days,
+                                            onChange: (e) =>
+                                                this.set(
+                                                    "subscribe",
+                                                    "failed_jobs_keep_days",
+                                                    e.target.value,
+                                                ),
+                                        }),
+                                    ),
+                                    f.a.createElement(
+                                        m,
+                                        {
                                             title: "\u5f53\u8ba2\u9605\u65b0\u8d2d\u65f6\u89e6\u53d1\u4e8b\u4ef6",
                                             description:
                                                 "\u65b0\u8d2d\u8ba2\u9605\u5b8c\u6210\u65f6\u5c06\u89e6\u53d1\u8be5\u4efb\u52a1\u3002",
@@ -42438,6 +42578,8 @@
                                                     stat: "\u7edf\u8ba1\u961f\u5217",
                                                     stat_refresh:
                                                         "\u7edf\u8ba1\u5237\u65b0\u961f\u5217",
+                                                    maintenance_cleanup:
+                                                        "\u81ea\u52a8\u6e05\u7406\u961f\u5217",
                                                     traffic_fetch:
                                                         "\u6d41\u91cf\u6d88\u8d39\u961f\u5217",
                                                 };

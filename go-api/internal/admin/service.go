@@ -32,6 +32,7 @@ var monitoredQueueWorkloadNames = []string{
 	"send_telegram",
 	"stat",
 	"stat_refresh",
+	"maintenance_cleanup",
 	"traffic_fetch",
 }
 

@@ -17,6 +17,13 @@ func TestDBServiceFetchConfigAndTemplates(t *testing.T) {
 		"invite_commission":             20,
 		"commission_auto_check_minutes": 1440,
 		"order_keep_days":               30,
+		"mail_log_keep_days":            15,
+		"log_keep_days":                 15,
+		"stat_user_keep_days":           90,
+		"stat_server_keep_days":         180,
+		"auth_session_keep_days":        30,
+		"runtime_kv_keep_days":          7,
+		"failed_jobs_keep_days":         15,
 		"commission_withdraw_method":    []string{"USDT", "支付宝"},
 		"email_bulk_interval":           3,
 		"email_whitelist_suffix":        []string{"qq.com"},
@@ -51,6 +58,27 @@ func TestDBServiceFetchConfigAndTemplates(t *testing.T) {
 	}
 	if subscribe["order_keep_days"] != int64(30) {
 		t.Fatalf("expected order_keep_days 30, got %#v", subscribe["order_keep_days"])
+	}
+	if subscribe["mail_log_keep_days"] != int64(15) {
+		t.Fatalf("expected mail_log_keep_days 15, got %#v", subscribe["mail_log_keep_days"])
+	}
+	if subscribe["log_keep_days"] != int64(15) {
+		t.Fatalf("expected log_keep_days 15, got %#v", subscribe["log_keep_days"])
+	}
+	if subscribe["stat_user_keep_days"] != int64(90) {
+		t.Fatalf("expected stat_user_keep_days 90, got %#v", subscribe["stat_user_keep_days"])
+	}
+	if subscribe["stat_server_keep_days"] != int64(180) {
+		t.Fatalf("expected stat_server_keep_days 180, got %#v", subscribe["stat_server_keep_days"])
+	}
+	if subscribe["auth_session_keep_days"] != int64(30) {
+		t.Fatalf("expected auth_session_keep_days 30, got %#v", subscribe["auth_session_keep_days"])
+	}
+	if subscribe["runtime_kv_keep_days"] != int64(7) {
+		t.Fatalf("expected runtime_kv_keep_days 7, got %#v", subscribe["runtime_kv_keep_days"])
+	}
+	if subscribe["failed_jobs_keep_days"] != int64(15) {
+		t.Fatalf("expected failed_jobs_keep_days 15, got %#v", subscribe["failed_jobs_keep_days"])
 	}
 	methods, ok := invite["commission_withdraw_method"].([]string)
 	if !ok || len(methods) != 2 || methods[0] != "USDT" || methods[1] != "支付宝" {
@@ -90,6 +118,8 @@ func TestDBServiceSaveConfigPersistsJSONValues(t *testing.T) {
 		"deposit_bounus":             []any{"100:10"},
 		"commission_withdraw_method": []any{"USDT", "支付宝"},
 		"email_bulk_interval":        5,
+		"mail_log_keep_days":         15,
+		"stat_user_keep_days":        90,
 	})
 	if err != nil {
 		t.Fatalf("save config: %v", err)
@@ -128,6 +158,12 @@ func TestDBServiceSaveConfigPersistsJSONValues(t *testing.T) {
 	if written["email_bulk_interval"] != "5" && written["email_bulk_interval"] != float64(5) {
 		t.Fatalf("expected email_bulk_interval in json, got %#v", written["email_bulk_interval"])
 	}
+	if written["mail_log_keep_days"] != "15" && written["mail_log_keep_days"] != float64(15) {
+		t.Fatalf("expected mail_log_keep_days in json, got %#v", written["mail_log_keep_days"])
+	}
+	if written["stat_user_keep_days"] != "90" && written["stat_user_keep_days"] != float64(90) {
+		t.Fatalf("expected stat_user_keep_days in json, got %#v", written["stat_user_keep_days"])
+	}
 }
 
 func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
@@ -138,6 +174,13 @@ func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 		"reset_traffic_method":          0,
 		"commission_auto_check_minutes": 4320,
 		"order_keep_days":               0,
+		"mail_log_keep_days":            0,
+		"log_keep_days":                 0,
+		"stat_user_keep_days":           0,
+		"stat_server_keep_days":         0,
+		"auth_session_keep_days":        0,
+		"runtime_kv_keep_days":          0,
+		"failed_jobs_keep_days":         0,
 	})
 	mustMkdirAll(t, filepath.Join(root, "go-api"))
 
@@ -173,12 +216,40 @@ func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 	if runtimeState.Current().OrderKeepDays != 0 {
 		t.Fatalf("expected order_keep_days=0 before save, got %d", runtimeState.Current().OrderKeepDays)
 	}
+	if runtimeState.Current().MailLogKeepDays != 0 {
+		t.Fatalf("expected mail_log_keep_days=0 before save, got %d", runtimeState.Current().MailLogKeepDays)
+	}
+	if runtimeState.Current().LogKeepDays != 0 {
+		t.Fatalf("expected log_keep_days=0 before save, got %d", runtimeState.Current().LogKeepDays)
+	}
+	if runtimeState.Current().StatUserKeepDays != 0 {
+		t.Fatalf("expected stat_user_keep_days=0 before save, got %d", runtimeState.Current().StatUserKeepDays)
+	}
+	if runtimeState.Current().StatServerKeepDays != 0 {
+		t.Fatalf("expected stat_server_keep_days=0 before save, got %d", runtimeState.Current().StatServerKeepDays)
+	}
+	if runtimeState.Current().AuthSessionKeepDays != 0 {
+		t.Fatalf("expected auth_session_keep_days=0 before save, got %d", runtimeState.Current().AuthSessionKeepDays)
+	}
+	if runtimeState.Current().RuntimeKVKeepDays != 0 {
+		t.Fatalf("expected runtime_kv_keep_days=0 before save, got %d", runtimeState.Current().RuntimeKVKeepDays)
+	}
+	if runtimeState.Current().FailedJobsKeepDays != 0 {
+		t.Fatalf("expected failed_jobs_keep_days=0 before save, got %d", runtimeState.Current().FailedJobsKeepDays)
+	}
 
 	ok, err := service.SaveConfig(context.Background(), map[string]any{
 		"allow_new_period":              1,
 		"reset_traffic_method":          4,
 		"commission_auto_check_minutes": 90,
 		"order_keep_days":               45,
+		"mail_log_keep_days":            15,
+		"log_keep_days":                 15,
+		"stat_user_keep_days":           90,
+		"stat_server_keep_days":         180,
+		"auth_session_keep_days":        30,
+		"runtime_kv_keep_days":          7,
+		"failed_jobs_keep_days":         15,
 	})
 	if err != nil {
 		t.Fatalf("save config: %v", err)
@@ -198,6 +269,27 @@ func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 	}
 	if runtimeState.Current().OrderKeepDays != 45 {
 		t.Fatalf("expected order_keep_days=45 after save, got %d", runtimeState.Current().OrderKeepDays)
+	}
+	if runtimeState.Current().MailLogKeepDays != 15 {
+		t.Fatalf("expected mail_log_keep_days=15 after save, got %d", runtimeState.Current().MailLogKeepDays)
+	}
+	if runtimeState.Current().LogKeepDays != 15 {
+		t.Fatalf("expected log_keep_days=15 after save, got %d", runtimeState.Current().LogKeepDays)
+	}
+	if runtimeState.Current().StatUserKeepDays != 90 {
+		t.Fatalf("expected stat_user_keep_days=90 after save, got %d", runtimeState.Current().StatUserKeepDays)
+	}
+	if runtimeState.Current().StatServerKeepDays != 180 {
+		t.Fatalf("expected stat_server_keep_days=180 after save, got %d", runtimeState.Current().StatServerKeepDays)
+	}
+	if runtimeState.Current().AuthSessionKeepDays != 30 {
+		t.Fatalf("expected auth_session_keep_days=30 after save, got %d", runtimeState.Current().AuthSessionKeepDays)
+	}
+	if runtimeState.Current().RuntimeKVKeepDays != 7 {
+		t.Fatalf("expected runtime_kv_keep_days=7 after save, got %d", runtimeState.Current().RuntimeKVKeepDays)
+	}
+	if runtimeState.Current().FailedJobsKeepDays != 15 {
+		t.Fatalf("expected failed_jobs_keep_days=15 after save, got %d", runtimeState.Current().FailedJobsKeepDays)
 	}
 }
 
