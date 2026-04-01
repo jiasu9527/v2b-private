@@ -862,6 +862,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			fileServer.ServeHTTP(w, r)
 			return
 		default:
+			if shouldReturnForbiddenUIPage(r) {
+				writePlainText(w, http.StatusForbidden, "Forbidden")
+				return
+			}
 			http.NotFound(w, r)
 			return
 		}

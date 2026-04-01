@@ -260,6 +260,24 @@ func normalizeAdminPath(path string) string {
 	return path
 }
 
+func shouldReturnForbiddenUIPage(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+
+	path := normalizeUIPath(r.URL.Path)
+	if path == "/" {
+		return true
+	}
+
+	cleanPath := strings.TrimPrefix(path, "/")
+	if cleanPath == "" || strings.HasPrefix(cleanPath, "api/") {
+		return false
+	}
+
+	return !strings.Contains(filepath.Base(cleanPath), ".")
+}
+
 func resolvePublicDir(publicDir string) string {
 	if filepath.IsAbs(publicDir) {
 		return filepath.Clean(publicDir)

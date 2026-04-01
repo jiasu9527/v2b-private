@@ -28,8 +28,8 @@ func TestRouterDoesNotServeFrontendShell(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", rec.Code)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rec.Code)
 	}
 }
 
@@ -50,8 +50,8 @@ func TestRouterDoesNotFallbackToDefaultThemeShell(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", rec.Code)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rec.Code)
 	}
 }
 
@@ -108,7 +108,7 @@ func TestRouterServesOnlyAdminInviteCampaignPage(t *testing.T) {
 		code   int
 		needle string
 	}{
-		{path: "/invite-campaign", code: http.StatusNotFound},
+		{path: "/invite-campaign", code: http.StatusForbidden},
 		{path: "/localadmin/invite-campaign", code: http.StatusOK, needle: `InviteCampaignAdminPage`},
 	}
 	for _, tc := range cases {
@@ -122,6 +122,28 @@ func TestRouterServesOnlyAdminInviteCampaignPage(t *testing.T) {
 		if tc.needle != "" && !strings.Contains(rec.Body.String(), tc.needle) {
 			t.Fatalf("expected %s page to contain %q, body=%s", tc.path, tc.needle, rec.Body.String())
 		}
+	}
+}
+
+func TestRouterMissingStaticAssetStillReturnsNotFound(t *testing.T) {
+	root := t.TempDir()
+	writeUIFixture(t, root)
+
+	router := NewRouter(config.Config{
+		AppName:        "Forest Site",
+		AppDescription: "Fast and stable",
+		AppURL:         "https://forest.test",
+		Logo:           "https://cdn.example.com/logo.png",
+		AdminPath:      "localadmin",
+		PublicDir:      filepath.Join(root, "public"),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/assets/missing.js", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing asset, got %d", rec.Code)
 	}
 }
 
