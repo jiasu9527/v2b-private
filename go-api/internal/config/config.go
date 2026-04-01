@@ -37,6 +37,7 @@ type Config struct {
 	TicketStatus                 int64
 	CommissionFirstTime          bool
 	OrderCancelRecoverTTL        int64
+	OrderKeepDays                int64
 	SubscribeURL                 string
 	SubscribePath                string
 	ShowInfoToServerEnable       bool
@@ -160,6 +161,7 @@ func Load() Config {
 		TicketStatus:                 managedInt64("TICKET_STATUS", "ticket_status", 0),
 		CommissionFirstTime:          managedBool("COMMISSION_FIRST_TIME_ENABLE", "commission_first_time_enable", true),
 		OrderCancelRecoverTTL:        managedInt64("ORDER_CANCEL_RECOVER_TTL", "order_cancel_recover_ttl", 1800),
+		OrderKeepDays:                managedInt64("ORDER_KEEP_DAYS", "order_keep_days", 0),
 		SubscribeURL:                 managedString("SUBSCRIBE_URL", "subscribe_url", ""),
 		SubscribePath:                managedString("SUBSCRIBE_PATH", "subscribe_path", "/api/v1/client/subscribe"),
 		ShowInfoToServerEnable:       managedBool("SHOW_INFO_TO_SERVER_ENABLE", "show_info_to_server_enable", false),

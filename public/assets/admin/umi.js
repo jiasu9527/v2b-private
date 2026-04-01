@@ -7502,6 +7502,26 @@
                                     f.a.createElement(
                                         m,
                                         {
+                                            title: "\u8ba2\u5355\u4fdd\u7559\u5929\u6570",
+                                            description:
+                                                "\u5df2\u53d6\u6d88\u3001\u5df2\u9000\u6b3e\u3001\u8d85\u8fc7\u4fdd\u7559\u671f\u7684\u8ba2\u5355\u4f1a\u88ab\u7cfb\u7edf\u81ea\u52a8\u6e05\u7406\uff0c0 \u4e3a\u4e0d\u81ea\u52a8\u6e05\u7406\u3002",
+                                        },
+                                        f.a.createElement("input", {
+                                            type: "text",
+                                            className: "form-control",
+                                            placeholder: "\u8bf7\u8f93\u5165",
+                                            defaultValue: r.order_keep_days,
+                                            onChange: (e) =>
+                                                this.set(
+                                                    "subscribe",
+                                                    "order_keep_days",
+                                                    e.target.value,
+                                                ),
+                                        }),
+                                    ),
+                                    f.a.createElement(
+                                        m,
+                                        {
                                             title: "\u5f53\u8ba2\u9605\u65b0\u8d2d\u65f6\u89e6\u53d1\u4e8b\u4ef6",
                                             description:
                                                 "\u65b0\u8d2d\u8ba2\u9605\u5b8c\u6210\u65f6\u5c06\u89e6\u53d1\u8be5\u4efb\u52a1\u3002",

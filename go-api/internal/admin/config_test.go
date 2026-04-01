@@ -16,6 +16,7 @@ func TestDBServiceFetchConfigAndTemplates(t *testing.T) {
 		"invite_campaign_enable":        1,
 		"invite_commission":             20,
 		"commission_auto_check_minutes": 1440,
+		"order_keep_days":               30,
 		"commission_withdraw_method":    []string{"USDT", "支付宝"},
 		"email_bulk_interval":           3,
 		"email_whitelist_suffix":        []string{"qq.com"},
@@ -43,6 +44,13 @@ func TestDBServiceFetchConfigAndTemplates(t *testing.T) {
 	}
 	if invite["commission_auto_check_minutes"] != int64(1440) {
 		t.Fatalf("expected commission auto check minutes 1440, got %#v", invite["commission_auto_check_minutes"])
+	}
+	subscribe, ok := data["subscribe"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected subscribe group, got %#v", data)
+	}
+	if subscribe["order_keep_days"] != int64(30) {
+		t.Fatalf("expected order_keep_days 30, got %#v", subscribe["order_keep_days"])
 	}
 	methods, ok := invite["commission_withdraw_method"].([]string)
 	if !ok || len(methods) != 2 || methods[0] != "USDT" || methods[1] != "支付宝" {
@@ -129,6 +137,7 @@ func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 		"allow_new_period":              0,
 		"reset_traffic_method":          0,
 		"commission_auto_check_minutes": 4320,
+		"order_keep_days":               0,
 	})
 	mustMkdirAll(t, filepath.Join(root, "go-api"))
 
@@ -161,11 +170,15 @@ func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 	if runtimeState.Current().CommissionAutoCheckMinutes != 4320 {
 		t.Fatalf("expected commission_auto_check_minutes=4320 before save, got %d", runtimeState.Current().CommissionAutoCheckMinutes)
 	}
+	if runtimeState.Current().OrderKeepDays != 0 {
+		t.Fatalf("expected order_keep_days=0 before save, got %d", runtimeState.Current().OrderKeepDays)
+	}
 
 	ok, err := service.SaveConfig(context.Background(), map[string]any{
 		"allow_new_period":              1,
 		"reset_traffic_method":          4,
 		"commission_auto_check_minutes": 90,
+		"order_keep_days":               45,
 	})
 	if err != nil {
 		t.Fatalf("save config: %v", err)
@@ -182,6 +195,9 @@ func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 	}
 	if runtimeState.Current().CommissionAutoCheckMinutes != 90 {
 		t.Fatalf("expected commission_auto_check_minutes=90 after save, got %d", runtimeState.Current().CommissionAutoCheckMinutes)
+	}
+	if runtimeState.Current().OrderKeepDays != 45 {
+		t.Fatalf("expected order_keep_days=45 after save, got %d", runtimeState.Current().OrderKeepDays)
 	}
 }
 

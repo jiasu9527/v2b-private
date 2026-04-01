@@ -7,6 +7,7 @@ type RuntimeValues struct {
 	ResetTrafficMethod         int64
 	CommissionAutoCheckEnable  bool
 	CommissionAutoCheckMinutes int64
+	OrderKeepDays              int64
 }
 
 type RuntimeState struct {
@@ -64,6 +65,7 @@ func loadRuntimeValues(cfg Config) RuntimeValues {
 		ResetTrafficMethod:         cfg.ResetTrafficMethod,
 		CommissionAutoCheckEnable:  cfg.CommissionAutoCheckEnable,
 		CommissionAutoCheckMinutes: cfg.CommissionAutoCheckMinutes,
+		OrderKeepDays:              cfg.OrderKeepDays,
 	}
 }
 

@@ -17,9 +17,9 @@ func TestRefundManagedOrderRestoresPreviousSubscription(t *testing.T) {
 	defer db.Close()
 
 	now := time.Now()
-	previousPaidAt := now.AddDate(0, 0, -15).Unix()
 	targetPaidAt := now.AddDate(0, 0, -5).Unix()
-	expectedExpiredAt := time.Unix(previousPaidAt, 0).AddDate(0, 1, 0).Unix()
+	expectedExpiredAt := now.AddDate(0, 0, 25).Unix()
+	currentExpiredAt := time.Unix(expectedExpiredAt, 0).AddDate(0, 1, 0).Unix()
 
 	service := NewDBService(config.Config{}, db)
 
@@ -47,25 +47,7 @@ func TestRefundManagedOrderRestoresPreviousSubscription(t *testing.T) {
 			"u", "d", "transfer_enable", "device_limit", "banned", "group_id", "plan_id", "speed_limit", "expired_at",
 		}).AddRow(
 			int64(12), nil, int64(0), int64(0), nil, int64(0), nil,
-			int64(11), int64(22), int64(trafficGB), int64(3), int64(0), int64(2), int64(9), int64(50), now.AddDate(0, 0, 25).Unix(),
-		))
-	mock.ExpectQuery(`SELECT\s+id, plan_id, type, period, surplus_order_ids, paid_at, created_at\s+FROM v2_order\s+WHERE user_id = \$1 AND status = 3 AND id <> \$2 AND plan_id > 0\s+ORDER BY COALESCE\(paid_at, created_at\) ASC, id ASC`).
-		WithArgs(int64(12), int64(19)).
-		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "plan_id", "type", "period", "surplus_order_ids", "paid_at", "created_at",
-		}).AddRow(
-			int64(18), int64(9), int64(1), "month_price", nil, previousPaidAt, previousPaidAt,
-		))
-	mock.ExpectQuery(`SELECT\s+id, group_id, transfer_enable, device_limit, speed_limit, "show", renew,\s*month_price, quarter_price, half_year_price, year_price, two_year_price, three_year_price,\s*onetime_price, reset_price, reset_traffic_method, capacity_limit\s+FROM v2_plan\s+WHERE id = \$1\s+LIMIT 1`).
-		WithArgs(int64(9)).
-		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "group_id", "transfer_enable", "device_limit", "speed_limit", "show", "renew",
-			"month_price", "quarter_price", "half_year_price", "year_price", "two_year_price", "three_year_price",
-			"onetime_price", "reset_price", "reset_traffic_method", "capacity_limit",
-		}).AddRow(
-			int64(9), int64(2), int64(1), int64(3), int64(50), int64(1), int64(1),
-			int64(2000), nil, nil, nil, nil, nil,
-			nil, nil, nil, nil,
+			int64(11), int64(22), int64(trafficGB), int64(3), int64(0), int64(2), int64(9), int64(50), currentExpiredAt,
 		))
 	mock.ExpectExec(`UPDATE v2_user SET`).
 		WithArgs(
@@ -130,8 +112,8 @@ func TestRefundManagedOrderReopensClosedSurplusOrders(t *testing.T) {
 	mock.ExpectExec(`UPDATE v2_order SET status = 3, updated_at = \$3 WHERE status = 4 AND id IN \(\$1,\$2\)`).
 		WithArgs(int64(17), int64(18), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 2))
-	mock.ExpectQuery(`SELECT\s+id, plan_id, type, period, surplus_order_ids, paid_at, created_at\s+FROM v2_order\s+WHERE user_id = \$1 AND status = 3 AND id <> \$2 AND plan_id > 0\s+ORDER BY COALESCE\(paid_at, created_at\) ASC, id ASC`).
-		WithArgs(int64(12), int64(30)).
+	mock.ExpectQuery(`SELECT\s+id, plan_id, type, period, surplus_order_ids, paid_at, created_at\s+FROM v2_order\s+WHERE id IN \(\$1,\$2\)\s+ORDER BY COALESCE\(paid_at, created_at\) ASC, id ASC`).
+		WithArgs(int64(17), int64(18)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "plan_id", "type", "period", "surplus_order_ids", "paid_at", "created_at",
 		}).AddRow(

@@ -74,6 +74,7 @@ func TestLoadAdminJSONFallbacks(t *testing.T) {
 	raw, err := json.MarshalIndent(map[string]any{
 		"secure_path":                "newadmin",
 		"commission_withdraw_method": []string{"USDT", "支付宝"},
+		"order_keep_days":            60,
 	}, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal admin json: %v", err)
@@ -99,6 +100,9 @@ func TestLoadAdminJSONFallbacks(t *testing.T) {
 	}
 	if len(cfg.CommissionWithdrawMethods) != 2 || cfg.CommissionWithdrawMethods[0] != "USDT" || cfg.CommissionWithdrawMethods[1] != "支付宝" {
 		t.Fatalf("unexpected json withdraw methods: %#v", cfg.CommissionWithdrawMethods)
+	}
+	if cfg.OrderKeepDays != 60 {
+		t.Fatalf("expected order keep days 60 from admin.json, got %d", cfg.OrderKeepDays)
 	}
 }
 

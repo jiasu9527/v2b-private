@@ -105,6 +105,7 @@ func (s *DBService) FetchConfig(_ context.Context, key string) (map[string]any, 
 			"reset_traffic_method":       cfg.int64Value("reset_traffic_method", 0),
 			"surplus_enable":             cfg.int64Value("surplus_enable", 1),
 			"allow_new_period":           cfg.int64Value("allow_new_period", 0),
+			"order_keep_days":            cfg.int64Value("order_keep_days", 0),
 			"new_order_event_id":         cfg.int64Value("new_order_event_id", 0),
 			"renew_order_event_id":       cfg.int64Value("renew_order_event_id", 0),
 			"change_order_event_id":      cfg.int64Value("change_order_event_id", 0),
@@ -606,6 +607,15 @@ func validateConfigValue(key string, value phpConfigValue) error {
 		parsed, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || parsed < 0 {
 			return errors.New("佣金自动确认时间必须为大于等于0的整数")
+		}
+	case "order_keep_days":
+		raw := strings.TrimSpace(valueToString(value))
+		if raw == "" {
+			return nil
+		}
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			return errors.New("订单保留天数必须为大于等于0的整数")
 		}
 	}
 	return nil

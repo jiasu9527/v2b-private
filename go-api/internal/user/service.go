@@ -252,6 +252,7 @@ func (s *DBService) runtimeValues() config.RuntimeValues {
 			ResetTrafficMethod:         cfg.ResetTrafficMethod,
 			CommissionAutoCheckEnable:  cfg.CommissionAutoCheckEnable,
 			CommissionAutoCheckMinutes: cfg.CommissionAutoCheckMinutes,
+			OrderKeepDays:              cfg.OrderKeepDays,
 		}
 	}
 	return s.runtime.Current()
