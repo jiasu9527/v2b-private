@@ -36,6 +36,17 @@ var monitoredQueueWorkloadNames = []string{
 	"traffic_fetch",
 }
 
+var monitoredQueueDisplayNames = map[string]string{
+	"order_handle":        "订单队列",
+	"send_email":          "邮件队列",
+	"send_email_mass":     "邮件群发队列",
+	"send_telegram":       "Telegram消息队列",
+	"stat":                "统计队列",
+	"stat_refresh":        "统计刷新队列",
+	"maintenance_cleanup": "自动清理队列",
+	"traffic_fetch":       "流量消费队列",
+}
+
 type SystemStatus struct {
 	Schedule            bool   `json:"schedule"`
 	Horizon             bool   `json:"horizon"`
@@ -407,16 +418,16 @@ func (s *DBService) GetQueueStats(_ context.Context) (QueueStats, error) {
 
 	wait := make([]QueueWaitJob, 0, len(snapshot.Queues))
 	for _, item := range snapshot.Queues {
-		wait = append(wait, QueueWaitJob{Name: item.Name, Time: item.Wait})
+		wait = append(wait, QueueWaitJob{Name: queueDisplayName(item.Name), Time: item.Wait})
 	}
 
 	var maxRuntime any
 	if snapshot.MaxRuntimeQueue != "" {
-		maxRuntime = snapshot.MaxRuntimeQueue
+		maxRuntime = queueDisplayName(snapshot.MaxRuntimeQueue)
 	}
 	var maxThroughput any
 	if snapshot.MaxThroughputQueue != "" {
-		maxThroughput = snapshot.MaxThroughputQueue
+		maxThroughput = queueDisplayName(snapshot.MaxThroughputQueue)
 	}
 
 	return QueueStats{
@@ -452,7 +463,8 @@ func queueWorkloadRows(snapshot queue.Snapshot) []map[string]any {
 	rowsByName := make(map[string]map[string]any, len(snapshot.Queues))
 	for _, item := range snapshot.Queues {
 		rowsByName[item.Name] = map[string]any{
-			"name":      item.Name,
+			"name":      queueDisplayName(item.Name),
+			"queue":     item.Name,
 			"processes": item.Processes,
 			"length":    item.Length,
 			"wait":      item.Wait,
@@ -465,7 +477,8 @@ func queueWorkloadRows(snapshot queue.Snapshot) []map[string]any {
 		row, ok := rowsByName[name]
 		if !ok {
 			row = map[string]any{
-				"name":      name,
+				"name":      queueDisplayName(name),
+				"queue":     name,
 				"processes": int64(0),
 				"length":    int64(0),
 				"wait":      int64(0),
@@ -488,6 +501,13 @@ func queueWorkloadRows(snapshot queue.Snapshot) []map[string]any {
 	}
 
 	return result
+}
+
+func queueDisplayName(name string) string {
+	if displayName, ok := monitoredQueueDisplayNames[name]; ok {
+		return displayName
+	}
+	return name
 }
 
 func (s *DBService) TouchScheduleHeartbeat(ctx context.Context) error {

@@ -50,10 +50,10 @@ func TestDBServiceGetQueueStatsUsesQueueRuntimeSnapshot(t *testing.T) {
 	if stats.RecentJobs != 15 || stats.FailedJobs != 2 {
 		t.Fatalf("unexpected queue counters: %#v", stats)
 	}
-	if stats.QueueWithMaxRuntime != "send_email_mass" || stats.QueueWithMaxThroughput != "send_email" {
+	if stats.QueueWithMaxRuntime != "邮件群发队列" || stats.QueueWithMaxThroughput != "邮件队列" {
 		t.Fatalf("unexpected queue max values: %#v", stats)
 	}
-	if len(stats.Wait) != 1 || stats.Wait[0].Name != "send_email" || stats.Wait[0].Time != 9 {
+	if len(stats.Wait) != 1 || stats.Wait[0].Name != "邮件队列" || stats.Wait[0].Time != 9 {
 		t.Fatalf("unexpected queue wait stats: %#v", stats.Wait)
 	}
 }
@@ -77,17 +77,17 @@ func TestDBServiceGetQueueWorkloadUsesQueueRuntimeSnapshot(t *testing.T) {
 		t.Fatalf("expected built-in queue workload rows, got %#v", workload)
 	}
 
-	byName := make(map[string]map[string]any, len(workload))
+	byQueue := make(map[string]map[string]any, len(workload))
 	for _, row := range workload {
-		name, _ := row["name"].(string)
-		byName[name] = row
+		name, _ := row["queue"].(string)
+		byQueue[name] = row
 	}
 
-	if byName["send_email"]["processes"] != int64(2) || byName["send_email"]["length"] != int64(5) || byName["send_email"]["wait"] != int64(11) {
-		t.Fatalf("unexpected send_email workload row: %#v", byName["send_email"])
+	if byQueue["send_email"]["name"] != "邮件队列" || byQueue["send_email"]["processes"] != int64(2) || byQueue["send_email"]["length"] != int64(5) || byQueue["send_email"]["wait"] != int64(11) {
+		t.Fatalf("unexpected send_email workload row: %#v", byQueue["send_email"])
 	}
-	if byName["send_email_mass"]["processes"] != int64(1) || byName["send_email_mass"]["length"] != int64(3) || byName["send_email_mass"]["wait"] != int64(7) {
-		t.Fatalf("unexpected send_email_mass workload row: %#v", byName["send_email_mass"])
+	if byQueue["send_email_mass"]["name"] != "邮件群发队列" || byQueue["send_email_mass"]["processes"] != int64(1) || byQueue["send_email_mass"]["length"] != int64(3) || byQueue["send_email_mass"]["wait"] != int64(7) {
+		t.Fatalf("unexpected send_email_mass workload row: %#v", byQueue["send_email_mass"])
 	}
 }
 
@@ -106,20 +106,23 @@ func TestDBServiceGetQueueWorkloadIncludesKnownQueuesWhenIdle(t *testing.T) {
 		t.Fatalf("expected built-in queue rows when idle, got %#v", workload)
 	}
 
-	byName := make(map[string]map[string]any, len(workload))
+	byQueue := make(map[string]map[string]any, len(workload))
 	for _, row := range workload {
-		name, _ := row["name"].(string)
-		byName[name] = row
+		name, _ := row["queue"].(string)
+		byQueue[name] = row
 	}
 
 	for _, queueName := range []string{"order_handle", "send_email", "send_email_mass", "send_telegram", "stat", "stat_refresh", "maintenance_cleanup", "traffic_fetch"} {
-		row, ok := byName[queueName]
+		row, ok := byQueue[queueName]
 		if !ok {
 			t.Fatalf("expected queue %q in idle workload: %#v", queueName, workload)
 		}
 		if row["processes"] != int64(0) || row["length"] != int64(0) || row["wait"] != int64(0) {
 			t.Fatalf("expected idle queue row to be zeroed for %q, got %#v", queueName, row)
 		}
+	}
+	if byQueue["maintenance_cleanup"]["name"] != "自动清理队列" {
+		t.Fatalf("expected localized maintenance queue name, got %#v", byQueue["maintenance_cleanup"])
 	}
 }
 
