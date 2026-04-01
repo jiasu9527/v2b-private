@@ -713,8 +713,10 @@ func (s *DBService) ensureRuntimeTables(ctx context.Context) error {
 			return
 		}
 		if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_v2_runtime_kv_expire_at ON v2_runtime_kv(expire_at)`); err != nil {
-			s.ensureErr = fmt.Errorf("ensure v2_runtime_kv index: %w", err)
-			return
+			if !ignorableEnsureIndexError(err) {
+				s.ensureErr = fmt.Errorf("ensure v2_runtime_kv index: %w", err)
+				return
+			}
 		}
 		if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS v2_auth_session (
 		id BIGSERIAL PRIMARY KEY,
@@ -733,11 +735,24 @@ func (s *DBService) ensureRuntimeTables(ctx context.Context) error {
 			return
 		}
 		if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_v2_auth_session_user_id ON v2_auth_session(user_id)`); err != nil {
-			s.ensureErr = fmt.Errorf("ensure v2_auth_session index: %w", err)
-			return
+			if !ignorableEnsureIndexError(err) {
+				s.ensureErr = fmt.Errorf("ensure v2_auth_session index: %w", err)
+				return
+			}
 		}
 	})
 	return s.ensureErr
+}
+
+func ignorableEnsureIndexError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "must be owner of table") ||
+		strings.Contains(message, "must be owner of relation") ||
+		strings.Contains(message, "permission denied for table") ||
+		strings.Contains(message, "permission denied for relation")
 }
 
 func (s *DBService) beginTx(ctx context.Context) (*sql.Tx, error) {

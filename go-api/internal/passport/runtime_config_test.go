@@ -52,6 +52,36 @@ func TestRegisterUsesRuntimeEmailVerify(t *testing.T) {
 	}
 }
 
+func TestEnsureRuntimeTablesIgnoresIndexPrivilegeErrors(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_runtime_kv`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_runtime_kv_expire_at ON v2_runtime_kv`).
+		WillReturnError(assertableError("ERROR: must be owner of table v2_runtime_kv (SQLSTATE 42501)"))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_auth_session`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_auth_session_user_id ON v2_auth_session\(user_id\)`).
+		WillReturnError(assertableError("ERROR: must be owner of table v2_auth_session (SQLSTATE 42501)"))
+
+	service := NewDBServiceWithConfig(config.Config{}, db)
+	if err := service.ensureRuntimeTables(context.Background()); err != nil {
+		t.Fatalf("expected ignorable index privilege errors, got %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+type assertableError string
+
+func (e assertableError) Error() string {
+	return string(e)
+}
+
 func TestRuntimeMailSettingsUsesReloadedRuntimeConfig(t *testing.T) {
 	root, restoreWD := prepareRuntimeConfigFixture(t, map[string]any{
 		"app_name":           "Forest Old",
