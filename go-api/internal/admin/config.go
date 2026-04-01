@@ -76,6 +76,7 @@ func (s *DBService) FetchConfig(_ context.Context, key string) (map[string]any, 
 			"invite_campaign_try_out_hours":       cfg.float64Value("invite_campaign_try_out_hours", 0),
 			"commission_first_time_enable":        cfg.int64Value("commission_first_time_enable", 1),
 			"commission_auto_check_enable":        cfg.int64Value("commission_auto_check_enable", 1),
+			"commission_auto_check_minutes":       cfg.int64Value("commission_auto_check_minutes", 4320),
 			"commission_withdraw_limit":           cfg.int64Value("commission_withdraw_limit", 100),
 			"commission_withdraw_method":          cfg.stringSliceValue("commission_withdraw_method", []string{"支付宝", "USDT", "Paypal"}),
 			"withdraw_close_enable":               cfg.int64Value("withdraw_close_enable", 0),
@@ -596,6 +597,15 @@ func validateConfigValue(key string, value phpConfigValue) error {
 		parsed, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || parsed < 0 {
 			return errors.New("群发速率限制必须为大于等于0的整数")
+		}
+	case "commission_auto_check_minutes":
+		raw := strings.TrimSpace(valueToString(value))
+		if raw == "" {
+			return nil
+		}
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			return errors.New("佣金自动确认时间必须为大于等于0的整数")
 		}
 	}
 	return nil

@@ -141,6 +141,18 @@ forest status
 ./scripts/appctl doctor
 ```
 
+Admin 前端去混淆与清单生成:
+
+```bash
+node scripts/deobfuscate-admin-bundle.mjs
+```
+
+说明:
+
+- 只处理现有 `public/assets/admin` 编译产物，不新建前端项目
+- 会原地保留当前 bundle 文件，并额外生成 `docs/admin-bundle-inventory.md`
+- 全量模块拆分结果会生成到 `analysis/admin-bundle/`，可随时重新生成
+
 配置文件位置:
 
 - 运行环境：`.env.go`

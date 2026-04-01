@@ -22,6 +22,9 @@ import (
 
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/queue"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type fakeExecResult struct{}
@@ -287,6 +290,73 @@ func TestSendEmailBestEffortRendersHTMLTemplate(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "<html>") || !strings.Contains(rendered, "654321") {
 		t.Fatalf("expected rendered html template body, got %q", rendered)
+	}
+}
+
+func TestLoginMatchesStoredEmailCaseInsensitively(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+
+	service := NewDBServiceWithConfig(config.Config{AppKey: "test-app-key"}, db)
+	service.ensureOne.Do(func() {})
+
+	mock.ExpectQuery(`SELECT id, email, password, password_algo, password_salt, token, is_admin, is_staff, banned\s+FROM v2_user\s+WHERE LOWER\(email\) = \$1\s+LIMIT 1`).
+		WithArgs("user@example.com").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "email", "password", "password_algo", "password_salt", "token", "is_admin", "is_staff", "banned",
+		}).AddRow(
+			int64(9), "User@Example.com", string(hashedPassword), nil, nil, "token-9", int64(0), int64(0), int64(0),
+		))
+	mock.ExpectExec(`INSERT INTO v2_auth_session`).
+		WithArgs(int64(9), sqlmock.AnyArg(), sqlmock.AnyArg(), "", "", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	authData, err := service.Login(context.Background(), LoginRequest{
+		Email:    "user@example.com",
+		Password: "password123",
+	})
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if authData.Token != "token-9" {
+		t.Fatalf("expected token-9, got %q", authData.Token)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestRegisterTreatsStoredEmailAsDuplicateCaseInsensitively(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := NewDBServiceWithConfig(config.Config{}, db)
+	service.ensureOne.Do(func() {})
+
+	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM v2_user WHERE LOWER\(email\) = \$1\)`).
+		WithArgs("user@example.com").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	_, err = service.Register(context.Background(), RegisterRequest{
+		Email:    "user@example.com",
+		Password: "password123",
+	})
+	if err == nil || !strings.Contains(err.Error(), "Email already exists") {
+		t.Fatalf("expected duplicate email error, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
 	}
 }
 

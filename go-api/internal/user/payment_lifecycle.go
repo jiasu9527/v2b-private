@@ -103,7 +103,7 @@ func (s *DBService) lockOrderByTradeNoTx(ctx context.Context, tx *sql.Tx, tradeN
 	err := tx.QueryRowContext(ctx, `SELECT
 id, user_id, plan_id, coupon_id, payment_id, type, period, trade_no, callback_no,
 total_amount, handling_amount, discount_amount, surplus_amount, refund_amount, balance_amount,
-surplus_order_ids, status, commission_balance, invite_user_id, invite_campaign_id,
+surplus_order_ids, status, commission_status, commission_balance, actual_commission_balance, invite_user_id, invite_campaign_id,
 invite_campaign_discount_amount, paid_at, created_at, updated_at
 FROM v2_order
 WHERE trade_no = $1
@@ -125,7 +125,9 @@ FOR UPDATE`, tradeNo).Scan(
 		&row.BalanceAmount,
 		&row.SurplusOrderIDs,
 		&row.Status,
+		&row.CommissionStatus,
 		&row.CommissionBalance,
+		&row.ActualCommissionBalance,
 		&row.InviteUserID,
 		&row.InviteCampaignID,
 		&row.InviteCampaignDiscountAmount,

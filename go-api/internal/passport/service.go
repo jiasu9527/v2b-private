@@ -757,11 +757,12 @@ func (s *DBService) findUserByEmail(ctx context.Context, email string) (*userRow
 	if !ok {
 		return nil, ErrUnavailable
 	}
+	email = strings.TrimSpace(strings.ToLower(email))
 	row := rowerDB.QueryRowContext(
 		ctx,
 		`SELECT id, email, password, password_algo, password_salt, token, is_admin, is_staff, banned
 FROM v2_user
-WHERE email = $1
+WHERE LOWER(email) = $1
 LIMIT 1`,
 		email,
 	)
@@ -803,8 +804,9 @@ func (s *DBService) emailExists(ctx context.Context, email string) (bool, error)
 	if !ok {
 		return false, ErrUnavailable
 	}
+	email = strings.TrimSpace(strings.ToLower(email))
 	var exists bool
-	if err := rowerDB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_user WHERE email = $1)`, email).Scan(&exists); err != nil {
+	if err := rowerDB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_user WHERE LOWER(email) = $1)`, email).Scan(&exists); err != nil {
 		return false, fmt.Errorf("check email exists: %w", err)
 	}
 	return exists, nil

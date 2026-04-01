@@ -198,7 +198,7 @@ func (s *DBService) UpdateUser(ctx context.Context, req UserUpdateRequest) (bool
 			return s.updateInviteUserBinding(ctx, req.ID, strings.TrimSpace(values["invite_user_email"]))
 		}
 	}
-	email := strings.TrimSpace(values["email"])
+	email := strings.TrimSpace(strings.ToLower(values["email"]))
 	if email == "" {
 		return false, errors.New("邮箱不能为空")
 	}
@@ -216,7 +216,7 @@ func (s *DBService) UpdateUser(ctx context.Context, req UserUpdateRequest) (bool
 	}
 
 	var duplicateID int64
-	err = s.db.QueryRowContext(ctx, `SELECT id FROM v2_user WHERE email = $1 LIMIT 1`, email).Scan(&duplicateID)
+	err = s.db.QueryRowContext(ctx, `SELECT id FROM v2_user WHERE LOWER(email) = $1 LIMIT 1`, email).Scan(&duplicateID)
 	switch {
 	case err == nil && duplicateID != req.ID:
 		return false, errors.New("邮箱已被使用")
@@ -346,12 +346,12 @@ func (s *DBService) UpdateUser(ctx context.Context, req UserUpdateRequest) (bool
 	}
 
 	if rawInviteEmail, ok := values["invite_user_email"]; ok {
-		inviteEmail := strings.TrimSpace(rawInviteEmail)
+		inviteEmail := strings.TrimSpace(strings.ToLower(rawInviteEmail))
 		if inviteEmail == "" {
 			addSet("invite_user_id", nil)
 		} else {
 			var inviteUserID int64
-			err := s.db.QueryRowContext(ctx, `SELECT id FROM v2_user WHERE email = $1 LIMIT 1`, inviteEmail).Scan(&inviteUserID)
+			err := s.db.QueryRowContext(ctx, `SELECT id FROM v2_user WHERE LOWER(email) = $1 LIMIT 1`, inviteEmail).Scan(&inviteUserID)
 			switch {
 			case err == nil:
 				addSet("invite_user_id", inviteUserID)
@@ -414,8 +414,9 @@ func (s *DBService) updateInviteUserBinding(ctx context.Context, userID int64, i
 
 	var inviteUserID any
 	if inviteEmail != "" {
+		inviteEmail = strings.TrimSpace(strings.ToLower(inviteEmail))
 		var parsedInviteUserID int64
-		err := s.db.QueryRowContext(ctx, `SELECT id FROM v2_user WHERE email = $1 LIMIT 1`, inviteEmail).Scan(&parsedInviteUserID)
+		err := s.db.QueryRowContext(ctx, `SELECT id FROM v2_user WHERE LOWER(email) = $1 LIMIT 1`, inviteEmail).Scan(&parsedInviteUserID)
 		switch {
 		case err == nil:
 			inviteUserID = parsedInviteUserID
@@ -442,7 +443,7 @@ func (s *DBService) GenerateUsers(ctx context.Context, req UserGenerateRequest) 
 	}
 
 	values := cloneStringMap(req.Values)
-	emailSuffix := strings.TrimSpace(values["email_suffix"])
+	emailSuffix := strings.TrimSpace(strings.ToLower(values["email_suffix"]))
 	if emailSuffix == "" {
 		return "", false, errors.New("参数有误")
 	}
@@ -456,7 +457,7 @@ func (s *DBService) GenerateUsers(ctx context.Context, req UserGenerateRequest) 
 		return "", false, errors.New("参数有误")
 	}
 
-	if emailPrefix := strings.TrimSpace(values["email_prefix"]); emailPrefix != "" {
+	if emailPrefix := strings.TrimSpace(strings.ToLower(values["email_prefix"])); emailPrefix != "" {
 		email := emailPrefix + "@" + emailSuffix
 		exists, err := s.userEmailExists(ctx, email)
 		if err != nil {
@@ -1361,8 +1362,9 @@ func (s *DBService) optionalUserPlan(ctx context.Context, raw string) (*userPlan
 }
 
 func (s *DBService) userEmailExists(ctx context.Context, email string) (bool, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
 	var exists bool
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_user WHERE email = $1)`, email).Scan(&exists)
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_user WHERE LOWER(email) = $1)`, email).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("query user email exists: %w", err)
 	}
@@ -1370,17 +1372,18 @@ func (s *DBService) userEmailExists(ctx context.Context, email string) (bool, er
 }
 
 func (s *DBService) generateUniqueEmailTx(ctx context.Context, tx *sql.Tx, suffix string, seen map[string]struct{}) (string, error) {
+	suffix = strings.TrimSpace(strings.ToLower(suffix))
 	for range 32 {
 		localPart, err := randomAlphaNumeric(6)
 		if err != nil {
 			return "", err
 		}
-		email := localPart + "@" + suffix
+		email := strings.ToLower(localPart + "@" + suffix)
 		if _, ok := seen[email]; ok {
 			continue
 		}
 		var exists bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_user WHERE email = $1)`, email).Scan(&exists); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_user WHERE LOWER(email) = $1)`, email).Scan(&exists); err != nil {
 			return "", err
 		}
 		if exists {

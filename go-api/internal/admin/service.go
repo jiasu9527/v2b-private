@@ -283,6 +283,7 @@ type Service interface {
 	UpdateOrder(ctx context.Context, req OrderUpdateRequest) (bool, error)
 	MarkOrderPaid(ctx context.Context, tradeNo string) (bool, error)
 	CancelManagedOrder(ctx context.Context, tradeNo string) (bool, error)
+	RefundManagedOrder(ctx context.Context, tradeNo string) (bool, error)
 	AssignOrder(ctx context.Context, req OrderAssignRequest) (string, error)
 	ListPayments(ctx context.Context) ([]PaymentRecord, error)
 	ListPaymentMethods(ctx context.Context) ([]string, error)

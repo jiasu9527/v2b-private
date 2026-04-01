@@ -3,8 +3,10 @@ package config
 import "sync"
 
 type RuntimeValues struct {
-	AllowNewPeriod     bool
-	ResetTrafficMethod int64
+	AllowNewPeriod             bool
+	ResetTrafficMethod         int64
+	CommissionAutoCheckEnable  bool
+	CommissionAutoCheckMinutes int64
 }
 
 type RuntimeState struct {
@@ -58,8 +60,10 @@ func (s *RuntimeState) CurrentConfig() Config {
 
 func loadRuntimeValues(cfg Config) RuntimeValues {
 	return RuntimeValues{
-		AllowNewPeriod:     cfg.AllowNewPeriod,
-		ResetTrafficMethod: cfg.ResetTrafficMethod,
+		AllowNewPeriod:             cfg.AllowNewPeriod,
+		ResetTrafficMethod:         cfg.ResetTrafficMethod,
+		CommissionAutoCheckEnable:  cfg.CommissionAutoCheckEnable,
+		CommissionAutoCheckMinutes: cfg.CommissionAutoCheckMinutes,
 	}
 }
 

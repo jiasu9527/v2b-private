@@ -47,6 +47,7 @@ type orderRuntime interface {
 	MarkOrderPaid(ctx context.Context, tradeNo, callbackNo string, allowCancelled bool) error
 	CancelOrder(ctx context.Context, userID int64, tradeNo string) (bool, error)
 	AssignAdminOrder(ctx context.Context, req usersvc.AdminAssignOrderRequest) (string, error)
+	RefundManagedOrder(ctx context.Context, tradeNo string) error
 }
 
 func (s *DBService) FetchOrders(ctx context.Context, req OrderFetchRequest) (OrderListResult, error) {
@@ -239,6 +240,34 @@ func (s *DBService) CancelManagedOrder(ctx context.Context, tradeNo string) (boo
 		}
 	}
 	return ok, nil
+}
+
+func (s *DBService) RefundManagedOrder(ctx context.Context, tradeNo string) (bool, error) {
+	if s.db == nil || s.orders == nil {
+		return false, ErrUnavailable
+	}
+	tradeNo = strings.TrimSpace(tradeNo)
+	if tradeNo == "" {
+		return false, errors.New("订单不存在")
+	}
+
+	if err := s.orders.RefundManagedOrder(ctx, tradeNo); err != nil {
+		switch {
+		case errors.Is(err, usersvc.ErrOrderNotFound):
+			return false, errors.New("订单不存在")
+		case errors.Is(err, usersvc.ErrRefundCompletedOnly):
+			return false, errors.New("只能对已完成的订单进行退款")
+		case errors.Is(err, usersvc.ErrRefundLatestOnly):
+			return false, errors.New("仅支持退款用户最近一笔已完成订单")
+		case errors.Is(err, usersvc.ErrRefundTargetNotSupported):
+			return false, errors.New("当前订单不支持退款")
+		case errors.Is(err, usersvc.ErrCommissionRollbackInsufficient):
+			return false, errors.New("邀请佣金余额不足，无法完成退款")
+		default:
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func (s *DBService) AssignOrder(ctx context.Context, req OrderAssignRequest) (string, error) {

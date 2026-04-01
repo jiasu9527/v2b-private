@@ -13,12 +13,13 @@ import (
 func TestDBServiceFetchConfigAndTemplates(t *testing.T) {
 	root := t.TempDir()
 	writeAdminJSONFixture(t, root, map[string]any{
-		"invite_campaign_enable":     1,
-		"invite_commission":          20,
-		"commission_withdraw_method": []string{"USDT", "支付宝"},
-		"email_bulk_interval":        3,
-		"email_whitelist_suffix":     []string{"qq.com"},
-		"secure_path":                "localadmin",
+		"invite_campaign_enable":        1,
+		"invite_commission":             20,
+		"commission_auto_check_minutes": 1440,
+		"commission_withdraw_method":    []string{"USDT", "支付宝"},
+		"email_bulk_interval":           3,
+		"email_whitelist_suffix":        []string{"qq.com"},
+		"secure_path":                   "localadmin",
 	})
 	mustMkdirAll(t, filepath.Join(root, "resources", "views", "mail", "default"))
 	mustMkdirAll(t, filepath.Join(root, "resources", "views", "mail", "classic"))
@@ -39,6 +40,9 @@ func TestDBServiceFetchConfigAndTemplates(t *testing.T) {
 	}
 	if invite["invite_campaign_enable"] != int64(1) {
 		t.Fatalf("expected invite campaign enabled, got %#v", invite["invite_campaign_enable"])
+	}
+	if invite["commission_auto_check_minutes"] != int64(1440) {
+		t.Fatalf("expected commission auto check minutes 1440, got %#v", invite["commission_auto_check_minutes"])
 	}
 	methods, ok := invite["commission_withdraw_method"].([]string)
 	if !ok || len(methods) != 2 || methods[0] != "USDT" || methods[1] != "支付宝" {
@@ -121,9 +125,10 @@ func TestDBServiceSaveConfigPersistsJSONValues(t *testing.T) {
 func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 	root := t.TempDir()
 	writeAdminJSONFixture(t, root, map[string]any{
-		"secure_path":          "localadmin",
-		"allow_new_period":     0,
-		"reset_traffic_method": 0,
+		"secure_path":                   "localadmin",
+		"allow_new_period":              0,
+		"reset_traffic_method":          0,
+		"commission_auto_check_minutes": 4320,
 	})
 	mustMkdirAll(t, filepath.Join(root, "go-api"))
 
@@ -153,10 +158,14 @@ func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 	if runtimeState.Current().ResetTrafficMethod != 0 {
 		t.Fatalf("expected reset_traffic_method=0 before save, got %d", runtimeState.Current().ResetTrafficMethod)
 	}
+	if runtimeState.Current().CommissionAutoCheckMinutes != 4320 {
+		t.Fatalf("expected commission_auto_check_minutes=4320 before save, got %d", runtimeState.Current().CommissionAutoCheckMinutes)
+	}
 
 	ok, err := service.SaveConfig(context.Background(), map[string]any{
-		"allow_new_period":     1,
-		"reset_traffic_method": 4,
+		"allow_new_period":              1,
+		"reset_traffic_method":          4,
+		"commission_auto_check_minutes": 90,
 	})
 	if err != nil {
 		t.Fatalf("save config: %v", err)
@@ -170,6 +179,9 @@ func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 	}
 	if runtimeState.Current().ResetTrafficMethod != 4 {
 		t.Fatalf("expected reset_traffic_method=4 after save, got %d", runtimeState.Current().ResetTrafficMethod)
+	}
+	if runtimeState.Current().CommissionAutoCheckMinutes != 90 {
+		t.Fatalf("expected commission_auto_check_minutes=90 after save, got %d", runtimeState.Current().CommissionAutoCheckMinutes)
 	}
 }
 

@@ -104,7 +104,9 @@ type orderRecord struct {
 	BalanceAmount                sql.NullInt64
 	SurplusOrderIDs              sql.NullString
 	Status                       int64
+	CommissionStatus             int64
 	CommissionBalance            int64
+	ActualCommissionBalance      sql.NullInt64
 	InviteUserID                 sql.NullInt64
 	InviteCampaignID             sql.NullInt64
 	InviteCampaignDiscountAmount int64
@@ -1002,11 +1004,12 @@ FOR UPDATE`, userID).Scan(
 
 func (s *DBService) lockUserByEmailTx(ctx context.Context, tx *sql.Tx, email string) (userRecord, error) {
 	var row userRecord
+	email = strings.TrimSpace(strings.ToLower(email))
 	err := tx.QueryRowContext(ctx, `SELECT
 id, invite_user_id, balance, commission_balance, discount, commission_type, commission_rate,
 u, d, transfer_enable, device_limit, banned, group_id, plan_id, speed_limit, expired_at
 FROM v2_user
-WHERE email = $1
+WHERE LOWER(email) = $1
 FOR UPDATE`, email).Scan(
 		&row.ID,
 		&row.InviteUserID,
@@ -1243,7 +1246,7 @@ func (s *DBService) lockOrderTx(ctx context.Context, tx *sql.Tx, userID int64, t
 	err := tx.QueryRowContext(ctx, `SELECT
 id, user_id, plan_id, coupon_id, payment_id, type, period, trade_no, callback_no,
 total_amount, handling_amount, discount_amount, surplus_amount, refund_amount, balance_amount,
-surplus_order_ids, status, commission_balance, invite_user_id, invite_campaign_id,
+surplus_order_ids, status, commission_status, commission_balance, actual_commission_balance, invite_user_id, invite_campaign_id,
 invite_campaign_discount_amount, paid_at, created_at, updated_at
 FROM v2_order
 WHERE user_id = $1 AND trade_no = $2
@@ -1265,7 +1268,9 @@ FOR UPDATE`, userID, tradeNo).Scan(
 		&row.BalanceAmount,
 		&row.SurplusOrderIDs,
 		&row.Status,
+		&row.CommissionStatus,
 		&row.CommissionBalance,
+		&row.ActualCommissionBalance,
 		&row.InviteUserID,
 		&row.InviteCampaignID,
 		&row.InviteCampaignDiscountAmount,
@@ -1325,6 +1330,24 @@ func (s *DBService) updateOrderPaymentStateTx(ctx context.Context, tx *sql.Tx, o
 		order.ID, order.Status, nullStringAny(order.CallbackNo), nullInt64Any(order.PaidAt), order.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("update order payment state: %w", err)
+	}
+	return nil
+}
+
+func (s *DBService) updateOrderCommissionStateTx(ctx context.Context, tx *sql.Tx, order orderRecord) error {
+	_, err := tx.ExecContext(ctx, `UPDATE v2_order SET commission_status = $2, actual_commission_balance = $3, updated_at = $4 WHERE id = $1`,
+		order.ID, order.CommissionStatus, nullInt64Any(order.ActualCommissionBalance), order.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("update order commission state: %w", err)
+	}
+	return nil
+}
+
+func (s *DBService) updateOrderRefundStateTx(ctx context.Context, tx *sql.Tx, order orderRecord) error {
+	_, err := tx.ExecContext(ctx, `UPDATE v2_order SET status = $2, commission_status = $3, actual_commission_balance = $4, updated_at = $5 WHERE id = $1`,
+		order.ID, order.Status, order.CommissionStatus, nullInt64Any(order.ActualCommissionBalance), order.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("update order refund state: %w", err)
 	}
 	return nil
 }

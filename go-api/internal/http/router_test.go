@@ -692,6 +692,7 @@ type fakeAdminService struct {
 	lastUpdate         admin.OrderUpdateRequest
 	lastPaid           string
 	lastCancel         string
+	lastRefund         string
 	lastAssign         admin.OrderAssignRequest
 	lastTicketFetch    admin.TicketListRequest
 	lastTicketID       int64
@@ -1199,6 +1200,11 @@ func (f *fakeAdminService) MarkOrderPaid(_ context.Context, tradeNo string) (boo
 
 func (f *fakeAdminService) CancelManagedOrder(_ context.Context, tradeNo string) (bool, error) {
 	f.lastCancel = tradeNo
+	return true, f.err
+}
+
+func (f *fakeAdminService) RefundManagedOrder(_ context.Context, tradeNo string) (bool, error) {
+	f.lastRefund = tradeNo
 	return true, f.err
 }
 
@@ -4917,6 +4923,30 @@ func TestRouterAdminOrderCancelEndpoint(t *testing.T) {
 	}
 	if adminService.lastCancel != "T304" {
 		t.Fatalf("expected cancel trade no T304, got %q", adminService.lastCancel)
+	}
+}
+
+func TestRouterAdminOrderRefundEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{
+		user: &session.Identity{ID: 1, IsAdmin: 1},
+	}
+	adminService := &fakeAdminService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/order/refund", strings.NewReader("auth_data=jwt-admin&trade_no=T304R"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if adminService.lastRefund != "T304R" {
+		t.Fatalf("expected refund trade no T304R, got %q", adminService.lastRefund)
 	}
 }
 

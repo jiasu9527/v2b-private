@@ -55,10 +55,10 @@ func (s *DBService) ListTickets(ctx context.Context, req TicketListRequest) (Tic
 		clauses = append(clauses, clause)
 	}
 
-	email := strings.TrimSpace(req.Email)
+	email := strings.TrimSpace(strings.ToLower(req.Email))
 	if email != "" {
 		var userID int64
-		err := s.db.QueryRowContext(ctx, `SELECT id FROM v2_user WHERE email = $1 LIMIT 1`, email).Scan(&userID)
+		err := s.db.QueryRowContext(ctx, `SELECT id FROM v2_user WHERE LOWER(email) = $1 LIMIT 1`, email).Scan(&userID)
 		switch {
 		case err == nil:
 			args = append(args, userID)

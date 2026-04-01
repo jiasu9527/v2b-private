@@ -22,7 +22,7 @@ func TestUpdateUserAllowsInviteUserOnlyUpdate(t *testing.T) {
 	mock.ExpectQuery(`SELECT email FROM v2_user WHERE id = \$1 LIMIT 1`).
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"email"}).AddRow("demo@example.com"))
-	mock.ExpectQuery(`SELECT id FROM v2_user WHERE email = \$1 LIMIT 1`).
+	mock.ExpectQuery(`SELECT id FROM v2_user WHERE LOWER\(email\) = \$1 LIMIT 1`).
 		WithArgs("owner@example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(7)))
 	mock.ExpectExec(`UPDATE v2_user SET invite_user_id = \$2, updated_at = \$3 WHERE id = \$1`).
@@ -61,7 +61,7 @@ func TestUpdateUserBannedInvalidatesAuthCache(t *testing.T) {
 	mock.ExpectQuery(`SELECT email FROM v2_user WHERE id = \$1 LIMIT 1`).
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"email"}).AddRow("demo@example.com"))
-	mock.ExpectQuery(`SELECT id FROM v2_user WHERE email = \$1 LIMIT 1`).
+	mock.ExpectQuery(`SELECT id FROM v2_user WHERE LOWER\(email\) = \$1 LIMIT 1`).
 		WithArgs("demo@example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
 	mock.ExpectBegin()

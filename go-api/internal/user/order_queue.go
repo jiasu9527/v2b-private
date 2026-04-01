@@ -42,6 +42,41 @@ LIMIT $1`, orderHandleBatchLimit)
 			return err
 		}
 	}
+
+	cfg := s.currentConfig()
+	if !cfg.CommissionAutoCheckEnable {
+		return nil
+	}
+
+	cutoff := time.Now().Unix() - (cfg.CommissionAutoCheckMinutes * 60)
+	commissionRows, err := s.db.QueryContext(ctx, `SELECT trade_no
+FROM v2_order
+WHERE status = 3 AND commission_balance > 0 AND invite_user_id IS NOT NULL AND commission_status IN (0, 1)
+AND paid_at <= $2
+ORDER BY paid_at ASC
+LIMIT $1`, orderHandleBatchLimit, cutoff)
+	if err != nil {
+		return fmt.Errorf("query commission handle candidates: %w", err)
+	}
+	defer commissionRows.Close()
+
+	commissionTradeNos := make([]string, 0)
+	for commissionRows.Next() {
+		var tradeNo string
+		if err := commissionRows.Scan(&tradeNo); err != nil {
+			return fmt.Errorf("scan commission handle candidate: %w", err)
+		}
+		commissionTradeNos = append(commissionTradeNos, tradeNo)
+	}
+	if err := commissionRows.Err(); err != nil {
+		return fmt.Errorf("iterate commission handle candidates: %w", err)
+	}
+
+	for _, tradeNo := range commissionTradeNos {
+		if err := s.handleQueuedCommission(ctx, tradeNo); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

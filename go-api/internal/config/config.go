@@ -25,6 +25,8 @@ type Config struct {
 	InviteCampaignEnable         bool
 	InviteCampaignRewardAmount   int64
 	InviteCampaignExpireHours    int64
+	CommissionAutoCheckEnable    bool
+	CommissionAutoCheckMinutes   int64
 	CommissionDistEnabled        bool
 	CommissionDistL1             int64
 	CommissionDistL2             int64
@@ -146,6 +148,8 @@ func Load() Config {
 		InviteCampaignEnable:         managedBool("INVITE_CAMPAIGN_ENABLE", "invite_campaign_enable", true),
 		InviteCampaignRewardAmount:   managedInt64("INVITE_CAMPAIGN_REWARD_AMOUNT", "invite_campaign_reward_amount", 1000),
 		InviteCampaignExpireHours:    managedInt64("INVITE_CAMPAIGN_EXPIRE_HOURS", "invite_campaign_expire_hours", 48),
+		CommissionAutoCheckEnable:    managedBool("COMMISSION_AUTO_CHECK_ENABLE", "commission_auto_check_enable", true),
+		CommissionAutoCheckMinutes:   managedInt64("COMMISSION_AUTO_CHECK_MINUTES", "commission_auto_check_minutes", 4320),
 		CommissionDistEnabled:        managedBool("COMMISSION_DISTRIBUTION_ENABLE", "commission_distribution_enable", false),
 		CommissionDistL1:             managedInt64("COMMISSION_DISTRIBUTION_L1", "commission_distribution_l1", 30),
 		CommissionDistL2:             managedInt64("COMMISSION_DISTRIBUTION_L2", "commission_distribution_l2", 10),
