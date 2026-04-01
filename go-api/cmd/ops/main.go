@@ -123,6 +123,9 @@ func runUpdate(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := applyUpdateCompatFixes(context.Background(), db); err != nil {
+		return err
+	}
 	fmt.Printf("schema update finished: success=%d failed=%d\n", ok, failed)
 	return nil
 }
@@ -215,6 +218,89 @@ func execSQLFile(ctx context.Context, db *sql.DB, path string) (int, int, error)
 		return ok, failed, fmt.Errorf("all SQL statements failed for %s", path)
 	}
 	return ok, failed, nil
+}
+
+func applyUpdateCompatFixes(ctx context.Context, db *sql.DB) error {
+	if err := bestEffortEnsureUpdateIndex(ctx, db, `CREATE INDEX IF NOT EXISTS idx_v2_runtime_kv_expire_at ON v2_runtime_kv(expire_at)`); err != nil {
+		return err
+	}
+	if err := bestEffortEnsureUpdateIndex(ctx, db, `CREATE INDEX IF NOT EXISTS idx_v2_auth_session_user_id ON v2_auth_session(user_id)`); err != nil {
+		return err
+	}
+
+	repairs := []struct {
+		table  string
+		column string
+		query  string
+		label  string
+	}{
+		{
+			table:  "v2_invite_code",
+			column: "code",
+			query:  `UPDATE v2_invite_code SET code = BTRIM(code)`,
+			label:  "trim v2_invite_code.code",
+		},
+		{
+			table:  "v2_invite_campaign",
+			column: "invite_code",
+			query:  `UPDATE v2_invite_campaign SET invite_code = CASE WHEN invite_code IS NULL THEN NULL ELSE BTRIM(invite_code) END`,
+			label:  "trim v2_invite_campaign.invite_code",
+		},
+		{
+			table:  "v2_invite_campaign_record",
+			column: "invite_code",
+			query:  `UPDATE v2_invite_campaign_record SET invite_code = BTRIM(invite_code)`,
+			label:  "trim v2_invite_campaign_record.invite_code",
+		},
+	}
+
+	for _, repair := range repairs {
+		exists, err := postgresColumnExists(ctx, db, repair.table, repair.column)
+		if err != nil {
+			return fmt.Errorf("check %s: %w", repair.label, err)
+		}
+		if !exists {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, repair.query); err != nil {
+			return fmt.Errorf("%s: %w", repair.label, err)
+		}
+	}
+
+	return nil
+}
+
+func bestEffortEnsureUpdateIndex(ctx context.Context, db *sql.DB, stmt string) error {
+	if _, err := db.ExecContext(ctx, stmt); err != nil {
+		if isIgnorableOwnerError(err) {
+			return nil
+		}
+		return fmt.Errorf("ensure update index: %w", err)
+	}
+	return nil
+}
+
+func postgresColumnExists(ctx context.Context, db *sql.DB, tableName, columnName string) (bool, error) {
+	const query = `SELECT EXISTS (
+SELECT 1 FROM information_schema.columns
+WHERE table_schema = CURRENT_SCHEMA() AND table_name = $1 AND column_name = $2
+)`
+	var exists bool
+	if err := db.QueryRowContext(ctx, query, tableName, columnName).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+func isIgnorableOwnerError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "must be owner of table") ||
+		strings.Contains(message, "must be owner of relation") ||
+		strings.Contains(message, "permission denied for table") ||
+		strings.Contains(message, "permission denied for relation")
 }
 
 func splitSQLStatements(raw string) []string {

@@ -47,6 +47,11 @@ func TestUpdatePostgresSQLAvoidsLegacyMigrationChain(t *testing.T) {
 		`ALTER TABLE "v2_tutorial"`,
 		`ALTER TABLE "v2_plan";`,
 		`ALTER TABLE "v2_mail_log";`,
+		`CREATE INDEX IF NOT EXISTS "idx_v2_runtime_kv_expire_at"`,
+		`CREATE INDEX IF NOT EXISTS "idx_v2_auth_session_user_id"`,
+		`ALTER TABLE IF EXISTS "v2_invite_code"`,
+		`ALTER TABLE IF EXISTS "v2_invite_campaign"`,
+		`ALTER TABLE IF EXISTS "v2_invite_campaign_record"`,
 	}
 	for _, fragment := range forbidden {
 		if strings.Contains(content, fragment) {
@@ -57,9 +62,7 @@ func TestUpdatePostgresSQLAvoidsLegacyMigrationChain(t *testing.T) {
 	required := []string{
 		`CREATE TABLE IF NOT EXISTS "failed_jobs"`,
 		`CREATE TABLE IF NOT EXISTS "v2_runtime_kv"`,
-		`CREATE INDEX IF NOT EXISTS "idx_v2_runtime_kv_expire_at"`,
 		`CREATE TABLE IF NOT EXISTS "v2_auth_session"`,
-		`CREATE INDEX IF NOT EXISTS "idx_v2_auth_session_user_id"`,
 	}
 	for _, fragment := range required {
 		if !strings.Contains(content, fragment) {
