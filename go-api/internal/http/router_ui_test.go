@@ -180,6 +180,9 @@ func TestRouterUnknownUIPathFallsBackToForbiddenWithoutHijacker(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 fallback, got %d", rec.Code)
 	}
+	if rec.Body.String() != "连接已关闭" {
+		t.Fatalf("expected fallback body 连接已关闭, got %q", rec.Body.String())
+	}
 }
 
 type hijackRecorder struct {
