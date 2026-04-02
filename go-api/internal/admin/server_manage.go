@@ -269,15 +269,12 @@ func renderNodeInstallCommand(commandTemplate, scriptURL, apiHost string, nodeID
 	}
 
 	if scriptURL == "" {
-		scriptURL = "https://your-node-installer.example/install.sh"
+		scriptURL = "https://raw.githubusercontent.com/jiasu9527/v2b-private/master/node/install.sh"
 	}
 
 	return fmt.Sprintf(
-		"NODE_INSTALL_URL=%q && if command -v curl >/dev/null 2>&1; then curl -fsSL \"$NODE_INSTALL_URL\" | bash -s -- --api-host %s --node-id %d --api-key %s; else wget -qO- \"$NODE_INSTALL_URL\" | bash -s -- --api-host %s --node-id %d --api-key %s; fi",
+		"wget -N %s && bash install.sh --api-host %s --node-id %d --api-key %s",
 		scriptURL,
-		apiHost,
-		nodeID,
-		apiKey,
 		apiHost,
 		nodeID,
 		apiKey,
