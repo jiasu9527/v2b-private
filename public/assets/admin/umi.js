@@ -145421,7 +145421,7 @@
                                             cursor: "pointer",
                                         },
                                         onClick: () => {
-                                            (S()(t.host),
+                                            (S()(t.host + ":" + t.port),
                                                 c["a"].success(
                                                     "\u590d\u5236\u6210\u529f",
                                                 ));
