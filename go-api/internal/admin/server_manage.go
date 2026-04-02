@@ -50,6 +50,7 @@ FROM (
 				rows.Close()
 				return nil, fmt.Errorf("decode managed server from %s: %w", table, err)
 			}
+			normalizeManagedServerObjectFields(item)
 			item["type"] = serverType
 			item["group_id"] = managedServerStringList(item["group_id"])
 			item["route_id"] = managedServerStringList(item["route_id"])
@@ -198,6 +199,41 @@ func managedServerStringList(value any) []string {
 		return parseServerStringList(typed)
 	default:
 		return parseServerStringList(fmt.Sprint(value))
+	}
+}
+
+func normalizeManagedServerObjectFields(item map[string]any) {
+	for _, key := range []string{
+		"network_settings",
+		"tls_settings",
+		"encryption_settings",
+		"networkSettings",
+		"tlsSettings",
+		"ruleSettings",
+		"dnsSettings",
+	} {
+		normalizeManagedServerObjectField(item, key)
+	}
+}
+
+func normalizeManagedServerObjectField(item map[string]any, key string) {
+	value, ok := item[key]
+	if !ok || value == nil {
+		return
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		item[key] = cloneMap(typed)
+	case string:
+		raw := strings.TrimSpace(typed)
+		if raw == "" || raw == "null" {
+			item[key] = nil
+			return
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(raw), &decoded); err == nil {
+			item[key] = decoded
+		}
 	}
 }
 

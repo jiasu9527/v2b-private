@@ -1,11 +1,50 @@
 package admin
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	cfgpkg "forest/go-api/internal/config"
 )
+
+func TestNormalizeManagedServerObjectFieldsParsesJSONString(t *testing.T) {
+	item := map[string]any{
+		"tls_settings":        `{"server_name":"edge.example.com","allow_insecure":"1"}`,
+		"network_settings":    `{"path":"/ws"}`,
+		"encryption_settings": `{"mode":"native"}`,
+		"tlsSettings":         `{"serverName":"legacy.example.com","allowInsecure":"0"}`,
+	}
+
+	normalizeManagedServerObjectFields(item)
+
+	for _, key := range []string{"tls_settings", "network_settings", "encryption_settings", "tlsSettings"} {
+		value, ok := item[key].(map[string]any)
+		if !ok {
+			t.Fatalf("expected %s to decode into map, got %#v", key, item[key])
+		}
+		if len(value) == 0 {
+			t.Fatalf("expected %s map to stay non-empty", key)
+		}
+	}
+}
+
+func TestNormalizeManagedServerObjectFieldsKeepsExistingMap(t *testing.T) {
+	original := map[string]any{"server_name": "edge.example.com"}
+	item := map[string]any{
+		"tls_settings": original,
+	}
+
+	normalizeManagedServerObjectFields(item)
+
+	got, ok := item["tls_settings"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected existing map to stay map, got %#v", item["tls_settings"])
+	}
+	if !jsonEqual(got, original) {
+		t.Fatalf("expected existing map to stay unchanged, got %#v", got)
+	}
+}
 
 func TestV2nodeInstallCommandUsesRepoDefaultInstaller(t *testing.T) {
 	root := t.TempDir()
@@ -32,6 +71,12 @@ func TestV2nodeInstallCommandUsesRepoDefaultInstaller(t *testing.T) {
 	if !strings.Contains(command, "--node-id 7") {
 		t.Fatalf("expected node id flag in command, got %q", command)
 	}
+}
+
+func jsonEqual(left, right map[string]any) bool {
+	leftRaw, _ := json.Marshal(left)
+	rightRaw, _ := json.Marshal(right)
+	return string(leftRaw) == string(rightRaw)
 }
 
 func TestV2nodeInstallCommandSupportsConfiguredScriptURL(t *testing.T) {
