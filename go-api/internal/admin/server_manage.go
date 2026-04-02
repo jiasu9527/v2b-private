@@ -269,7 +269,7 @@ func renderNodeInstallCommand(commandTemplate, scriptURL, apiHost string, nodeID
 	}
 
 	if scriptURL == "" {
-		scriptURL = "https://raw.githubusercontent.com/jiasu9527/v2b-private/master/node/install.sh"
+		scriptURL = "https://raw.githubusercontent.com/wyx2685/v2node/master/script/install.sh"
 	}
 
 	return fmt.Sprintf(
