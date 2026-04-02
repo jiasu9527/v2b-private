@@ -6771,26 +6771,7 @@ func readManagedServerSortPayload(r *http.Request) (map[string]map[int64]int64, 
 }
 
 func readManagedServerPayload(r *http.Request) (map[string]any, error) {
-	payload := make(map[string]any)
-	if strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
-		if err := readJSONBody(r, &payload); err != nil {
-			return nil, err
-		}
-	}
-
-	inputs, err := readInputs(r)
-	if err != nil {
-		return nil, err
-	}
-
-	for key, value := range inputs {
-		if _, exists := payload[key]; exists {
-			continue
-		}
-		payload[key] = value
-	}
-
-	return payload, nil
+	return readStructuredInputs(r)
 }
 
 func managedSortAnyToInt64(value any) (int64, bool) {

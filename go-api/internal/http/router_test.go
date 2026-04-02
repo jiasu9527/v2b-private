@@ -3646,6 +3646,48 @@ func TestRouterAdminManagedServerSaveEndpoints(t *testing.T) {
 	}
 }
 
+func TestRouterAdminManagedServerSaveEndpointsAcceptFormEncodedNestedPayload(t *testing.T) {
+	serverTypes := []string{"vmess", "trojan", "shadowsocks", "tuic", "hysteria", "vless", "anytls", "v2node"}
+	body := "auth_data=jwt-admin&id=9&name=Node-A&group_id[0]=1&group_id[1]=2&route_id[0]=3&host=node.example.com&port=443&server_port=8443&show=1&tags[0]=edge&network_settings[path]=%2Fws"
+
+	for _, serverType := range serverTypes {
+		t.Run(serverType, func(t *testing.T) {
+			sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+			adminService := &fakeAdminService{}
+			router := NewRouter(
+				config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+				WithSessionService(sessionService),
+				WithAdminService(adminService),
+			)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/"+serverType+"/save", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d with body %s", rec.Code, rec.Body.String())
+			}
+			groupID, ok := adminService.lastNodeSave["group_id"].([]any)
+			if !ok || len(groupID) != 2 || fmt.Sprint(groupID[0]) != "1" || fmt.Sprint(groupID[1]) != "2" {
+				t.Fatalf("expected parsed group_id array, got %#v", adminService.lastNodeSave["group_id"])
+			}
+			routeID, ok := adminService.lastNodeSave["route_id"].([]any)
+			if !ok || len(routeID) != 1 || fmt.Sprint(routeID[0]) != "3" {
+				t.Fatalf("expected parsed route_id array, got %#v", adminService.lastNodeSave["route_id"])
+			}
+			tags, ok := adminService.lastNodeSave["tags"].([]any)
+			if !ok || len(tags) != 1 || fmt.Sprint(tags[0]) != "edge" {
+				t.Fatalf("expected parsed tags array, got %#v", adminService.lastNodeSave["tags"])
+			}
+			networkSettings, ok := adminService.lastNodeSave["network_settings"].(map[string]any)
+			if !ok || networkSettings["path"] != "/ws" {
+				t.Fatalf("expected parsed nested object, got %#v", adminService.lastNodeSave["network_settings"])
+			}
+		})
+	}
+}
+
 func TestRouterAdminManagedServerUpdateEndpoints(t *testing.T) {
 	serverTypes := []string{"vmess", "trojan", "shadowsocks", "tuic", "hysteria", "vless", "anytls", "v2node"}
 
