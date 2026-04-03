@@ -168,7 +168,7 @@ func (s *DBService) GetUserInfoByID(ctx context.Context, id int64) (map[string]a
 		return nil, fmt.Errorf("query admin user detail: %w", err)
 	}
 	if user == nil {
-		return nil, nil
+		return deletedAdminUserPlaceholder(id), nil
 	}
 
 	if inviteID := mapNullableAnyInt64(user["invite_user_id"]); inviteID != nil && *inviteID > 0 {
@@ -182,6 +182,28 @@ func (s *DBService) GetUserInfoByID(ctx context.Context, id int64) (map[string]a
 	}
 
 	return user, nil
+}
+
+func deletedAdminUserPlaceholder(id int64) map[string]any {
+	return map[string]any{
+		"id":                 id,
+		"email":              fmt.Sprintf("已删除用户 #%d", id),
+		"password":           "",
+		"transfer_enable":    int64(0),
+		"u":                  int64(0),
+		"d":                  int64(0),
+		"commission_balance": int64(0),
+		"balance":            int64(0),
+		"discount":           int64(0),
+		"commission_type":    int64(0),
+		"commission_rate":    int64(0),
+		"is_admin":           int64(0),
+		"is_staff":           int64(0),
+		"banned":             int64(1),
+		"group_id":           int64(0),
+		"plan_id":            int64(0),
+		"deleted_user":       int64(1),
+	}
 }
 
 func (s *DBService) UpdateUser(ctx context.Context, req UserUpdateRequest) (bool, error) {
@@ -991,6 +1013,13 @@ func deleteUsersByIDList(ctx context.Context, tx *sql.Tx, ids []int64, message s
 	}
 
 	if query, args := buildInt64InQuery(`DELETE FROM v2_order WHERE user_id IN (%s)`, ids); len(args) > 0 {
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return errors.New(message)
+		}
+	}
+	if inClause, inArgs := buildInt64Placeholders(2, ids); len(inArgs) > 0 {
+		query := `UPDATE v2_order SET invite_user_id = NULL, updated_at = $1 WHERE invite_user_id IN (` + inClause + `)`
+		args := append([]any{time.Now().Unix()}, inArgs...)
 		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 			return errors.New(message)
 		}

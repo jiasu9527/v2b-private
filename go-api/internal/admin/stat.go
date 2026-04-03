@@ -468,6 +468,8 @@ LIMIT 15`, startAt, endAt)
 			return nil, err
 		} else if name != "" {
 			entry["server_name"] = name
+		} else {
+			entry["server_name"] = fallbackServerRankName(serverType, serverID)
 		}
 		result = append(result, entry)
 	}
@@ -553,7 +555,7 @@ func (s *DBService) fetchServerName(ctx context.Context, serverType string, serv
 	}
 
 	var name string
-	err := s.db.QueryRowContext(ctx, `SELECT name FROM `+table+` WHERE parent_id IS NULL AND id = $1 LIMIT 1`, serverID).Scan(&name)
+	err := s.db.QueryRowContext(ctx, `SELECT name FROM `+table+` WHERE id = $1 LIMIT 1`, serverID).Scan(&name)
 	if err == nil {
 		return name, nil
 	}
@@ -561,6 +563,14 @@ func (s *DBService) fetchServerName(ctx context.Context, serverType string, serv
 		return "", nil
 	}
 	return "", fmt.Errorf("query server name: %w", err)
+}
+
+func fallbackServerRankName(serverType string, serverID int64) string {
+	serverType = strings.TrimSpace(serverType)
+	if serverType == "" {
+		return fmt.Sprintf("节点 #%d", serverID)
+	}
+	return fmt.Sprintf("%s #%d", serverType, serverID)
 }
 
 func statServerTable(serverType string) string {

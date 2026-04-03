@@ -110598,6 +110598,19 @@
                                         return e.abrupt("return");
                                     case 5:
                                         return (
+                                            (t.data =
+                                                t.data || {
+                                                    id: n,
+                                                    email:
+                                                        "\u5df2\u5220\u9664\u7528\u6237 #" +
+                                                        n,
+                                                    password: "",
+                                                    transfer_enable: 0,
+                                                    u: 0,
+                                                    d: 0,
+                                                    commission_balance: 0,
+                                                    balance: 0,
+                                                }),
                                             (t.data.password = ""),
                                             (t.data.transfer_enable = (
                                                 t.data.transfer_enable /
@@ -128290,6 +128303,20 @@
                                         return t.abrupt("return");
                                     case 6:
                                         return (
+                                            e.setState({
+                                                order: n.data,
+                                                user: {
+                                                    email:
+                                                        "\u5df2\u5220\u9664\u7528\u6237 #" +
+                                                        (n.data.user_id || 0),
+                                                },
+                                                invite_user: {
+                                                    email:
+                                                        "\u5df2\u5220\u9664\u7528\u6237 #" +
+                                                        (n.data.invite_user_id ||
+                                                            0),
+                                                },
+                                            }),
                                             (t.next = 8),
                                             Object(O["a"])(
                                                 "/" +
@@ -128308,6 +128335,13 @@
                                         }
                                         return t.abrupt("return");
                                     case 11:
+                                        e.setState({
+                                            user: r.data || {
+                                                email:
+                                                    "\u5df2\u5220\u9664\u7528\u6237 #" +
+                                                    (n.data.user_id || 0),
+                                            },
+                                        });
                                         if (!n.data.invite_user_id) {
                                             t.next = 18;
                                             break;
@@ -128332,12 +128366,20 @@
                                         return t.abrupt("return");
                                     case 17:
                                         e.setState({
-                                            invite_user: i.data,
+                                            invite_user: i.data || {
+                                                email:
+                                                    "\u5df2\u5220\u9664\u7528\u6237 #" +
+                                                    (n.data.invite_user_id || 0),
+                                            },
                                         });
                                     case 18:
                                         e.setState({
                                             order: n.data,
-                                            user: r.data,
+                                            user: r.data || {
+                                                email:
+                                                    "\u5df2\u5220\u9664\u7528\u6237 #" +
+                                                    (n.data.user_id || 0),
+                                            },
                                         });
                                     case 19:
                                     case "end":

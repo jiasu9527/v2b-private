@@ -117,6 +117,18 @@ FROM (
 		return nil, fmt.Errorf("decode order detail: %w", err)
 	}
 
+	if inviteID := mapNullableAnyInt64(detail["invite_user_id"]); inviteID != nil && *inviteID > 0 {
+		inviteUser, err := s.fetchUserSummary(ctx, *inviteID)
+		if err != nil {
+			return nil, err
+		}
+		if inviteUser == nil {
+			detail["invite_user_id"] = nil
+		} else {
+			detail["invite_user"] = inviteUser
+		}
+	}
+
 	logs, err := s.queryJSONList(ctx, `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json)
 FROM (
 	SELECT * FROM v2_commission_log WHERE trade_no = $1 ORDER BY id ASC
