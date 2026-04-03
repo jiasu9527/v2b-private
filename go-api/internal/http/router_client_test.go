@@ -212,6 +212,55 @@ func TestRouterClientSubscribeClashEndpointUsesAttachmentHeader(t *testing.T) {
 	}
 }
 
+func TestRouterClientSubscribeReqIOSUserAgentUsesYAMLProfile(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		subscribe: user.Subscribe{
+			U:              11,
+			D:              22,
+			TransferEnable: 100,
+			ExpiredAt:      int64Ptr(1234567890),
+			UUID:           "user-uuid",
+		},
+		servers: []map[string]any{
+			{
+				"type":    "vmess",
+				"name":    "VMess-1",
+				"host":    "node.example.com",
+				"port":    int64(443),
+				"network": "ws",
+				"tls":     int64(1),
+				"tls_settings": map[string]any{
+					"server_name": "node.example.com",
+				},
+				"network_settings": map[string]any{
+					"path": "/ws",
+					"headers": map[string]any{
+						"Host": "node.example.com",
+					},
+				},
+			},
+		},
+	}
+	router := NewRouter(config.Config{AppName: "Forest", PublicDir: "../public"}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
+	req.Header.Set("User-Agent", "req-ios")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "yaml") {
+		t.Fatalf("expected req-ios subscribe to return yaml, got %q with body %q", contentType, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "proxies:") {
+		t.Fatalf("expected req-ios subscribe body to be clash-like yaml, got %q", rec.Body.String())
+	}
+}
+
 func TestRouterClientSubscribeShadowrocketEndpointUsesLegacyStatusLine(t *testing.T) {
 	userService := &fakeUserService{
 		resolvedClientUserID: 10,

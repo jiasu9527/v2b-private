@@ -249,6 +249,7 @@ func isClashLikeSubscribeFlag(flag string) bool {
 	return strings.Contains(flag, "clash") ||
 		strings.Contains(flag, "meta") ||
 		strings.Contains(flag, "stash") ||
+		strings.Contains(flag, "req-ios") ||
 		strings.Contains(flag, "verge") ||
 		strings.Contains(flag, "nyanpasu")
 }
