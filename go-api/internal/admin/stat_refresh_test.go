@@ -33,6 +33,9 @@ func TestRefreshLegacyStatsBackfillsRecentDaysAndDeletesTodaySnapshot(t *testing
 
 	service := &DBService{db: db}
 
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = $1 LIMIT 1`)).
+		WithArgs("STAT_REFRESH_LAST_AT_").
+		WillReturnRows(sqlmock.NewRows([]string{"v", "expire_at"}))
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM v2_stat WHERE record_type = 'd' AND record_at >= $1 AND record_at < $2`)).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -40,6 +43,32 @@ func TestRefreshLegacyStatsBackfillsRecentDaysAndDeletesTodaySnapshot(t *testing
 		expectLegacyStatSummaryQueries(mock)
 		expectLegacyStatUpsert(mock)
 	}
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO v2_runtime_kv (k, v, expire_at, created_at, updated_at)
+VALUES ($1, $2, 0, $3, $3)
+ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = EXCLUDED.expire_at, updated_at = EXCLUDED.updated_at`)).
+		WithArgs("STAT_REFRESH_LAST_AT_", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	if err := service.RefreshLegacyStats(context.Background()); err != nil {
+		t.Fatalf("refresh legacy stats: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestRefreshLegacyStatsSkipsWhenAlreadyRefreshedRecently(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := &DBService{db: db}
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = $1 LIMIT 1`)).
+		WithArgs("STAT_REFRESH_LAST_AT_").
+		WillReturnRows(sqlmock.NewRows([]string{"v", "expire_at"}).AddRow("4102444800", int64(0)))
 
 	if err := service.RefreshLegacyStats(context.Background()); err != nil {
 		t.Fatalf("refresh legacy stats: %v", err)

@@ -23,7 +23,9 @@ import (
 var ErrUnavailable = errors.New("admin service unavailable")
 
 const scheduleLastCheckKey = "SCHEDULE_LAST_CHECK_AT_"
+const statRefreshLastCheckKey = "STAT_REFRESH_LAST_AT_"
 const legacyStatBackfillDays = 7
+const legacyStatRefreshInterval = time.Hour
 
 var monitoredQueueWorkloadNames = []string{
 	"order_handle",
@@ -557,12 +559,29 @@ func legacyStatTodayStart(now time.Time) int64 {
 	return time.Date(current.Year(), current.Month(), current.Day(), 0, 0, 0, 0, current.Location()).Unix()
 }
 
+func legacyStatRefreshBucketStart(now time.Time) int64 {
+	current := now
+	if current.IsZero() {
+		current = time.Now()
+	}
+	return current.Truncate(legacyStatRefreshInterval).Unix()
+}
+
 func (s *DBService) RefreshLegacyStats(ctx context.Context) error {
 	if s.db == nil {
 		return ErrUnavailable
 	}
 
 	current := time.Now()
+	bucketStart := legacyStatRefreshBucketStart(current)
+	lastRefreshAt, err := s.getInt64KV(ctx, statRefreshLastCheckKey)
+	if err != nil {
+		return fmt.Errorf("query legacy stat refresh runtime: %w", err)
+	}
+	if lastRefreshAt != nil && *lastRefreshAt >= bucketStart {
+		return nil
+	}
+
 	windows := legacyStatWindows(current)
 	if len(windows) == 0 {
 		return nil
@@ -580,6 +599,15 @@ func (s *DBService) RefreshLegacyStats(ctx context.Context) error {
 		if err := s.upsertLegacyStat(ctx, window.recordAt, summary); err != nil {
 			return err
 		}
+	}
+
+	nowUnix := current.Unix()
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO v2_runtime_kv (k, v, expire_at, created_at, updated_at)
+VALUES ($1, $2, 0, $3, $3)
+ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = EXCLUDED.expire_at, updated_at = EXCLUDED.updated_at`,
+		statRefreshLastCheckKey, strconv.FormatInt(bucketStart, 10), nowUnix,
+	); err != nil {
+		return fmt.Errorf("save legacy stat refresh runtime: %w", err)
 	}
 	return nil
 }
