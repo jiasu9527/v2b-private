@@ -47,7 +47,12 @@ POSTGRES_DSN=postgres://postgres:secret@127.0.0.1:5432/forest?sslmode=disable
 ADMIN_EMAIL=admin@example.com
 EOF
 
-OUTPUT2="$("${TMP_DIR}/scripts/appctl" doctor 2>&1)"
+cat > "${TMP_DIR}/postgresql.conf" <<'EOF'
+log_statement = all
+log_min_duration_statement = 5000
+EOF
+
+OUTPUT2="$(POSTGRES_SERVER_CONF="${TMP_DIR}/postgresql.conf" "${TMP_DIR}/scripts/appctl" doctor 2>&1)"
 
 if [[ "${OUTPUT2}" != *"env_exists=true"* ]]; then
   echo "expected doctor to report active env file"
@@ -63,6 +68,18 @@ fi
 
 if [[ "${OUTPUT2}" != *"admin_email_configured=true"* ]]; then
   echo "expected doctor to report admin email configured"
+  echo "${OUTPUT2}"
+  exit 1
+fi
+
+if [[ "${OUTPUT2}" != *"postgres_server_log_statement=all"* ]]; then
+  echo "expected doctor to report postgres log_statement"
+  echo "${OUTPUT2}"
+  exit 1
+fi
+
+if [[ "${OUTPUT2}" != *"postgres_server_log_warning=检测到 PostgreSQL 正在记录全部 SQL"* ]]; then
+  echo "expected doctor to warn about postgres statement logging"
   echo "${OUTPUT2}"
   exit 1
 fi

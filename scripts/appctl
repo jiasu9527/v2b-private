@@ -775,6 +775,40 @@ resolve_realpath() {
   )
 }
 
+detect_postgres_server_conf() {
+  if [[ -n "${POSTGRES_SERVER_CONF:-}" ]] && [[ -f "${POSTGRES_SERVER_CONF}" ]]; then
+    printf '%s\n' "${POSTGRES_SERVER_CONF}"
+    return 0
+  fi
+
+  local candidate="/www/server/pgsql/data/postgresql.conf"
+  if [[ -f "${candidate}" ]]; then
+    printf '%s\n' "${candidate}"
+    return 0
+  fi
+
+  return 1
+}
+
+read_postgres_server_conf_value() {
+  local conf_path="$1"
+  local key="$2"
+
+  awk -v target="${key}" '
+    /^[[:space:]]*#/ { next }
+    {
+      line = $0
+      if (line ~ "^[[:space:]]*" target "[[:space:]]*=") {
+        sub(/^[^=]*=[[:space:]]*/, "", line)
+        sub(/[[:space:]]*(#.*)?$/, "", line)
+        gsub(/^'\''|'\''$/, "", line)
+        print line
+        exit
+      }
+    }
+  ' "${conf_path}"
+}
+
 run_ops_migrate_config() {
   ensure_go
   local args=(run ./cmd/ops migrate-config --target-root ..)
@@ -1426,11 +1460,29 @@ cmd_doctor() {
     admin_email_configured=true
   fi
 
+  local postgres_server_conf="not_found"
+  local postgres_server_log_statement="unknown"
+  local postgres_server_log_min_duration_statement="unknown"
+  if postgres_server_conf="$(detect_postgres_server_conf 2>/dev/null)"; then
+    postgres_server_log_statement="$(read_postgres_server_conf_value "${postgres_server_conf}" "log_statement")"
+    postgres_server_log_min_duration_statement="$(read_postgres_server_conf_value "${postgres_server_conf}" "log_min_duration_statement")"
+    postgres_server_log_statement="${postgres_server_log_statement:-unknown}"
+    postgres_server_log_min_duration_statement="${postgres_server_log_min_duration_statement:-unknown}"
+  else
+    postgres_server_conf="not_found"
+  fi
+
   printf 'env_file=%s\n' "${env_path}"
   printf 'env_exists=%s\n' "${env_exists}"
   printf 'legacy_env_ignored=%s\n' "${legacy_ignored}"
   printf 'postgres_configured=%s\n' "${postgres_configured}"
   printf 'admin_email_configured=%s\n' "${admin_email_configured}"
+  printf 'postgres_server_conf=%s\n' "${postgres_server_conf}"
+  printf 'postgres_server_log_statement=%s\n' "${postgres_server_log_statement}"
+  printf 'postgres_server_log_min_duration_statement=%s\n' "${postgres_server_log_min_duration_statement}"
+  if [[ "${postgres_server_log_statement}" == "all" ]]; then
+    printf 'postgres_server_log_warning=%s\n' "检测到 PostgreSQL 正在记录全部 SQL，日志会迅速膨胀，建议改成 none 或 ddl"
+  fi
 }
 
 cmd_migrate_config() {

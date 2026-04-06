@@ -118,6 +118,37 @@ forest start
 forest status
 ```
 
+## 4. PostgreSQL 日志建议
+
+宝塔里的 PostgreSQL 不要把 `log_statement` 设成 `all`。
+
+这样会把每一条正常业务 SQL 都写进日志，流量一上来日志会按天膨胀，硬盘很快被打满。
+
+推荐值：
+
+```conf
+log_statement = none
+log_min_duration_statement = 5000
+```
+
+宝塔 PostgreSQL 常见配置文件位置：
+
+```bash
+/www/server/pgsql/data/postgresql.conf
+```
+
+改完后执行一次重载：
+
+```bash
+su - postgres -c "/www/server/pgsql/bin/psql -d postgres -Atqc 'select pg_reload_conf();'"
+```
+
+如果之前已经刷出了很大的 PostgreSQL 日志，可以把旧日志压缩或删除，目录一般在：
+
+```bash
+/www/server/pgsql/logs
+```
+
 如果这是旧 PHP + MySQL 架构第一次切到现在这套 Go + PostgreSQL：
 
 - 保留旧站点目录里的 legacy `.env`
