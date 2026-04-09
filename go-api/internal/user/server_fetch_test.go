@@ -103,3 +103,25 @@ func TestParseIDStringSupportsJSONStringArray(t *testing.T) {
 		t.Fatalf("expected [1 2], got %#v", ids)
 	}
 }
+
+func TestParseServerStringListTreatsNilMarkerAsEmpty(t *testing.T) {
+	tags := parseServerStringList("<nil>")
+	if len(tags) != 0 {
+		t.Fatalf("expected empty tags for nil marker, got %#v", tags)
+	}
+}
+
+func TestNormalizeServerFetchRowOmitsEmptyTags(t *testing.T) {
+	service := &DBService{}
+
+	item, err := service.normalizeServerFetchRow(context.Background(), serverFetchTable{serverType: "vmess"}, map[string]any{
+		"id":   int64(1),
+		"tags": nil,
+	}, map[int64]map[string]any{})
+	if err != nil {
+		t.Fatalf("normalize server row: %v", err)
+	}
+	if _, ok := item["tags"]; ok {
+		t.Fatalf("expected empty tags to be omitted, got %#v", item["tags"])
+	}
+}

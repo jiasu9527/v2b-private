@@ -187,7 +187,12 @@ func (s *DBService) normalizeServerFetchRow(ctx context.Context, table serverFet
 	item["type"] = table.serverType
 	item["group_id"] = parseIDString(fmt.Sprint(item["group_id"]))
 	item["route_id"] = parseIDString(fmt.Sprint(item["route_id"]))
-	item["tags"] = parseServerStringList(fmt.Sprint(item["tags"]))
+	tags := parseServerStringList(fmt.Sprint(item["tags"]))
+	if len(tags) > 0 {
+		item["tags"] = tags
+	} else {
+		delete(item, "tags")
+	}
 
 	for _, key := range []string{
 		"obfs_settings",
@@ -521,7 +526,7 @@ func decodeServerJSONValue(value any) any {
 
 func parseServerStringList(raw string) []string {
 	raw = strings.TrimSpace(raw)
-	if raw == "" || strings.EqualFold(raw, "null") {
+	if raw == "" || strings.EqualFold(raw, "null") || raw == "<nil>" {
 		return []string{}
 	}
 
@@ -535,7 +540,7 @@ func parseServerStringList(raw string) []string {
 		values = make([]string, 0, len(generic))
 		for _, item := range generic {
 			text := strings.TrimSpace(fmt.Sprint(item))
-			if text != "" {
+			if text != "" && text != "<nil>" {
 				values = append(values, text)
 			}
 		}
@@ -547,7 +552,7 @@ func parseServerStringList(raw string) []string {
 	values = make([]string, 0, len(parts))
 	for _, part := range parts {
 		part = strings.TrimSpace(strings.Trim(part, `"'`))
-		if part != "" {
+		if part != "" && part != "<nil>" {
 			values = append(values, part)
 		}
 	}
