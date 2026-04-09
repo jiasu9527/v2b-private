@@ -97350,8 +97350,8 @@
                                                             ],
                                                         },
                                                         {
-                                                            key: "coupon_code",
-                                                            title: "\u4f18\u60e0\u5238\u7801",
+                                                            key: "invite_code",
+                                                            title: "\u9080\u8bf7\u7801",
                                                             condition: [
                                                                 "\u6a21\u7cca",
                                                             ],
