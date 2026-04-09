@@ -1,9 +1,9 @@
 package httpapi
 
 import (
-	"errors"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -209,6 +209,85 @@ func TestRouterClientSubscribeClashEndpointUsesAttachmentHeader(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "proxies:") {
 		t.Fatalf("expected clash yaml body, got %q", rec.Body.String())
+	}
+}
+
+func TestRouterClientSubscribeClashEndpointIncludesMetaProtocols(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		subscribe: user.Subscribe{
+			U:              11,
+			D:              22,
+			TransferEnable: 100,
+			ExpiredAt:      int64Ptr(1234567890),
+			UUID:           "user-uuid",
+		},
+		servers: []map[string]any{
+			{
+				"type":    "vless",
+				"name":    "VLESS-1",
+				"host":    "vless.example.com",
+				"port":    int64(443),
+				"network": "ws",
+				"tls":     int64(1),
+				"tls_settings": map[string]any{
+					"server_name": "vless.example.com",
+					"fingerprint": "chrome",
+				},
+				"network_settings": map[string]any{
+					"path": "/ws",
+					"headers": map[string]any{
+						"Host": "vless.example.com",
+					},
+				},
+			},
+			{
+				"type":           "tuic",
+				"name":           "TUIC-1",
+				"host":           "tuic.example.com",
+				"port":           int64(443),
+				"server_name":    "tuic.example.com",
+				"udp_relay_mode": "native",
+			},
+			{
+				"type":          "hysteria",
+				"version":       int64(2),
+				"name":          "HY2-1",
+				"host":          "hy2.example.com",
+				"port":          int64(443),
+				"server_name":   "hy2.example.com",
+				"up_mbps":       int64(30),
+				"down_mbps":     int64(200),
+				"obfs":          "salamander",
+				"obfs_password": "hy-pass",
+			},
+			{
+				"type":        "anytls",
+				"name":        "AnyTLS-1",
+				"host":        "anytls.example.com",
+				"port":        int64(443),
+				"server_name": "anytls.example.com",
+				"tls_settings": map[string]any{
+					"allow_insecure": true,
+				},
+			},
+		},
+	}
+	router := NewRouter(config.Config{AppName: "Forest", PublicDir: "../public"}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1&flag=clash", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, name := range []string{"VLESS-1", "TUIC-1", "HY2-1", "AnyTLS-1"} {
+		if !strings.Contains(body, name) {
+			t.Fatalf("expected clash yaml to include %s, got %q", name, body)
+		}
 	}
 }
 
@@ -480,13 +559,13 @@ func TestRouterServerV2ConfigEndpointKeepsPrivateKeys(t *testing.T) {
 			ID:       9,
 			NodeType: "v2node",
 			Fields: map[string]any{
-				"listen_ip":    "0.0.0.0",
-				"server_port":  int64(443),
-				"network":      "tcp",
-				"protocol":     "vless",
-				"tls":          int64(2),
-				"tls_settings": map[string]any{"private_key": "tls-private", "public_key": "tls-public"},
-				"encryption":   "none",
+				"listen_ip":           "0.0.0.0",
+				"server_port":         int64(443),
+				"network":             "tcp",
+				"protocol":            "vless",
+				"tls":                 int64(2),
+				"tls_settings":        map[string]any{"private_key": "tls-private", "public_key": "tls-public"},
+				"encryption":          "none",
 				"encryption_settings": map[string]any{"private_key": "enc-private", "public_key": "enc-public"},
 			},
 		},

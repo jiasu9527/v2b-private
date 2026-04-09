@@ -228,8 +228,18 @@ func buildClashStandardProxy(userUUID string, server map[string]any) (map[string
 		}
 	case "vmess":
 		return buildClashVmessProxy(userUUID, normalized), true
+	case "vless":
+		return buildClashVlessProxy(userUUID, normalized), true
 	case "trojan":
 		return buildClashTrojanProxy(userUUID, normalized), true
+	case "tuic":
+		return buildClashTUICProxy(userUUID, normalized), true
+	case "hysteria":
+		return buildClashHysteriaProxy(userUUID, normalized), true
+	case "hysteria2":
+		return buildClashHysteria2Proxy(userUUID, normalized), true
+	case "anytls":
+		return buildClashAnyTLSProxy(userUUID, normalized), true
 	default:
 		return nil, false
 	}
@@ -374,6 +384,198 @@ func buildClashTrojanProxy(userUUID string, server map[string]any) map[string]an
 	return proxy
 }
 
+func buildClashVlessProxy(userUUID string, server map[string]any) map[string]any {
+	proxy := map[string]any{
+		"name":   serverString(server, "name"),
+		"type":   "vless",
+		"server": serverString(server, "host"),
+		"port":   serverInt64(server, "port"),
+		"uuid":   userUUID,
+		"udp":    true,
+	}
+
+	if flow := serverString(server, "flow"); flow != "" {
+		proxy["flow"] = flow
+	}
+
+	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	if clientFingerprint := firstNonEmptyString(strings.TrimSpace(fmt.Sprint(tlsSettings["fingerprint"])), "chrome"); clientFingerprint != "" {
+		proxy["client-fingerprint"] = clientFingerprint
+	}
+
+	encryption := buildClashVlessEncryption(server)
+	if encryption != "" {
+		proxy["encryption"] = encryption
+	}
+
+	if serverInt64(server, "tls") != 0 {
+		proxy["tls"] = true
+		proxy["servername"] = firstNonEmptyString(
+			strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"])),
+			strings.TrimSpace(fmt.Sprint(tlsSettings["serverName"])),
+			serverString(server, "host"),
+		)
+		proxy["skip-cert-verify"] = serverMapBool(tlsSettings, "allow_insecure", "allowInsecure")
+		if alpn := clashALPNList(tlsSettings, false); len(alpn) > 0 {
+			proxy["alpn"] = alpn
+		}
+		if serverInt64(server, "tls") == 2 {
+			realityOpts := map[string]any{}
+			if publicKey := strings.TrimSpace(fmt.Sprint(tlsSettings["public_key"])); publicKey != "" {
+				realityOpts["public-key"] = publicKey
+			}
+			if shortID := strings.TrimSpace(fmt.Sprint(tlsSettings["short_id"])); shortID != "" {
+				realityOpts["short-id"] = shortID
+			}
+			if len(realityOpts) > 0 {
+				proxy["reality-opts"] = realityOpts
+			}
+		}
+	}
+
+	applyClashStreamOptions(proxy, server, true)
+	return proxy
+}
+
+func buildClashTUICProxy(userUUID string, server map[string]any) map[string]any {
+	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	proxy := map[string]any{
+		"name":     serverString(server, "name"),
+		"type":     "tuic",
+		"server":   serverString(server, "host"),
+		"port":     serverInt64(server, "port"),
+		"uuid":     userUUID,
+		"password": userUUID,
+	}
+
+	if token := serverString(server, "token"); token != "" {
+		proxy["token"] = token
+	}
+	if sni := firstNonEmptyString(serverString(server, "server_name"), strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"])), serverString(server, "host")); sni != "" {
+		proxy["sni"] = sni
+	}
+	if alpn := clashALPNList(tlsSettings, true); len(alpn) > 0 {
+		proxy["alpn"] = alpn
+	}
+	if congestion := serverString(server, "congestion_control"); congestion != "" {
+		proxy["congestion-controller"] = congestion
+	}
+	if relayMode := firstNonEmptyString(serverString(server, "udp_relay_mode"), "native"); relayMode != "" {
+		proxy["udp-relay-mode"] = relayMode
+	}
+	if serverBool(server, "disable_sni") {
+		proxy["disable-sni"] = true
+	}
+	if serverBoolValue(server["zero_rtt_handshake"]) || serverBool(server, "reduce_rtt") {
+		proxy["reduce-rtt"] = true
+	}
+	if timeout := serverInt64(server, "request_timeout"); timeout > 0 {
+		proxy["request-timeout"] = timeout
+	}
+	if packetSize := serverInt64(server, "max_udp_relay_packet_size"); packetSize > 0 {
+		proxy["max-udp-relay-packet-size"] = packetSize
+	}
+	if maxOpenStreams := serverInt64(server, "max_open_streams"); maxOpenStreams > 0 {
+		proxy["max-open-streams"] = maxOpenStreams
+	}
+	if heartbeat := serverInt64(server, "heartbeat_interval"); heartbeat > 0 {
+		proxy["heartbeat-interval"] = heartbeat
+	}
+	proxy["skip-cert-verify"] = serverBoolValue(server["insecure"]) || serverMapBool(tlsSettings, "allow_insecure", "allowInsecure")
+	return proxy
+}
+
+func buildClashHysteriaProxy(userUUID string, server map[string]any) map[string]any {
+	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	proxy := map[string]any{
+		"name":     serverString(server, "name"),
+		"type":     "hysteria",
+		"server":   serverString(server, "host"),
+		"port":     clashPrimaryPort(server),
+		"auth-str": userUUID,
+		"protocol": firstNonEmptyString(serverString(server, "protocol"), "udp"),
+		"up":       clashMbps(serverInt64(server, "up_mbps")),
+		"down":     clashMbps(serverInt64(server, "down_mbps")),
+	}
+	if ports := clashPortHopping(server); ports != "" {
+		proxy["ports"] = ports
+	}
+	if obfs := serverString(server, "obfs"); obfs != "" {
+		proxy["obfs"] = obfs
+	}
+	if sni := firstNonEmptyString(serverString(server, "server_name"), strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"])), serverString(server, "host")); sni != "" {
+		proxy["sni"] = sni
+	}
+	if alpn := clashALPNList(tlsSettings, true); len(alpn) > 0 {
+		proxy["alpn"] = alpn
+	}
+	proxy["skip-cert-verify"] = serverBoolValue(server["insecure"]) || serverMapBool(tlsSettings, "allow_insecure", "allowInsecure")
+	return proxy
+}
+
+func buildClashHysteria2Proxy(userUUID string, server map[string]any) map[string]any {
+	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	proxy := map[string]any{
+		"name":     serverString(server, "name"),
+		"type":     "hysteria2",
+		"server":   serverString(server, "host"),
+		"port":     clashPrimaryPort(server),
+		"password": userUUID,
+		"up":       clashMbps(serverInt64(server, "up_mbps")),
+		"down":     clashMbps(serverInt64(server, "down_mbps")),
+	}
+	if ports := clashPortHopping(server); ports != "" {
+		proxy["ports"] = ports
+	}
+	if hopInterval := serverInt64(server, "hop_interval"); hopInterval > 0 {
+		proxy["hop-interval"] = hopInterval
+	}
+	if obfs := serverString(server, "obfs"); obfs != "" {
+		proxy["obfs"] = obfs
+	}
+	if obfsPassword := serverString(server, "obfs_password"); obfsPassword != "" {
+		proxy["obfs-password"] = obfsPassword
+	}
+	if sni := firstNonEmptyString(serverString(server, "server_name"), strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"])), serverString(server, "host")); sni != "" {
+		proxy["sni"] = sni
+	}
+	if alpn := clashALPNList(tlsSettings, true); len(alpn) > 0 {
+		proxy["alpn"] = alpn
+	}
+	proxy["skip-cert-verify"] = serverBoolValue(server["insecure"]) || serverMapBool(tlsSettings, "allow_insecure", "allowInsecure")
+	return proxy
+}
+
+func buildClashAnyTLSProxy(userUUID string, server map[string]any) map[string]any {
+	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	proxy := map[string]any{
+		"name":               serverString(server, "name"),
+		"type":               "anytls",
+		"server":             serverString(server, "host"),
+		"port":               serverInt64(server, "port"),
+		"password":           userUUID,
+		"client-fingerprint": firstNonEmptyString(strings.TrimSpace(fmt.Sprint(tlsSettings["fingerprint"])), "chrome"),
+		"udp":                true,
+	}
+	if sni := firstNonEmptyString(serverString(server, "server_name"), strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"])), serverString(server, "host")); sni != "" {
+		proxy["sni"] = sni
+	}
+	if alpn := clashALPNList(tlsSettings, false); len(alpn) > 0 {
+		proxy["alpn"] = alpn
+	}
+	if interval := serverInt64(server, "idle_session_check_interval"); interval > 0 {
+		proxy["idle-session-check-interval"] = interval
+	}
+	if timeout := serverInt64(server, "idle_session_timeout"); timeout > 0 {
+		proxy["idle-session-timeout"] = timeout
+	}
+	if minIdle := serverInt64(server, "min_idle_session"); minIdle > 0 {
+		proxy["min-idle-session"] = minIdle
+	}
+	proxy["skip-cert-verify"] = serverBoolValue(server["insecure"]) || serverMapBool(tlsSettings, "allow_insecure", "allowInsecure")
+	return proxy
+}
+
 func buildSubscribeURI(userUUID string, server map[string]any) string {
 	serverType, normalized := normalizeSubscribeServer(server)
 	switch serverType {
@@ -429,6 +631,178 @@ func canonicalSubscribeServerType(value string) string {
 	default:
 		return strings.ToLower(strings.TrimSpace(value))
 	}
+}
+
+func buildClashVlessEncryption(server map[string]any) string {
+	if !strings.EqualFold(serverString(server, "encryption"), "mlkem768x25519plus") {
+		return ""
+	}
+	encryptionSettings := serverMap(server, "encryption_settings")
+	parts := []string{
+		"mlkem768x25519plus",
+		firstNonEmptyString(strings.TrimSpace(fmt.Sprint(encryptionSettings["mode"])), "native"),
+		firstNonEmptyString(strings.TrimSpace(fmt.Sprint(encryptionSettings["rtt"])), "1rtt"),
+	}
+	if padding := strings.TrimSpace(fmt.Sprint(encryptionSettings["client_padding"])); padding != "" {
+		parts = append(parts, padding)
+	}
+	if password := strings.TrimSpace(fmt.Sprint(encryptionSettings["password"])); password != "" {
+		parts = append(parts, password)
+	}
+	return strings.Join(parts, ".")
+}
+
+func applyClashStreamOptions(proxy map[string]any, server map[string]any, allowXHTTP bool) {
+	network := serverString(server, "network")
+	networkSettings := firstNonEmptyMap(serverMap(server, "network_settings"), serverMap(server, "networkSettings"))
+	switch network {
+	case "tcp":
+		header := nestedMap(networkSettings, "header")
+		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(header["type"])), "http") {
+			proxy["network"] = "http"
+			httpOpts := map[string]any{}
+			request := nestedMap(header, "request")
+			if paths := nestedAnySlice(request, "path"); len(paths) > 0 {
+				httpOpts["path"] = paths
+			}
+			headers := map[string]any{}
+			if hosts := nestedAnySlice(nestedMap(request, "headers"), "Host"); len(hosts) > 0 {
+				headers["Host"] = hosts
+			}
+			if len(headers) > 0 {
+				httpOpts["headers"] = headers
+			}
+			if len(httpOpts) > 0 {
+				proxy["http-opts"] = httpOpts
+			}
+		}
+	case "ws":
+		proxy["network"] = "ws"
+		wsOpts := map[string]any{}
+		if path := strings.TrimSpace(fmt.Sprint(networkSettings["path"])); path != "" {
+			wsOpts["path"] = path
+		}
+		if host := strings.TrimSpace(fmt.Sprint(nestedMap(networkSettings, "headers")["Host"])); host != "" {
+			wsOpts["headers"] = map[string]any{"Host": host}
+		}
+		if len(wsOpts) > 0 {
+			proxy["ws-opts"] = wsOpts
+		}
+	case "grpc":
+		proxy["network"] = "grpc"
+		if serviceName := strings.TrimSpace(fmt.Sprint(networkSettings["serviceName"])); serviceName != "" {
+			proxy["grpc-opts"] = map[string]any{"grpc-service-name": serviceName}
+		}
+	case "httpupgrade":
+		proxy["network"] = "ws"
+		wsOpts := map[string]any{
+			"v2ray-http-upgrade": true,
+		}
+		if path := strings.TrimSpace(fmt.Sprint(networkSettings["path"])); path != "" {
+			wsOpts["path"] = path
+		}
+		if host := strings.TrimSpace(fmt.Sprint(networkSettings["host"])); host != "" {
+			wsOpts["headers"] = map[string]any{"Host": host}
+		}
+		proxy["ws-opts"] = wsOpts
+	case "xhttp":
+		if allowXHTTP {
+			proxy["network"] = "xhttp"
+			xhttpOpts := map[string]any{}
+			if path := strings.TrimSpace(fmt.Sprint(networkSettings["path"])); path != "" {
+				xhttpOpts["path"] = path
+			}
+			if host := strings.TrimSpace(fmt.Sprint(networkSettings["host"])); host != "" {
+				xhttpOpts["host"] = host
+			}
+			if mode := firstNonEmptyString(strings.TrimSpace(fmt.Sprint(networkSettings["mode"])), "auto"); mode != "" {
+				xhttpOpts["mode"] = mode
+			}
+			if headers := mapFromAny(networkSettings["headers"]); len(headers) > 0 {
+				xhttpOpts["headers"] = headers
+			}
+			if len(xhttpOpts) > 0 {
+				proxy["xhttp-opts"] = xhttpOpts
+			}
+		}
+	}
+}
+
+func clashPrimaryPort(server map[string]any) int64 {
+	if port, ok := clashPrimaryPortString(server); ok {
+		parsed, _ := strconv.ParseInt(port, 10, 64)
+		return parsed
+	}
+	return serverInt64(server, "port")
+}
+
+func clashPrimaryPortString(server map[string]any) (string, bool) {
+	for _, raw := range []string{serverString(server, "mport"), serverString(server, "port")} {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		for _, segment := range strings.Split(raw, ",") {
+			segment = strings.TrimSpace(segment)
+			if segment == "" {
+				continue
+			}
+			if strings.Contains(segment, "-") {
+				parts := strings.SplitN(segment, "-", 2)
+				return strings.TrimSpace(parts[0]), true
+			}
+			return segment, true
+		}
+	}
+	return "", false
+}
+
+func clashPortHopping(server map[string]any) string {
+	for _, raw := range []string{serverString(server, "mport"), serverString(server, "port")} {
+		raw = strings.TrimSpace(raw)
+		if strings.Contains(raw, "-") {
+			return raw
+		}
+	}
+	return ""
+}
+
+func clashMbps(value int64) string {
+	if value <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d Mbps", value)
+}
+
+func clashALPNList(settings map[string]any, fallbackH3 bool) []string {
+	values := serverStringSlice(settings, "alpn")
+	if len(values) == 0 && fallbackH3 {
+		return []string{"h3"}
+	}
+	return values
+}
+
+func serverStringSlice(server map[string]any, key string) []string {
+	values := asAnySlice(server[key])
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(fmt.Sprint(value))
+		if trimmed != "" && trimmed != "<nil>" {
+			result = append(result, trimmed)
+		}
+	}
+	if len(result) > 0 {
+		return result
+	}
+	if raw := strings.TrimSpace(fmt.Sprint(server[key])); raw != "" && raw != "<nil>" && raw != "[]" {
+		for _, part := range strings.Split(raw, ",") {
+			trimmed := strings.Trim(strings.TrimSpace(part), "[]\"")
+			if trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+	}
+	return result
 }
 
 func inferLegacyV2nodeProtocol(server map[string]any) string {
