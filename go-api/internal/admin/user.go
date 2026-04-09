@@ -1093,6 +1093,24 @@ func (s *DBService) buildUserWhere(ctx context.Context, filters []UserFilter) (s
 			continue
 		}
 
+		if key == "coupon_code" {
+			operator := condition
+			argument := any(value)
+			if condition == "ILIKE" {
+				argument = "%" + value + "%"
+			}
+			args = append(args, argument)
+			parts = append(parts, fmt.Sprintf(`EXISTS (
+SELECT 1
+FROM v2_order o
+JOIN v2_coupon c ON c.id = o.coupon_id
+WHERE o.user_id = u.id
+AND o.status NOT IN (0, 2)
+AND c.code %s $%d
+)`, operator, len(args)))
+			continue
+		}
+
 		if key == "plan_id" && value == "null" {
 			parts = append(parts, "u.plan_id IS NULL")
 			continue

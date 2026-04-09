@@ -97350,6 +97350,13 @@
                                                             ],
                                                         },
                                                         {
+                                                            key: "coupon_code",
+                                                            title: "\u4f18\u60e0\u5238\u7801",
+                                                            condition: [
+                                                                "\u6a21\u7cca",
+                                                            ],
+                                                        },
+                                                        {
                                                             key: "invite_user_id",
                                                             title: "\u9080\u8bf7\u4ebaID",
                                                             condition: ["="],
