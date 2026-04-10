@@ -15,6 +15,7 @@ import (
 	"math"
 	"net/mail"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,8 @@ import (
 )
 
 const gibibyte = int64(1073741824)
+
+var adminInviteCodePattern = regexp.MustCompile(`^[A-Za-z0-9]{1,32}$`)
 
 type UserFilter struct {
 	Key       string
@@ -179,6 +182,15 @@ func (s *DBService) GetUserInfoByID(ctx context.Context, id int64) (map[string]a
 		if inviteUser != nil {
 			user["invite_user"] = inviteUser
 		}
+	}
+
+	inviteCode, err := s.getPrimaryInviteCode(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if inviteCode != nil {
+		user["invite_code_id"] = inviteCode.ID
+		user["invite_code"] = inviteCode.Code
 	}
 
 	return user, nil
@@ -393,13 +405,20 @@ func (s *DBService) UpdateUser(ctx context.Context, req UserUpdateRequest) (bool
 		}
 	}
 
-	addSet("updated_at", time.Now().Unix())
+	now := time.Now().Unix()
+	addSet("updated_at", now)
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, fmt.Errorf("begin admin user update transaction: %w", err)
 	}
 	defer tx.Rollback()
+
+	if rawInviteCode, ok := values["invite_code"]; ok {
+		if err := s.savePrimaryInviteCodeTx(ctx, tx, req.ID, rawInviteCode, now); err != nil {
+			return false, err
+		}
+	}
 
 	if bannedValue == 1 {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_auth_session WHERE user_id = $1`, req.ID); err != nil {
@@ -457,6 +476,86 @@ func (s *DBService) updateInviteUserBinding(ctx context.Context, userID int64, i
 		return false, errors.New("保存失败")
 	}
 	return true, nil
+}
+
+type adminPrimaryInviteCode struct {
+	ID               int64
+	Code             string
+	InviteCampaignID sql.NullInt64
+}
+
+func (s *DBService) getPrimaryInviteCode(ctx context.Context, userID int64) (*adminPrimaryInviteCode, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id, code FROM v2_invite_code WHERE user_id = $1 AND status = 0 ORDER BY id ASC LIMIT 1`, userID)
+	result := &adminPrimaryInviteCode{}
+	if err := row.Scan(&result.ID, &result.Code); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("query user invite code: %w", err)
+	}
+	result.Code = strings.TrimSpace(result.Code)
+	return result, nil
+}
+
+func (s *DBService) savePrimaryInviteCodeTx(ctx context.Context, tx *sql.Tx, userID int64, rawCode string, now int64) error {
+	code := strings.TrimSpace(rawCode)
+	if code == "" {
+		return nil
+	}
+	if !adminInviteCodePattern.MatchString(code) {
+		return errors.New("邀请码格式不正确，仅支持1-32位字母和数字")
+	}
+
+	current, err := s.getPrimaryInviteCodeTx(ctx, tx, userID)
+	if err != nil {
+		return err
+	}
+
+	var duplicateID int64
+	err = tx.QueryRowContext(ctx, `SELECT id FROM v2_invite_code WHERE code = $1 AND status = 0 AND user_id <> $2 LIMIT 1`, code, userID).Scan(&duplicateID)
+	switch {
+	case err == nil:
+		return errors.New("邀请码已被使用")
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("query duplicate invite code: %w", err)
+	}
+
+	if current != nil {
+		if current.Code == code {
+			return nil
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE v2_invite_code SET code = $2, updated_at = $3 WHERE id = $1`, current.ID, code, now); err != nil {
+			return fmt.Errorf("update invite code: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE v2_invite_campaign SET invite_code = $2, updated_at = $3 WHERE invite_code_id = $1`, current.ID, code, now); err != nil {
+			return fmt.Errorf("update invite campaign code: %w", err)
+		}
+		return nil
+	}
+
+	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_invite_code (user_id, code, status, pv, created_at, updated_at)
+VALUES ($1, $2, 0, 0, $3, $3)`, userID, code, now); err != nil {
+		return fmt.Errorf("insert invite code: %w", err)
+	}
+	return nil
+}
+
+func (s *DBService) getPrimaryInviteCodeTx(ctx context.Context, tx *sql.Tx, userID int64) (*adminPrimaryInviteCode, error) {
+	row := tx.QueryRowContext(ctx, `SELECT id, code, invite_campaign_id
+FROM v2_invite_code
+WHERE user_id = $1 AND status = 0
+ORDER BY id ASC
+LIMIT 1
+FOR UPDATE`, userID)
+	result := &adminPrimaryInviteCode{}
+	if err := row.Scan(&result.ID, &result.Code, &result.InviteCampaignID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("query user invite code: %w", err)
+	}
+	result.Code = strings.TrimSpace(result.Code)
+	return result, nil
 }
 
 func (s *DBService) GenerateUsers(ctx context.Context, req UserGenerateRequest) (string, bool, error) {

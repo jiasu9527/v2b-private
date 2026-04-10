@@ -29697,6 +29697,29 @@
                                               {
                                                   for: "example-text-input-alt",
                                               },
+                                              "\u9080\u8bf7\u7801",
+                                          ),
+                                          p.a.createElement(u["a"], {
+                                              placeholder:
+                                                  "\u53ef\u76f4\u63a5\u4fee\u6539\uff0c\u4f8b\u5982 888",
+                                              defaultValue: t.invite_code,
+                                              onChange: (e) =>
+                                                  this.formChange(
+                                                      "invite_code",
+                                                      e.target.value,
+                                                  ),
+                                          }),
+                                      ),
+                                      p.a.createElement(
+                                          "div",
+                                          {
+                                              className: "form-group",
+                                          },
+                                          p.a.createElement(
+                                              "label",
+                                              {
+                                                  for: "example-text-input-alt",
+                                              },
                                               "\u5bc6\u7801",
                                           ),
                                           p.a.createElement(u["a"], {
