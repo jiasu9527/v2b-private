@@ -74,8 +74,8 @@ func buildShadowrocketVmessURI(userUUID string, server map[string]any) string {
 			params.Set("allowInsecure", "1")
 		}
 		if peer := firstNonEmptyString(
-			strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"])),
-			strings.TrimSpace(fmt.Sprint(tlsSettings["serverName"])),
+			stringValue(tlsSettings["server_name"]),
+			stringValue(tlsSettings["serverName"]),
 		); peer != "" {
 			params.Set("peer", peer)
 		}
@@ -86,34 +86,34 @@ func buildShadowrocketVmessURI(userUUID string, server map[string]any) string {
 	switch network {
 	case "tcp":
 		header := nestedMap(settings, "header")
-		if obfs := strings.TrimSpace(fmt.Sprint(header["type"])); obfs != "" {
+		if obfs := stringValue(header["type"]); obfs != "" {
 			params.Set("obfs", obfs)
 		}
 		request := nestedMap(header, "request")
 		if paths := nestedAnySlice(request, "path"); len(paths) > 0 {
-			params.Set("path", strings.TrimSpace(fmt.Sprint(paths[0])))
+			params.Set("path", stringValue(paths[0]))
 		}
 		if hosts := nestedAnySlice(nestedMap(request, "headers"), "Host"); len(hosts) > 0 {
-			params.Set("obfsParam", strings.TrimSpace(fmt.Sprint(hosts[0])))
+			params.Set("obfsParam", stringValue(hosts[0]))
 		}
 	case "ws":
 		params.Set("obfs", "websocket")
-		if path := strings.TrimSpace(fmt.Sprint(settings["path"])); path != "" {
+		if path := stringValue(settings["path"]); path != "" {
 			params.Set("path", path)
 		}
-		if host := strings.TrimSpace(fmt.Sprint(nestedMap(settings, "headers")["Host"])); host != "" {
+		if host := stringValue(nestedMap(settings, "headers")["Host"]); host != "" {
 			params.Set("obfsParam", host)
 		}
-		if method := strings.TrimSpace(fmt.Sprint(settings["security"])); method != "" && method != "<nil>" {
+		if method := stringValue(settings["security"]); method != "" {
 			params.Set("method", method)
 		}
 	case "grpc":
 		params.Set("obfs", "grpc")
-		if serviceName := strings.TrimSpace(fmt.Sprint(settings["serviceName"])); serviceName != "" {
+		if serviceName := stringValue(settings["serviceName"]); serviceName != "" {
 			params.Set("path", serviceName)
 		}
 		if host := firstNonEmptyString(
-			strings.TrimSpace(fmt.Sprint(firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))["server_name"])),
+			stringValue(firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))["server_name"]),
 			serverString(server, "host"),
 		); host != "" {
 			params.Set("host", host)
@@ -137,7 +137,7 @@ func buildClashStandardProfile(cfg config.Config, customFile, defaultFile, userU
 			continue
 		}
 		proxies = append(proxies, proxy)
-		names = append(names, strings.TrimSpace(fmt.Sprint(proxy["name"])))
+		names = append(names, stringValue(proxy["name"]))
 	}
 
 	template["proxies"] = appendAnySlice(asAnySlice(template["proxies"]), proxies...)
@@ -265,7 +265,7 @@ func buildClashShadowsocksProxy(userUUID string, server map[string]any) map[stri
 		proxy["plugin-opts"] = opts
 	} else if strings.EqualFold(serverString(server, "network"), "http") {
 		networkSettings := serverMap(server, "network_settings")
-		if host := strings.TrimSpace(fmt.Sprint(networkSettings["Host"])); host != "" {
+		if host := stringValue(networkSettings["Host"]); host != "" {
 			proxy["plugin"] = "obfs"
 			proxy["plugin-opts"] = map[string]any{
 				"mode": "http",
@@ -294,8 +294,8 @@ func buildClashVmessProxy(userUUID string, server map[string]any) map[string]any
 		tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
 		proxy["skip-cert-verify"] = serverMapBool(tlsSettings, "allow_insecure", "allowInsecure")
 		proxy["servername"] = firstNonEmptyString(
-			strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"])),
-			strings.TrimSpace(fmt.Sprint(tlsSettings["serverName"])),
+			stringValue(tlsSettings["server_name"]),
+			stringValue(tlsSettings["serverName"]),
 		)
 	}
 
@@ -304,7 +304,7 @@ func buildClashVmessProxy(userUUID string, server map[string]any) map[string]any
 	switch network {
 	case "tcp":
 		header := nestedMap(networkSettings, "header")
-		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(header["type"])), "http") {
+		if strings.EqualFold(stringValue(header["type"]), "http") {
 			proxy["network"] = "http"
 			request := nestedMap(header, "request")
 			if hosts := nestedAnySlice(nestedMap(request, "headers"), "Host"); len(hosts) > 0 {
@@ -323,21 +323,21 @@ func buildClashVmessProxy(userUUID string, server map[string]any) map[string]any
 	case "ws":
 		proxy["network"] = "ws"
 		wsOpts := map[string]any{}
-		if path := strings.TrimSpace(fmt.Sprint(networkSettings["path"])); path != "" {
+		if path := stringValue(networkSettings["path"]); path != "" {
 			wsOpts["path"] = path
 		}
-		if host := strings.TrimSpace(fmt.Sprint(nestedMap(networkSettings, "headers")["Host"])); host != "" {
+		if host := stringValue(nestedMap(networkSettings, "headers")["Host"]); host != "" {
 			wsOpts["headers"] = map[string]any{"Host": host}
 		}
 		if len(wsOpts) > 0 {
 			proxy["ws-opts"] = wsOpts
 		}
-		if security := strings.TrimSpace(fmt.Sprint(networkSettings["security"])); security != "" {
+		if security := stringValue(networkSettings["security"]); security != "" {
 			proxy["cipher"] = security
 		}
 	case "grpc":
 		proxy["network"] = "grpc"
-		if serviceName := strings.TrimSpace(fmt.Sprint(networkSettings["serviceName"])); serviceName != "" {
+		if serviceName := stringValue(networkSettings["serviceName"]); serviceName != "" {
 			proxy["grpc-opts"] = map[string]any{"grpc-service-name": serviceName}
 		}
 	}
@@ -360,16 +360,16 @@ func buildClashTrojanProxy(userUUID string, server map[string]any) map[string]an
 	if network == "grpc" || network == "ws" {
 		proxy["network"] = network
 		if network == "grpc" {
-			if serviceName := strings.TrimSpace(fmt.Sprint(networkSettings["serviceName"])); serviceName != "" {
+			if serviceName := stringValue(networkSettings["serviceName"]); serviceName != "" {
 				proxy["grpc-opts"] = map[string]any{"grpc-service-name": serviceName}
 			}
 		}
 		if network == "ws" {
 			wsOpts := map[string]any{}
-			if path := strings.TrimSpace(fmt.Sprint(networkSettings["path"])); path != "" {
+			if path := stringValue(networkSettings["path"]); path != "" {
 				wsOpts["path"] = path
 			}
-			if host := strings.TrimSpace(fmt.Sprint(nestedMap(networkSettings, "headers")["Host"])); host != "" {
+			if host := stringValue(nestedMap(networkSettings, "headers")["Host"]); host != "" {
 				wsOpts["headers"] = map[string]any{"Host": host}
 			}
 			if len(wsOpts) > 0 {
@@ -379,7 +379,7 @@ func buildClashTrojanProxy(userUUID string, server map[string]any) map[string]an
 	}
 
 	tlsSettings := serverMap(server, "tls_settings")
-	proxy["sni"] = firstNonEmptyString(serverString(server, "server_name"), strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"])))
+	proxy["sni"] = firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"]))
 	proxy["skip-cert-verify"] = serverBoolValue(server["allow_insecure"]) || serverMapBool(tlsSettings, "allow_insecure")
 	return proxy
 }
@@ -399,7 +399,7 @@ func buildClashVlessProxy(userUUID string, server map[string]any) map[string]any
 	}
 
 	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
-	if clientFingerprint := firstNonEmptyString(strings.TrimSpace(fmt.Sprint(tlsSettings["fingerprint"])), "chrome"); clientFingerprint != "" {
+	if clientFingerprint := firstNonEmptyString(stringValue(tlsSettings["fingerprint"]), "chrome"); clientFingerprint != "" {
 		proxy["client-fingerprint"] = clientFingerprint
 	}
 
@@ -411,8 +411,8 @@ func buildClashVlessProxy(userUUID string, server map[string]any) map[string]any
 	if serverInt64(server, "tls") != 0 {
 		proxy["tls"] = true
 		proxy["servername"] = firstNonEmptyString(
-			strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"])),
-			strings.TrimSpace(fmt.Sprint(tlsSettings["serverName"])),
+			stringValue(tlsSettings["server_name"]),
+			stringValue(tlsSettings["serverName"]),
 			serverString(server, "host"),
 		)
 		proxy["skip-cert-verify"] = serverMapBool(tlsSettings, "allow_insecure", "allowInsecure")
@@ -421,10 +421,10 @@ func buildClashVlessProxy(userUUID string, server map[string]any) map[string]any
 		}
 		if serverInt64(server, "tls") == 2 {
 			realityOpts := map[string]any{}
-			if publicKey := strings.TrimSpace(fmt.Sprint(tlsSettings["public_key"])); publicKey != "" {
+			if publicKey := stringValue(tlsSettings["public_key"]); publicKey != "" {
 				realityOpts["public-key"] = publicKey
 			}
-			if shortID := strings.TrimSpace(fmt.Sprint(tlsSettings["short_id"])); shortID != "" {
+			if shortID := stringValue(tlsSettings["short_id"]); shortID != "" {
 				realityOpts["short-id"] = shortID
 			}
 			if len(realityOpts) > 0 {
@@ -451,7 +451,7 @@ func buildClashTUICProxy(userUUID string, server map[string]any) map[string]any 
 	if token := serverString(server, "token"); token != "" {
 		proxy["token"] = token
 	}
-	if sni := firstNonEmptyString(serverString(server, "server_name"), strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"])), serverString(server, "host")); sni != "" {
+	if sni := firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"]), serverString(server, "host")); sni != "" {
 		proxy["sni"] = sni
 	}
 	if alpn := clashALPNList(tlsSettings, true); len(alpn) > 0 {
@@ -503,7 +503,7 @@ func buildClashHysteriaProxy(userUUID string, server map[string]any) map[string]
 	if obfs := serverString(server, "obfs"); obfs != "" {
 		proxy["obfs"] = obfs
 	}
-	if sni := firstNonEmptyString(serverString(server, "server_name"), strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"])), serverString(server, "host")); sni != "" {
+	if sni := firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"]), serverString(server, "host")); sni != "" {
 		proxy["sni"] = sni
 	}
 	if alpn := clashALPNList(tlsSettings, true); len(alpn) > 0 {
@@ -536,7 +536,7 @@ func buildClashHysteria2Proxy(userUUID string, server map[string]any) map[string
 	if obfsPassword := serverString(server, "obfs_password"); obfsPassword != "" {
 		proxy["obfs-password"] = obfsPassword
 	}
-	if sni := firstNonEmptyString(serverString(server, "server_name"), strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"])), serverString(server, "host")); sni != "" {
+	if sni := firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"]), serverString(server, "host")); sni != "" {
 		proxy["sni"] = sni
 	}
 	if alpn := clashALPNList(tlsSettings, true); len(alpn) > 0 {
@@ -554,10 +554,10 @@ func buildClashAnyTLSProxy(userUUID string, server map[string]any) map[string]an
 		"server":             serverString(server, "host"),
 		"port":               serverInt64(server, "port"),
 		"password":           userUUID,
-		"client-fingerprint": firstNonEmptyString(strings.TrimSpace(fmt.Sprint(tlsSettings["fingerprint"])), "chrome"),
+		"client-fingerprint": firstNonEmptyString(stringValue(tlsSettings["fingerprint"]), "chrome"),
 		"udp":                true,
 	}
-	if sni := firstNonEmptyString(serverString(server, "server_name"), strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"])), serverString(server, "host")); sni != "" {
+	if sni := firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"]), serverString(server, "host")); sni != "" {
 		proxy["sni"] = sni
 	}
 	if alpn := clashALPNList(tlsSettings, false); len(alpn) > 0 {
@@ -640,13 +640,13 @@ func buildClashVlessEncryption(server map[string]any) string {
 	encryptionSettings := serverMap(server, "encryption_settings")
 	parts := []string{
 		"mlkem768x25519plus",
-		firstNonEmptyString(strings.TrimSpace(fmt.Sprint(encryptionSettings["mode"])), "native"),
-		firstNonEmptyString(strings.TrimSpace(fmt.Sprint(encryptionSettings["rtt"])), "1rtt"),
+		firstNonEmptyString(stringValue(encryptionSettings["mode"]), "native"),
+		firstNonEmptyString(stringValue(encryptionSettings["rtt"]), "1rtt"),
 	}
-	if padding := strings.TrimSpace(fmt.Sprint(encryptionSettings["client_padding"])); padding != "" {
+	if padding := stringValue(encryptionSettings["client_padding"]); padding != "" {
 		parts = append(parts, padding)
 	}
-	if password := strings.TrimSpace(fmt.Sprint(encryptionSettings["password"])); password != "" {
+	if password := stringValue(encryptionSettings["password"]); password != "" {
 		parts = append(parts, password)
 	}
 	return strings.Join(parts, ".")
@@ -658,7 +658,7 @@ func applyClashStreamOptions(proxy map[string]any, server map[string]any, allowX
 	switch network {
 	case "tcp":
 		header := nestedMap(networkSettings, "header")
-		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(header["type"])), "http") {
+		if strings.EqualFold(stringValue(header["type"]), "http") {
 			proxy["network"] = "http"
 			httpOpts := map[string]any{}
 			request := nestedMap(header, "request")
@@ -679,10 +679,10 @@ func applyClashStreamOptions(proxy map[string]any, server map[string]any, allowX
 	case "ws":
 		proxy["network"] = "ws"
 		wsOpts := map[string]any{}
-		if path := strings.TrimSpace(fmt.Sprint(networkSettings["path"])); path != "" {
+		if path := stringValue(networkSettings["path"]); path != "" {
 			wsOpts["path"] = path
 		}
-		if host := strings.TrimSpace(fmt.Sprint(nestedMap(networkSettings, "headers")["Host"])); host != "" {
+		if host := stringValue(nestedMap(networkSettings, "headers")["Host"]); host != "" {
 			wsOpts["headers"] = map[string]any{"Host": host}
 		}
 		if len(wsOpts) > 0 {
@@ -690,7 +690,7 @@ func applyClashStreamOptions(proxy map[string]any, server map[string]any, allowX
 		}
 	case "grpc":
 		proxy["network"] = "grpc"
-		if serviceName := strings.TrimSpace(fmt.Sprint(networkSettings["serviceName"])); serviceName != "" {
+		if serviceName := stringValue(networkSettings["serviceName"]); serviceName != "" {
 			proxy["grpc-opts"] = map[string]any{"grpc-service-name": serviceName}
 		}
 	case "httpupgrade":
@@ -698,10 +698,10 @@ func applyClashStreamOptions(proxy map[string]any, server map[string]any, allowX
 		wsOpts := map[string]any{
 			"v2ray-http-upgrade": true,
 		}
-		if path := strings.TrimSpace(fmt.Sprint(networkSettings["path"])); path != "" {
+		if path := stringValue(networkSettings["path"]); path != "" {
 			wsOpts["path"] = path
 		}
-		if host := strings.TrimSpace(fmt.Sprint(networkSettings["host"])); host != "" {
+		if host := stringValue(networkSettings["host"]); host != "" {
 			wsOpts["headers"] = map[string]any{"Host": host}
 		}
 		proxy["ws-opts"] = wsOpts
@@ -709,13 +709,13 @@ func applyClashStreamOptions(proxy map[string]any, server map[string]any, allowX
 		if allowXHTTP {
 			proxy["network"] = "xhttp"
 			xhttpOpts := map[string]any{}
-			if path := strings.TrimSpace(fmt.Sprint(networkSettings["path"])); path != "" {
+			if path := stringValue(networkSettings["path"]); path != "" {
 				xhttpOpts["path"] = path
 			}
-			if host := strings.TrimSpace(fmt.Sprint(networkSettings["host"])); host != "" {
+			if host := stringValue(networkSettings["host"]); host != "" {
 				xhttpOpts["host"] = host
 			}
-			if mode := firstNonEmptyString(strings.TrimSpace(fmt.Sprint(networkSettings["mode"])), "auto"); mode != "" {
+			if mode := firstNonEmptyString(stringValue(networkSettings["mode"]), "auto"); mode != "" {
 				xhttpOpts["mode"] = mode
 			}
 			if headers := mapFromAny(networkSettings["headers"]); len(headers) > 0 {
@@ -786,15 +786,15 @@ func serverStringSlice(server map[string]any, key string) []string {
 	values := asAnySlice(server[key])
 	result := make([]string, 0, len(values))
 	for _, value := range values {
-		trimmed := strings.TrimSpace(fmt.Sprint(value))
-		if trimmed != "" && trimmed != "<nil>" {
+		trimmed := stringValue(value)
+		if trimmed != "" {
 			result = append(result, trimmed)
 		}
 	}
 	if len(result) > 0 {
 		return result
 	}
-	if raw := strings.TrimSpace(fmt.Sprint(server[key])); raw != "" && raw != "<nil>" && raw != "[]" {
+	if raw := stringValue(server[key]); raw != "" && raw != "[]" {
 		for _, part := range strings.Split(raw, ",") {
 			trimmed := strings.Trim(strings.TrimSpace(part), "[]\"")
 			if trimmed != "" {
@@ -852,8 +852,8 @@ func buildShadowsocksURI(userUUID string, server map[string]any) string {
 		)
 	} else if strings.EqualFold(serverString(server, "network"), "http") {
 		settings := serverMap(server, "network_settings")
-		if host := strings.TrimSpace(fmt.Sprint(settings["Host"])); host != "" {
-			path := firstNonEmptyString(strings.TrimSpace(fmt.Sprint(settings["path"])), "/")
+		if host := stringValue(settings["Host"]); host != "" {
+			path := firstNonEmptyString(stringValue(settings["path"]), "/")
 			uri += fmt.Sprintf("?plugin=obfs-local;obfs=tls;obfs-host=%s;path=%s", host, path)
 		}
 	}
@@ -882,8 +882,8 @@ func buildVmessURI(userUUID string, server map[string]any) string {
 		config["tls"] = "tls"
 		config["allowInsecure"] = boolToInt(serverMapBool(tlsSettings, "allow_insecure", "allowInsecure"))
 		config["sni"] = firstNonEmptyString(
-			strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"])),
-			strings.TrimSpace(fmt.Sprint(tlsSettings["serverName"])),
+			stringValue(tlsSettings["server_name"]),
+			stringValue(tlsSettings["serverName"]),
 		)
 	}
 
@@ -891,36 +891,36 @@ func buildVmessURI(userUUID string, server map[string]any) string {
 	switch serverString(server, "network") {
 	case "tcp":
 		header := nestedMap(networkSettings, "header")
-		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(header["type"])), "http") {
+		if strings.EqualFold(stringValue(header["type"]), "http") {
 			config["type"] = "http"
 			request := nestedMap(header, "request")
 			if hosts := nestedAnySlice(nestedMap(request, "headers"), "Host"); len(hosts) > 0 {
-				config["host"] = fmt.Sprint(hosts[0])
+				config["host"] = stringValue(hosts[0])
 			}
 			if paths := nestedAnySlice(request, "path"); len(paths) > 0 {
-				config["path"] = fmt.Sprint(paths[0])
+				config["path"] = stringValue(paths[0])
 			}
 		}
 	case "ws":
-		config["path"] = strings.TrimSpace(fmt.Sprint(networkSettings["path"]))
-		config["host"] = strings.TrimSpace(fmt.Sprint(nestedMap(networkSettings, "headers")["Host"]))
-		if security := strings.TrimSpace(fmt.Sprint(networkSettings["security"])); security != "" {
+		config["path"] = stringValue(networkSettings["path"])
+		config["host"] = stringValue(nestedMap(networkSettings, "headers")["Host"])
+		if security := stringValue(networkSettings["security"]); security != "" {
 			config["scy"] = security
 		}
 	case "grpc":
-		config["path"] = strings.TrimSpace(fmt.Sprint(networkSettings["serviceName"]))
+		config["path"] = stringValue(networkSettings["serviceName"])
 	case "kcp":
-		if seed := strings.TrimSpace(fmt.Sprint(networkSettings["seed"])); seed != "" {
+		if seed := stringValue(networkSettings["seed"]); seed != "" {
 			config["path"] = seed
 		}
-		config["type"] = firstNonEmptyString(strings.TrimSpace(fmt.Sprint(nestedMap(networkSettings, "header")["type"])), "none")
+		config["type"] = firstNonEmptyString(stringValue(nestedMap(networkSettings, "header")["type"]), "none")
 	case "httpupgrade":
-		config["path"] = strings.TrimSpace(fmt.Sprint(networkSettings["path"]))
-		config["host"] = strings.TrimSpace(fmt.Sprint(networkSettings["host"]))
+		config["path"] = stringValue(networkSettings["path"])
+		config["host"] = stringValue(networkSettings["host"])
 	case "xhttp":
-		config["path"] = strings.TrimSpace(fmt.Sprint(networkSettings["path"]))
-		config["host"] = strings.TrimSpace(fmt.Sprint(networkSettings["host"]))
-		config["mode"] = firstNonEmptyString(strings.TrimSpace(fmt.Sprint(networkSettings["mode"])), "auto")
+		config["path"] = stringValue(networkSettings["path"])
+		config["host"] = stringValue(networkSettings["host"])
+		config["mode"] = firstNonEmptyString(stringValue(networkSettings["mode"]), "auto")
 		if extra, ok := networkSettings["extra"]; ok && extra != nil {
 			if raw, err := json.Marshal(extra); err == nil {
 				config["extra"] = string(raw)
@@ -944,7 +944,7 @@ func buildVlessURI(userUUID string, server map[string]any) string {
 		"serviceName":  "",
 		"security":     "",
 		"flow":         serverString(server, "flow"),
-		"fp":           firstNonEmptyString(strings.TrimSpace(fmt.Sprint(tlsSettings["fingerprint"])), "chrome"),
+		"fp":           firstNonEmptyString(stringValue(tlsSettings["fingerprint"]), "chrome"),
 		"insecure":     strconv.Itoa(boolToInt(serverMapBool(tlsSettings, "allow_insecure"))),
 	}
 
@@ -954,10 +954,10 @@ func buildVlessURI(userUUID string, server map[string]any) string {
 		} else {
 			config["security"] = "tls"
 		}
-		config["sni"] = strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"]))
+		config["sni"] = stringValue(tlsSettings["server_name"])
 		if tls == 2 {
-			config["pbk"] = strings.TrimSpace(fmt.Sprint(tlsSettings["public_key"]))
-			config["sid"] = strings.TrimSpace(fmt.Sprint(tlsSettings["short_id"]))
+			config["pbk"] = stringValue(tlsSettings["public_key"])
+			config["sid"] = stringValue(tlsSettings["short_id"])
 		}
 	}
 
@@ -965,13 +965,13 @@ func buildVlessURI(userUUID string, server map[string]any) string {
 		encryptionSettings := serverMap(server, "encryption_settings")
 		parts := []string{
 			"mlkem768x25519plus",
-			firstNonEmptyString(strings.TrimSpace(fmt.Sprint(encryptionSettings["mode"])), "native"),
-			firstNonEmptyString(strings.TrimSpace(fmt.Sprint(encryptionSettings["rtt"])), "1rtt"),
+			firstNonEmptyString(stringValue(encryptionSettings["mode"]), "native"),
+			firstNonEmptyString(stringValue(encryptionSettings["rtt"]), "1rtt"),
 		}
-		if padding := strings.TrimSpace(fmt.Sprint(encryptionSettings["client_padding"])); padding != "" {
+		if padding := stringValue(encryptionSettings["client_padding"]); padding != "" {
 			parts = append(parts, padding)
 		}
-		parts = append(parts, strings.TrimSpace(fmt.Sprint(encryptionSettings["password"])))
+		parts = append(parts, stringValue(encryptionSettings["password"]))
 		config["encryption"] = strings.Join(parts, ".")
 	}
 
@@ -984,33 +984,33 @@ func configureVlessNetwork(server map[string]any, config map[string]string) {
 	switch serverString(server, "network") {
 	case "tcp":
 		header := nestedMap(settings, "header")
-		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(header["type"])), "http") {
+		if strings.EqualFold(stringValue(header["type"]), "http") {
 			config["headerType"] = "http"
 			request := nestedMap(header, "request")
 			if hosts := nestedAnySlice(nestedMap(request, "headers"), "Host"); len(hosts) > 0 {
-				config["host"] = fmt.Sprint(hosts[0])
+				config["host"] = stringValue(hosts[0])
 			}
 			if paths := nestedAnySlice(request, "path"); len(paths) > 0 {
-				config["path"] = fmt.Sprint(paths[0])
+				config["path"] = stringValue(paths[0])
 			}
 		}
 	case "ws":
-		config["path"] = strings.TrimSpace(fmt.Sprint(settings["path"]))
-		config["host"] = strings.TrimSpace(fmt.Sprint(nestedMap(settings, "headers")["Host"]))
+		config["path"] = stringValue(settings["path"])
+		config["host"] = stringValue(nestedMap(settings, "headers")["Host"])
 	case "grpc":
-		config["serviceName"] = strings.TrimSpace(fmt.Sprint(settings["serviceName"]))
+		config["serviceName"] = stringValue(settings["serviceName"])
 	case "kcp":
-		config["headerType"] = firstNonEmptyString(strings.TrimSpace(fmt.Sprint(nestedMap(settings, "header")["type"])), "none")
-		if seed := strings.TrimSpace(fmt.Sprint(settings["seed"])); seed != "" {
+		config["headerType"] = firstNonEmptyString(stringValue(nestedMap(settings, "header")["type"]), "none")
+		if seed := stringValue(settings["seed"]); seed != "" {
 			config["seed"] = seed
 		}
 	case "httpupgrade":
-		config["path"] = strings.TrimSpace(fmt.Sprint(settings["path"]))
-		config["host"] = strings.TrimSpace(fmt.Sprint(settings["host"]))
+		config["path"] = stringValue(settings["path"])
+		config["host"] = stringValue(settings["host"])
 	case "xhttp":
-		config["path"] = strings.TrimSpace(fmt.Sprint(settings["path"]))
-		config["host"] = strings.TrimSpace(fmt.Sprint(settings["host"]))
-		config["mode"] = firstNonEmptyString(strings.TrimSpace(fmt.Sprint(settings["mode"])), "auto")
+		config["path"] = stringValue(settings["path"])
+		config["host"] = stringValue(settings["host"])
+		config["mode"] = firstNonEmptyString(stringValue(settings["mode"]), "auto")
 		if extra, ok := settings["extra"]; ok && extra != nil {
 			if raw, err := json.Marshal(extra); err == nil {
 				config["extra"] = string(raw)
@@ -1023,19 +1023,19 @@ func buildTrojanURI(userUUID string, server map[string]any) string {
 	tlsSettings := serverMap(server, "tls_settings")
 	params := map[string]string{
 		"allowInsecure": strconv.Itoa(boolToInt(serverBoolValue(server["allow_insecure"]) || serverMapBool(tlsSettings, "allow_insecure"))),
-		"peer":          firstNonEmptyString(serverString(server, "server_name"), strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"]))),
-		"sni":           firstNonEmptyString(serverString(server, "server_name"), strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"]))),
+		"peer":          firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])),
+		"sni":           firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])),
 		"type":          serverString(server, "network"),
 	}
 
 	if network := serverString(server, "network"); network == "grpc" || network == "ws" {
 		settings := serverMap(server, "network_settings")
 		if network == "grpc" {
-			params["serviceName"] = strings.TrimSpace(fmt.Sprint(settings["serviceName"]))
+			params["serviceName"] = stringValue(settings["serviceName"])
 		}
 		if network == "ws" {
-			params["path"] = strings.TrimSpace(fmt.Sprint(settings["path"]))
-			params["host"] = strings.TrimSpace(fmt.Sprint(nestedMap(settings, "headers")["Host"]))
+			params["path"] = stringValue(settings["path"])
+			params["host"] = stringValue(nestedMap(settings, "headers")["Host"])
 		}
 	}
 	return buildURIString("trojan", userUUID, server, rawURLEncode(serverString(server, "name")), params)
@@ -1062,7 +1062,7 @@ func buildHysteriaURI(userUUID string, server map[string]any) string {
 			remote,
 			firstPort,
 			boolToInt(serverBoolValue(server["insecure"]) || serverMapBool(tlsSettings, "allow_insecure")),
-			firstNonEmptyString(serverString(server, "server_name"), strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"]))),
+			firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])),
 		)
 		if obfs := serverString(server, "obfs"); obfs != "" && serverString(server, "obfs_password") != "" {
 			uri += "&obfs=" + url.QueryEscape(obfs) + "&obfs-password=" + url.QueryEscape(serverString(server, "obfs_password"))
@@ -1095,7 +1095,7 @@ func buildHysteriaURI(userUUID string, server map[string]any) string {
 func buildTuicURI(userUUID string, server map[string]any) string {
 	tlsSettings := serverMap(server, "tls_settings")
 	params := map[string]string{
-		"sni":                firstNonEmptyString(serverString(server, "server_name"), strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"]))),
+		"sni":                firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])),
 		"alpn":               "h3",
 		"congestion_control": serverString(server, "congestion_control"),
 		"allow_insecure":     strconv.Itoa(boolToInt(serverBoolValue(server["insecure"]) || serverMapBool(tlsSettings, "allow_insecure"))),
@@ -1118,7 +1118,7 @@ func buildAnyTLSURI(userUUID string, server map[string]any) string {
 	params := map[string]string{
 		"insecure": strconv.Itoa(boolToInt(serverBoolValue(server["insecure"]) || serverMapBool(tlsSettings, "allow_insecure"))),
 	}
-	if sni := firstNonEmptyString(serverString(server, "server_name"), strings.TrimSpace(fmt.Sprint(tlsSettings["server_name"]))); sni != "" {
+	if sni := firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])); sni != "" {
 		params["sni"] = sni
 	}
 	return fmt.Sprintf(
@@ -1230,7 +1230,7 @@ func appendAnySlice(dst []any, src ...any) []any {
 
 func sliceContainsString(values []any, target string) bool {
 	for _, value := range values {
-		if strings.TrimSpace(fmt.Sprint(value)) == target {
+		if stringValue(value) == target {
 			return true
 		}
 	}
@@ -1274,11 +1274,28 @@ func firstNonEmptyMap(values ...map[string]any) map[string]any {
 
 func firstNonEmptyString(values ...string) string {
 	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
+		if normalized := sanitizeString(value); normalized != "" {
+			return normalized
 		}
 	}
 	return ""
+}
+
+func stringValue(value any) string {
+	if value == nil {
+		return ""
+	}
+	return sanitizeString(fmt.Sprintf("%v", value))
+}
+
+func sanitizeString(value string) string {
+	trimmed := strings.TrimSpace(value)
+	switch strings.ToLower(trimmed) {
+	case "", "<nil>", "null":
+		return ""
+	default:
+		return trimmed
+	}
 }
 
 func serverString(server map[string]any, key string) string {
@@ -1289,7 +1306,7 @@ func serverString(server map[string]any, key string) string {
 	if !ok || value == nil {
 		return ""
 	}
-	return strings.TrimSpace(fmt.Sprint(value))
+	return stringValue(value)
 }
 
 func serverInt64(server map[string]any, key string) int64 {
