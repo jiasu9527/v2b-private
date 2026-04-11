@@ -376,6 +376,21 @@ legacy_mysql_configured() {
   [[ -n "${database}" && -n "${username}" ]]
 }
 
+legacy_mysql_default_value() {
+  local key="$1"
+  local fallback="${2:-}"
+  local legacy_env value
+  legacy_env="$(legacy_mysql_env_path || true)"
+  if [[ -n "${legacy_env}" ]]; then
+    value="$(env_value_from_path "${legacy_env}" "${key}")"
+    if [[ -n "${value}" ]]; then
+      printf '%s\n' "${value}"
+      return 0
+    fi
+  fi
+  printf '%s\n' "${fallback}"
+}
+
 should_prompt_db_config() {
   if [[ "${FORCE_INTERACTIVE_DB_CONFIG:-0}" == "1" ]]; then
     return 0
@@ -1139,6 +1154,54 @@ run_ops_migrate_mysql() {
   "${GO_BIN}" "${args[@]}"
 }
 
+run_ops_inspect_merge_mysql() {
+  local source_host="$1"
+  local source_port="$2"
+  local source_database="$3"
+  local source_username="$4"
+  local source_password="$5"
+  local source_charset="$6"
+  local args=(
+    run ./cmd/ops inspect-merge-mysql
+    --source-host "${source_host}"
+    --source-port "${source_port}"
+    --source-database "${source_database}"
+    --source-username "${source_username}"
+    --source-password "${source_password}"
+    --source-charset "${source_charset}"
+  )
+  if [[ -n "${POSTGRES_DSN:-}" ]]; then
+    args+=(--target-dsn "${POSTGRES_DSN}")
+  fi
+  cd "${GO_DIR}"
+  "${GO_BIN}" "${args[@]}"
+}
+
+run_ops_merge_mysql() {
+  local source_host="$1"
+  local source_port="$2"
+  local source_database="$3"
+  local source_username="$4"
+  local source_password="$5"
+  local source_charset="$6"
+  local plan_map="$7"
+  local args=(
+    run ./cmd/ops merge-mysql
+    --source-host "${source_host}"
+    --source-port "${source_port}"
+    --source-database "${source_database}"
+    --source-username "${source_username}"
+    --source-password "${source_password}"
+    --source-charset "${source_charset}"
+    --plan-map "${plan_map}"
+  )
+  if [[ -n "${POSTGRES_DSN:-}" ]]; then
+    args+=(--target-dsn "${POSTGRES_DSN}")
+  fi
+  cd "${GO_DIR}"
+  "${GO_BIN}" "${args[@]}"
+}
+
 ensure_postgres_target_for_legacy_mysql() {
   local legacy_env
   legacy_env="$(legacy_mysql_env_path)"
@@ -1521,6 +1584,164 @@ cmd_migrate_mysql() {
   fi
 }
 
+cmd_merge_mysql() {
+  ensure_go
+  load_env
+  resolve_postgres_dsn
+
+  local source_host source_port source_database source_username source_password source_charset
+  source_host="$(prompt_with_default "源 MySQL 主机" "$(legacy_mysql_default_value DB_HOST 127.0.0.1)")"
+  source_host="${source_host:-127.0.0.1}"
+  source_port="$(prompt_with_default "源 MySQL 端口" "$(legacy_mysql_default_value DB_PORT 3306)")"
+  source_port="${source_port:-3306}"
+  source_database="$(prompt_with_default "源 MySQL 数据库名" "$(legacy_mysql_default_value DB_DATABASE)")"
+  source_username="$(prompt_with_default "源 MySQL 用户名" "$(legacy_mysql_default_value DB_USERNAME)")"
+  source_password="$(prompt_secret_with_default "源 MySQL 密码" "$(legacy_mysql_default_value DB_PASSWORD)")"
+  source_charset="$(prompt_with_default "源 MySQL 字符集" "$(legacy_mysql_default_value DB_CHARSET utf8mb4)")"
+  source_charset="${source_charset:-utf8mb4}"
+
+  if [[ -z "${source_database}" || -z "${source_username}" ]]; then
+    echo "源 MySQL 数据库名和用户名不能为空"
+    exit 1
+  fi
+
+  local inspect_output
+  inspect_output="$(run_ops_inspect_merge_mysql "${source_host}" "${source_port}" "${source_database}" "${source_username}" "${source_password}" "${source_charset}")"
+
+  local source_users_total="0"
+  local source_users_without_plan="0"
+  local -a source_plans=()
+  local -a target_plans=()
+  local line kind plan_id plan_name plan_users
+  while IFS= read -r line; do
+    case "${line}" in
+      source_users_total=*)
+        source_users_total="${line#*=}"
+        ;;
+      source_users_without_plan=*)
+        source_users_without_plan="${line#*=}"
+        ;;
+      $'source_plan\t'*)
+        IFS=$'\t' read -r kind plan_id plan_name plan_users <<< "${line}"
+        source_plans+=("${plan_id}"$'\t'"${plan_name}"$'\t'"${plan_users}")
+        ;;
+      $'target_plan\t'*)
+        IFS=$'\t' read -r kind plan_id plan_name plan_users <<< "${line}"
+        target_plans+=("${plan_id}"$'\t'"${plan_name}"$'\t'"${plan_users}")
+        ;;
+    esac
+  done <<< "${inspect_output}"
+
+  echo "源库用户总数: ${source_users_total}"
+  echo "无套餐用户数: ${source_users_without_plan}"
+  echo
+
+  if [[ ${#source_plans[@]} -gt 0 ]]; then
+    echo "检测到旧套餐："
+    local item source_plan_id source_plan_name source_plan_count
+    for item in "${source_plans[@]}"; do
+      IFS=$'\t' read -r source_plan_id source_plan_name source_plan_count <<< "${item}"
+      [[ -n "${source_plan_name}" ]] || source_plan_name="未命名套餐"
+      printf '  [%s] %s（用户 %s）\n' "${source_plan_id}" "${source_plan_name}" "${source_plan_count}"
+    done
+    echo
+  else
+    echo "源库没有检测到已绑定套餐的用户"
+    echo
+  fi
+
+  if [[ ${#target_plans[@]} -gt 0 ]]; then
+    echo "当前站可用套餐："
+    local target_item target_id target_name target_user_count
+    for target_item in "${target_plans[@]}"; do
+      IFS=$'\t' read -r target_id target_name target_user_count <<< "${target_item}"
+      [[ -n "${target_name}" ]] || target_name="未命名套餐"
+      printf '  [%s] %s（当前用户 %s）\n' "${target_id}" "${target_name}" "${target_user_count}"
+    done
+    echo
+  fi
+
+  if [[ ${#source_plans[@]} -gt 0 && ${#target_plans[@]} -eq 0 ]]; then
+    echo "目标站没有可用套餐，请先在当前站创建套餐后再合并"
+    exit 1
+  fi
+
+  local -a plan_map_entries=()
+  local mapping_input resolved_target_id
+  local source_item source_plan_id source_plan_name source_plan_count
+  for source_item in "${source_plans[@]}"; do
+    IFS=$'\t' read -r source_plan_id source_plan_name source_plan_count <<< "${source_item}"
+    [[ -n "${source_plan_name}" ]] || source_plan_name="未命名套餐"
+    while true; do
+      mapping_input="$(prompt_with_default "旧套餐 [${source_plan_id}] ${source_plan_name}（用户 ${source_plan_count}） -> 新套餐 ID 或完整名称（留空=跳过）" "")"
+      mapping_input="$(printf '%s' "${mapping_input}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+      if [[ -z "${mapping_input}" ]]; then
+        break
+      fi
+
+      resolved_target_id=""
+      local target_item target_id target_name target_user_count
+      if [[ "${mapping_input}" =~ ^[0-9]+$ ]]; then
+        for target_item in "${target_plans[@]}"; do
+          IFS=$'\t' read -r target_id target_name target_user_count <<< "${target_item}"
+          if [[ "${mapping_input}" == "${target_id}" ]]; then
+            resolved_target_id="${target_id}"
+            break
+          fi
+        done
+      else
+        for target_item in "${target_plans[@]}"; do
+          IFS=$'\t' read -r target_id target_name target_user_count <<< "${target_item}"
+          if [[ "${mapping_input}" == "${target_name}" ]]; then
+            resolved_target_id="${target_id}"
+            break
+          fi
+        done
+      fi
+
+      if [[ -n "${resolved_target_id}" ]]; then
+        plan_map_entries+=("${source_plan_id}:${resolved_target_id}")
+        break
+      fi
+      echo "未找到对应的新套餐，请输入列表里的套餐 ID 或完整名称"
+    done
+  done
+
+  local plan_map=""
+  if [[ ${#plan_map_entries[@]} -gt 0 ]]; then
+    plan_map="$(IFS=,; printf '%s' "${plan_map_entries[*]}")"
+  fi
+
+  echo "即将开始合并 MySQL 用户库："
+  echo "  源库: ${source_host}:${source_port}/${source_database}"
+  echo "  目标库: 当前 PostgreSQL 站点"
+  echo "  套餐映射数: ${#plan_map_entries[@]}"
+  if [[ "${source_users_without_plan}" != "0" ]]; then
+    echo "  无套餐用户: 保留原用户数据并直接并入"
+  fi
+  echo "冲突处理规则："
+  echo "  同邮箱账号：并入当前站已有账号"
+  echo "  当前站密码/套餐：不覆盖"
+  echo "  token 冲突：自动生成新值"
+  echo "  邀请码冲突：自动改成唯一值"
+  echo "  未映射旧套餐用户：跳过"
+
+  local answer=""
+  printf '确认开始合并？ [y/N]: ' >&2
+  IFS= read -r answer || true
+  answer="$(normalize_yes_no_answer "${answer}")"
+  if [[ "${answer}" != "y" && "${answer}" != "yes" ]]; then
+    echo "已取消合并"
+    return 0
+  fi
+
+  local merge_output
+  merge_output="$(run_ops_merge_mysql "${source_host}" "${source_port}" "${source_database}" "${source_username}" "${source_password}" "${source_charset}" "${plan_map}")"
+  if [[ -n "${merge_output}" ]]; then
+    printf '%s\n' "${merge_output}"
+  fi
+}
+
 cmd_create_admin() {
   ensure_go
   load_env
@@ -1702,6 +1923,7 @@ usage() {
   ./scripts/appctl build
   ./scripts/appctl migrate-config [legacy-config-root]
   ./scripts/appctl migrate-mysql
+  ./scripts/appctl merge-mysql
   ./scripts/appctl init-env
   ./scripts/appctl doctor
   ./scripts/appctl run
@@ -1739,6 +1961,7 @@ case "${action}" in
   build) build ;;
   migrate-config) shift; cmd_migrate_config "$@" ;;
   migrate-mysql) shift; cmd_migrate_mysql "$@" ;;
+  merge-mysql) shift; cmd_merge_mysql "$@" ;;
   init-env) cmd_init_env ;;
   doctor) cmd_doctor ;;
   run) cmd_run ;;

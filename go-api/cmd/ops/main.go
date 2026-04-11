@@ -50,6 +50,14 @@ func main() {
 		if err := runMigrateMySQL(os.Args[2:]); err != nil {
 			exitWithErr(err)
 		}
+	case "inspect-merge-mysql":
+		if err := runInspectMergeMySQL(os.Args[2:]); err != nil {
+			exitWithErr(err)
+		}
+	case "merge-mysql":
+		if err := runMergeMySQL(os.Args[2:]); err != nil {
+			exitWithErr(err)
+		}
 	case "gen-app-key":
 		key, err := generateAppKey()
 		if err != nil {
@@ -501,6 +509,8 @@ func printUsage() {
   go run ./cmd/ops seed-demo [--admin-email=admin@example.com] [--admin-password=xxx] [--dsn=...]
   go run ./cmd/ops migrate-config [--legacy-root=...] [--target-root=...]
   go run ./cmd/ops migrate-mysql --source-env=../.env [--target-dsn=...] [--install-sql=...]
+  go run ./cmd/ops inspect-merge-mysql --source-host=127.0.0.1 --source-port=3306 --source-database=legacy --source-username=root --source-password=xxx [--target-dsn=...]
+  go run ./cmd/ops merge-mysql --source-host=127.0.0.1 --source-port=3306 --source-database=legacy --source-username=root --source-password=xxx --plan-map=1:10,2:20 [--target-dsn=...]
   go run ./cmd/ops gen-app-key`)
 }
 

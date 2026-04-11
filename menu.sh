@@ -222,6 +222,7 @@ show_advanced_menu() {
 7. 生成 systemd 服务模板
 8. 安装全局 forest 命令
 9. 安全卸载当前部署
+10. 合并 MySQL 用户库
 0. 返回上级
 TEXT
 }
@@ -440,6 +441,7 @@ advanced_menu() {
       7) run_appctl service-template; pause_screen ;;
       8) run_appctl install-link; pause_screen ;;
       9) run_appctl uninstall; pause_screen ;;
+      10) run_appctl merge-mysql; pause_screen ;;
       *) echo "无效编号"; pause_screen ;;
     esac
   done

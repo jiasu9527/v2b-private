@@ -66,4 +66,12 @@ if [[ "$(filtered_actions)" != "uninstall" ]]; then
   exit 1
 fi
 
+: > "${APPCTL_LOG}"
+printf '4\n10\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-routing-merge-mysql.out 2>/tmp/test-menu-routing-merge-mysql.err
+if [[ "$(filtered_actions)" != "merge-mysql" ]]; then
+  echo "expected merge-mysql action"
+  cat "${APPCTL_LOG}"
+  exit 1
+fi
+
 echo "menu routing test passed"
