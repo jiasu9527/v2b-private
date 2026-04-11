@@ -391,6 +391,93 @@ legacy_mysql_default_value() {
   printf '%s\n' "${fallback}"
 }
 
+merge_mysql_profile_path() {
+  local override="${FOREST_MERGE_MYSQL_PROFILE:-}"
+  if [[ -n "${override}" ]]; then
+    [[ -f "${override}" ]] || return 1
+    printf '%s\n' "${override}"
+    return 0
+  fi
+
+  local candidate="/etc/forest/merge-mysql.env"
+  if [[ -f "${candidate}" ]]; then
+    printf '%s\n' "${candidate}"
+    return 0
+  fi
+
+  candidate="${ROOT_DIR}/.merge-mysql.env"
+  if [[ -f "${candidate}" ]]; then
+    printf '%s\n' "${candidate}"
+    return 0
+  fi
+  return 1
+}
+
+merge_mysql_profile_value() {
+  local key="$1"
+  local fallback="${2:-}"
+  local value="${!key:-}"
+  if [[ -n "${value}" ]]; then
+    printf '%s\n' "${value}"
+    return 0
+  fi
+
+  local profile_path
+  profile_path="$(merge_mysql_profile_path || true)"
+  if [[ -n "${profile_path}" ]]; then
+    value="$(env_value_from_path "${profile_path}" "${key}")"
+    if [[ -n "${value}" ]]; then
+      printf '%s\n' "${value}"
+      return 0
+    fi
+  fi
+
+  printf '%s\n' "${fallback}"
+}
+
+merge_mysql_source_default_value() {
+  local profile_key="$1"
+  local legacy_key="$2"
+  local fallback="${3:-}"
+  local value=""
+
+  value="$(merge_mysql_profile_value "${profile_key}")"
+  if [[ -n "${value}" ]]; then
+    printf '%s\n' "${value}"
+    return 0
+  fi
+
+  legacy_mysql_default_value "${legacy_key}" "${fallback}"
+}
+
+merge_mysql_source_preset_ready() {
+  local source_database source_username source_password
+  source_database="$(merge_mysql_source_default_value "MERGE_MYSQL_SOURCE_DATABASE" "DB_DATABASE")"
+  source_username="$(merge_mysql_source_default_value "MERGE_MYSQL_SOURCE_USERNAME" "DB_USERNAME")"
+  source_password="$(merge_mysql_profile_value "MERGE_MYSQL_SOURCE_PASSWORD" "$(legacy_mysql_default_value "DB_PASSWORD")")"
+  [[ -n "${source_database}" && -n "${source_username}" && -n "${source_password}" ]]
+}
+
+merge_mysql_plan_map_lookup() {
+  local raw="$1"
+  local source_plan_id="$2"
+  local token source_id target_id
+
+  while IFS= read -r token; do
+    token="$(printf '%s' "${token}" | tr -d '[:space:]')"
+    [[ -n "${token}" ]] || continue
+    [[ "${token}" == *:* ]] || continue
+    source_id="${token%%:*}"
+    target_id="${token#*:}"
+    if [[ "${source_id}" == "${source_plan_id}" && -n "${target_id}" ]]; then
+      printf '%s\n' "${target_id}"
+      return 0
+    fi
+  done < <(printf '%s' "${raw}" | tr ',\r\n\t' '\n')
+
+  return 1
+}
+
 should_prompt_db_config() {
   if [[ "${FORCE_INTERACTIVE_DB_CONFIG:-0}" == "1" ]]; then
     return 0
@@ -1589,16 +1676,39 @@ cmd_merge_mysql() {
   load_env
   resolve_postgres_dsn
 
+  local merge_profile_path=""
+  merge_profile_path="$(merge_mysql_profile_path || true)"
+  if [[ -n "${merge_profile_path}" ]]; then
+    echo "已加载 MySQL 合并预设: ${merge_profile_path}"
+  fi
+
   local source_host source_port source_database source_username source_password source_charset
-  source_host="$(prompt_with_default "源 MySQL 主机" "$(legacy_mysql_default_value DB_HOST 127.0.0.1)")"
-  source_host="${source_host:-127.0.0.1}"
-  source_port="$(prompt_with_default "源 MySQL 端口" "$(legacy_mysql_default_value DB_PORT 3306)")"
-  source_port="${source_port:-3306}"
-  source_database="$(prompt_with_default "源 MySQL 数据库名" "$(legacy_mysql_default_value DB_DATABASE)")"
-  source_username="$(prompt_with_default "源 MySQL 用户名" "$(legacy_mysql_default_value DB_USERNAME)")"
-  source_password="$(prompt_secret_with_default "源 MySQL 密码" "$(legacy_mysql_default_value DB_PASSWORD)")"
-  source_charset="$(prompt_with_default "源 MySQL 字符集" "$(legacy_mysql_default_value DB_CHARSET utf8mb4)")"
-  source_charset="${source_charset:-utf8mb4}"
+  local source_host_default source_port_default source_database_default source_username_default source_password_default source_charset_default
+  source_host_default="$(merge_mysql_source_default_value "MERGE_MYSQL_SOURCE_HOST" "DB_HOST" "127.0.0.1")"
+  source_port_default="$(merge_mysql_source_default_value "MERGE_MYSQL_SOURCE_PORT" "DB_PORT" "3306")"
+  source_database_default="$(merge_mysql_source_default_value "MERGE_MYSQL_SOURCE_DATABASE" "DB_DATABASE")"
+  source_username_default="$(merge_mysql_source_default_value "MERGE_MYSQL_SOURCE_USERNAME" "DB_USERNAME")"
+  source_password_default="$(merge_mysql_profile_value "MERGE_MYSQL_SOURCE_PASSWORD" "$(legacy_mysql_default_value "DB_PASSWORD")")"
+  source_charset_default="$(merge_mysql_source_default_value "MERGE_MYSQL_SOURCE_CHARSET" "DB_CHARSET" "utf8mb4")"
+
+  if merge_mysql_source_preset_ready; then
+    source_host="${source_host_default:-127.0.0.1}"
+    source_port="${source_port_default:-3306}"
+    source_database="${source_database_default}"
+    source_username="${source_username_default}"
+    source_password="${source_password_default}"
+    source_charset="${source_charset_default:-utf8mb4}"
+  else
+    source_host="$(prompt_with_default "源 MySQL 主机" "${source_host_default}")"
+    source_host="${source_host:-127.0.0.1}"
+    source_port="$(prompt_with_default "源 MySQL 端口" "${source_port_default}")"
+    source_port="${source_port:-3306}"
+    source_database="$(prompt_with_default "源 MySQL 数据库名" "${source_database_default}")"
+    source_username="$(prompt_with_default "源 MySQL 用户名" "${source_username_default}")"
+    source_password="$(prompt_secret_with_default "源 MySQL 密码" "${source_password_default}")"
+    source_charset="$(prompt_with_default "源 MySQL 字符集" "${source_charset_default}")"
+    source_charset="${source_charset:-utf8mb4}"
+  fi
 
   if [[ -z "${source_database}" || -z "${source_username}" ]]; then
     echo "源 MySQL 数据库名和用户名不能为空"
@@ -1667,13 +1777,44 @@ cmd_merge_mysql() {
   fi
 
   local -a plan_map_entries=()
+  local saved_plan_map=""
+  saved_plan_map="$(merge_mysql_profile_value "MERGE_MYSQL_PLAN_MAP")"
   local mapping_input resolved_target_id
   local source_item source_plan_id source_plan_name source_plan_count
   for source_item in "${source_plans[@]}"; do
     IFS=$'\t' read -r source_plan_id source_plan_name source_plan_count <<< "${source_item}"
     [[ -n "${source_plan_name}" ]] || source_plan_name="未命名套餐"
+
+    local saved_mapping_input=""
+    saved_mapping_input="$(merge_mysql_plan_map_lookup "${saved_plan_map}" "${source_plan_id}" || true)"
+    resolved_target_id=""
+    if [[ -n "${saved_mapping_input}" ]]; then
+      local target_item target_id target_name target_user_count
+      if [[ "${saved_mapping_input}" =~ ^[0-9]+$ ]]; then
+        for target_item in "${target_plans[@]}"; do
+          IFS=$'\t' read -r target_id target_name target_user_count <<< "${target_item}"
+          if [[ "${saved_mapping_input}" == "${target_id}" ]]; then
+            resolved_target_id="${target_id}"
+            break
+          fi
+        done
+      else
+        for target_item in "${target_plans[@]}"; do
+          IFS=$'\t' read -r target_id target_name target_user_count <<< "${target_item}"
+          if [[ "${saved_mapping_input}" == "${target_name}" ]]; then
+            resolved_target_id="${target_id}"
+            break
+          fi
+        done
+      fi
+      if [[ -n "${resolved_target_id}" ]]; then
+        plan_map_entries+=("${source_plan_id}:${resolved_target_id}")
+        continue
+      fi
+    fi
+
     while true; do
-      mapping_input="$(prompt_with_default "旧套餐 [${source_plan_id}] ${source_plan_name}（用户 ${source_plan_count}） -> 新套餐 ID 或完整名称（留空=跳过）" "")"
+      mapping_input="$(prompt_with_default "旧套餐 [${source_plan_id}] ${source_plan_name}（用户 ${source_plan_count}） -> 新套餐 ID 或完整名称（留空=跳过）" "${saved_mapping_input}")"
       mapping_input="$(printf '%s' "${mapping_input}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
       if [[ -z "${mapping_input}" ]]; then
         break
@@ -1721,7 +1862,8 @@ cmd_merge_mysql() {
   fi
   echo "冲突处理规则："
   echo "  同邮箱账号：并入当前站已有账号"
-  echo "  当前站密码/套餐：不覆盖"
+  echo "  当前站密码：不覆盖"
+  echo "  当前站套餐：同邮箱时保留更高档套餐"
   echo "  token 冲突：自动生成新值"
   echo "  邀请码冲突：自动改成唯一值"
   echo "  未映射旧套餐用户：跳过"

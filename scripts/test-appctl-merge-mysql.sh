@@ -54,7 +54,7 @@ chmod +x "${TMP_DIR}/.local/go/bin/go"
 GO_LOG="${TMP_DIR}/go.log"
 export GO_LOG
 
-INPUT=$'\n\n\n\n\n\n10\n新年付\ny\n'
+INPUT=$'10\n新年付\ny\n'
 printf '%s' "${INPUT}" | PATH="/usr/bin:/bin" "${TMP_DIR}/scripts/appctl" merge-mysql >/tmp/test-appctl-merge-mysql.out 2>/tmp/test-appctl-merge-mysql.err
 
 EXPECTED_INSPECT='run ./cmd/ops inspect-merge-mysql --source-host legacy.mysql.local --source-port 3307 --source-database legacydb --source-username legacyuser --source-password legacypass --source-charset utf8mb4 --target-dsn host=127.0.0.1 port=5432 user=mergeuser dbname=forest sslmode=disable password=mergepass'
