@@ -63,6 +63,7 @@ type mergeTargetUser struct {
 	TransferEnable int64
 	DeviceLimit    *int64
 	SpeedLimit     *int64
+	ExpiredAt      *int64
 }
 
 type mergeTargetPlanInfo struct {
@@ -582,7 +583,7 @@ func mergeMySQLUsersIntoPostgres(ctx context.Context, sourceDB, targetDB *sql.DB
 			continue
 		}
 		if existing, ok := targetUsersByEmail[sourceUser.EmailKey]; ok {
-			updatedExisting, err := upgradeMergeTargetUserPlanIfNeeded(ctx, tx, existing, sourceUser, targetPlanByID, planMap)
+			updatedExisting, err := mergeTargetUserSubscriptionIfNeeded(ctx, tx, existing, sourceUser, targetPlanByID, planMap)
 			if err != nil {
 				return result, err
 			}
@@ -620,6 +621,7 @@ func mergeMySQLUsersIntoPostgres(ctx context.Context, sourceDB, targetDB *sql.DB
 			TransferEnable: insertUser.TransferEnable,
 			DeviceLimit:    insertUser.DeviceLimit,
 			SpeedLimit:     insertUser.SpeedLimit,
+			ExpiredAt:      cloneInt64Ptr(insertUser.ExpiredAt),
 		}
 		usedTokens[insertUser.Token] = struct{}{}
 		usedUUIDs[insertUser.UUID] = struct{}{}
@@ -876,7 +878,7 @@ func mergeSourceUserFromRow(row map[string]any) (mergeSourceUser, error) {
 		RemindExpire:      rowInt64Ptr(row, "remind_expire"),
 		RemindTraffic:     rowInt64Ptr(row, "remind_traffic"),
 		Token:             strings.TrimSpace(rowString(row, "token")),
-		ExpiredAt:         rowInt64Ptr(row, "expired_at"),
+		ExpiredAt:         normalizeMergeExpiredAt(rowInt64Ptr(row, "expired_at")),
 		Remarks:           trimmedStringPtr(rowStringPtr(row, "remarks")),
 		CreatedAt:         createdAt,
 		UpdatedAt:         updatedAt,
@@ -912,7 +914,7 @@ func buildMergeInsertUser(sourceUser mergeSourceUser, targetPlanByID map[int64]m
 		AutoRenewal:       sourceUser.AutoRenewal,
 		RemindExpire:      sourceUser.RemindExpire,
 		RemindTraffic:     sourceUser.RemindTraffic,
-		ExpiredAt:         sourceUser.ExpiredAt,
+		ExpiredAt:         normalizeMergeExpiredAt(sourceUser.ExpiredAt),
 		Remarks:           sourceUser.Remarks,
 		CreatedAt:         sourceUser.CreatedAt,
 		UpdatedAt:         sourceUser.UpdatedAt,
@@ -977,23 +979,19 @@ func buildMergeInsertUser(sourceUser mergeSourceUser, targetPlanByID map[int64]m
 	return insertUser, true, nil
 }
 
-func upgradeMergeTargetUserPlanIfNeeded(ctx context.Context, tx *sql.Tx, existing mergeTargetUser, sourceUser mergeSourceUser, targetPlanByID map[int64]mergeTargetPlanInfo, planMap map[int64]int64) (mergeTargetUser, error) {
+func mergeTargetUserSubscriptionIfNeeded(ctx context.Context, tx *sql.Tx, existing mergeTargetUser, sourceUser mergeSourceUser, targetPlanByID map[int64]mergeTargetPlanInfo, planMap map[int64]int64) (mergeTargetUser, error) {
 	sourcePlan, mapped := resolveMergeMappedTargetPlan(sourceUser, targetPlanByID, planMap)
 	if !mapped {
 		return existing, nil
 	}
-	if !shouldUpgradeMergeTargetUserPlan(existing, sourcePlan, targetPlanByID) {
+	desired := buildMergedTargetUserSubscription(existing, sourceUser, sourcePlan, targetPlanByID)
+	if !mergeTargetUserSubscriptionChanged(existing, desired) {
 		return existing, nil
 	}
-	if err := updateMergeTargetUserPlan(ctx, tx, existing.ID, sourcePlan); err != nil {
+	if err := updateMergeTargetUserSubscription(ctx, tx, existing.ID, desired); err != nil {
 		return existing, err
 	}
-	existing.GroupID = int64Ptr(sourcePlan.GroupID)
-	existing.PlanID = int64Ptr(sourcePlan.ID)
-	existing.TransferEnable = planTransferGBToUserBytes(sourcePlan.TransferEnable)
-	existing.DeviceLimit = cloneInt64Ptr(sourcePlan.DeviceLimit)
-	existing.SpeedLimit = cloneInt64Ptr(sourcePlan.SpeedLimit)
-	return existing, nil
+	return desired, nil
 }
 
 func resolveMergeMappedTargetPlan(sourceUser mergeSourceUser, targetPlanByID map[int64]mergeTargetPlanInfo, planMap map[int64]int64) (mergeTargetPlanInfo, bool) {
@@ -1009,24 +1007,6 @@ func resolveMergeMappedTargetPlan(sourceUser mergeSourceUser, targetPlanByID map
 		return mergeTargetPlanInfo{}, false
 	}
 	return targetPlan, true
-}
-
-func shouldUpgradeMergeTargetUserPlan(existing mergeTargetUser, sourcePlan mergeTargetPlanInfo, targetPlanByID map[int64]mergeTargetPlanInfo) bool {
-	currentRank := mergeTargetUserPlanRank(existing, targetPlanByID)
-	sourceRank := sourcePlan.TransferEnable
-	if existing.PlanID == nil || *existing.PlanID <= 0 {
-		return sourceRank > currentRank
-	}
-	return sourceRank > currentRank
-}
-
-func mergeTargetUserPlanRank(existing mergeTargetUser, targetPlanByID map[int64]mergeTargetPlanInfo) int64 {
-	if existing.PlanID != nil && *existing.PlanID > 0 {
-		if currentPlan, ok := targetPlanByID[*existing.PlanID]; ok {
-			return currentPlan.TransferEnable
-		}
-	}
-	return normalizeMergeTransferGB(existing.TransferEnable)
 }
 
 func normalizeMergeTransferGB(value int64) int64 {
@@ -1048,17 +1028,118 @@ func planTransferGBToUserBytes(value int64) int64 {
 	return value * gib
 }
 
-func updateMergeTargetUserPlan(ctx context.Context, tx *sql.Tx, userID int64, targetPlan mergeTargetPlanInfo) error {
-	if _, err := tx.ExecContext(ctx, `UPDATE v2_user SET group_id = $1, plan_id = $2, transfer_enable = $3, device_limit = $4, speed_limit = $5, updated_at = $6 WHERE id = $7`,
-		targetPlan.GroupID,
-		targetPlan.ID,
-		planTransferGBToUserBytes(targetPlan.TransferEnable),
-		nullableInt64Value(targetPlan.DeviceLimit),
-		nullableInt64Value(targetPlan.SpeedLimit),
+func buildMergedTargetUserSubscription(existing mergeTargetUser, sourceUser mergeSourceUser, sourcePlan mergeTargetPlanInfo, targetPlanByID map[int64]mergeTargetPlanInfo) mergeTargetUser {
+	desired := existing
+	targetPlan := preferredMergeTargetPlan(existing, sourcePlan, targetPlanByID)
+	desired.GroupID = int64Ptr(targetPlan.GroupID)
+	desired.PlanID = int64Ptr(targetPlan.ID)
+	desired.TransferEnable = planTransferGBToUserBytes(targetPlan.TransferEnable)
+	desired.DeviceLimit = cloneInt64Ptr(targetPlan.DeviceLimit)
+	desired.SpeedLimit = cloneInt64Ptr(targetPlan.SpeedLimit)
+	desired.ExpiredAt = mergePreferredExpiredAt(existing.ExpiredAt, sourceUser.ExpiredAt)
+	return desired
+}
+
+func preferredMergeTargetPlan(existing mergeTargetUser, sourcePlan mergeTargetPlanInfo, targetPlanByID map[int64]mergeTargetPlanInfo) mergeTargetPlanInfo {
+	currentPlan, ok := currentMergeTargetPlan(existing, targetPlanByID)
+	if !ok {
+		return sourcePlan
+	}
+	if sourcePlan.TransferEnable > currentPlan.TransferEnable {
+		return sourcePlan
+	}
+	return currentPlan
+}
+
+func currentMergeTargetPlan(existing mergeTargetUser, targetPlanByID map[int64]mergeTargetPlanInfo) (mergeTargetPlanInfo, bool) {
+	if existing.PlanID != nil && *existing.PlanID > 0 {
+		if currentPlan, ok := targetPlanByID[*existing.PlanID]; ok {
+			return currentPlan, true
+		}
+		return mergeTargetPlanInfo{
+			ID:             *existing.PlanID,
+			GroupID:        derefInt64(existing.GroupID),
+			TransferEnable: normalizeMergeTransferGB(existing.TransferEnable),
+			DeviceLimit:    cloneInt64Ptr(existing.DeviceLimit),
+			SpeedLimit:     cloneInt64Ptr(existing.SpeedLimit),
+		}, true
+	}
+	return mergeTargetPlanInfo{}, false
+}
+
+func mergePreferredExpiredAt(currentRaw, sourceRaw *int64) *int64 {
+	current := normalizeMergeExpiredAt(currentRaw)
+	source := normalizeMergeExpiredAt(sourceRaw)
+	if source == nil {
+		return nil
+	}
+	if current == nil {
+		return nil
+	}
+	if *source > *current {
+		return cloneInt64Ptr(source)
+	}
+	return cloneInt64Ptr(current)
+}
+
+func normalizeMergeExpiredAt(value *int64) *int64 {
+	if value == nil || *value <= 0 {
+		return nil
+	}
+	return cloneInt64Ptr(value)
+}
+
+func mergeTargetUserSubscriptionChanged(current, desired mergeTargetUser) bool {
+	if !equalInt64Ptr(current.GroupID, desired.GroupID) {
+		return true
+	}
+	if !equalInt64Ptr(current.PlanID, desired.PlanID) {
+		return true
+	}
+	if current.TransferEnable != desired.TransferEnable {
+		return true
+	}
+	if !equalInt64Ptr(current.DeviceLimit, desired.DeviceLimit) {
+		return true
+	}
+	if !equalInt64Ptr(current.SpeedLimit, desired.SpeedLimit) {
+		return true
+	}
+	if !equalExpiredAtStorage(current.ExpiredAt, desired.ExpiredAt) {
+		return true
+	}
+	return false
+}
+
+func equalExpiredAtStorage(currentRaw, desired *int64) bool {
+	if desired == nil {
+		return currentRaw == nil
+	}
+	if currentRaw == nil {
+		return false
+	}
+	return *currentRaw == *desired
+}
+
+func equalInt64Ptr(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func updateMergeTargetUserSubscription(ctx context.Context, tx *sql.Tx, userID int64, targetUser mergeTargetUser) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE v2_user SET group_id = $1, plan_id = $2, transfer_enable = $3, device_limit = $4, speed_limit = $5, expired_at = $6, updated_at = $7 WHERE id = $8`,
+		nullableInt64Value(targetUser.GroupID),
+		nullableInt64Value(targetUser.PlanID),
+		targetUser.TransferEnable,
+		nullableInt64Value(targetUser.DeviceLimit),
+		nullableInt64Value(targetUser.SpeedLimit),
+		nullableInt64Value(targetUser.ExpiredAt),
 		time.Now().Unix(),
 		userID,
 	); err != nil {
-		return fmt.Errorf("更新目标站已存在用户套餐失败（用户 %d）: %w", userID, err)
+		return fmt.Errorf("更新目标站已存在用户订阅失败（用户 %d）: %w", userID, err)
 	}
 	return nil
 }
@@ -1107,7 +1188,7 @@ $26, $27, $28, $29, $30, $31, $32
 		defaultInt64Ptr(user.RemindExpire, 1),
 		defaultInt64Ptr(user.RemindTraffic, 1),
 		user.Token,
-		defaultInt64Ptr(user.ExpiredAt, 0),
+		nullableInt64Value(user.ExpiredAt),
 		user.Remarks,
 		user.CreatedAt,
 		user.UpdatedAt,
@@ -1139,7 +1220,7 @@ func updateMergeInviteRelation(ctx context.Context, tx *sql.Tx, targetUsersByEma
 }
 
 func loadMergeTargetUsers(ctx context.Context, db queryRower) (map[string]mergeTargetUser, map[string]struct{}, map[string]struct{}, error) {
-	rows, err := db.QueryContext(ctx, `SELECT id, email, invite_user_id, token, uuid, group_id, plan_id, transfer_enable, device_limit, speed_limit FROM v2_user ORDER BY id`)
+	rows, err := db.QueryContext(ctx, `SELECT id, email, invite_user_id, token, uuid, group_id, plan_id, transfer_enable, device_limit, speed_limit, expired_at FROM v2_user ORDER BY id`)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("读取目标站用户失败: %w", err)
 	}
@@ -1156,7 +1237,8 @@ func loadMergeTargetUsers(ctx context.Context, db queryRower) (map[string]mergeT
 		var transferEnable sql.NullInt64
 		var deviceLimit sql.NullInt64
 		var speedLimit sql.NullInt64
-		if err := rows.Scan(&item.ID, &item.Email, &inviteUserID, &item.Token, &item.UUID, &groupID, &planID, &transferEnable, &deviceLimit, &speedLimit); err != nil {
+		var expiredAt sql.NullInt64
+		if err := rows.Scan(&item.ID, &item.Email, &inviteUserID, &item.Token, &item.UUID, &groupID, &planID, &transferEnable, &deviceLimit, &speedLimit, &expiredAt); err != nil {
 			return nil, nil, nil, fmt.Errorf("扫描目标站用户失败: %w", err)
 		}
 		item.Email = strings.TrimSpace(item.Email)
@@ -1167,6 +1249,7 @@ func loadMergeTargetUsers(ctx context.Context, db queryRower) (map[string]mergeT
 		item.TransferEnable = transferEnable.Int64
 		item.DeviceLimit = nullInt64Ptr(deviceLimit)
 		item.SpeedLimit = nullInt64Ptr(speedLimit)
+		item.ExpiredAt = nullInt64Ptr(expiredAt)
 		if item.EmailKey != "" {
 			if _, ok := usersByEmail[item.EmailKey]; !ok {
 				usersByEmail[item.EmailKey] = item
@@ -1191,6 +1274,13 @@ func cloneInt64Ptr(value *int64) *int64 {
 	}
 	cloned := *value
 	return &cloned
+}
+
+func derefInt64(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func nullableInt64Value(value *int64) any {
