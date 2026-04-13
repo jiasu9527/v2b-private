@@ -94,6 +94,32 @@ func TestLoadServerFetchUserAllowsNullGroupID(t *testing.T) {
 	}
 }
 
+func TestLoadServerFetchUserTreatsZeroExpiredAtAsUnlimited(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := NewDBService(config.Config{}, db)
+	rows := sqlmock.NewRows([]string{"id", "group_id", "plan_id", "transfer_enable", "banned", "created_at", "expired_at"}).
+		AddRow(int64(2), int64(1), int64(1), int64(100), int64(0), int64(1700000000), int64(0))
+	mock.ExpectQuery(`SELECT id, group_id, plan_id, transfer_enable, banned, created_at, expired_at`).
+		WithArgs(int64(2)).
+		WillReturnRows(rows)
+
+	userRow, err := service.loadServerFetchUser(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("loadServerFetchUser: %v", err)
+	}
+	if userRow.ExpiredAt.Valid {
+		t.Fatalf("expected zero expired_at to become invalid, got %#v", userRow.ExpiredAt)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestParseIDStringSupportsJSONStringArray(t *testing.T) {
 	ids := parseIDString(`["1","2"]`)
 	if len(ids) != 2 {

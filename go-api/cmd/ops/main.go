@@ -243,6 +243,12 @@ func applyUpdateCompatFixes(ctx context.Context, db *sql.DB) error {
 		label  string
 	}{
 		{
+			table:  "v2_user",
+			column: "expired_at",
+			query:  `UPDATE v2_user SET expired_at = NULL WHERE expired_at IS NOT NULL AND expired_at <= 0`,
+			label:  "normalize v2_user.expired_at",
+		},
+		{
 			table:  "v2_invite_code",
 			column: "code",
 			query:  `UPDATE v2_invite_code SET code = BTRIM(code)`,

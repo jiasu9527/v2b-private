@@ -999,6 +999,7 @@ FOR UPDATE`, userID).Scan(
 		}
 		return userRecord{}, fmt.Errorf("lock user: %w", err)
 	}
+	row.ExpiredAt = normalizeNullableExpiry(row.ExpiredAt)
 	return row, nil
 }
 
@@ -1034,6 +1035,7 @@ FOR UPDATE`, email).Scan(
 		}
 		return userRecord{}, fmt.Errorf("lock user by email: %w", err)
 	}
+	row.ExpiredAt = normalizeNullableExpiry(row.ExpiredAt)
 	return row, nil
 }
 

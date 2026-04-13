@@ -78,6 +78,48 @@ func TestSubscribeUsesRuntimeAllowNewPeriod(t *testing.T) {
 	}
 }
 
+func TestSubscribeTreatsZeroExpiredAtAsUnlimited(t *testing.T) {
+	root, restoreWD := prepareRuntimeConfigFixture(t, map[string]any{
+		"allow_new_period": 1,
+	})
+	defer restoreWD()
+
+	cfg := config.Load()
+	runtimeState := config.NewRuntimeState(cfg)
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := NewDBService(cfg, db).WithRuntimeConfig(runtimeState)
+	userRows := sqlmock.NewRows([]string{
+		"plan_id", "token", "expired_at", "u", "d", "transfer_enable", "device_limit", "email", "uuid",
+	}).AddRow(nil, "token-1", int64(0), int64(0), int64(0), int64(1024), nil, "user@example.com", "uuid-1")
+
+	mock.ExpectQuery(`SELECT plan_id, token, expired_at, u, d, transfer_enable, device_limit, email, uuid`).
+		WithArgs(int64(2)).
+		WillReturnRows(userRows)
+	mock.ExpectQuery(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = \$1 LIMIT 1`).
+		WithArgs("ALIVE_IP_USER_2").
+		WillReturnError(sql.ErrNoRows)
+
+	subscribe, err := service.Subscribe(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	if subscribe.ExpiredAt != nil {
+		t.Fatalf("expected zero expired_at to become nil, got %#v", subscribe.ExpiredAt)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+
+	_ = root
+}
+
 func TestCalculateResetPeriodForPlanUsesRuntimeResetTrafficMethod(t *testing.T) {
 	root, restoreWD := prepareRuntimeConfigFixture(t, map[string]any{
 		"reset_traffic_method": 0,

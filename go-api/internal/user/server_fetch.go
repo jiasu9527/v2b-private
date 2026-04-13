@@ -162,6 +162,7 @@ LIMIT 1`, userID).Scan(
 		}
 		return serverFetchUser{}, fmt.Errorf("query server fetch user: %w", err)
 	}
+	row.ExpiredAt = normalizeNullableExpiry(row.ExpiredAt)
 	if planID.Valid {
 		row.PlanID = planID.Int64
 	}

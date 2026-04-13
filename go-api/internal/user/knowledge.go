@@ -78,6 +78,7 @@ LIMIT 1`, userID).Scan(&token, &banned, &transferEnable, &expiredAt)
 		}
 		return nil, fmt.Errorf("query knowledge user: %w", err)
 	}
+	expiredAt = normalizeNullableExpiry(expiredAt)
 
 	body := fmt.Sprint(knowledge["body"])
 	if !knowledgeUserAvailable(banned, transferEnable, expiredAt, time.Now().Unix()) {

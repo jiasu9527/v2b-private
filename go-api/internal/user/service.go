@@ -314,7 +314,7 @@ LIMIT 1`, userID).Scan(
 	info.AutoRenewal = nullInt64Default(autoRenewal, 0)
 	info.RemindExpire = nullInt64Default(remindExpire, 1)
 	info.RemindTraffic = nullInt64Default(remindTraffic, 1)
-	info.ExpiredAt = nullInt64Ptr(expiredAt)
+	info.ExpiredAt = nullInt64Ptr(normalizeNullableExpiry(expiredAt))
 	info.PlanID = nullInt64Ptr(planID)
 	info.Discount = nullInt64Ptr(discount)
 	info.CommissionRate = nullInt64Ptr(commissionRate)
@@ -434,7 +434,7 @@ LIMIT 1`, userID).Scan(
 	}
 
 	subscribe.PlanID = nullInt64Ptr(planID)
-	subscribe.ExpiredAt = nullInt64Ptr(expiredAt)
+	subscribe.ExpiredAt = nullInt64Ptr(normalizeNullableExpiry(expiredAt))
 	subscribe.DeviceLimit = nullInt64Ptr(deviceLimit)
 	subscribe.AliveIP = 0
 	if raw, ok, err := s.kvGet(ctx, "ALIVE_IP_USER_"+strconv.FormatInt(userID, 10)); err != nil {
@@ -642,6 +642,13 @@ func nullInt64Ptr(value sql.NullInt64) *int64 {
 	return &v
 }
 
+func normalizeNullableExpiry(value sql.NullInt64) sql.NullInt64 {
+	if !value.Valid || value.Int64 <= 0 {
+		return sql.NullInt64{}
+	}
+	return value
+}
+
 func nullInt64Default(value sql.NullInt64, fallback int64) int64 {
 	if !value.Valid {
 		return fallback
@@ -676,7 +683,7 @@ func (s *DBService) findUserPlanID(ctx context.Context, userID int64) (sql.NullI
 func (s *DBService) activePlanCounts(ctx context.Context) (map[int64]int64, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT plan_id, COUNT(*) AS count
 FROM v2_user
-WHERE plan_id IS NOT NULL AND (expired_at >= $1 OR expired_at IS NULL)
+WHERE plan_id IS NOT NULL AND (expired_at >= $1 OR expired_at IS NULL OR expired_at <= 0)
 GROUP BY plan_id`, time.Now().Unix())
 	if err != nil {
 		return nil, fmt.Errorf("query active plan counts: %w", err)

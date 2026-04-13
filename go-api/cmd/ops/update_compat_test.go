@@ -26,6 +26,7 @@ func TestApplyUpdateCompatFixesIgnoresOwnerOnlyIndexErrors(t *testing.T) {
 		table  string
 		column string
 	}{
+		{table: "v2_user", column: "expired_at"},
 		{table: "v2_invite_code", column: "code"},
 		{table: "v2_invite_campaign", column: "invite_code"},
 		{table: "v2_invite_campaign_record", column: "invite_code"},
@@ -57,6 +58,12 @@ func TestApplyUpdateCompatFixesTrimsExistingInviteColumns(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_auth_session_user_id ON v2_auth_session\(user_id\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+		WithArgs("v2_user", "expired_at").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectExec(`UPDATE v2_user SET expired_at = NULL WHERE expired_at IS NOT NULL AND expired_at <= 0`).
+		WillReturnResult(sqlmock.NewResult(0, 4))
 
 	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
 		WithArgs("v2_invite_code", "code").

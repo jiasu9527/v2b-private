@@ -104,7 +104,7 @@ func (s *DBService) AvailableUsers(ctx context.Context, groupIDs []int64) ([]Ava
 FROM v2_user
 WHERE group_id IN (`+inClause+`)
   AND u + d < transfer_enable
-  AND (expired_at >= $`+strconv.Itoa(len(args))+` OR expired_at IS NULL)
+  AND (expired_at >= $`+strconv.Itoa(len(args))+` OR expired_at IS NULL OR expired_at <= 0)
   AND banned = 0
 ORDER BY id ASC`, args...)
 	if err != nil {
@@ -189,7 +189,7 @@ func (s *DBService) AliveList(ctx context.Context) (map[int64]int64, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id
 FROM v2_user
 WHERE u + d < transfer_enable
-  AND (expired_at >= $1 OR expired_at IS NULL)
+  AND (expired_at >= $1 OR expired_at IS NULL OR expired_at <= 0)
   AND banned = 0
   AND device_limit > 0
 ORDER BY id ASC`, time.Now().Unix())

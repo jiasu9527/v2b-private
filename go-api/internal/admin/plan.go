@@ -352,7 +352,7 @@ func (s *DBService) SortPlans(ctx context.Context, ids []int64) (bool, error) {
 func (s *DBService) activePlanCounts(ctx context.Context) (map[int64]int64, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT plan_id, COUNT(*) AS count
 FROM v2_user
-WHERE plan_id IS NOT NULL AND (expired_at >= $1 OR expired_at IS NULL)
+WHERE plan_id IS NOT NULL AND (expired_at >= $1 OR expired_at IS NULL OR expired_at <= 0)
 GROUP BY plan_id`, time.Now().Unix())
 	if err != nil {
 		return nil, fmt.Errorf("query active plan counts: %w", err)
