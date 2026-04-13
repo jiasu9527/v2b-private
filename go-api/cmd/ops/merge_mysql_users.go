@@ -938,6 +938,7 @@ func buildMergeInsertUser(sourceUser mergeSourceUser, targetPlanByID map[int64]m
 		insertUser.DeviceLimit = targetPlan.DeviceLimit
 		insertUser.SpeedLimit = targetPlan.SpeedLimit
 	}
+	insertUser.AutoRenewal = int64Ptr(defaultInt64Ptr(insertUser.AutoRenewal, 0))
 
 	uuid := strings.TrimSpace(sourceUser.UUID)
 	if uuid == "" {

@@ -160,6 +160,38 @@ func TestBuildMergeInsertUserNormalizesUnlimitedExpiredAt(t *testing.T) {
 	}
 }
 
+func TestBuildMergeInsertUserDefaultsAutoRenewalToZero(t *testing.T) {
+	sourcePlanID := int64(23)
+	sourceUser := mergeSourceUser{
+		Email:    "merge@example.com",
+		Password: "hashed-password",
+		PlanID:   &sourcePlanID,
+	}
+
+	insertUser, mapped, err := buildMergeInsertUser(
+		sourceUser,
+		map[int64]mergeTargetPlanInfo{
+			3: {
+				ID:             3,
+				GroupID:        1,
+				TransferEnable: 2000,
+			},
+		},
+		map[int64]int64{23: 3},
+		map[string]struct{}{},
+		map[string]struct{}{},
+	)
+	if err != nil {
+		t.Fatalf("buildMergeInsertUser: %v", err)
+	}
+	if !mapped {
+		t.Fatal("expected source user plan to map to target plan")
+	}
+	if insertUser.AutoRenewal == nil || *insertUser.AutoRenewal != 0 {
+		t.Fatalf("expected auto_renewal default 0, got %#v", insertUser.AutoRenewal)
+	}
+}
+
 func TestBuildMergedTargetUserSubscriptionKeepsHigherSourceTrafficBytes(t *testing.T) {
 	existingPlanID := int64(1)
 	existingGroupID := int64(1)

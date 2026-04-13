@@ -68,3 +68,7 @@ CREATE TABLE IF NOT EXISTS "v2_auth_session" (
   PRIMARY KEY ("id"),
   CONSTRAINT "uniq_user_session" UNIQUE ("user_id", "session_id")
 );
+
+UPDATE "v2_user" SET "auto_renewal" = 0 WHERE "auto_renewal" IS NULL;
+UPDATE "v2_user" SET "remind_expire" = 1 WHERE "remind_expire" IS NULL;
+UPDATE "v2_user" SET "remind_traffic" = 1 WHERE "remind_traffic" IS NULL;

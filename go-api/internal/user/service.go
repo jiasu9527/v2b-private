@@ -267,6 +267,9 @@ func (s *DBService) Info(ctx context.Context, userID int64) (Info, error) {
 		info           Info
 		deviceLimit    sql.NullInt64
 		lastLoginAt    sql.NullInt64
+		autoRenewal    sql.NullInt64
+		remindExpire   sql.NullInt64
+		remindTraffic  sql.NullInt64
 		expiredAt      sql.NullInt64
 		planID         sql.NullInt64
 		discount       sql.NullInt64
@@ -287,9 +290,9 @@ LIMIT 1`, userID).Scan(
 		&lastLoginAt,
 		&info.CreatedAt,
 		&info.Banned,
-		&info.AutoRenewal,
-		&info.RemindExpire,
-		&info.RemindTraffic,
+		&autoRenewal,
+		&remindExpire,
+		&remindTraffic,
 		&expiredAt,
 		&info.Balance,
 		&info.CommissionBalance,
@@ -308,6 +311,9 @@ LIMIT 1`, userID).Scan(
 
 	info.DeviceLimit = nullInt64Ptr(deviceLimit)
 	info.LastLoginAt = nullInt64Ptr(lastLoginAt)
+	info.AutoRenewal = nullInt64Default(autoRenewal, 0)
+	info.RemindExpire = nullInt64Default(remindExpire, 1)
+	info.RemindTraffic = nullInt64Default(remindTraffic, 1)
 	info.ExpiredAt = nullInt64Ptr(expiredAt)
 	info.PlanID = nullInt64Ptr(planID)
 	info.Discount = nullInt64Ptr(discount)
@@ -634,6 +640,13 @@ func nullInt64Ptr(value sql.NullInt64) *int64 {
 	}
 	v := value.Int64
 	return &v
+}
+
+func nullInt64Default(value sql.NullInt64, fallback int64) int64 {
+	if !value.Valid {
+		return fallback
+	}
+	return value.Int64
 }
 
 func (s *DBService) count(ctx context.Context, query string, userID int64) (int64, error) {
