@@ -463,7 +463,7 @@ merge_mysql_plan_map_lookup() {
   local source_plan_id="$2"
   local token source_id target_id
 
-  while IFS= read -r token; do
+  while IFS= read -r token || [[ -n "${token}" ]]; do
     token="$(printf '%s' "${token}" | tr -d '[:space:]')"
     [[ -n "${token}" ]] || continue
     [[ "${token}" == *:* ]] || continue

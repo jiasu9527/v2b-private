@@ -38,6 +38,7 @@ source_users_without_plan=1
 source_plan	11	旧轻量	3
 source_plan	20	旧旗舰	2
 source_plan	23	旧旗舰加速	1
+source_plan	33	旧不限时	1
 target_plan	1	轻量套餐	5
 target_plan	2	高级套餐	8
 target_plan	3	旗舰套餐	3
@@ -62,7 +63,7 @@ FOREST_MERGE_MYSQL_PROFILE="${TMP_DIR}/merge-mysql.env" \
   "${TMP_DIR}/scripts/appctl" merge-mysql >/tmp/test-appctl-merge-mysql-profile.out 2>/tmp/test-appctl-merge-mysql-profile.err <<< "${INPUT}"
 
 EXPECTED_INSPECT='run ./cmd/ops inspect-merge-mysql --source-host 31.22.111.209 --source-port 3306 --source-database v2board --source-username v2user --source-password V2UserPass123456! --source-charset utf8mb4 --target-dsn host=127.0.0.1 port=5432 user=mergeuser dbname=forest sslmode=disable password=mergepass'
-EXPECTED_MERGE='run ./cmd/ops merge-mysql --source-host 31.22.111.209 --source-port 3306 --source-database v2board --source-username v2user --source-password V2UserPass123456! --source-charset utf8mb4 --plan-map 11:1,20:3,23:3 --target-dsn host=127.0.0.1 port=5432 user=mergeuser dbname=forest sslmode=disable password=mergepass'
+EXPECTED_MERGE='run ./cmd/ops merge-mysql --source-host 31.22.111.209 --source-port 3306 --source-database v2board --source-username v2user --source-password V2UserPass123456! --source-charset utf8mb4 --plan-map 11:1,20:3,23:3,33:1 --target-dsn host=127.0.0.1 port=5432 user=mergeuser dbname=forest sslmode=disable password=mergepass'
 
 if ! grep -Fx "${EXPECTED_INSPECT}" "${GO_LOG}" >/dev/null 2>&1; then
   echo "expected inspect command from merge profile"
