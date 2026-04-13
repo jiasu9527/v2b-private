@@ -931,7 +931,10 @@ func buildMergeInsertUser(sourceUser mergeSourceUser, targetPlanByID map[int64]m
 		}
 		insertUser.PlanID = int64Ptr(targetPlanID)
 		insertUser.GroupID = int64Ptr(targetPlan.GroupID)
-		insertUser.TransferEnable = planTransferGBToUserBytes(targetPlan.TransferEnable)
+		insertUser.TransferEnable = maxMergeTransferEnableBytes(
+			sourceUser.TransferEnable,
+			planTransferGBToUserBytes(targetPlan.TransferEnable),
+		)
 		insertUser.DeviceLimit = targetPlan.DeviceLimit
 		insertUser.SpeedLimit = targetPlan.SpeedLimit
 	}
@@ -1033,11 +1036,25 @@ func buildMergedTargetUserSubscription(existing mergeTargetUser, sourceUser merg
 	targetPlan := preferredMergeTargetPlan(existing, sourcePlan, targetPlanByID)
 	desired.GroupID = int64Ptr(targetPlan.GroupID)
 	desired.PlanID = int64Ptr(targetPlan.ID)
-	desired.TransferEnable = planTransferGBToUserBytes(targetPlan.TransferEnable)
+	desired.TransferEnable = maxMergeTransferEnableBytes(
+		existing.TransferEnable,
+		sourceUser.TransferEnable,
+		planTransferGBToUserBytes(targetPlan.TransferEnable),
+	)
 	desired.DeviceLimit = cloneInt64Ptr(targetPlan.DeviceLimit)
 	desired.SpeedLimit = cloneInt64Ptr(targetPlan.SpeedLimit)
 	desired.ExpiredAt = mergePreferredExpiredAt(existing.ExpiredAt, sourceUser.ExpiredAt)
 	return desired
+}
+
+func maxMergeTransferEnableBytes(values ...int64) int64 {
+	var maxValue int64
+	for _, value := range values {
+		if value > maxValue {
+			maxValue = value
+		}
+	}
+	return maxValue
 }
 
 func preferredMergeTargetPlan(existing mergeTargetUser, sourcePlan mergeTargetPlanInfo, targetPlanByID map[int64]mergeTargetPlanInfo) mergeTargetPlanInfo {

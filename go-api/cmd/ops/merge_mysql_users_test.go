@@ -92,6 +92,40 @@ func TestBuildMergeInsertUserUsesTargetPlanTrafficBytes(t *testing.T) {
 	}
 }
 
+func TestBuildMergeInsertUserKeepsHigherSourceTrafficBytes(t *testing.T) {
+	sourcePlanID := int64(23)
+	const sourceTrafficBytes = int64(3000) * 1024 * 1024 * 1024
+	sourceUser := mergeSourceUser{
+		Email:          "merge@example.com",
+		Password:       "hashed-password",
+		PlanID:         &sourcePlanID,
+		TransferEnable: sourceTrafficBytes,
+	}
+
+	insertUser, mapped, err := buildMergeInsertUser(
+		sourceUser,
+		map[int64]mergeTargetPlanInfo{
+			3: {
+				ID:             3,
+				GroupID:        1,
+				TransferEnable: 2000,
+			},
+		},
+		map[int64]int64{23: 3},
+		map[string]struct{}{},
+		map[string]struct{}{},
+	)
+	if err != nil {
+		t.Fatalf("buildMergeInsertUser: %v", err)
+	}
+	if !mapped {
+		t.Fatal("expected source user plan to map to target plan")
+	}
+	if insertUser.TransferEnable != sourceTrafficBytes {
+		t.Fatalf("expected higher source transfer_enable=%d bytes to be preserved, got %d", sourceTrafficBytes, insertUser.TransferEnable)
+	}
+}
+
 func TestBuildMergeInsertUserNormalizesUnlimitedExpiredAt(t *testing.T) {
 	sourcePlanID := int64(23)
 	zeroExpiredAt := int64(0)
@@ -123,6 +157,55 @@ func TestBuildMergeInsertUserNormalizesUnlimitedExpiredAt(t *testing.T) {
 	}
 	if insertUser.ExpiredAt != nil {
 		t.Fatalf("expected unlimited expired_at to become nil, got %#v", insertUser.ExpiredAt)
+	}
+}
+
+func TestBuildMergedTargetUserSubscriptionKeepsHigherSourceTrafficBytes(t *testing.T) {
+	existingPlanID := int64(1)
+	existingGroupID := int64(1)
+	existingTrafficBytes := int64(200) * 1024 * 1024 * 1024
+	sourcePlanID := int64(23)
+	sourceGroupID := int64(1)
+	sourceTrafficBytes := int64(1000) * 1024 * 1024 * 1024
+
+	desired := buildMergedTargetUserSubscription(
+		mergeTargetUser{
+			ID:             9,
+			Email:          "merge@example.com",
+			GroupID:        &existingGroupID,
+			PlanID:         &existingPlanID,
+			TransferEnable: existingTrafficBytes,
+		},
+		mergeSourceUser{
+			Email:          "merge@example.com",
+			GroupID:        &sourceGroupID,
+			PlanID:         &sourcePlanID,
+			TransferEnable: sourceTrafficBytes,
+		},
+		mergeTargetPlanInfo{
+			ID:             5,
+			GroupID:        1,
+			TransferEnable: 400,
+		},
+		map[int64]mergeTargetPlanInfo{
+			1: {
+				ID:             1,
+				GroupID:        1,
+				TransferEnable: 200,
+			},
+			5: {
+				ID:             5,
+				GroupID:        1,
+				TransferEnable: 400,
+			},
+		},
+	)
+
+	if desired.TransferEnable != sourceTrafficBytes {
+		t.Fatalf("expected higher source transfer_enable=%d bytes to be preserved, got %d", sourceTrafficBytes, desired.TransferEnable)
+	}
+	if desired.PlanID == nil || *desired.PlanID != 5 {
+		t.Fatalf("expected mapped target plan to remain 5, got %#v", desired.PlanID)
 	}
 }
 
