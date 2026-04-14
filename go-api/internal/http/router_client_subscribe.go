@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -141,7 +142,9 @@ func buildClashStandardProfile(cfg config.Config, customFile, defaultFile, userU
 	}
 
 	template["proxies"] = appendAnySlice(asAnySlice(template["proxies"]), proxies...)
-	mergeProxyGroups(template, names)
+	if err := mergeProxyGroups(template, names); err != nil {
+		return "", err
+	}
 
 	raw, err := yaml.Marshal(template)
 	if err != nil {
@@ -192,27 +195,116 @@ func loadRuleTemplate(cfg config.Config, customFile, defaultFile string) (map[st
 	return template, nil
 }
 
-func mergeProxyGroups(template map[string]any, proxyNames []string) {
-	if len(proxyNames) == 0 {
-		return
-	}
-
+func mergeProxyGroups(template map[string]any, proxyNames []string) error {
 	groups := asAnySlice(template["proxy-groups"])
 	for _, groupValue := range groups {
 		group, ok := groupValue.(map[string]any)
 		if !ok {
 			continue
 		}
-		existing := asAnySlice(group["proxies"])
-		for _, name := range proxyNames {
-			if sliceContainsString(existing, name) {
-				continue
-			}
-			existing = append(existing, name)
+		merged, hasMatcher, err := resolveProxyGroupMembers(group, proxyNames)
+		if err != nil {
+			return err
 		}
-		group["proxies"] = existing
+		if !hasMatcher {
+			for _, name := range proxyNames {
+				if sliceContainsString(merged, name) {
+					continue
+				}
+				merged = append(merged, name)
+			}
+		}
+		group["proxies"] = merged
 	}
 	template["proxy-groups"] = groups
+	return nil
+}
+
+func resolveProxyGroupMembers(group map[string]any, proxyNames []string) ([]any, bool, error) {
+	existing := asAnySlice(group["proxies"])
+	resolved := make([]any, 0, len(existing))
+	hasMatcher := false
+	groupName := firstNonEmptyString(stringValue(group["name"]), "unnamed")
+
+	for _, value := range existing {
+		raw := stringValue(value)
+		if raw == "" {
+			continue
+		}
+		matcher, ok, err := compileProxyGroupEntryMatcher(raw)
+		if err != nil {
+			return nil, false, fmt.Errorf("proxy group %q invalid regex %q: %w", groupName, raw, err)
+		}
+		if !ok {
+			if !sliceContainsString(resolved, raw) {
+				resolved = append(resolved, raw)
+			}
+			continue
+		}
+		hasMatcher = true
+		resolved = appendMatchingProxyNames(resolved, proxyNames, matcher)
+	}
+
+	if serverBoolValue(group["include-all"]) || stringValue(group["filter"]) != "" || stringValue(group["exclude-filter"]) != "" {
+		includeMatcher, err := compileOptionalProxyGroupMatcher(stringValue(group["filter"]))
+		if err != nil {
+			return nil, false, fmt.Errorf("proxy group %q invalid filter %q: %w", groupName, stringValue(group["filter"]), err)
+		}
+		excludeMatcher, err := compileOptionalProxyGroupMatcher(stringValue(group["exclude-filter"]))
+		if err != nil {
+			return nil, false, fmt.Errorf("proxy group %q invalid exclude-filter %q: %w", groupName, stringValue(group["exclude-filter"]), err)
+		}
+		hasMatcher = true
+		for _, name := range proxyNames {
+			if includeMatcher != nil && !includeMatcher.MatchString(name) {
+				continue
+			}
+			if excludeMatcher != nil && excludeMatcher.MatchString(name) {
+				continue
+			}
+			if !sliceContainsString(resolved, name) {
+				resolved = append(resolved, name)
+			}
+		}
+	}
+
+	return resolved, hasMatcher, nil
+}
+
+func appendMatchingProxyNames(dst []any, proxyNames []string, matcher *regexp.Regexp) []any {
+	for _, name := range proxyNames {
+		if matcher.MatchString(name) && !sliceContainsString(dst, name) {
+			dst = append(dst, name)
+		}
+	}
+	return dst
+}
+
+func compileOptionalProxyGroupMatcher(raw string) (*regexp.Regexp, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	if strings.HasPrefix(raw, "/") && strings.HasSuffix(raw, "/") && len(raw) >= 2 {
+		raw = strings.TrimSuffix(strings.TrimPrefix(raw, "/"), "/")
+	}
+	return regexp.Compile(raw)
+}
+
+func compileProxyGroupEntryMatcher(raw string) (*regexp.Regexp, bool, error) {
+	raw = strings.TrimSpace(raw)
+	if len(raw) < 2 {
+		return nil, false, nil
+	}
+	if strings.HasPrefix(raw, "/") && strings.HasSuffix(raw, "/") {
+		pattern := strings.TrimSuffix(strings.TrimPrefix(raw, "/"), "/")
+		matcher, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil, true, err
+		}
+		return matcher, true, nil
+	}
+	return nil, false, nil
 }
 
 func buildClashStandardProxy(userUUID string, server map[string]any) (map[string]any, bool) {
