@@ -395,17 +395,59 @@ func parseServerHostByCondition(hostConfig string, user serverFetchUser, ua stri
 }
 
 func serverFetchUAHit(rawKeywords, ua string) bool {
-	if strings.TrimSpace(ua) == "" {
-		return false
-	}
+	ua = strings.TrimSpace(ua)
+	hasPositive := false
+	positiveMatched := false
+
 	for _, keyword := range strings.Split(rawKeywords, "|") {
 		keyword = strings.TrimSpace(keyword)
 		keyword = strings.TrimPrefix(strings.TrimPrefix(keyword, "U"), "u")
-		if keyword != "" && strings.Contains(strings.ToLower(ua), strings.ToLower(keyword)) {
-			return true
+		if keyword == "" {
+			continue
+		}
+		if normalized, negated := serverFetchNegatedUAKeyword(keyword); negated {
+			if ua != "" && strings.Contains(strings.ToLower(ua), strings.ToLower(normalized)) {
+				return false
+			}
+			continue
+		}
+		if serverFetchMissingUAKeyword(keyword) {
+			hasPositive = true
+			if strings.TrimSpace(ua) == "" {
+				positiveMatched = true
+			}
+			continue
+		}
+		hasPositive = true
+		if ua != "" && strings.Contains(strings.ToLower(ua), strings.ToLower(keyword)) {
+			positiveMatched = true
 		}
 	}
-	return false
+	if hasPositive {
+		return positiveMatched
+	}
+	return true
+}
+
+func serverFetchMissingUAKeyword(keyword string) bool {
+	switch strings.ToLower(strings.TrimSpace(keyword)) {
+	case "none", "empty", "blank", "null", "missing", "noua", "no-ua", "no_ua":
+		return true
+	default:
+		return false
+	}
+}
+
+func serverFetchNegatedUAKeyword(keyword string) (string, bool) {
+	trimmed := strings.TrimSpace(keyword)
+	switch {
+	case strings.HasPrefix(trimmed, "!"):
+		return strings.TrimSpace(trimmed[1:]), true
+	case strings.HasPrefix(trimmed, "-"):
+		return strings.TrimSpace(trimmed[1:]), true
+	default:
+		return "", false
+	}
 }
 
 func serverGroupAllowed(groupIDs []int64, userGroupID int64) bool {

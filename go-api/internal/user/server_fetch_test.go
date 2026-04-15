@@ -68,6 +68,86 @@ func TestParseServerHostByConditionDropsServerWhenNoConditionMatches(t *testing.
 	}
 }
 
+func TestParseServerHostByConditionMatchesMissingUserAgent(t *testing.T) {
+	createdAt := time.Now().Add(-5 * 24 * time.Hour).Unix()
+	host, ok := parseServerHostByCondition(
+		"noua.example.com(UNoUA),default.example.com",
+		serverFetchUser{
+			ID:        1,
+			PlanID:    1,
+			CreatedAt: createdAt,
+		},
+		"",
+		time.Now().Unix(),
+	)
+	if !ok {
+		t.Fatalf("expected no-ua host match")
+	}
+	if host != "noua.example.com" {
+		t.Fatalf("expected no-ua host, got %q", host)
+	}
+}
+
+func TestParseServerHostByConditionDoesNotMatchNoUAWhenUserAgentPresent(t *testing.T) {
+	createdAt := time.Now().Add(-5 * 24 * time.Hour).Unix()
+	host, ok := parseServerHostByCondition(
+		"noua.example.com(UNoUA),default.example.com",
+		serverFetchUser{
+			ID:        1,
+			PlanID:    1,
+			CreatedAt: createdAt,
+		},
+		"ClashMeta/1.0",
+		time.Now().Unix(),
+	)
+	if !ok {
+		t.Fatalf("expected default host match")
+	}
+	if host != "default.example.com" {
+		t.Fatalf("expected default host, got %q", host)
+	}
+}
+
+func TestParseServerHostByConditionMatchesWhenUserAgentExcluded(t *testing.T) {
+	createdAt := time.Now().Add(-5 * 24 * time.Hour).Unix()
+	host, ok := parseServerHostByCondition(
+		"nonclash.example.com(U!Clash),default.example.com",
+		serverFetchUser{
+			ID:        1,
+			PlanID:    1,
+			CreatedAt: createdAt,
+		},
+		"Shadowrocket/1.0",
+		time.Now().Unix(),
+	)
+	if !ok {
+		t.Fatalf("expected excluded-ua host match")
+	}
+	if host != "nonclash.example.com" {
+		t.Fatalf("expected excluded-ua host, got %q", host)
+	}
+}
+
+func TestParseServerHostByConditionSkipsWhenExcludedUserAgentMatches(t *testing.T) {
+	createdAt := time.Now().Add(-5 * 24 * time.Hour).Unix()
+	host, ok := parseServerHostByCondition(
+		"nonclash.example.com(U!Clash),default.example.com",
+		serverFetchUser{
+			ID:        1,
+			PlanID:    1,
+			CreatedAt: createdAt,
+		},
+		"ClashMeta/1.0",
+		time.Now().Unix(),
+	)
+	if !ok {
+		t.Fatalf("expected default host match")
+	}
+	if host != "default.example.com" {
+		t.Fatalf("expected default host, got %q", host)
+	}
+}
+
 func TestLoadServerFetchUserAllowsNullGroupID(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
