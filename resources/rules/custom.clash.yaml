@@ -33,8 +33,8 @@ dns:
 proxies:
 
 proxy-groups:
-  - { name: "自动选择", type: url-test, proxies: [], url: "http://www.google-analytics.com/generate_204", interval: 300, tolerance: 50 }
   - { name: "节点选择", type: select, proxies: ["自动选择"] }
+  - { name: "自动选择", type: url-test, proxies: [], url: "http://www.google-analytics.com/generate_204", interval: 300, tolerance: 50 }
   - { name: "AI服务", type: select, proxies: ["节点选择","自动选择"] }
   - { name: "流媒体", type: select, proxies: ["节点选择","自动选择"] }
   - { name: "国际服务", type: select, proxies: ["节点选择","自动选择"] }
