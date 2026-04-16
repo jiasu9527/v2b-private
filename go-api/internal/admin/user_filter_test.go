@@ -31,3 +31,21 @@ func TestBuildUserWhereSupportsInviteCodeFilter(t *testing.T) {
 		t.Fatalf("expected invite code filter args, got %#v", args)
 	}
 }
+
+func TestBuildUserWhereSupportsLastOnlineFilter(t *testing.T) {
+	service := &DBService{}
+
+	whereClause, args, err := service.buildUserWhere(t.Context(), []UserFilter{
+		{Key: "t", Condition: ">=", Value: "1710000000"},
+	})
+	if err != nil {
+		t.Fatalf("build user where: %v", err)
+	}
+
+	if !strings.Contains(whereClause, "u.t >= $1") {
+		t.Fatalf("expected last online predicate, got %s", whereClause)
+	}
+	if len(args) != 1 || args[0] != int64(1710000000) {
+		t.Fatalf("expected last online args, got %#v", args)
+	}
+}

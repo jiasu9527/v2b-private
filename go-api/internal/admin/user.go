@@ -1268,6 +1268,8 @@ func userFilterField(key string) (string, bool) {
 		return "u.device_limit", true
 	case "d":
 		return "u.d", true
+	case "t":
+		return "u.t", true
 	case "expired_at":
 		return "u.expired_at", true
 	case "uuid":
@@ -1299,6 +1301,8 @@ func userLikeFilterField(key string) string {
 		return "CAST(u.device_limit AS TEXT)"
 	case "d":
 		return "CAST(u.d AS TEXT)"
+	case "t":
+		return "CAST(u.t AS TEXT)"
 	case "expired_at":
 		return "CAST(u.expired_at AS TEXT)"
 	case "invite_user_id":
