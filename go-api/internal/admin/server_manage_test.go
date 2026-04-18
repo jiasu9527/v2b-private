@@ -62,7 +62,7 @@ func TestV2nodeInstallCommandUsesRepoDefaultInstaller(t *testing.T) {
 	if strings.Contains(command, "jiasu9527/v2b-private") {
 		t.Fatalf("expected node install command to avoid panel repo, got %q", command)
 	}
-	if !strings.HasPrefix(command, "wget -N https://raw.githubusercontent.com/wyx2685/v2node/master/script/install.sh && bash install.sh") {
+	if !strings.HasPrefix(command, "wget -N https://raw.githubusercontent.com/jiasu9527/v2node/main/script/install.sh && bash install.sh") {
 		t.Fatalf("expected v2node repo default installer command, got %q", command)
 	}
 	if !strings.Contains(command, "--api-host https://panel.example.com") {
@@ -105,5 +105,31 @@ func TestV2nodeInstallCommandSupportsConfiguredScriptURL(t *testing.T) {
 	}
 	if !strings.Contains(command, "--api-key forest-secret") {
 		t.Fatalf("expected api key flag in command, got %q", command)
+	}
+}
+
+func TestNormalizeManagedServerSavePayloadV2nodeKeepsSendThrough(t *testing.T) {
+	payload := map[string]any{
+		"group_id":           []any{float64(1)},
+		"name":               "Node-A",
+		"host":               "node.example.com",
+		"listen_ip":          "0.0.0.0",
+		"send_through":       "198.51.100.7",
+		"port":               "443",
+		"server_port":        float64(8443),
+		"rate":               "1",
+		"protocol":           "vless",
+		"tls":                float64(1),
+		"network":            "tcp",
+		"disable_sni":        float64(0),
+		"zero_rtt_handshake": float64(0),
+	}
+
+	_, values, err := normalizeManagedServerSavePayload("v2node", payload)
+	if err != nil {
+		t.Fatalf("normalizeManagedServerSavePayload() error = %v", err)
+	}
+	if got := values["send_through"]; got != "198.51.100.7" {
+		t.Fatalf("send_through = %#v, want %q", got, "198.51.100.7")
 	}
 }

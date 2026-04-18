@@ -155,6 +155,7 @@ ORDER BY id ASC`, args...)
 	defer rows.Close()
 
 	result := make([]map[string]any, 0)
+	byID := make(map[int64]map[string]any, len(routeIDs))
 	for rows.Next() {
 		var (
 			id          int64
@@ -173,10 +174,17 @@ ORDER BY id ASC`, args...)
 		if actionValue.Valid && strings.TrimSpace(actionValue.String) != "" {
 			record["action_value"] = actionValue.String
 		}
-		result = append(result, record)
+		byID[id] = record
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate node routes: %w", err)
+	}
+	for _, id := range routeIDs {
+		record, ok := byID[id]
+		if !ok {
+			continue
+		}
+		result = append(result, record)
 	}
 	return result, nil
 }

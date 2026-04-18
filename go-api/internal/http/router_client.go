@@ -322,6 +322,9 @@ func buildV2ServerConfig(cfg config.Config, server nodeapi.ServerRecord, routes 
 			"device_online_min_traffic": cfg.ServerDeviceOnlineMinTraffic,
 		},
 	}
+	if sendThrough := fieldString(server, "send_through"); sendThrough != "" {
+		payload["send_through"] = sendThrough
+	}
 
 	switch fieldString(server, "cipher") {
 	case "2022-blake3-aes-128-gcm":

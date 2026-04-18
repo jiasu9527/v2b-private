@@ -235,6 +235,15 @@ func applyUpdateCompatFixes(ctx context.Context, db *sql.DB) error {
 	if err := bestEffortEnsureUpdateIndex(ctx, db, `CREATE INDEX IF NOT EXISTS idx_v2_auth_session_user_id ON v2_auth_session(user_id)`); err != nil {
 		return err
 	}
+	if err := bestEffortEnsureUpdateColumn(
+		ctx,
+		db,
+		"v2_server_v2node",
+		"send_through",
+		`ALTER TABLE v2_server_v2node ADD COLUMN send_through varchar(255) DEFAULT NULL`,
+	); err != nil {
+		return err
+	}
 
 	repairs := []struct {
 		table  string
@@ -281,6 +290,23 @@ func applyUpdateCompatFixes(ctx context.Context, db *sql.DB) error {
 		}
 	}
 
+	return nil
+}
+
+func bestEffortEnsureUpdateColumn(ctx context.Context, db *sql.DB, tableName, columnName, stmt string) error {
+	exists, err := postgresColumnExists(ctx, db, tableName, columnName)
+	if err != nil {
+		return fmt.Errorf("check column %s.%s: %w", tableName, columnName, err)
+	}
+	if exists {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, stmt); err != nil {
+		if isIgnorableOwnerError(err) {
+			return nil
+		}
+		return fmt.Errorf("ensure column %s.%s: %w", tableName, columnName, err)
+	}
 	return nil
 }
 

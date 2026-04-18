@@ -492,6 +492,7 @@ func TestRouterServerV2ConfigEndpoint(t *testing.T) {
 			RouteIDs: []int64{3},
 			Fields: map[string]any{
 				"listen_ip":           "0.0.0.0",
+				"send_through":        "198.51.100.7",
 				"server_port":         int64(443),
 				"network":             "ws",
 				"network_settings":    map[string]any{"path": "/ws"},
@@ -540,6 +541,9 @@ func TestRouterServerV2ConfigEndpoint(t *testing.T) {
 	}
 	if payload["listen_ip"] != "0.0.0.0" || payload["protocol"] != "vmess" {
 		t.Fatalf("unexpected payload: %#v", payload)
+	}
+	if payload["send_through"] != "198.51.100.7" {
+		t.Fatalf("expected send_through to be preserved, got %#v", payload["send_through"])
 	}
 	if payload["ignore_client_bandwidth"] != true {
 		t.Fatalf("expected ignore_client_bandwidth=true, got %#v", payload["ignore_client_bandwidth"])

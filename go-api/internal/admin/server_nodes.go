@@ -88,7 +88,7 @@ var managedServerDefinitions = map[string]managedServerDefinition{
 	"v2node": {
 		table: "v2_server_v2node",
 		columns: []string{
-			"group_id", "route_id", "name", "parent_id", "host", "listen_ip", "port",
+			"group_id", "route_id", "name", "parent_id", "host", "listen_ip", "send_through", "port",
 			"server_port", "tags", "rate", "show", "sort", "protocol", "tls",
 			"tls_settings", "flow", "network", "network_settings", "encryption",
 			"encryption_settings", "disable_sni", "udp_relay_mode", "zero_rtt_handshake",
@@ -659,6 +659,9 @@ func normalizeV2nodeServer(values, payload map[string]any, seed string, hasID bo
 	protocol, err := requiredStringField(payload, "protocol", "协议不能为空")
 	if err != nil {
 		return err
+	}
+	if sendThrough, present := optionalNullableStringField(payload, "send_through"); present {
+		values["send_through"] = sendThrough
 	}
 	tls, err := requiredAllowedIntField(payload, "tls", []int64{0, 1, 2}, "TLS不能为空", "TLS格式不正确")
 	if err != nil {
