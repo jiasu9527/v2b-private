@@ -137,13 +137,18 @@ func (s *DBService) ListUsers(ctx context.Context, req UserFetchRequest) (UserLi
 		return UserListResult{}, fmt.Errorf("query admin users: %w", err)
 	}
 
+	nodeNames, err := s.loadManagedServerNameMap(ctx)
+	if err != nil {
+		return UserListResult{}, err
+	}
+
 	for _, item := range data {
 		token := strings.TrimSpace(fmt.Sprint(item["token"]))
 		userID := mapAnyInt64(item["id"])
 		if raw, ok, err := s.getStringKV(ctx, adminAliveUserRuntimeKey(userID)); err != nil {
 			return UserListResult{}, err
 		} else if ok {
-			item["alive_ip"], item["ips"] = adminAliveIPSummary(raw)
+			item["alive_ip"], item["ips"] = adminAliveIPSummaryWithNodeNames(raw, nodeNames)
 		} else {
 			item["alive_ip"] = int64(0)
 			item["ips"] = ""

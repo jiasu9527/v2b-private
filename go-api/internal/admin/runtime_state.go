@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -48,6 +50,10 @@ func mergeManagedServerRuntimeFields(item map[string]any, online, lastCheckAt, l
 }
 
 func adminAliveIPSummary(raw string) (int64, string) {
+	return adminAliveIPSummaryWithNodeNames(raw, nil)
+}
+
+func adminAliveIPSummaryWithNodeNames(raw string, nodeNames map[string]string) (int64, string) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return 0, ""
@@ -60,6 +66,7 @@ func adminAliveIPSummary(raw string) (int64, string) {
 
 	count := mapAnyInt64(state["alive_ip"])
 	ips := make([]string, 0)
+	seen := make(map[string]struct{})
 	for nodeTypeID, payload := range state {
 		if nodeTypeID == "alive_ip" {
 			continue
@@ -77,12 +84,119 @@ func adminAliveIPSummary(raw string) (int64, string) {
 				ip = ip[:index]
 			}
 			if ip != "" {
-				ips = append(ips, fmt.Sprintf("%s_%s", ip, nodeTypeID))
+				label := adminAliveIPNodeLabel(nodeTypeID, nodeNames)
+				value := ip
+				if label != "" {
+					value = fmt.Sprintf("%s | %s", ip, label)
+				}
+				if _, ok := seen[value]; ok {
+					continue
+				}
+				seen[value] = struct{}{}
+				ips = append(ips, value)
 			}
 		}
 	}
 	sort.Strings(ips)
 	return count, strings.Join(ips, ", ")
+}
+
+func adminAliveIPNodeLabel(nodeTypeID string, nodeNames map[string]string) string {
+	nodeTypeID = strings.ToLower(strings.TrimSpace(nodeTypeID))
+	if nodeTypeID == "" {
+		return ""
+	}
+	if name := strings.TrimSpace(nodeNames[nodeTypeID]); name != "" {
+		return name
+	}
+	if nodeType, nodeID, ok := parseManagedServerNodeKey(nodeTypeID); ok {
+		normalizedKey := nodeType + strconv.FormatInt(nodeID, 10)
+		if name := strings.TrimSpace(nodeNames[normalizedKey]); name != "" {
+			return name
+		}
+		return normalizedKey
+	}
+	return nodeTypeID
+}
+
+func parseManagedServerNodeKey(nodeTypeID string) (string, int64, bool) {
+	nodeTypeID = strings.ToLower(strings.TrimSpace(nodeTypeID))
+	if nodeTypeID == "" {
+		return "", 0, false
+	}
+
+	index := len(nodeTypeID)
+	for index > 0 {
+		ch := nodeTypeID[index-1]
+		if ch < '0' || ch > '9' {
+			break
+		}
+		index--
+	}
+	if index <= 0 || index >= len(nodeTypeID) {
+		return "", 0, false
+	}
+
+	nodeType := normalizeManagedServerType(nodeTypeID[:index])
+	if _, ok := managedServerDefinitions[nodeType]; !ok {
+		return "", 0, false
+	}
+
+	nodeID, err := strconv.ParseInt(nodeTypeID[index:], 10, 64)
+	if err != nil || nodeID <= 0 {
+		return "", 0, false
+	}
+
+	return nodeType, nodeID, true
+}
+
+func normalizeManagedServerType(serverType string) string {
+	switch strings.ToLower(strings.TrimSpace(serverType)) {
+	case "v2ray":
+		return "vmess"
+	case "hysteria2":
+		return "hysteria"
+	default:
+		return strings.ToLower(strings.TrimSpace(serverType))
+	}
+}
+
+func (s *DBService) loadManagedServerNameMap(ctx context.Context) (map[string]string, error) {
+	result := make(map[string]string)
+	serverTypes := make([]string, 0, len(managedServerDefinitions))
+	for serverType := range managedServerDefinitions {
+		serverTypes = append(serverTypes, serverType)
+	}
+	sort.Strings(serverTypes)
+
+	for _, serverType := range serverTypes {
+		def := managedServerDefinitions[serverType]
+		rows, err := s.db.QueryContext(ctx, `SELECT id, name FROM `+quoteIdentifier(def.table))
+		if err != nil {
+			return nil, fmt.Errorf("query managed server names for %s: %w", serverType, err)
+		}
+
+		for rows.Next() {
+			var (
+				id   int64
+				name sql.NullString
+			)
+			if err := rows.Scan(&id, &name); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scan managed server name for %s: %w", serverType, err)
+			}
+			if id > 0 && strings.TrimSpace(name.String) != "" {
+				result[serverType+strconv.FormatInt(id, 10)] = strings.TrimSpace(name.String)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("iterate managed server names for %s: %w", serverType, err)
+		}
+		rows.Close()
+	}
+
+	return result, nil
 }
 
 func runtimeAliveIPList(value any) []string {

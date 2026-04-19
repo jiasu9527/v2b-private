@@ -71,7 +71,7 @@ func TestAdminAliveIPSummaryParsesRuntimeState(t *testing.T) {
 	}
 	parts := strings.Split(ips, ", ")
 	sort.Strings(parts)
-	expected := []string{"1.1.1.1_vmess12", "2.2.2.2_vmess12", "3.3.3.3_trojan9"}
+	expected := []string{"1.1.1.1 | vmess12", "2.2.2.2 | vmess12", "3.3.3.3 | trojan9"}
 	if len(parts) != len(expected) {
 		t.Fatalf("expected %d ips, got %#v", len(expected), parts)
 	}
@@ -87,5 +87,53 @@ func TestAdminAliveIPSummaryIgnoresInvalidPayload(t *testing.T) {
 
 	if count != 0 || ips != "" {
 		t.Fatalf("expected empty alive summary, got count=%d ips=%q", count, ips)
+	}
+}
+
+func TestAdminAliveIPSummaryUsesNodeNames(t *testing.T) {
+	count, ips := adminAliveIPSummaryWithNodeNames(`{
+		"alive_ip": 2,
+		"vmess12": {"aliveips": ["1.1.1.1_ios", "1.1.1.1_android"]},
+		"trojan9": {"aliveips": ["3.3.3.3_android"]}
+	}`, map[string]string{
+		"vmess12": "香港-01",
+		"trojan9": "台湾-02",
+	})
+
+	if count != 2 {
+		t.Fatalf("expected alive count 2, got %d", count)
+	}
+	parts := strings.Split(ips, ", ")
+	sort.Strings(parts)
+	expected := []string{"1.1.1.1 | 香港-01", "3.3.3.3 | 台湾-02"}
+	if len(parts) != len(expected) {
+		t.Fatalf("expected %d ips, got %#v", len(expected), parts)
+	}
+	for index := range expected {
+		if parts[index] != expected[index] {
+			t.Fatalf("unexpected ips summary: %#v", parts)
+		}
+	}
+}
+
+func TestParseManagedServerNodeKey(t *testing.T) {
+	tests := []struct {
+		input      string
+		wantType   string
+		wantID     int64
+		wantParsed bool
+	}{
+		{input: "vmess12", wantType: "vmess", wantID: 12, wantParsed: true},
+		{input: "v2ray13", wantType: "vmess", wantID: 13, wantParsed: true},
+		{input: "anytls25", wantType: "anytls", wantID: 25, wantParsed: true},
+		{input: "v2node34", wantType: "v2node", wantID: 34, wantParsed: true},
+		{input: "broken", wantParsed: false},
+	}
+
+	for _, test := range tests {
+		gotType, gotID, gotParsed := parseManagedServerNodeKey(test.input)
+		if gotParsed != test.wantParsed || gotType != test.wantType || gotID != test.wantID {
+			t.Fatalf("parseManagedServerNodeKey(%q) = (%q, %d, %v), want (%q, %d, %v)", test.input, gotType, gotID, gotParsed, test.wantType, test.wantID, test.wantParsed)
+		}
 	}
 }
