@@ -47,7 +47,6 @@ NODE_TYPE=vmess \
 - `GET /api/v1/passport/auth/token2Login`
 - `POST /api/v1/passport/auth/forget`
 - `POST /api/v1/passport/auth/getQuickLoginUrl`
-- `POST /api/v1/passport/auth/loginWithMailLink`
 - `GET /api/v1/client/app/getVersion`
 - `GET /api/v1/client/app/getConfig`
 - `GET /api/v1/client/subscribe`

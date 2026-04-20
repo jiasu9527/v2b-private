@@ -502,10 +502,6 @@
     },
     {
       "method": "POST",
-      "path": "/api/v1/passport/auth/loginWithMailLink"
-    },
-    {
-      "method": "POST",
       "path": "/api/v1/passport/auth/register"
     },
     {

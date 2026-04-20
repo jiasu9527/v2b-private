@@ -1494,7 +1494,7 @@ func TestRouterPassportGetQuickLoginUrlEndpoint(t *testing.T) {
 	}
 }
 
-func TestRouterPassportLoginWithMailLinkEndpoint(t *testing.T) {
+func TestRouterPassportLoginWithMailLinkEndpointDisabled(t *testing.T) {
 	service := &fakePassportService{mailLinkResult: "http://127.0.0.1/#/login?verify=mail"}
 	router := NewRouter(config.Config{AppName: "forest-go"}, WithPassportService(service))
 
@@ -1507,11 +1507,11 @@ func TestRouterPassportLoginWithMailLinkEndpoint(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
 	}
-	if service.lastMailLink.Email != "user@example.com" {
-		t.Fatalf("unexpected mail link payload: %#v", service.lastMailLink)
+	if service.lastMailLink.Email != "" {
+		t.Fatalf("expected mail link service to stay unused, got %#v", service.lastMailLink)
 	}
 }
 

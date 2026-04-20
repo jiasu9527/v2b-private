@@ -292,10 +292,6 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handlePassportGetQuickLoginURL(w, r, state.passport) {
 				return
 			}
-		case r.URL.Path == "/api/v1/passport/auth/loginWithMailLink":
-			if handlePassportLoginWithMailLink(w, r, state.passport) {
-				return
-			}
 		case r.URL.Path == "/api/v1/client/app/getVersion":
 			if handleClientAppGetVersion(w, r, cfg) {
 				return
