@@ -141194,6 +141194,134 @@
                                 }),
                             ),
                         ),
+                        y.a.createElement(
+                            "div",
+                            {
+                                className: "form-group",
+                            },
+                            y.a.createElement(
+                                "label",
+                                null,
+                                "ECH (Encrypted Client Hello)",
+                            ),
+                            y.a.createElement(
+                                N["a"],
+                                {
+                                    value: e.ech || "",
+                                    style: {
+                                        width: "100%",
+                                    },
+                                    onChange: (e) => this.change("ech", e),
+                                    placeholder: "选择 ECH 模式",
+                                },
+                                y.a.createElement(
+                                    N["a"].Option,
+                                    {
+                                        key: 0,
+                                        value: "",
+                                    },
+                                    "无",
+                                ),
+                                y.a.createElement(
+                                    N["a"].Option,
+                                    {
+                                        key: 1,
+                                        value: "cloudflare",
+                                    },
+                                    "Cloudflare",
+                                ),
+                                y.a.createElement(
+                                    N["a"].Option,
+                                    {
+                                        key: 2,
+                                        value: "custom",
+                                    },
+                                    "自定义 SNI",
+                                ),
+                            ),
+                        ),
+                        e.ech === "cloudflare" &&
+                            y.a.createElement(
+                                "div",
+                                {
+                                    className: "form-group",
+                                    style: {
+                                        background: "#f6ffed",
+                                        padding: "8px 12px",
+                                        borderRadius: "4px",
+                                        border: "1px solid #b7eb8f",
+                                    },
+                                },
+                                y.a.createElement(
+                                    "span",
+                                    {
+                                        style: {
+                                            color: "#52c41a",
+                                        },
+                                    },
+                                    "✓ Cloudflare 托管 ECH，密钥由 Cloudflare 自动管理，客户端从 DNS 自动获取配置，服务端无需额外填写",
+                                ),
+                            ),
+                        e.ech === "custom" &&
+                            y.a.createElement(
+                                "div",
+                                {
+                                    className: "form-group",
+                                },
+                                y.a.createElement(
+                                    "label",
+                                    null,
+                                    "ECH Server Name (伪装域名/外层SNI)",
+                                ),
+                                y.a.createElement(s["a"], {
+                                    value: e.ech_server_name || "",
+                                    onChange: (e) =>
+                                        this.change(
+                                            "ech_server_name",
+                                            e.target.value,
+                                        ),
+                                    placeholder: "留空则关闭自定义 ECH",
+                                }),
+                            ),
+                        e.ech === "custom" &&
+                            y.a.createElement(
+                                "div",
+                                {
+                                    className: "form-group",
+                                },
+                                y.a.createElement(
+                                    "label",
+                                    null,
+                                    "ECH Key (服务端私钥)",
+                                ),
+                                y.a.createElement(s["a"], {
+                                    value: e.ech_key || "",
+                                    onChange: (e) =>
+                                        this.change("ech_key", e.target.value),
+                                    placeholder: "留空自动生成",
+                                }),
+                            ),
+                        e.ech === "custom" &&
+                            y.a.createElement(
+                                "div",
+                                {
+                                    className: "form-group",
+                                },
+                                y.a.createElement(
+                                    "label",
+                                    null,
+                                    "ECH Config (客户端配置)",
+                                ),
+                                y.a.createElement(s["a"], {
+                                    value: e.ech_config || "",
+                                    onChange: (e) =>
+                                        this.change(
+                                            "ech_config",
+                                            e.target.value,
+                                        ),
+                                    placeholder: "留空自动生成",
+                                }),
+                            ),
                     ),
                 );
             }

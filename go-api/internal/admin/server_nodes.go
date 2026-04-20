@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/md5"
 	crand "crypto/rand"
 	"crypto/sha1"
@@ -10,10 +11,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
 
+	"golang.org/x/crypto/cryptobyte"
 	"golang.org/x/crypto/curve25519"
 )
 
@@ -609,6 +612,10 @@ func normalizeVlessServer(values, payload map[string]any) error {
 		}
 		tlsSettings = next
 	}
+	tlsSettings, err = normalizeECHSettings(tlsSettings)
+	if err != nil {
+		return errors.New("保存失败")
+	}
 	if tlsSettings != nil || hasPayloadKey(payload, "tls_settings") || tls == 2 {
 		values["tls_settings"] = marshalJSONOrNil(tlsSettings)
 	}
@@ -686,6 +693,10 @@ func normalizeV2nodeServer(values, payload map[string]any, seed string, hasID bo
 			return errors.New("保存失败")
 		}
 		tlsSettings = next
+	}
+	tlsSettings, err = normalizeECHSettings(tlsSettings)
+	if err != nil {
+		return errors.New("保存失败")
 	}
 	if tlsSettings != nil || hasPayloadKey(payload, "tls_settings") || tls == 2 {
 		values["tls_settings"] = marshalJSONOrNil(tlsSettings)
@@ -1205,6 +1216,105 @@ func ensureRealitySettings(settings map[string]any) (map[string]any, error) {
 		settings["server_port"] = "443"
 	}
 	return settings, nil
+}
+
+func normalizeECHSettings(settings map[string]any) (map[string]any, error) {
+	if settings == nil {
+		return nil, nil
+	}
+
+	switch strings.TrimSpace(fmt.Sprint(settings["ech"])) {
+	case "", "<nil>", "cloudflare":
+		return settings, nil
+	case "custom":
+		outerSNI := strings.TrimSpace(fmt.Sprint(settings["ech_server_name"]))
+		if outerSNI == "" || outerSNI == "<nil>" {
+			settings["ech"] = ""
+			return settings, nil
+		}
+
+		missingKey := !nonEmptyString(settings["ech_key"])
+		missingConfig := !nonEmptyString(settings["ech_config"])
+		if !missingKey && !missingConfig {
+			return settings, nil
+		}
+
+		echKey, echConfig, err := generateECHMaterial(outerSNI)
+		if err != nil {
+			return nil, err
+		}
+		if missingKey {
+			settings["ech_key"] = echKey
+		}
+		if missingConfig {
+			settings["ech_config"] = echConfig
+		}
+		return settings, nil
+	default:
+		settings["ech"] = ""
+		return settings, nil
+	}
+}
+
+func generateECHMaterial(publicName string) (string, string, error) {
+	configBytes, privateKey, err := generateECHConfig(publicName)
+	if err != nil {
+		return "", "", err
+	}
+
+	var keyBuffer cryptobyte.Builder
+	keyBuffer.AddUint16(uint16(len(privateKey)))
+	keyBuffer.AddBytes(privateKey)
+	keyBuffer.AddUint16(uint16(len(configBytes)))
+	keyBuffer.AddBytes(configBytes)
+	keyBytes, err := keyBuffer.Bytes()
+	if err != nil {
+		return "", "", err
+	}
+
+	return base64.StdEncoding.EncodeToString(keyBytes), base64.StdEncoding.EncodeToString(configBytes), nil
+}
+
+func generateECHConfig(publicName string) ([]byte, []byte, error) {
+	privateKey := make([]byte, 32)
+	if _, err := io.ReadFull(crand.Reader, privateKey); err != nil {
+		return nil, nil, err
+	}
+
+	privateKeyHandle, err := ecdh.X25519().NewPrivateKey(privateKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	publicKey := privateKeyHandle.PublicKey().Bytes()
+
+	var builder cryptobyte.Builder
+	builder.AddUint16(0xfe0d)
+	builder.AddUint16LengthPrefixed(func(child *cryptobyte.Builder) {
+		child.AddUint8(0)
+		child.AddUint16(0x0020)
+		child.AddUint16(uint16(len(publicKey)))
+		child.AddBytes(publicKey)
+		child.AddUint16LengthPrefixed(func(suites *cryptobyte.Builder) {
+			for _, suite := range [][2]uint16{
+				{0x0001, 0x0001},
+				{0x0001, 0x0002},
+				{0x0001, 0x0003},
+			} {
+				suites.AddUint16(suite[0])
+				suites.AddUint16(suite[1])
+			}
+		})
+		child.AddUint8(0)
+		child.AddUint8(uint8(len(publicName)))
+		child.AddBytes([]byte(publicName))
+		child.AddUint16(0)
+	})
+
+	configBytes, err := builder.Bytes()
+	if err != nil {
+		return nil, nil, err
+	}
+	return configBytes, privateKey, nil
 }
 
 func ensureMLKEMSettings(settings map[string]any, includeDefaults bool) (map[string]any, error) {

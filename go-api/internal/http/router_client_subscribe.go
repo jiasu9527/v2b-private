@@ -389,6 +389,9 @@ func buildClashVmessProxy(userUUID string, server map[string]any) map[string]any
 			stringValue(tlsSettings["server_name"]),
 			stringValue(tlsSettings["serverName"]),
 		)
+		if echOpts := clashECHOptions(tlsSettings); len(echOpts) > 0 {
+			proxy["ech-opts"] = echOpts
+		}
 	}
 
 	network := serverString(server, "network")
@@ -473,6 +476,9 @@ func buildClashTrojanProxy(userUUID string, server map[string]any) map[string]an
 	tlsSettings := serverMap(server, "tls_settings")
 	proxy["sni"] = firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"]))
 	proxy["skip-cert-verify"] = serverBoolValue(server["allow_insecure"]) || serverMapBool(tlsSettings, "allow_insecure")
+	if echOpts := clashECHOptions(tlsSettings); len(echOpts) > 0 {
+		proxy["ech-opts"] = echOpts
+	}
 	return proxy
 }
 
@@ -522,6 +528,9 @@ func buildClashVlessProxy(userUUID string, server map[string]any) map[string]any
 			if len(realityOpts) > 0 {
 				proxy["reality-opts"] = realityOpts
 			}
+		}
+		if echOpts := clashECHOptions(tlsSettings); len(echOpts) > 0 {
+			proxy["ech-opts"] = echOpts
 		}
 	}
 
@@ -874,6 +883,71 @@ func clashALPNList(settings map[string]any, fallbackH3 bool) []string {
 	return values
 }
 
+func clashECHOptions(settings map[string]any) map[string]any {
+	switch strings.TrimSpace(stringValue(settings["ech"])) {
+	case "cloudflare":
+		return map[string]any{
+			"enable":            true,
+			"query-server-name": "cloudflare-ech.com",
+		}
+	case "custom":
+		configs := echConfigValues(settings)
+		if len(configs) == 0 {
+			return nil
+		}
+		return map[string]any{
+			"enable": true,
+			"config": configs,
+		}
+	default:
+		return nil
+	}
+}
+
+func subscribeECHValue(settings map[string]any) string {
+	switch strings.TrimSpace(stringValue(settings["ech"])) {
+	case "cloudflare":
+		return "cloudflare-ech.com+https://1.1.1.1/dns-query"
+	case "custom":
+		configs := echConfigValues(settings)
+		if len(configs) == 0 {
+			return ""
+		}
+		return configs[0]
+	default:
+		return ""
+	}
+}
+
+func echConfigValues(settings map[string]any) []string {
+	switch typed := settings["ech_config"].(type) {
+	case []string:
+		result := make([]string, 0, len(typed))
+		for _, value := range typed {
+			trimmed := strings.TrimSpace(value)
+			if trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+		return result
+	case []any:
+		result := make([]string, 0, len(typed))
+		for _, value := range typed {
+			raw := strings.TrimSpace(fmt.Sprint(value))
+			if raw != "" && raw != "<nil>" {
+				result = append(result, raw)
+			}
+		}
+		return result
+	default:
+		raw := strings.TrimSpace(stringValue(settings["ech_config"]))
+		if raw == "" {
+			return nil
+		}
+		return []string{raw}
+	}
+}
+
 func serverStringSlice(server map[string]any, key string) []string {
 	values := asAnySlice(server[key])
 	result := make([]string, 0, len(values))
@@ -1051,6 +1125,9 @@ func buildVlessURI(userUUID string, server map[string]any) string {
 			config["pbk"] = stringValue(tlsSettings["public_key"])
 			config["sid"] = stringValue(tlsSettings["short_id"])
 		}
+		if ech := subscribeECHValue(tlsSettings); ech != "" {
+			config["ech"] = ech
+		}
 	}
 
 	if strings.EqualFold(serverString(server, "encryption"), "mlkem768x25519plus") {
@@ -1118,6 +1195,9 @@ func buildTrojanURI(userUUID string, server map[string]any) string {
 		"peer":          firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])),
 		"sni":           firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])),
 		"type":          serverString(server, "network"),
+	}
+	if ech := subscribeECHValue(tlsSettings); ech != "" {
+		params["ech"] = ech
 	}
 
 	if network := serverString(server, "network"); network == "grpc" || network == "ws" {
