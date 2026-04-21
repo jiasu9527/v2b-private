@@ -357,6 +357,16 @@ func (s *DBService) GetServerTodayRank(ctx context.Context) ([]map[string]any, e
 	return s.getServerRank(ctx, startAt, endAt)
 }
 
+func (s *DBService) GetInviteLastRank(ctx context.Context) ([]map[string]any, error) {
+	startAt, endAt := dayRange(-1)
+	return s.getLegacyInviteRank(ctx, startAt, endAt, 15)
+}
+
+func (s *DBService) GetInviteTodayRank(ctx context.Context) ([]map[string]any, error) {
+	startAt, endAt := dayRange(0)
+	return s.getLegacyInviteRank(ctx, startAt, endAt, 15)
+}
+
 func (s *DBService) GetUserLastRank(ctx context.Context) ([]map[string]any, error) {
 	startAt, endAt := dayRange(-1)
 	return s.getUserRank(ctx, startAt, endAt)

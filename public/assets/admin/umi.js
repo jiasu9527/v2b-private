@@ -55986,6 +55986,70 @@
                         }, e);
                     })();
                 },
+                getInviteLastRank(e) {
+                    var t = e.complete;
+                    return a().mark(function e() {
+                        var n;
+                        return a().wrap(function (e) {
+                            while (1)
+                                switch ((e.prev = e.next)) {
+                                    case 0:
+                                        return (
+                                            (e.next = 2),
+                                            Object(o["a"])(
+                                                "/" +
+                                                    window.settings
+                                                        .secure_path +
+                                                    "/stat/getInviteLastRank",
+                                            )
+                                        );
+                                    case 2:
+                                        if (((n = e.sent), 200 === n.code)) {
+                                            e.next = 5;
+                                            break;
+                                        }
+                                        return e.abrupt("return");
+                                    case 5:
+                                        t(n.data);
+                                    case 6:
+                                    case "end":
+                                        return e.stop();
+                                }
+                        }, e);
+                    })();
+                },
+                getInviteTodayRank(e) {
+                    var t = e.complete;
+                    return a().mark(function e() {
+                        var n;
+                        return a().wrap(function (e) {
+                            while (1)
+                                switch ((e.prev = e.next)) {
+                                    case 0:
+                                        return (
+                                            (e.next = 2),
+                                            Object(o["a"])(
+                                                "/" +
+                                                    window.settings
+                                                        .secure_path +
+                                                    "/stat/getInviteTodayRank",
+                                            )
+                                        );
+                                    case 2:
+                                        if (((n = e.sent), 200 === n.code)) {
+                                            e.next = 5;
+                                            break;
+                                        }
+                                        return e.abrupt("return");
+                                    case 5:
+                                        t(n.data);
+                                    case 6:
+                                    case "end":
+                                        return e.stop();
+                                }
+                        }, e);
+                    })();
+                },
                 getUserTodayRank(e) {
                     var t = e.complete;
                     return a().mark(function e() {
@@ -132000,10 +132064,14 @@
                     (this.orderChartObj = void 0),
                     (this.serverLastRankChart = l.a.createRef()),
                     (this.serverTodayRankChart = l.a.createRef()),
+                    (this.inviteLastRankChart = l.a.createRef()),
+                    (this.inviteTodayRankChart = l.a.createRef()),
                     (this.userTodayRankChart = l.a.createRef()),
                     (this.userLastRankChart = l.a.createRef()),
                     (this.serverLastRankChartObj = void 0),
                     (this.serverTodayRankChartObj = void 0),
+                    (this.inviteLastRankChartObj = void 0),
+                    (this.inviteTodayRankChartObj = void 0),
                     (this.userTodayRankChartObj = void 0),
                     (this.userLastRankChartObj = void 0));
             }
@@ -132146,6 +132214,88 @@
                 }),
                     this.serverTodayRankChartObj.setOption(n));
             }
+            inviteTodayRankChartRender(e) {
+                var t;
+                this.inviteTodayRankChartObj = g["b"](
+                    null === (t = this.inviteTodayRankChart) || void 0 === t
+                        ? void 0
+                        : t.current,
+                );
+                var n = {
+                    tooltip: {
+                        trigger: "axis",
+                        formatter: (e) => {
+                            return "".concat(e[0].value, " 人");
+                        },
+                    },
+                    grid: {
+                        top: "1%",
+                        left: "1%",
+                        right: "1%",
+                        bottom: "3%",
+                        containLabel: !0,
+                    },
+                    xAxis: {
+                        type: "value",
+                    },
+                    yAxis: {
+                        type: "category",
+                        data: [],
+                    },
+                    series: [
+                        {
+                            data: [],
+                            type: "bar",
+                        },
+                    ],
+                };
+                (e.reverse().forEach((e) => {
+                    (n.yAxis.data.push(e.email),
+                        n.series[0].data.push(e.count));
+                }),
+                    this.inviteTodayRankChartObj.setOption(n));
+            }
+            inviteLastRankChartRender(e) {
+                var t;
+                this.inviteLastRankChartObj = g["b"](
+                    null === (t = this.inviteLastRankChart) || void 0 === t
+                        ? void 0
+                        : t.current,
+                );
+                var n = {
+                    tooltip: {
+                        trigger: "axis",
+                        formatter: (e) => {
+                            return "".concat(e[0].value, " 人");
+                        },
+                    },
+                    grid: {
+                        top: "1%",
+                        left: "1%",
+                        right: "1%",
+                        bottom: "3%",
+                        containLabel: !0,
+                    },
+                    xAxis: {
+                        type: "value",
+                    },
+                    yAxis: {
+                        type: "category",
+                        data: [],
+                    },
+                    series: [
+                        {
+                            data: [],
+                            type: "bar",
+                        },
+                    ],
+                };
+                (e.reverse().forEach((e) => {
+                    (n.yAxis.data.push(e.email),
+                        n.series[0].data.push(e.count));
+                }),
+                    this.inviteLastRankChartObj.setOption(n));
+            }
             userTodayRankChartRender(e) {
                 var t;
                 this.userTodayRankChartObj = g["b"](
@@ -132232,6 +132382,8 @@
                 (this.orderChartObj.resize(),
                     this.serverLastRankChartObj.resize(),
                     this.serverTodayRankChartObj.resize(),
+                    this.inviteLastRankChartObj.resize(),
+                    this.inviteTodayRankChartObj.resize(),
                     this.userTodayRankChartObj.resize(),
                     this.userLastRankChartObj.resize());
             }
@@ -132270,6 +132422,18 @@
                         type: "stat/getServerTodayRank",
                         complete: (e) => {
                             this.serverTodayRankChartRender(e);
+                        },
+                    }),
+                    this.props.dispatch({
+                        type: "stat/getInviteTodayRank",
+                        complete: (e) => {
+                            this.inviteTodayRankChartRender(e);
+                        },
+                    }),
+                    this.props.dispatch({
+                        type: "stat/getInviteLastRank",
+                        complete: (e) => {
+                            this.inviteLastRankChartRender(e);
                         },
                     }),
                     this.props.dispatch({
@@ -133147,6 +133311,96 @@
                                                 height: 400,
                                             },
                                             ref: this.userLastRankChart,
+                                        }),
+                                    ),
+                                ),
+                            ),
+                        ),
+                        l.a.createElement(
+                            "div",
+                            {
+                                className: "row mt-xl-3",
+                            },
+                            l.a.createElement(
+                                "div",
+                                {
+                                    className:
+                                        "col-lg-6 js-appear-enabled animated pr-xl-1",
+                                    "data-toggle": "appear",
+                                },
+                                l.a.createElement(
+                                    "div",
+                                    {
+                                        className: "block border-bottom",
+                                    },
+                                    l.a.createElement(
+                                        "div",
+                                        {
+                                            class: "block-header block-header-default",
+                                        },
+                                        l.a.createElement(
+                                            "h3",
+                                            {
+                                                class: "block-title",
+                                            },
+                                            "\u4eca\u65e5\u9080\u8bf7\u6392\u884c",
+                                        ),
+                                    ),
+                                    l.a.createElement(
+                                        "div",
+                                        {
+                                            className: "block-content",
+                                        },
+                                        l.a.createElement("div", {
+                                            className:
+                                                "px-sm-3 pt-sm-3 py-3 clearfix",
+                                            id: "inviteTodayRankChart",
+                                            style: {
+                                                height: 400,
+                                            },
+                                            ref: this.inviteTodayRankChart,
+                                        }),
+                                    ),
+                                ),
+                            ),
+                            l.a.createElement(
+                                "div",
+                                {
+                                    className:
+                                        "col-lg-6 js-appear-enabled animated",
+                                    "data-toggle": "appear",
+                                },
+                                l.a.createElement(
+                                    "div",
+                                    {
+                                        className: "block border-bottom",
+                                    },
+                                    l.a.createElement(
+                                        "div",
+                                        {
+                                            class: "block-header block-header-default",
+                                        },
+                                        l.a.createElement(
+                                            "h3",
+                                            {
+                                                class: "block-title",
+                                            },
+                                            "\u6628\u65e5\u9080\u8bf7\u6392\u884c",
+                                        ),
+                                    ),
+                                    l.a.createElement(
+                                        "div",
+                                        {
+                                            className: "block-content",
+                                        },
+                                        l.a.createElement("div", {
+                                            className:
+                                                "px-sm-3 pt-sm-3 py-3 clearfix",
+                                            id: "inviteLastRankChart",
+                                            style: {
+                                                height: 400,
+                                            },
+                                            ref: this.inviteLastRankChart,
                                         }),
                                     ),
                                 ),

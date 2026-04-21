@@ -232,6 +232,8 @@ type Service interface {
 	GetStatRecord(ctx context.Context, statType string, startAt, endAt int64) ([]map[string]any, error)
 	GetServerLastRank(ctx context.Context) ([]map[string]any, error)
 	GetServerTodayRank(ctx context.Context) ([]map[string]any, error)
+	GetInviteLastRank(ctx context.Context) ([]map[string]any, error)
+	GetInviteTodayRank(ctx context.Context) ([]map[string]any, error)
 	GetUserLastRank(ctx context.Context) ([]map[string]any, error)
 	GetUserTodayRank(ctx context.Context) ([]map[string]any, error)
 	GetStatUser(ctx context.Context, userID, current, pageSize int64) ([]map[string]any, int64, error)

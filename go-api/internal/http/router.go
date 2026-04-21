@@ -556,6 +556,14 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminStatServerTodayRank(w, r, state.session, state.admin) {
 				return
 			}
+		case r.URL.Path == adminPrefix+"/stat/getInviteLastRank":
+			if handleAdminStatInviteLastRank(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/stat/getInviteTodayRank":
+			if handleAdminStatInviteTodayRank(w, r, state.session, state.admin) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/stat/getUserLastRank":
 			if handleAdminStatUserLastRank(w, r, state.session, state.admin) {
 				return
@@ -5940,6 +5948,40 @@ func handleAdminStatServerTodayRank(w http.ResponseWriter, r *http.Request, sess
 	}
 
 	data, err := adminService.GetServerTodayRank(r.Context())
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": data})
+	return true
+}
+
+func handleAdminStatInviteLastRank(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+
+	data, err := adminService.GetInviteLastRank(r.Context())
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": data})
+	return true
+}
+
+func handleAdminStatInviteTodayRank(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+
+	data, err := adminService.GetInviteTodayRank(r.Context())
 	if err != nil {
 		return handleAdminError(w, err)
 	}

@@ -362,6 +362,14 @@
     },
     {
       "method": "GET",
+      "path": "/api/v1/<admin_path>/stat/getInviteLastRank"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/<admin_path>/stat/getInviteTodayRank"
+    },
+    {
+      "method": "GET",
       "path": "/api/v1/<admin_path>/stat/getStat"
     },
     {

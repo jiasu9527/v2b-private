@@ -629,6 +629,8 @@ type fakeAdminService struct {
 	statRecords        []map[string]any
 	serverLastRank     []map[string]any
 	serverTodayRank    []map[string]any
+	inviteLastRank     []map[string]any
+	inviteTodayRank    []map[string]any
 	userLastRank       []map[string]any
 	userTodayRank      []map[string]any
 	statUserRecords    []map[string]any
@@ -842,6 +844,14 @@ func (f *fakeAdminService) GetServerLastRank(_ context.Context) ([]map[string]an
 
 func (f *fakeAdminService) GetServerTodayRank(_ context.Context) ([]map[string]any, error) {
 	return f.serverTodayRank, f.err
+}
+
+func (f *fakeAdminService) GetInviteLastRank(_ context.Context) ([]map[string]any, error) {
+	return f.inviteLastRank, f.err
+}
+
+func (f *fakeAdminService) GetInviteTodayRank(_ context.Context) ([]map[string]any, error) {
+	return f.inviteTodayRank, f.err
 }
 
 func (f *fakeAdminService) GetUserLastRank(_ context.Context) ([]map[string]any, error) {
@@ -3255,6 +3265,52 @@ func TestRouterAdminStatUserTodayRankEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"b@example.com"`) {
 		t.Fatalf("expected user today rank payload, got %s", rec.Body.String())
+	}
+}
+
+func TestRouterAdminStatInviteLastRankEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{
+		inviteLastRank: []map[string]any{{"email": "c@example.com", "count": int64(6)}},
+	}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/stat/getInviteLastRank?auth_data=jwt-admin", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"c@example.com"`) {
+		t.Fatalf("expected invite last rank payload, got %s", rec.Body.String())
+	}
+}
+
+func TestRouterAdminStatInviteTodayRankEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{
+		inviteTodayRank: []map[string]any{{"email": "d@example.com", "count": int64(8)}},
+	}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/stat/getInviteTodayRank?auth_data=jwt-admin", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"d@example.com"`) {
+		t.Fatalf("expected invite today rank payload, got %s", rec.Body.String())
 	}
 }
 
