@@ -159,7 +159,19 @@ func buildClashStandardProfile(cfg config.Config, customFile, defaultFile, userU
 }
 
 func loadRuleTemplate(cfg config.Config, customFile, defaultFile string) (map[string]any, error) {
-	candidates := make([]string, 0, 2)
+	raw, err := loadRuleTemplateRaw(cfg, customFile, defaultFile)
+	if err != nil {
+		return nil, err
+	}
+	template := map[string]any{}
+	if err := yaml.Unmarshal(raw, &template); err != nil {
+		return nil, fmt.Errorf("decode rule template: %w", err)
+	}
+	return template, nil
+}
+
+func loadRuleTemplateRaw(cfg config.Config, customFile, defaultFile string) ([]byte, error) {
+	candidates := make([]string, 0, 4)
 	if strings.TrimSpace(customFile) != "" {
 		candidates = append(candidates, filepath.Join(cfg.PublicDir, "..", "resources", "rules", customFile))
 	}
@@ -187,12 +199,667 @@ func loadRuleTemplate(cfg config.Config, customFile, defaultFile string) (map[st
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("read rule template: %w", err)
 	}
+	return raw, nil
+}
+
+func buildSurgeProfile(cfg config.Config, customFile, defaultFile, subscribeURL, subscribeDomain string, subscribe usersvc.Subscribe, userUUID string, servers []map[string]any) (string, error) {
+	raw, err := loadRuleTemplateRaw(cfg, customFile, defaultFile)
+	if err != nil {
+		return "", err
+	}
+
+	proxies := make([]string, 0, len(servers))
+	groupNames := make([]string, 0, len(servers))
+	for _, server := range servers {
+		line, ok := buildSurgeProxyLine(userUUID, server)
+		if !ok {
+			continue
+		}
+		proxies = append(proxies, line)
+		groupNames = append(groupNames, serverString(normalizeSubscribeServerOnly(server), "name"))
+	}
+
+	groupValue := strings.Join(groupNames, ", ")
+	if groupValue == "" {
+		groupValue = "DIRECT"
+	}
+
+	content := string(raw)
+	content = strings.ReplaceAll(content, "$subs_link", subscribeURL)
+	content = strings.ReplaceAll(content, "$subs_domain", subscribeDomain)
+	content = strings.ReplaceAll(content, "$proxies", strings.Join(proxies, ""))
+	content = strings.ReplaceAll(content, "$proxy_group", groupValue)
+	content = strings.ReplaceAll(content, "$subscribe_info", buildSurgeSubscribeInfo(cfg, subscribe))
+	return content, nil
+}
+
+func buildSurgeSubscribeInfo(cfg config.Config, subscribe usersvc.Subscribe) string {
+	appName := strings.TrimSpace(cfg.AppName)
+	if appName == "" {
+		appName = "Forest"
+	}
+	upload := float64(subscribe.U) / (1024 * 1024 * 1024)
+	download := float64(subscribe.D) / (1024 * 1024 * 1024)
+	total := float64(subscribe.TransferEnable) / (1024 * 1024 * 1024)
+	remaining := float64(subscribe.TransferEnable-subscribe.U-subscribe.D) / (1024 * 1024 * 1024)
+	if remaining < 0 {
+		remaining = 0
+	}
+	expire := "长期有效"
+	if subscribe.ExpiredAt != nil && *subscribe.ExpiredAt > 0 {
+		expire = time.Unix(*subscribe.ExpiredAt, 0).Format("2006-01-02 15:04:05")
+	}
+	return fmt.Sprintf(
+		"title=%s订阅信息, content=上传流量：%.2fGB\\n下载流量：%.2fGB\\n剩余流量：%.2fGB\\n套餐流量：%.2fGB\\n到期时间：%s",
+		appName,
+		upload,
+		download,
+		remaining,
+		total,
+		expire,
+	)
+}
+
+func buildSurgeProxyLine(userUUID string, server map[string]any) (string, bool) {
+	serverType, normalized := normalizeSubscribeServer(server)
+	switch serverType {
+	case "shadowsocks":
+		return buildSurgeShadowsocksLine(userUUID, normalized), true
+	case "vmess":
+		if network := serverString(normalized, "network"); network == "grpc" || network == "httpupgrade" || network == "xhttp" || network == "kcp" {
+			return "", false
+		}
+		return buildSurgeVmessLine(userUUID, normalized), true
+	case "trojan":
+		return buildSurgeTrojanLine(userUUID, normalized), true
+	case "hysteria2":
+		return buildSurgeHysteria2Line(userUUID, normalized), true
+	case "anytls":
+		return buildSurgeAnyTLSLine(userUUID, normalized), true
+	default:
+		return "", false
+	}
+}
+
+func normalizeSubscribeServerOnly(server map[string]any) map[string]any {
+	_, normalized := normalizeSubscribeServer(server)
+	return normalized
+}
+
+func buildSurgeShadowsocksLine(userUUID string, server map[string]any) string {
+	cipher := serverString(server, "cipher")
+	password := userUUID
+	if strings.Contains(cipher, "2022-blake3") {
+		length := 32
+		if cipher == "2022-blake3-aes-128-gcm" {
+			length = 16
+		}
+		serverKey := nodeapi.ServerKey(serverInt64(server, "created_at"), length)
+		userKey := base64.StdEncoding.EncodeToString([]byte(truncateString(userUUID, length)))
+		password = serverKey + ":" + userKey
+	}
+
+	parts := []string{
+		fmt.Sprintf("%s=ss", serverString(server, "name")),
+		serverString(server, "host"),
+		strconv.FormatInt(serverInt64(server, "port"), 10),
+		"encrypt-method=" + cipher,
+		"password=" + password,
+	}
+	if strings.EqualFold(serverString(server, "obfs"), "http") {
+		parts = append(parts, "obfs=http")
+		if host := serverString(server, "obfs-host"); host != "" {
+			parts = append(parts, "obfs-host="+host)
+		}
+		if path := serverString(server, "obfs-path"); path != "" {
+			parts = append(parts, "obfs-uri="+path)
+		}
+	} else if strings.EqualFold(serverString(server, "network"), "http") {
+		settings := serverMap(server, "network_settings")
+		if host := stringValue(settings["Host"]); host != "" {
+			parts = append(parts, "obfs=http", "obfs-host="+host)
+			if path := firstNonEmptyString(stringValue(settings["path"]), "/"); path != "" {
+				parts = append(parts, "obfs-uri="+path)
+			}
+		}
+	}
+	parts = append(parts, "fast-open=false", "udp=true")
+	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
+}
+
+func buildSurgeVmessLine(userUUID string, server map[string]any) string {
+	parts := []string{
+		fmt.Sprintf("%s=vmess", serverString(server, "name")),
+		serverString(server, "host"),
+		strconv.FormatInt(serverInt64(server, "port"), 10),
+		"username=" + userUUID,
+		"vmess-aead=true",
+		"tfo=true",
+		"udp-relay=true",
+	}
+	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	if serverBool(server, "tls") {
+		parts = append(parts, "tls=true")
+		parts = append(parts, "skip-cert-verify="+surgeBool(serverMapBool(tlsSettings, "allow_insecure", "allowInsecure")))
+		if sni := firstNonEmptyString(stringValue(tlsSettings["server_name"]), stringValue(tlsSettings["serverName"])); sni != "" {
+			parts = append(parts, "sni="+sni)
+		}
+	}
+	if serverString(server, "network") == "ws" {
+		parts = append(parts, "ws=true")
+		settings := firstNonEmptyMap(serverMap(server, "network_settings"), serverMap(server, "networkSettings"))
+		if path := stringValue(settings["path"]); path != "" {
+			parts = append(parts, "ws-path="+path)
+		}
+		if host := stringValue(nestedMap(settings, "headers")["Host"]); host != "" {
+			parts = append(parts, "ws-headers=Host:"+host)
+		}
+		if method := stringValue(settings["security"]); method != "" {
+			parts = append(parts, "encrypt-method="+method)
+		}
+	}
+	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
+}
+
+func buildSurgeTrojanLine(userUUID string, server map[string]any) string {
+	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	parts := []string{
+		fmt.Sprintf("%s=trojan", serverString(server, "name")),
+		serverString(server, "host"),
+		strconv.FormatInt(serverInt64(server, "port"), 10),
+		"password=" + userUUID,
+		"sni=" + firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])),
+		"tfo=true",
+		"udp-relay=true",
+		"skip-cert-verify=" + surgeBool(serverBoolValue(server["allow_insecure"]) || serverMapBool(tlsSettings, "allow_insecure")),
+	}
+	if serverString(server, "network") == "ws" {
+		settings := serverMap(server, "network_settings")
+		parts = append(parts, "ws=true")
+		if path := stringValue(settings["path"]); path != "" {
+			parts = append(parts, "ws-path="+path)
+		}
+		if host := stringValue(nestedMap(settings, "headers")["Host"]); host != "" {
+			parts = append(parts, "ws-headers=Host:"+host)
+		}
+	}
+	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
+}
+
+func buildSurgeHysteria2Line(userUUID string, server map[string]any) string {
+	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	port, ok := clashPrimaryPortString(server)
+	if !ok {
+		port = strconv.FormatInt(serverInt64(server, "port"), 10)
+	}
+	parts := []string{
+		fmt.Sprintf("%s=hysteria2", serverString(server, "name")),
+		serverString(server, "host"),
+		port,
+		"password=" + userUUID,
+		"download-bandwidth=" + strconv.FormatInt(serverInt64(server, "down_mbps"), 10),
+		"sni=" + firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])),
+		"udp-relay=true",
+		"skip-cert-verify=" + surgeBool(serverBoolValue(server["insecure"]) || serverMapBool(tlsSettings, "allow_insecure")),
+	}
+	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
+}
+
+func buildSurgeAnyTLSLine(userUUID string, server map[string]any) string {
+	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	parts := []string{
+		fmt.Sprintf("%s=anytls", serverString(server, "name")),
+		serverString(server, "host"),
+		strconv.FormatInt(serverInt64(server, "port"), 10),
+		"password=" + userUUID,
+		"skip-cert-verify=" + surgeBool(serverBoolValue(server["insecure"]) || serverMapBool(tlsSettings, "allow_insecure")),
+		"tfo=true",
+	}
+	if sni := firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])); sni != "" {
+		parts = append(parts, "sni="+sni)
+	}
+	return strings.Join(filterEmptyStrings(parts), ",") + "\r\n"
+}
+
+func surgeBool(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
+}
+
+func filterEmptyStrings(values []string) []string {
+	filtered := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
+}
+
+func buildSingBoxProfile(cfg config.Config, customFile, defaultFile, userUUID string, servers []map[string]any) (string, error) {
+	raw, err := loadRuleTemplateRaw(cfg, customFile, defaultFile)
+	if err != nil {
+		return "", err
+	}
 
 	template := map[string]any{}
-	if err := yaml.Unmarshal(raw, &template); err != nil {
-		return nil, fmt.Errorf("decode rule template: %w", err)
+	if err := json.Unmarshal(raw, &template); err != nil {
+		return "", fmt.Errorf("decode sing-box profile: %w", err)
 	}
-	return template, nil
+
+	proxies := make([]map[string]any, 0, len(servers))
+	tags := make([]string, 0, len(servers))
+	for _, server := range servers {
+		proxy, ok := buildSingBoxOutbound(userUUID, server)
+		if !ok {
+			continue
+		}
+		proxies = append(proxies, proxy)
+		tags = append(tags, stringValue(proxy["tag"]))
+	}
+
+	outbounds := asAnySlice(template["outbounds"])
+	for _, outboundValue := range outbounds {
+		outbound, ok := outboundValue.(map[string]any)
+		if !ok || !shouldInjectSingBoxProxyTags(outbound) {
+			continue
+		}
+		current := asAnySlice(outbound["outbounds"])
+		for _, tag := range tags {
+			if sliceContainsString(current, tag) {
+				continue
+			}
+			current = append(current, tag)
+		}
+		outbound["outbounds"] = current
+	}
+	for _, proxy := range proxies {
+		outbounds = append(outbounds, proxy)
+	}
+	template["outbounds"] = outbounds
+
+	rendered, err := json.Marshal(template)
+	if err != nil {
+		return "", fmt.Errorf("marshal sing-box profile: %w", err)
+	}
+	return string(rendered), nil
+}
+
+func shouldInjectSingBoxProxyTags(outbound map[string]any) bool {
+	outboundType := stringValue(outbound["type"])
+	tag := stringValue(outbound["tag"])
+	return (outboundType == "selector" && tag == "节点选择") ||
+		(outboundType == "urltest" && tag == "自动选择") ||
+		(outboundType == "selector" && strings.HasPrefix(tag, "#"))
+}
+
+func buildSingBoxOutbound(userUUID string, server map[string]any) (map[string]any, bool) {
+	serverType, normalized := normalizeSubscribeServer(server)
+	switch serverType {
+	case "shadowsocks":
+		return buildSingBoxShadowsocksOutbound(userUUID, normalized), true
+	case "vmess":
+		return buildSingBoxVmessOutbound(userUUID, normalized), true
+	case "vless":
+		return buildSingBoxVlessOutbound(userUUID, normalized), true
+	case "trojan":
+		return buildSingBoxTrojanOutbound(userUUID, normalized), true
+	case "tuic":
+		return buildSingBoxTUICOutbound(userUUID, normalized), true
+	case "hysteria":
+		return buildSingBoxHysteriaOutbound(userUUID, normalized), true
+	case "hysteria2":
+		return buildSingBoxHysteria2Outbound(userUUID, normalized), true
+	case "anytls":
+		return buildSingBoxAnyTLSOutbound(userUUID, normalized), true
+	default:
+		return nil, false
+	}
+}
+
+func buildSingBoxShadowsocksOutbound(userUUID string, server map[string]any) map[string]any {
+	cipher := serverString(server, "cipher")
+	password := userUUID
+	if strings.Contains(cipher, "2022-blake3") {
+		length := 32
+		if cipher == "2022-blake3-aes-128-gcm" {
+			length = 16
+		}
+		serverKey := nodeapi.ServerKey(serverInt64(server, "created_at"), length)
+		userKey := base64.StdEncoding.EncodeToString([]byte(truncateString(userUUID, length)))
+		password = serverKey + ":" + userKey
+	}
+	proxy := map[string]any{
+		"tag":             serverString(server, "name"),
+		"type":            "shadowsocks",
+		"server":          serverString(server, "host"),
+		"server_port":     serverInt64(server, "port"),
+		"method":          cipher,
+		"password":        password,
+		"domain_resolver": "local",
+	}
+	if strings.EqualFold(serverString(server, "obfs"), "http") {
+		parts := []string{"obfs=http"}
+		if host := serverString(server, "obfs-host"); host != "" {
+			parts = append(parts, "obfs-host="+host)
+		}
+		if path := serverString(server, "obfs-path"); path != "" {
+			parts = append(parts, "path="+path)
+		}
+		proxy["plugin"] = "obfs-local"
+		proxy["plugin_opts"] = strings.Join(parts, ";")
+	}
+	return proxy
+}
+
+func buildSingBoxVmessOutbound(userUUID string, server map[string]any) map[string]any {
+	proxy := map[string]any{
+		"tag":             serverString(server, "name"),
+		"type":            "vmess",
+		"server":          serverString(server, "host"),
+		"server_port":     serverInt64(server, "port"),
+		"uuid":            userUUID,
+		"security":        "auto",
+		"alter_id":        int64(0),
+		"domain_resolver": "local",
+	}
+	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	if serverBool(server, "tls") {
+		tlsConfig := map[string]any{
+			"enabled":     true,
+			"insecure":    serverMapBool(tlsSettings, "allow_insecure", "allowInsecure"),
+			"server_name": firstNonEmptyString(stringValue(tlsSettings["server_name"]), stringValue(tlsSettings["serverName"])),
+		}
+		if ech := singBoxECHOptions(tlsSettings); len(ech) > 0 {
+			tlsConfig["ech"] = ech
+		}
+		proxy["tls"] = tlsConfig
+	}
+	if transport := singBoxTransport(server); len(transport) > 0 {
+		proxy["transport"] = transport
+	}
+	return proxy
+}
+
+func buildSingBoxVlessOutbound(userUUID string, server map[string]any) map[string]any {
+	proxy := map[string]any{
+		"tag":             serverString(server, "name"),
+		"type":            "vless",
+		"server":          serverString(server, "host"),
+		"server_port":     serverInt64(server, "port"),
+		"uuid":            userUUID,
+		"packet_encoding": "xudp",
+		"domain_resolver": "local",
+	}
+	if flow := serverString(server, "flow"); flow != "" {
+		proxy["flow"] = flow
+	}
+	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	if serverInt64(server, "tls") != 0 {
+		tlsConfig := map[string]any{
+			"enabled":     true,
+			"insecure":    serverMapBool(tlsSettings, "allow_insecure", "allowInsecure"),
+			"server_name": firstNonEmptyString(stringValue(tlsSettings["server_name"]), stringValue(tlsSettings["serverName"])),
+			"utls": map[string]any{
+				"enabled":     true,
+				"fingerprint": firstNonEmptyString(stringValue(tlsSettings["fingerprint"]), "chrome"),
+			},
+		}
+		if serverInt64(server, "tls") == 2 {
+			tlsConfig["reality"] = map[string]any{
+				"enabled":    true,
+				"public_key": stringValue(tlsSettings["public_key"]),
+				"short_id":   stringValue(tlsSettings["short_id"]),
+			}
+		}
+		if ech := singBoxECHOptions(tlsSettings); len(ech) > 0 {
+			tlsConfig["ech"] = ech
+		}
+		proxy["tls"] = tlsConfig
+	}
+	if transport := singBoxTransport(server); len(transport) > 0 {
+		proxy["transport"] = transport
+	}
+	return proxy
+}
+
+func buildSingBoxTrojanOutbound(userUUID string, server map[string]any) map[string]any {
+	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	tlsConfig := map[string]any{
+		"enabled":     true,
+		"insecure":    serverBoolValue(server["allow_insecure"]) || serverMapBool(tlsSettings, "allow_insecure"),
+		"server_name": firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])),
+	}
+	if ech := singBoxECHOptions(tlsSettings); len(ech) > 0 {
+		tlsConfig["ech"] = ech
+	}
+
+	proxy := map[string]any{
+		"tag":             serverString(server, "name"),
+		"type":            "trojan",
+		"server":          serverString(server, "host"),
+		"server_port":     serverInt64(server, "port"),
+		"password":        userUUID,
+		"tls":             tlsConfig,
+		"domain_resolver": "local",
+	}
+	if transport := singBoxTransport(server); len(transport) > 0 {
+		proxy["transport"] = transport
+	}
+	return proxy
+}
+
+func buildSingBoxTUICOutbound(userUUID string, server map[string]any) map[string]any {
+	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	proxy := map[string]any{
+		"tag":                serverString(server, "name"),
+		"type":               "tuic",
+		"server":             serverString(server, "host"),
+		"server_port":        serverInt64(server, "port"),
+		"uuid":               userUUID,
+		"password":           userUUID,
+		"congestion_control": firstNonEmptyString(serverString(server, "congestion_control"), "cubic"),
+		"udp_relay_mode":     firstNonEmptyString(serverString(server, "udp_relay_mode"), "native"),
+		"zero_rtt_handshake": serverBoolValue(server["zero_rtt_handshake"]),
+		"domain_resolver":    "local",
+	}
+	proxy["tls"] = map[string]any{
+		"enabled":     true,
+		"insecure":    serverBoolValue(server["insecure"]) || serverMapBool(tlsSettings, "allow_insecure"),
+		"alpn":        clashALPNList(tlsSettings, true),
+		"disable_sni": serverBool(server, "disable_sni"),
+		"server_name": firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])),
+	}
+	return proxy
+}
+
+func buildSingBoxHysteriaOutbound(userUUID string, server map[string]any) map[string]any {
+	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	proxy := map[string]any{
+		"tag":                   serverString(server, "name"),
+		"type":                  "hysteria",
+		"server":                serverString(server, "host"),
+		"auth_str":              userUUID,
+		"up_mbps":               serverInt64(server, "down_mbps"),
+		"down_mbps":             serverInt64(server, "up_mbps"),
+		"disable_mtu_discovery": true,
+		"domain_resolver":       "local",
+		"tls": map[string]any{
+			"enabled":     true,
+			"insecure":    serverBoolValue(server["insecure"]) || serverMapBool(tlsSettings, "allow_insecure"),
+			"server_name": firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])),
+		},
+	}
+	assignSingBoxHysteriaPorts(proxy, server)
+	if obfsPassword := serverString(server, "obfs_password"); obfsPassword != "" {
+		proxy["obfs"] = obfsPassword
+	}
+	return proxy
+}
+
+func buildSingBoxHysteria2Outbound(userUUID string, server map[string]any) map[string]any {
+	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	proxy := map[string]any{
+		"tag":             serverString(server, "name"),
+		"type":            "hysteria2",
+		"server":          serverString(server, "host"),
+		"password":        userUUID,
+		"domain_resolver": "local",
+		"tls": map[string]any{
+			"enabled":     true,
+			"insecure":    serverBoolValue(server["insecure"]) || serverMapBool(tlsSettings, "allow_insecure"),
+			"server_name": firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])),
+		},
+	}
+	assignSingBoxHysteriaPorts(proxy, server)
+	if obfs := serverString(server, "obfs"); obfs != "" {
+		proxy["obfs"] = map[string]any{
+			"type":     obfs,
+			"password": serverString(server, "obfs_password"),
+		}
+	}
+	return proxy
+}
+
+func assignSingBoxHysteriaPorts(proxy map[string]any, server map[string]any) {
+	rawPort := firstNonEmptyString(serverString(server, "mport"), serverString(server, "port"))
+	if rawPort == "" {
+		proxy["server_port"] = serverInt64(server, "port")
+		return
+	}
+	parts := strings.Split(rawPort, ",")
+	if len(parts) == 1 && !strings.Contains(parts[0], "-") {
+		parsed, _ := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
+		proxy["server_port"] = parsed
+		return
+	}
+	portRanges := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.Contains(part, "-") {
+			portRanges = append(portRanges, strings.ReplaceAll(part, "-", ":"))
+		}
+	}
+	if len(portRanges) == 0 {
+		parsed, _ := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
+		proxy["server_port"] = parsed
+		return
+	}
+	proxy["server_ports"] = portRanges
+}
+
+func buildSingBoxAnyTLSOutbound(userUUID string, server map[string]any) map[string]any {
+	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	tlsConfig := map[string]any{
+		"enabled":     true,
+		"insecure":    serverBoolValue(server["insecure"]) || serverMapBool(tlsSettings, "allow_insecure"),
+		"alpn":        clashALPNList(tlsSettings, false),
+		"server_name": firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"])),
+		"utls": map[string]any{
+			"enabled":     true,
+			"fingerprint": firstNonEmptyString(stringValue(tlsSettings["fingerprint"]), "chrome"),
+		},
+	}
+	if len(tlsConfig["alpn"].([]string)) == 0 {
+		tlsConfig["alpn"] = []string{"h2", "http/1.1"}
+	}
+	if serverInt64(server, "tls") == 2 {
+		tlsConfig["reality"] = map[string]any{
+			"enabled":    true,
+			"public_key": stringValue(tlsSettings["public_key"]),
+			"short_id":   stringValue(tlsSettings["short_id"]),
+		}
+	}
+
+	proxy := map[string]any{
+		"tag":             serverString(server, "name"),
+		"type":            "anytls",
+		"server":          serverString(server, "host"),
+		"server_port":     serverInt64(server, "port"),
+		"password":        userUUID,
+		"tls":             tlsConfig,
+		"domain_resolver": "local",
+	}
+	if transport := singBoxTransport(server); len(transport) > 0 {
+		proxy["transport"] = transport
+	}
+	return proxy
+}
+
+func singBoxTransport(server map[string]any) map[string]any {
+	settings := firstNonEmptyMap(serverMap(server, "network_settings"), serverMap(server, "networkSettings"))
+	transport := map[string]any{}
+	switch serverString(server, "network") {
+	case "tcp":
+		header := nestedMap(settings, "header")
+		if strings.EqualFold(stringValue(header["type"]), "http") {
+			transport["type"] = "http"
+			request := nestedMap(header, "request")
+			if hosts := nestedAnySlice(nestedMap(request, "headers"), "Host"); len(hosts) > 0 {
+				transport["host"] = hosts
+			}
+			if paths := nestedAnySlice(request, "path"); len(paths) > 0 {
+				transport["path"] = stringValue(paths[0])
+			}
+		}
+	case "ws":
+		transport["type"] = "ws"
+		transport["path"] = firstNonEmptyString(stringValue(settings["path"]), "/")
+		if host := stringValue(nestedMap(settings, "headers")["Host"]); host != "" {
+			transport["headers"] = map[string]any{"Host": []string{host}}
+		}
+		transport["max_early_data"] = int64(2048)
+		transport["early_data_header_name"] = "Sec-WebSocket-Protocol"
+	case "grpc":
+		transport["type"] = "grpc"
+		if serviceName := stringValue(settings["serviceName"]); serviceName != "" {
+			transport["service_name"] = serviceName
+		}
+	case "httpupgrade":
+		transport["type"] = "httpupgrade"
+		if path := stringValue(settings["path"]); path != "" {
+			transport["path"] = path
+		}
+		if host := stringValue(settings["host"]); host != "" {
+			transport["host"] = host
+		}
+	case "xhttp":
+		transport["type"] = "xhttp"
+		if path := stringValue(settings["path"]); path != "" {
+			transport["path"] = path
+		}
+		if host := stringValue(settings["host"]); host != "" {
+			transport["host"] = host
+		}
+		if mode := stringValue(settings["mode"]); mode != "" {
+			transport["mode"] = mode
+		}
+	}
+	return transport
+}
+
+func singBoxECHOptions(settings map[string]any) map[string]any {
+	switch strings.TrimSpace(stringValue(settings["ech"])) {
+	case "cloudflare":
+		return map[string]any{
+			"enabled":           true,
+			"query_server_name": "cloudflare-ech.com",
+		}
+	case "custom":
+		configs := echConfigValues(settings)
+		if len(configs) == 0 {
+			return nil
+		}
+		return map[string]any{
+			"enabled": true,
+			"config":  configs,
+		}
+	default:
+		return nil
+	}
 }
 
 func mergeProxyGroups(template map[string]any, proxyNames []string) error {

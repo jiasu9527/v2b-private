@@ -340,6 +340,226 @@ func TestRouterClientSubscribeReqIOSUserAgentUsesYAMLProfile(t *testing.T) {
 	}
 }
 
+func TestRouterClientSubscribeSurgeEndpointUsesManagedProfile(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		subscribe: user.Subscribe{
+			U:              11,
+			D:              22,
+			TransferEnable: 100,
+			ExpiredAt:      int64Ptr(1234567890),
+			UUID:           "user-uuid",
+		},
+		servers: []map[string]any{
+			{
+				"type":    "vmess",
+				"name":    "VMess-1",
+				"host":    "node.example.com",
+				"port":    int64(443),
+				"network": "ws",
+				"tls":     int64(1),
+				"tlsSettings": map[string]any{
+					"serverName": "node.example.com",
+				},
+				"networkSettings": map[string]any{
+					"path": "/ws",
+					"headers": map[string]any{
+						"Host": "node.example.com",
+					},
+				},
+			},
+		},
+	}
+	router := NewRouter(config.Config{AppName: "Forest", AppURL: "https://panel.example.com"}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1&flag=surge", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "#!MANAGED-CONFIG https://panel.example.com/api/v1/client/subscribe?token=token-1&flag=surge") ||
+		!strings.Contains(body, "[Proxy]") ||
+		!strings.Contains(body, "VMess-1=vmess") {
+		t.Fatalf("expected surge profile body, got %q", body)
+	}
+}
+
+func TestRouterClientSubscribeSurfboardEndpointUsesManagedProfile(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		subscribe: user.Subscribe{
+			U:              11,
+			D:              22,
+			TransferEnable: 100,
+			ExpiredAt:      int64Ptr(1234567890),
+			UUID:           "user-uuid",
+		},
+		servers: []map[string]any{
+			{
+				"type":    "trojan",
+				"name":    "Trojan-1",
+				"host":    "trojan.example.com",
+				"port":    int64(443),
+				"network": "tcp",
+				"tls":     int64(1),
+				"tls_settings": map[string]any{
+					"server_name": "trojan.example.com",
+				},
+			},
+		},
+	}
+	router := NewRouter(config.Config{AppName: "Forest", AppURL: "https://panel.example.com"}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1&flag=surfboard", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "#!MANAGED-CONFIG https://panel.example.com/api/v1/client/subscribe?token=token-1&flag=surfboard") ||
+		!strings.Contains(body, "[Proxy]") ||
+		!strings.Contains(body, "Trojan-1=trojan") {
+		t.Fatalf("expected surfboard profile body, got %q", body)
+	}
+}
+
+func TestRouterClientSubscribeSingboxFlagUsesJSONProfile(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		subscribe: user.Subscribe{
+			U:              11,
+			D:              22,
+			TransferEnable: 100,
+			ExpiredAt:      int64Ptr(1234567890),
+			UUID:           "user-uuid",
+		},
+		servers: []map[string]any{
+			{
+				"type":    "vmess",
+				"name":    "VMess-1",
+				"host":    "node.example.com",
+				"port":    int64(443),
+				"network": "ws",
+				"tls":     int64(1),
+				"tls_settings": map[string]any{
+					"server_name": "node.example.com",
+				},
+				"network_settings": map[string]any{
+					"path": "/ws",
+				},
+			},
+		},
+	}
+	router := NewRouter(config.Config{AppName: "Forest"}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1&flag=sing", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "application/json") {
+		t.Fatalf("expected sing-box subscribe to return json, got %q with body %q", contentType, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "\"outbounds\"") || !strings.Contains(body, "\"VMess-1\"") {
+		t.Fatalf("expected sing-box json body, got %q", body)
+	}
+}
+
+func TestRouterClientSubscribeSingboxUserAgentUsesJSONProfile(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		subscribe: user.Subscribe{
+			U:              11,
+			D:              22,
+			TransferEnable: 100,
+			ExpiredAt:      int64Ptr(1234567890),
+			UUID:           "user-uuid",
+		},
+		servers: []map[string]any{
+			{
+				"type":        "trojan",
+				"name":        "Trojan-1",
+				"host":        "trojan.example.com",
+				"port":        int64(443),
+				"network":     "tcp",
+				"tls":         int64(1),
+				"server_name": "trojan.example.com",
+			},
+		},
+	}
+	router := NewRouter(config.Config{AppName: "Forest"}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
+	req.Header.Set("User-Agent", "sing-box 1.12.1")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "application/json") {
+		t.Fatalf("expected sing-box UA subscribe to return json, got %q with body %q", contentType, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "\"outbounds\"") || !strings.Contains(body, "\"Trojan-1\"") {
+		t.Fatalf("expected sing-box json body, got %q", body)
+	}
+}
+
+func TestRouterClientSubscribeLegacySingboxUserAgentUsesLegacyTemplate(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		subscribe: user.Subscribe{
+			U:              11,
+			D:              22,
+			TransferEnable: 100,
+			ExpiredAt:      int64Ptr(1234567890),
+			UUID:           "user-uuid",
+		},
+		servers: []map[string]any{
+			{
+				"type":    "vmess",
+				"name":    "VMess-1",
+				"host":    "node.example.com",
+				"port":    int64(443),
+				"network": "ws",
+				"tls":     int64(1),
+				"tls_settings": map[string]any{
+					"server_name": "node.example.com",
+				},
+				"network_settings": map[string]any{
+					"path": "/ws",
+				},
+			},
+		},
+	}
+	router := NewRouter(config.Config{AppName: "Forest"}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
+	req.Header.Set("User-Agent", "sing-box 1.11.9")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "application/json") {
+		t.Fatalf("expected legacy sing-box subscribe to return json, got %q with body %q", contentType, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "\"tag\":\"direct\"") || !strings.Contains(body, "\"VMess-1\"") {
+		t.Fatalf("expected legacy sing-box template body, got %q", body)
+	}
+}
+
 func TestRouterClientSubscribeShadowrocketEndpointUsesLegacyStatusLine(t *testing.T) {
 	userService := &fakeUserService{
 		resolvedClientUserID: 10,

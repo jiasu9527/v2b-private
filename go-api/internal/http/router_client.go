@@ -95,6 +95,39 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 
 	writeSubscribeMetadataHeaders(w, cfg, subscribe)
 
+	if isSingboxSubscribeFlag(flag) {
+		writeSubscribeDownloadHeadersWithExtension(w, cfg, ".json")
+		customFile, defaultFile := singBoxTemplateFiles(flag)
+		body, err := buildSingBoxProfile(cfg, customFile, defaultFile, subscribe.UUID, servers)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
+			return true
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+		return true
+	}
+
+	if isSurgeSubscribeFlag(flag) || isSurfboardSubscribeFlag(flag) {
+		writeSubscribeDownloadHeadersWithExtension(w, cfg, ".conf")
+		subscribeURL := managedSubscribeURL(r, cfg)
+		subscribeDomain := managedSubscribeDomain(subscribeURL, r)
+		customFile := "custom.surge.conf"
+		defaultFile := "default.surge.conf"
+		if isSurfboardSubscribeFlag(flag) {
+			customFile = "custom.surfboard.conf"
+			defaultFile = "default.surfboard.conf"
+		}
+		body, err := buildSurgeProfile(cfg, customFile, defaultFile, subscribeURL, subscribeDomain, subscribe, subscribe.UUID, servers)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
+			return true
+		}
+		writePlainText(w, http.StatusOK, body)
+		return true
+	}
+
 	if isClashLikeSubscribeFlag(flag) {
 		writeSubscribeDownloadHeaders(w, cfg)
 		body, err := buildClashStandardProfile(cfg, "custom.clash.yaml", "default.clash.yaml", subscribe.UUID, servers)
@@ -238,11 +271,19 @@ func writeSubscribeMetadataHeaders(w http.ResponseWriter, cfg config.Config, sub
 }
 
 func writeSubscribeDownloadHeaders(w http.ResponseWriter, cfg config.Config) {
+	writeSubscribeDownloadHeadersWithExtension(w, cfg, "")
+}
+
+func writeSubscribeDownloadHeadersWithExtension(w http.ResponseWriter, cfg config.Config, extension string) {
 	appName := strings.TrimSpace(cfg.AppName)
 	if appName == "" {
 		appName = "Forest"
 	}
-	w.Header().Set("content-disposition", "attachment;filename*=UTF-8''"+url.PathEscape(appName))
+	filename := appName
+	if extension != "" && !strings.HasSuffix(strings.ToLower(filename), strings.ToLower(extension)) {
+		filename += extension
+	}
+	w.Header().Set("content-disposition", "attachment;filename*=UTF-8''"+url.PathEscape(filename))
 }
 
 func isClashLikeSubscribeFlag(flag string) bool {
@@ -258,8 +299,170 @@ func isShadowrocketSubscribeFlag(flag string) bool {
 	return strings.Contains(flag, "shadowrocket")
 }
 
+func isSurgeSubscribeFlag(flag string) bool {
+	return strings.Contains(flag, "surge")
+}
+
+func isSurfboardSubscribeFlag(flag string) bool {
+	return strings.Contains(flag, "surfboard")
+}
+
+func isSingboxSubscribeFlag(flag string) bool {
+	flag = strings.ToLower(strings.TrimSpace(flag))
+	return flag == "sing" ||
+		strings.Contains(flag, "sing-box") ||
+		strings.Contains(flag, "singbox") ||
+		strings.Contains(flag, "hiddify") ||
+		strings.Contains(flag, "sfa")
+}
+
+func singBoxTemplateFiles(flag string) (string, string) {
+	if singBoxUsesLegacyTemplate(flag) {
+		return "custom.sing-box.old.json", "default.sing-box.old.json"
+	}
+	return "custom.sing-box.json", "default.sing-box.json"
+}
+
+func singBoxUsesLegacyTemplate(flag string) bool {
+	version, ok := parseSingBoxVersion(flag)
+	if !ok {
+		return false
+	}
+	return compareVersion(version, "1.12.0") < 0
+}
+
+func parseSingBoxVersion(flag string) (string, bool) {
+	flag = strings.ToLower(strings.TrimSpace(flag))
+	for _, marker := range []string{"sing-box", "singbox"} {
+		index := strings.Index(flag, marker)
+		if index < 0 {
+			continue
+		}
+		rest := strings.TrimSpace(flag[index+len(marker):])
+		if rest == "" {
+			return "", false
+		}
+		fields := strings.Fields(rest)
+		if len(fields) == 0 {
+			return "", false
+		}
+		version := strings.TrimSpace(fields[0])
+		if version == "" {
+			return "", false
+		}
+		return version, true
+	}
+	return "", false
+}
+
+func compareVersion(left, right string) int {
+	leftParts := parseVersionParts(left)
+	rightParts := parseVersionParts(right)
+	size := len(leftParts)
+	if len(rightParts) > size {
+		size = len(rightParts)
+	}
+	for i := 0; i < size; i++ {
+		var lv, rv int
+		if i < len(leftParts) {
+			lv = leftParts[i]
+		}
+		if i < len(rightParts) {
+			rv = rightParts[i]
+		}
+		switch {
+		case lv < rv:
+			return -1
+		case lv > rv:
+			return 1
+		}
+	}
+	return 0
+}
+
+func parseVersionParts(raw string) []int {
+	parts := strings.Split(strings.TrimSpace(raw), ".")
+	result := make([]int, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			result = append(result, 0)
+			continue
+		}
+		value, err := strconv.Atoi(part)
+		if err != nil {
+			result = append(result, 0)
+			continue
+		}
+		result = append(result, value)
+	}
+	return result
+}
+
+func managedSubscribeURL(r *http.Request, cfg config.Config) string {
+	baseURL := firstConfiguredSubscribeBaseURL(cfg.SubscribeURL)
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(cfg.AppURL)
+	}
+	if baseURL == "" {
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
+			scheme = strings.TrimSpace(strings.Split(forwarded, ",")[0])
+		}
+		host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+		if host == "" {
+			host = strings.TrimSpace(r.Host)
+		}
+		if host == "" {
+			host = strings.TrimSpace(r.URL.Host)
+		}
+		if host != "" {
+			baseURL = scheme + "://" + host
+		}
+	}
+
+	reference := &url.URL{
+		Path:     r.URL.Path,
+		RawPath:  r.URL.RawPath,
+		RawQuery: r.URL.RawQuery,
+	}
+	if baseURL == "" {
+		return reference.String()
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return baseURL
+	}
+	return parsed.ResolveReference(reference).String()
+}
+
+func managedSubscribeDomain(subscribeURL string, r *http.Request) string {
+	if parsed, err := url.Parse(subscribeURL); err == nil {
+		if host := parsed.Hostname(); host != "" {
+			return host
+		}
+	}
+	if parsedHost, _, found := strings.Cut(strings.TrimSpace(r.Host), ":"); found && parsedHost != "" {
+		return parsedHost
+	}
+	return strings.TrimSpace(r.Host)
+}
+
+func firstConfiguredSubscribeBaseURL(raw string) string {
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			return part
+		}
+	}
+	return ""
+}
+
 func prependLegacySubscribeInfoServers(cfg config.Config, flag string, subscribe usersvc.Subscribe, servers []map[string]any) []map[string]any {
-	if !cfg.ShowInfoToServerEnable || strings.TrimSpace(flag) == "" || strings.Contains(flag, "sing") || len(servers) == 0 {
+	if !cfg.ShowInfoToServerEnable || strings.TrimSpace(flag) == "" || isSingboxSubscribeFlag(flag) || isSurgeSubscribeFlag(flag) || isSurfboardSubscribeFlag(flag) || len(servers) == 0 {
 		return servers
 	}
 
