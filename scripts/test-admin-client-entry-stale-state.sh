@@ -13,6 +13,7 @@ bundle = Path(sys.argv[1]).read_text()
 required = {
     "fetch clears stale route rows": 'fetchLoading: !0,\n                                                    routes: [],',
     "client entry modal opens from latest props": 'visible: !0,\n                                route: this.props.route || {},',
+    "client entry save clears stale ips": 'delete e.ips',
 }
 
 missing = [name for name, needle in required.items() if needle not in bundle]

@@ -152801,6 +152801,7 @@
                 } else {
                     e.match = [];
                 }
+                delete e.ips;
                 ((e.action = "ordered-fallback"),
                     (e.strategy = "ordered-fallback"));
                 this.props.dispatch({
