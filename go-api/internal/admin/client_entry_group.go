@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 )
@@ -75,6 +76,7 @@ FROM v2_client_entry_group`
 			CreatedAt:       row.CreatedAt,
 			UpdatedAt:       row.UpdatedAt,
 			Members:         []ClientEntryGroupMemberRecord{},
+			IPs:             []ClientEntryGroupIPRecord{},
 		})
 		ids = append(ids, row.ID)
 	}
@@ -89,8 +91,13 @@ FROM v2_client_entry_group`
 	if err != nil {
 		return nil, err
 	}
+	ips, err := s.loadClientEntryGroupIPs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	for index := range result {
 		result[index].Members = members[result[index].ID]
+		result[index].IPs = ips[result[index].ID]
 	}
 	return result, nil
 }
@@ -116,8 +123,8 @@ func (s *DBService) SaveClientEntryGroup(ctx context.Context, req ClientEntryGro
 	if _, ok := allowedClientEntryStrategies[req.Strategy]; !ok {
 		return false, errors.New("入口组策略不正确")
 	}
-	if len(req.Members) == 0 {
-		return false, errors.New("入口组成员不能为空")
+	if len(req.IPs) == 0 {
+		return false, errors.New("入口IP不能为空")
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -175,22 +182,26 @@ WHERE id = $1`,
 		if err != nil || affected == 0 {
 			return false, errors.New("保存失败")
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_group_member WHERE entry_group_id = $1`, groupID); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_group_ip WHERE entry_group_id = $1`, groupID); err != nil {
 			return false, errors.New("保存失败")
 		}
 	}
 
-	for _, member := range req.Members {
-		serverType := strings.TrimSpace(member.ServerType)
-		if serverType == "" || member.ServerID <= 0 {
-			return false, errors.New("入口组成员格式不正确")
+	seenIPs := make(map[string]struct{}, len(req.IPs))
+	for _, item := range req.IPs {
+		ip := strings.TrimSpace(item.IP)
+		if net.ParseIP(ip) == nil {
+			return false, errors.New("入口IP格式不正确")
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_group_member (entry_group_id, server_type, server_id, sort, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6)`,
+		if _, exists := seenIPs[ip]; exists {
+			continue
+		}
+		seenIPs[ip] = struct{}{}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_group_ip (entry_group_id, ip, sort, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5)`,
 			groupID,
-			serverType,
-			member.ServerID,
-			clientEntryNullableInt64(member.Sort),
+			ip,
+			clientEntryNullableInt64(item.Sort),
 			now,
 			now,
 		); err != nil {
@@ -219,6 +230,9 @@ func (s *DBService) DeleteClientEntryGroup(ctx context.Context, id int64) (bool,
 	defer tx.Rollback()
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_group_member WHERE entry_group_id = $1`, id); err != nil {
+		return false, errors.New("删除失败")
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_group_ip WHERE entry_group_id = $1`, id); err != nil {
 		return false, errors.New("删除失败")
 	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_group WHERE id = $1`, id)
@@ -272,6 +286,45 @@ ORDER BY entry_group_id ASC, sort ASC NULLS LAST, id ASC`, args...)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate client entry group members: %w", err)
+	}
+	return result, nil
+}
+
+func (s *DBService) loadClientEntryGroupIPs(ctx context.Context, groupIDs []int64) (map[int64][]ClientEntryGroupIPRecord, error) {
+	result := make(map[int64][]ClientEntryGroupIPRecord, len(groupIDs))
+	if len(groupIDs) == 0 {
+		return result, nil
+	}
+
+	inClause, args := buildInt64Placeholders(1, groupIDs)
+	rows, err := s.db.QueryContext(ctx, `SELECT entry_group_id, ip, sort
+FROM v2_client_entry_group_ip
+WHERE entry_group_id IN (`+inClause+`)
+ORDER BY entry_group_id ASC, sort ASC NULLS LAST, id ASC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query client entry group ips: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			groupID int64
+			ip      string
+			sort    sql.NullInt64
+		)
+		if err := rows.Scan(&groupID, &ip, &sort); err != nil {
+			return nil, fmt.Errorf("scan client entry group ip: %w", err)
+		}
+		record := ClientEntryGroupIPRecord{
+			IP: strings.TrimSpace(ip),
+		}
+		if sort.Valid {
+			record.Sort = &sort.Int64
+		}
+		result[groupID] = append(result[groupID], record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate client entry group ips: %w", err)
 	}
 	return result, nil
 }

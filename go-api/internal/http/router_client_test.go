@@ -136,6 +136,10 @@ func TestRouterUserForestRuntimeProfileEndpoint(t *testing.T) {
 				DisplayName:     "Asia Entry",
 				Strategy:        "sticky-low-latency",
 				HideMemberNodes: true,
+				IPs: []user.ClientEntryGroupIP{
+					{IP: "1.1.1.1"},
+					{IP: "8.8.8.8"},
+				},
 				Members: []user.ClientEntryGroupMember{
 					{ServerType: "vmess", ServerID: int64(11)},
 				},
@@ -235,6 +239,10 @@ func TestRouterClientForestEntryProviderEndpoint(t *testing.T) {
 				Name:        "Asia",
 				DisplayName: "Asia Entry",
 				Strategy:    "sticky-low-latency",
+				IPs: []user.ClientEntryGroupIP{
+					{IP: "1.1.1.1"},
+					{IP: "8.8.8.8"},
+				},
 				Members: []user.ClientEntryGroupMember{
 					{ServerType: "vmess", ServerID: int64(11)},
 				},
@@ -260,6 +268,9 @@ func TestRouterClientForestEntryProviderEndpoint(t *testing.T) {
 	}
 	if strings.Contains(body, "US-1") {
 		t.Fatalf("expected provider yaml to exclude non-member nodes, got %q", body)
+	}
+	if !strings.Contains(body, "1.1.1.1") || !strings.Contains(body, "8.8.8.8") {
+		t.Fatalf("expected provider yaml to include entry ips, got %q", body)
 	}
 	if userService.lastClientToken != "token-1" {
 		t.Fatalf("expected provider endpoint to use client token, got %q", userService.lastClientToken)

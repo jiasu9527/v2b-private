@@ -108,6 +108,11 @@ type ClientEntryGroupMember struct {
 	Sort       *int64 `json:"sort,omitempty"`
 }
 
+type ClientEntryGroupIP struct {
+	IP   string `json:"ip"`
+	Sort *int64 `json:"sort,omitempty"`
+}
+
 type ClientEntryGroup struct {
 	ID              int64                    `json:"id"`
 	Code            string                   `json:"code"`
@@ -117,6 +122,7 @@ type ClientEntryGroup struct {
 	HideMemberNodes bool                     `json:"hide_member_nodes"`
 	Show            int64                    `json:"show"`
 	Members         []ClientEntryGroupMember `json:"members,omitempty"`
+	IPs             []ClientEntryGroupIP     `json:"ips,omitempty"`
 	CreatedAt       int64                    `json:"created_at,omitempty"`
 	UpdatedAt       int64                    `json:"updated_at,omitempty"`
 }

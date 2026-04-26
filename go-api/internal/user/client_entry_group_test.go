@@ -7,7 +7,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestDBServiceClientEntryGroupsReturnsShownGroupsWithMembers(t *testing.T) {
+func TestDBServiceClientEntryGroupsReturnsShownGroupsWithBindingsAndIPs(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -26,6 +26,13 @@ func TestDBServiceClientEntryGroupsReturnsShownGroupsWithMembers(t *testing.T) {
 		WithArgs(int64(7)).
 		WillReturnRows(memberRows)
 
+	ipRows := sqlmock.NewRows([]string{"entry_group_id", "ip", "sort"}).
+		AddRow(int64(7), "1.1.1.1", int64(1)).
+		AddRow(int64(7), "8.8.8.8", int64(2))
+	mock.ExpectQuery(`SELECT entry_group_id, ip, sort\s+FROM v2_client_entry_group_ip\s+WHERE entry_group_id IN \(\$1\)\s+ORDER BY entry_group_id ASC, sort ASC NULLS LAST, id ASC`).
+		WithArgs(int64(7)).
+		WillReturnRows(ipRows)
+
 	groups, err := service.ClientEntryGroups(context.Background(), int64(10))
 	if err != nil {
 		t.Fatalf("client entry groups: %v", err)
@@ -38,6 +45,9 @@ func TestDBServiceClientEntryGroupsReturnsShownGroupsWithMembers(t *testing.T) {
 	}
 	if len(groups[0].Members) != 1 || groups[0].Members[0].ServerType != "vmess" || groups[0].Members[0].ServerID != 11 {
 		t.Fatalf("unexpected client entry group members: %#v", groups[0].Members)
+	}
+	if len(groups[0].IPs) != 2 || groups[0].IPs[0].IP != "1.1.1.1" || groups[0].IPs[1].IP != "8.8.8.8" {
+		t.Fatalf("unexpected client entry group ips: %#v", groups[0].IPs)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)

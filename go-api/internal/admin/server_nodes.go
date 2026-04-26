@@ -192,9 +192,19 @@ func (s *DBService) UpdateManagedServer(ctx context.Context, serverType string, 
 	if err != nil {
 		return false, err
 	}
-	normalized["updated_at"] = time.Now().Unix()
-	if err := s.updateManagedServerRecord(ctx, def, id, normalized); err != nil {
-		return false, errors.New("保存失败")
+
+	now := time.Now().Unix()
+	if entryGroupID, present := normalized["entry_group_id"]; present {
+		if err := s.replaceManagedServerEntryGroup(ctx, strings.TrimSpace(serverType), id, entryGroupID, now); err != nil {
+			return false, errors.New("保存失败")
+		}
+		delete(normalized, "entry_group_id")
+	}
+	if len(normalized) > 0 {
+		normalized["updated_at"] = now
+		if err := s.updateManagedServerRecord(ctx, def, id, normalized); err != nil {
+			return false, errors.New("保存失败")
+		}
 	}
 	return true, nil
 }
@@ -314,10 +324,98 @@ func normalizeManagedServerUpdatePayload(payload map[string]any) (map[string]any
 	if present {
 		values["show"] = show
 	}
+	if entryGroupID, present, err := optionalManagedServerEntryGroupField(payload, "entry_group_id", "入口组格式不正确"); err != nil {
+		return nil, err
+	} else if present {
+		values["entry_group_id"] = entryGroupID
+	}
 	if len(values) == 0 {
 		return nil, errors.New("保存失败")
 	}
 	return values, nil
+}
+
+func optionalManagedServerEntryGroupField(payload map[string]any, key, errMsg string) (any, bool, error) {
+	value, present := payload[key]
+	if !present {
+		return nil, false, nil
+	}
+	if value == nil {
+		return nil, true, nil
+	}
+	switch typed := value.(type) {
+	case json.Number:
+		next, err := typed.Int64()
+		if err != nil || next <= 0 {
+			return nil, false, errors.New(errMsg)
+		}
+		return next, true, nil
+	case float64:
+		next := int64(typed)
+		if next <= 0 {
+			return nil, false, errors.New(errMsg)
+		}
+		return next, true, nil
+	case int64:
+		if typed <= 0 {
+			return nil, false, errors.New(errMsg)
+		}
+		return typed, true, nil
+	case int:
+		if typed <= 0 {
+			return nil, false, errors.New(errMsg)
+		}
+		return int64(typed), true, nil
+	case string:
+		raw := strings.TrimSpace(typed)
+		if raw == "" || raw == "null" {
+			return nil, true, nil
+		}
+		next, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || next <= 0 {
+			return nil, false, errors.New(errMsg)
+		}
+		return next, true, nil
+	default:
+		raw := strings.TrimSpace(fmt.Sprint(value))
+		if raw == "" || raw == "null" {
+			return nil, true, nil
+		}
+		next, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || next <= 0 {
+			return nil, false, errors.New(errMsg)
+		}
+		return next, true, nil
+	}
+}
+
+func (s *DBService) replaceManagedServerEntryGroup(ctx context.Context, serverType string, serverID int64, entryGroupID any, now int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_group_member WHERE server_type = $1 AND server_id = $2`, serverType, serverID); err != nil {
+		return err
+	}
+
+	if entryGroupID != nil {
+		groupID, ok := entryGroupID.(int64)
+		if !ok || groupID <= 0 {
+			return errors.New("invalid entry group id")
+		}
+		var exists int64
+		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM v2_client_entry_group WHERE id = $1 LIMIT 1`, groupID).Scan(&exists); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_group_member (entry_group_id, server_type, server_id, sort, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6)`, groupID, serverType, serverID, nil, now, now); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
 func normalizeManagedServerCommon(payload map[string]any, values map[string]any, hasID bool, options managedServerCommonOptions) (string, error) {

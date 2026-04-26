@@ -27935,7 +27935,7 @@
                                 }),
                             },
                             {
-                                title: "\u5ba2\u6237\u7aef\u5165\u53e3",
+                                title: "\u5ba2\u6237\u7aef\u5165\u53e3\u7ec4",
                                 type: "item",
                                 href: "/server/client-entry",
                                 icon: o.a.createElement("i", {
@@ -146042,22 +146042,38 @@
                             dataIndex: "entry_group_names",
                             key: "entry_group_names",
                             render: (e, t) => {
-                                var n = [];
-                                return (
-                                    (Array.isArray(t.entry_group_names)
-                                        ? t.entry_group_names
-                                        : []
-                                    ).map((e) => {
-                                        e &&
-                                            n.push(
-                                                y.a.createElement(
-                                                    g["a"],
-                                                    null,
-                                                    e,
-                                                ),
-                                            );
-                                    }),
-                                    y.a.createElement(y.a.Fragment, null, n)
+                                var n = Array.isArray(t.entry_group_options)
+                                    ? t.entry_group_options
+                                    : [];
+                                return y.a.createElement(
+                                    N["a"],
+                                    {
+                                        allowClear: !0,
+                                        placeholder: "\u672a\u8bbe\u7f6e",
+                                        value:
+                                            null == t.entry_group_id
+                                                ? void 0
+                                                : t.entry_group_id,
+                                        style: {
+                                            minWidth: 180,
+                                        },
+                                        onChange: (e) =>
+                                            this.update(
+                                                t,
+                                                "entry_group_id",
+                                                void 0 === e ? null : e,
+                                            ),
+                                    },
+                                    n.map((e) =>
+                                        y.a.createElement(
+                                            N["a"].Option,
+                                            {
+                                                key: e.id,
+                                                value: e.id,
+                                            },
+                                            e.name,
+                                        ),
+                                    ),
                                 );
                             },
                         },
@@ -152160,8 +152176,8 @@
                             title: o
                                 ? "".concat(
                                       this.state.route.id
-                                          ? "\u7f16\u8f91\u5ba2\u6237\u7aef\u5165\u53e3"
-                                          : "\u521b\u5efa\u5ba2\u6237\u7aef\u5165\u53e3",
+                                          ? "\u7f16\u8f91\u5ba2\u6237\u7aef\u5165\u53e3\u7ec4"
+                                          : "\u521b\u5efa\u5ba2\u6237\u7aef\u5165\u53e3\u7ec4",
                                   )
                                 : "".concat(
                                       this.state.route.id
@@ -152178,7 +152194,11 @@
                                 ? f.a.createElement(s["a"], {
                                       type: "loading",
                                   })
-                                : "\u63d0\u4ea4",
+                                : o
+                                  ? this.state.route.id
+                                      ? "\u4fdd\u5b58\u66f4\u6539"
+                                      : "\u521b\u5efa\u5165\u53e3\u7ec4"
+                                  : "\u63d0\u4ea4",
                             cancelText: "\u53d6\u6d88",
                         },
                         f.a.createElement(
@@ -152225,7 +152245,7 @@
                                             for: "example-text-input-alt",
                                         },
                                         o
-                                            ? "\u6210\u5458\u8282\u70b9"
+                                            ? "\u5165\u53e3 IP \u5217\u8868"
                                             : "\u5339\u914d\u503c",
                                         !o &&
                                             f.a.createElement(
@@ -152243,7 +152263,7 @@
                                         rows: 5,
                                         placeholder: (() => {
                                             if (o) {
-                                                return "vmess:11\ntrojan:22\nvless:33";
+                                                return "1.1.1.1\n8.8.8.8\n203.0.113.10";
                                             }
                                             const action =
                                                 this.state.route.action;
@@ -152315,7 +152335,9 @@
                                     {
                                         for: "example-text-input-alt",
                                     },
-                                    o ? "\u5207\u6362\u7b56\u7565" : "\u52a8\u4f5c",
+                                    o
+                                        ? "\u5165\u53e3 IP \u5207\u6362\u7b56\u7565"
+                                        : "\u52a8\u4f5c",
                                 ),
                                 f.a.createElement(
                                     "div",
@@ -152326,7 +152348,7 @@
                                             value: this.state.route.action,
                                             placeholder:
                                                 o
-                                                    ? "\u8bf7\u9009\u62e9\u5207\u6362\u7b56\u7565"
+                                                    ? "\u8bf7\u9009\u62e9\u5165\u53e3 IP \u5207\u6362\u7b56\u7565"
                                                     : "\u8bf7\u9009\u62e9\u52a8\u4f5c",
                                             style: {
                                                 width: "100%",
@@ -152581,7 +152603,7 @@
                         },
                         {
                             title: A
-                                ? "\u6210\u5458\u6570\u91cf"
+                                ? "\u5165\u53e3 IP \u6570\u91cf"
                                 : "\u5339\u914d\u6570\u91cf",
                             dataIndex: "match",
                             key: "match",
@@ -152601,7 +152623,7 @@
                                               : 0;
                                 return 0 === n
                                     ? A
-                                        ? "\u672a\u914d\u7f6e\u6210\u5458"
+                                        ? "\u672a\u914d\u7f6e\u5165\u53e3IP"
                                         : "\u65e0\u89c4\u5219\u65f6\u9ed8\u8ba4"
                                     : "".concat(
                                           A
@@ -152609,14 +152631,14 @@
                                               : "\u5339\u914d ",
                                           n,
                                           A
-                                              ? " \u4e2a\u6210\u5458"
+                                              ? " \u4e2aIP"
                                               : " \u6761\u89c4\u5219",
                                       );
                             },
                         },
                         {
                             title: A
-                                ? "\u5207\u6362\u7b56\u7565"
+                                ? "\u5165\u53e3 IP \u5207\u6362\u7b56\u7565"
                                 : "\u52a8\u4f5c",
                             dataIndex: "action",
                             key: "action",
@@ -152675,7 +152697,7 @@
                     d["a"],
                     i()({}, this.props, {
                         title: A
-                            ? "\u5ba2\u6237\u7aef\u5165\u53e3"
+                            ? "\u5ba2\u6237\u7aef\u5165\u53e3\u7ec4"
                             : "\u8def\u7531\u7ba1\u7406",
                     }),
                     f.a.createElement("div", {
@@ -152717,7 +152739,7 @@
                                                 type: "plus",
                                             }),
                                             A
-                                                ? " \u6dfb\u52a0\u5ba2\u6237\u7aef\u5165\u53e3"
+                                                ? " \u65b0\u5efa\u5ba2\u6237\u7aef\u5165\u53e3\u7ec4"
                                                 : " \u6dfb\u52a0\u8def\u7531",
                                         ),
                                     ),

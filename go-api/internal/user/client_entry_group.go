@@ -48,6 +48,7 @@ ORDER BY id ASC`)
 		group.Strategy = strings.TrimSpace(group.Strategy)
 		group.HideMemberNodes = hideMemberNodes != 0
 		group.Members = []ClientEntryGroupMember{}
+		group.IPs = []ClientEntryGroupIP{}
 		result = append(result, group)
 		ids = append(ids, group.ID)
 	}
@@ -62,8 +63,13 @@ ORDER BY id ASC`)
 	if err != nil {
 		return nil, err
 	}
+	ips, err := s.loadClientEntryGroupIPs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	for index := range result {
 		result[index].Members = members[result[index].ID]
+		result[index].IPs = ips[result[index].ID]
 	}
 	return result, nil
 }
@@ -105,6 +111,45 @@ ORDER BY entry_group_id ASC, sort ASC NULLS LAST, id ASC`, args...)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate client entry group members: %w", err)
+	}
+	return result, nil
+}
+
+func (s *DBService) loadClientEntryGroupIPs(ctx context.Context, groupIDs []int64) (map[int64][]ClientEntryGroupIP, error) {
+	result := make(map[int64][]ClientEntryGroupIP, len(groupIDs))
+	if len(groupIDs) == 0 {
+		return result, nil
+	}
+
+	inClause, args := buildInt64Placeholders(1, groupIDs)
+	rows, err := s.db.QueryContext(ctx, `SELECT entry_group_id, ip, sort
+FROM v2_client_entry_group_ip
+WHERE entry_group_id IN (`+inClause+`)
+ORDER BY entry_group_id ASC, sort ASC NULLS LAST, id ASC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query client entry group ips: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			groupID int64
+			ip      string
+			sort    sql.NullInt64
+		)
+		if err := rows.Scan(&groupID, &ip, &sort); err != nil {
+			return nil, fmt.Errorf("scan client entry group ip: %w", err)
+		}
+		record := ClientEntryGroupIP{
+			IP: strings.TrimSpace(ip),
+		}
+		if sort.Valid {
+			record.Sort = &sort.Int64
+		}
+		result[groupID] = append(result[groupID], record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate client entry group ips: %w", err)
 	}
 	return result, nil
 }

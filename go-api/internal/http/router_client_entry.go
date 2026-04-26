@@ -97,14 +97,7 @@ func handleClientForestEntryProvider(w http.ResponseWriter, r *http.Request, cfg
 	}
 
 	memberServers, _ := matchForestEntryGroupServers(servers, group)
-	proxies := make([]any, 0, len(memberServers))
-	for _, server := range memberServers {
-		proxy, ok := buildClashStandardProxy(subscribe.UUID, server)
-		if !ok {
-			continue
-		}
-		proxies = append(proxies, proxy)
-	}
+	proxies := buildForestEntryProviderProxies(subscribe.UUID, memberServers, group)
 
 	raw, err := yaml.Marshal(map[string]any{"proxies": proxies})
 	if err != nil {
@@ -174,11 +167,10 @@ func handleAdminClientEntryGroupSave(w http.ResponseWriter, r *http.Request, ses
 		HideMemberNodes *bool        `json:"hide_member_nodes"`
 		Show            *json.Number `json:"show"`
 		Match           []string     `json:"match"`
-		Members         []struct {
-			ServerType string       `json:"server_type"`
-			ServerID   *json.Number `json:"server_id"`
-			Sort       *json.Number `json:"sort"`
-		} `json:"members"`
+		IPs             []struct {
+			IP   string       `json:"ip"`
+			Sort *json.Number `json:"sort"`
+		} `json:"ips"`
 	}
 	if err := readJSONBody(r, &payload); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
@@ -201,33 +193,22 @@ func handleAdminClientEntryGroupSave(w http.ResponseWriter, r *http.Request, ses
 		show = value
 	}
 
-	members := make([]admin.ClientEntryGroupMemberSaveRequest, 0, len(payload.Members))
-	for _, member := range payload.Members {
-		serverID, err := jsonNumberToInt64Pointer(member.ServerID)
-		if err != nil || serverID == nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"message": "保存失败"})
-			return true
-		}
-		sortValue, err := jsonNumberToInt64Pointer(member.Sort)
+	ips := make([]admin.ClientEntryGroupIPSaveRequest, 0, len(payload.IPs))
+	for _, item := range payload.IPs {
+		sortValue, err := jsonNumberToInt64Pointer(item.Sort)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"message": "保存失败"})
 			return true
 		}
-		members = append(members, admin.ClientEntryGroupMemberSaveRequest{
-			ServerType: member.ServerType,
-			ServerID:   *serverID,
-			Sort:       sortValue,
+		ips = append(ips, admin.ClientEntryGroupIPSaveRequest{
+			IP:   item.IP,
+			Sort: sortValue,
 		})
 	}
-	if len(members) == 0 {
+	if len(ips) == 0 {
 		for _, raw := range payload.Match {
-			serverType, serverID, ok := parseClientEntryMatchItem(raw)
-			if !ok {
-				continue
-			}
-			members = append(members, admin.ClientEntryGroupMemberSaveRequest{
-				ServerType: serverType,
-				ServerID:   serverID,
+			ips = append(ips, admin.ClientEntryGroupIPSaveRequest{
+				IP: raw,
 			})
 		}
 	}
@@ -266,7 +247,7 @@ func handleAdminClientEntryGroupSave(w http.ResponseWriter, r *http.Request, ses
 		Strategy:        strategy,
 		HideMemberNodes: payload.HideMemberNodes != nil && *payload.HideMemberNodes,
 		Show:            show,
-		Members:         members,
+		IPs:             ips,
 	})
 	if err != nil {
 		return handleAdminError(w, err)
@@ -307,7 +288,7 @@ func buildForestRuntimeEntryGroups(r *http.Request, cfg config.Config, clientTok
 	result := make([]map[string]any, 0, len(groups))
 	for _, group := range groups {
 		memberServers, memberNames := matchForestEntryGroupServers(servers, group)
-		if len(memberServers) == 0 || strings.TrimSpace(clientToken) == "" {
+		if len(memberServers) == 0 || len(group.IPs) == 0 || strings.TrimSpace(clientToken) == "" {
 			continue
 		}
 
@@ -454,9 +435,9 @@ func normalizeClientEntryStrategy(value string) string {
 }
 
 func decorateClientEntryGroupForAdminPage(group admin.ClientEntryGroupRecord) map[string]any {
-	match := make([]string, 0, len(group.Members))
-	for _, member := range group.Members {
-		match = append(match, forestEntryServerKey(member.ServerType, member.ServerID))
+	match := make([]string, 0, len(group.IPs))
+	for _, item := range group.IPs {
+		match = append(match, strings.TrimSpace(item.IP))
 	}
 
 	return map[string]any{
@@ -468,6 +449,8 @@ func decorateClientEntryGroupForAdminPage(group admin.ClientEntryGroupRecord) ma
 		"hide_member_nodes": group.HideMemberNodes,
 		"show":              group.Show,
 		"members":           group.Members,
+		"ips":               group.IPs,
+		"ip_count":          len(group.IPs),
 		"created_at":        group.CreatedAt,
 		"updated_at":        group.UpdatedAt,
 		"remarks":           group.DisplayName,
@@ -488,6 +471,39 @@ func parseClientEntryMatchItem(raw string) (string, int64, bool) {
 		return "", 0, false
 	}
 	return serverType, serverID, true
+}
+
+func buildForestEntryProviderProxies(userUUID string, servers []map[string]any, group usersvc.ClientEntryGroup) []any {
+	proxies := make([]any, 0, len(servers)*len(group.IPs))
+	for _, server := range servers {
+		for _, item := range group.IPs {
+			ip := strings.TrimSpace(item.IP)
+			if ip == "" {
+				continue
+			}
+			serverCopy := copyMap(server)
+			serverCopy["host"] = ip
+			serverCopy["name"] = buildForestEntryVariantName(fmt.Sprint(server["name"]), ip)
+			proxy, ok := buildClashStandardProxy(userUUID, serverCopy)
+			if !ok {
+				continue
+			}
+			proxies = append(proxies, proxy)
+		}
+	}
+	return proxies
+}
+
+func buildForestEntryVariantName(name, ip string) string {
+	base := strings.TrimSpace(name)
+	if base == "" {
+		base = "entry"
+	}
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return base
+	}
+	return base + " @" + ip
 }
 
 func normalizeClientEntryCode(value string) string {
@@ -527,6 +543,8 @@ func enrichManagedServersWithClientEntryGroups(servers []map[string]any, groups 
 	}
 
 	byServer := make(map[string][]string)
+	byServerID := make(map[string]int64)
+	options := make([]map[string]any, 0, len(groups))
 	for _, group := range groups {
 		label := strings.TrimSpace(group.DisplayName)
 		if label == "" {
@@ -535,12 +553,19 @@ func enrichManagedServersWithClientEntryGroups(servers []map[string]any, groups 
 		if label == "" {
 			continue
 		}
+		options = append(options, map[string]any{
+			"id":   group.ID,
+			"name": label,
+		})
 		for _, member := range group.Members {
 			key := forestEntryServerKey(member.ServerType, member.ServerID)
 			if stringSliceContains(byServer[key], label) {
 				continue
 			}
 			byServer[key] = append(byServer[key], label)
+			if _, exists := byServerID[key]; !exists {
+				byServerID[key] = group.ID
+			}
 		}
 	}
 
@@ -548,10 +573,13 @@ func enrichManagedServersWithClientEntryGroups(servers []map[string]any, groups 
 	for _, server := range servers {
 		serverCopy := copyMap(server)
 		key := forestEntryServerKey(fmt.Sprint(serverCopy["type"]), int64FromAny(serverCopy["id"]))
+		serverCopy["entry_group_options"] = options
 		if names := byServer[key]; len(names) > 0 {
 			serverCopy["entry_group_names"] = names
+			serverCopy["entry_group_id"] = byServerID[key]
 		} else {
 			serverCopy["entry_group_names"] = []string{}
+			serverCopy["entry_group_id"] = nil
 		}
 		result = append(result, serverCopy)
 	}

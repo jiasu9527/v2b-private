@@ -221,6 +221,11 @@ type ClientEntryGroupMemberRecord struct {
 	Sort       *int64 `json:"sort,omitempty"`
 }
 
+type ClientEntryGroupIPRecord struct {
+	IP   string `json:"ip"`
+	Sort *int64 `json:"sort,omitempty"`
+}
+
 type ClientEntryGroupRecord struct {
 	ID              int64                          `json:"id"`
 	Code            string                         `json:"code"`
@@ -230,6 +235,7 @@ type ClientEntryGroupRecord struct {
 	HideMemberNodes bool                           `json:"hide_member_nodes"`
 	Show            int64                          `json:"show"`
 	Members         []ClientEntryGroupMemberRecord `json:"members,omitempty"`
+	IPs             []ClientEntryGroupIPRecord     `json:"ips,omitempty"`
 	CreatedAt       int64                          `json:"created_at,omitempty"`
 	UpdatedAt       int64                          `json:"updated_at,omitempty"`
 }
@@ -240,6 +246,11 @@ type ClientEntryGroupMemberSaveRequest struct {
 	Sort       *int64
 }
 
+type ClientEntryGroupIPSaveRequest struct {
+	IP   string
+	Sort *int64
+}
+
 type ClientEntryGroupSaveRequest struct {
 	ID              *int64
 	Code            string
@@ -248,7 +259,7 @@ type ClientEntryGroupSaveRequest struct {
 	Strategy        string
 	HideMemberNodes bool
 	Show            *int64
-	Members         []ClientEntryGroupMemberSaveRequest
+	IPs             []ClientEntryGroupIPSaveRequest
 }
 
 type ManagedServerHostUpdateResult struct {

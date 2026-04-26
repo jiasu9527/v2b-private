@@ -7,7 +7,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestDBServiceListClientEntryGroupsIncludesMembers(t *testing.T) {
+func TestDBServiceListClientEntryGroupsIncludesMembersAndIPs(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -27,6 +27,13 @@ func TestDBServiceListClientEntryGroupsIncludesMembers(t *testing.T) {
 		WithArgs(int64(7)).
 		WillReturnRows(memberRows)
 
+	ipRows := sqlmock.NewRows([]string{"entry_group_id", "ip", "sort"}).
+		AddRow(int64(7), "1.1.1.1", int64(1)).
+		AddRow(int64(7), "8.8.8.8", int64(2))
+	mock.ExpectQuery(`SELECT entry_group_id, ip, sort\s+FROM v2_client_entry_group_ip\s+WHERE entry_group_id IN \(\$1\)\s+ORDER BY entry_group_id ASC, sort ASC NULLS LAST, id ASC`).
+		WithArgs(int64(7)).
+		WillReturnRows(ipRows)
+
 	groups, err := service.ListClientEntryGroups(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("list client entry groups: %v", err)
@@ -40,12 +47,15 @@ func TestDBServiceListClientEntryGroupsIncludesMembers(t *testing.T) {
 	if len(groups[0].Members) != 2 || groups[0].Members[0].ServerType != "vmess" || groups[0].Members[1].ServerID != 12 {
 		t.Fatalf("unexpected client entry group members: %#v", groups[0].Members)
 	}
+	if len(groups[0].IPs) != 2 || groups[0].IPs[0].IP != "1.1.1.1" || groups[0].IPs[1].IP != "8.8.8.8" {
+		t.Fatalf("unexpected client entry group ips: %#v", groups[0].IPs)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
 	}
 }
 
-func TestDBServiceSaveClientEntryGroupCreatesMembers(t *testing.T) {
+func TestDBServiceSaveClientEntryGroupCreatesIPs(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -60,11 +70,11 @@ func TestDBServiceSaveClientEntryGroupCreatesMembers(t *testing.T) {
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_group \(code, name, display_name, strategy, hide_member_nodes, "show", created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8\)\s+RETURNING id`).
 		WithArgs("asia", "Asia", "Asia Entry", "sticky-low-latency", int64(1), int64(1), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(7)))
-	mock.ExpectExec(`INSERT INTO v2_client_entry_group_member \(entry_group_id, server_type, server_id, sort, created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, \$5, \$6\)`).
-		WithArgs(int64(7), "vmess", int64(11), int64(1), sqlmock.AnyArg(), sqlmock.AnyArg()).
+	mock.ExpectExec(`INSERT INTO v2_client_entry_group_ip \(entry_group_id, ip, sort, created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, \$5\)`).
+		WithArgs(int64(7), "1.1.1.1", int64(1), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(`INSERT INTO v2_client_entry_group_member \(entry_group_id, server_type, server_id, sort, created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, \$5, \$6\)`).
-		WithArgs(int64(7), "trojan", int64(12), int64(2), sqlmock.AnyArg(), sqlmock.AnyArg()).
+	mock.ExpectExec(`INSERT INTO v2_client_entry_group_ip \(entry_group_id, ip, sort, created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, \$5\)`).
+		WithArgs(int64(7), "8.8.8.8", int64(2), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(2, 1))
 	mock.ExpectCommit()
 
@@ -74,9 +84,9 @@ func TestDBServiceSaveClientEntryGroupCreatesMembers(t *testing.T) {
 		DisplayName:     "Asia Entry",
 		Strategy:        "sticky-low-latency",
 		HideMemberNodes: true,
-		Members: []ClientEntryGroupMemberSaveRequest{
-			{ServerType: "vmess", ServerID: int64(11), Sort: &sortA},
-			{ServerType: "trojan", ServerID: int64(12), Sort: &sortB},
+		IPs: []ClientEntryGroupIPSaveRequest{
+			{IP: "1.1.1.1", Sort: &sortA},
+			{IP: "8.8.8.8", Sort: &sortB},
 		},
 	})
 	if err != nil {

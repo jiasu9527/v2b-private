@@ -3654,6 +3654,10 @@ func TestRouterAdminClientEntryGroupFetchEndpoint(t *testing.T) {
 				DisplayName:     "Asia Entry",
 				Strategy:        "sticky-low-latency",
 				HideMemberNodes: true,
+				IPs: []admin.ClientEntryGroupIPRecord{
+					{IP: "1.1.1.1"},
+					{IP: "8.8.8.8"},
+				},
 				Members: []admin.ClientEntryGroupMemberRecord{
 					{ServerType: "vmess", ServerID: int64(11)},
 				},
@@ -3673,7 +3677,7 @@ func TestRouterAdminClientEntryGroupFetchEndpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), `"asia"`) || !strings.Contains(rec.Body.String(), `"sticky-low-latency"`) {
+	if !strings.Contains(rec.Body.String(), `"asia"`) || !strings.Contains(rec.Body.String(), `"sticky-low-latency"`) || !strings.Contains(rec.Body.String(), `"1.1.1.1"`) {
 		t.Fatalf("expected client entry payload, got %s", rec.Body.String())
 	}
 }
@@ -3687,7 +3691,7 @@ func TestRouterAdminClientEntryGroupSaveEndpoint(t *testing.T) {
 		WithAdminService(adminService),
 	)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry/save", strings.NewReader(`{"auth_data":"jwt-admin","id":7,"code":"asia","name":"Asia","display_name":"Asia Entry","strategy":"sticky-low-latency","hide_member_nodes":true,"members":[{"server_type":"vmess","server_id":11}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry/save", strings.NewReader(`{"auth_data":"jwt-admin","id":7,"code":"asia","name":"Asia","display_name":"Asia Entry","strategy":"sticky-low-latency","hide_member_nodes":true,"match":["1.1.1.1","8.8.8.8"]}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -3701,8 +3705,8 @@ func TestRouterAdminClientEntryGroupSaveEndpoint(t *testing.T) {
 	if adminService.lastClientEntrySave.Code != "asia" || adminService.lastClientEntrySave.DisplayName != "Asia Entry" {
 		t.Fatalf("unexpected client entry save payload: %#v", adminService.lastClientEntrySave)
 	}
-	if len(adminService.lastClientEntrySave.Members) != 1 || adminService.lastClientEntrySave.Members[0].ServerType != "vmess" || adminService.lastClientEntrySave.Members[0].ServerID != 11 {
-		t.Fatalf("unexpected client entry members: %#v", adminService.lastClientEntrySave.Members)
+	if len(adminService.lastClientEntrySave.IPs) != 2 || adminService.lastClientEntrySave.IPs[0].IP != "1.1.1.1" || adminService.lastClientEntrySave.IPs[1].IP != "8.8.8.8" {
+		t.Fatalf("unexpected client entry ips: %#v", adminService.lastClientEntrySave.IPs)
 	}
 }
 
@@ -3898,6 +3902,56 @@ func TestRouterAdminManagedServerUpdateEndpoints(t *testing.T) {
 				t.Fatalf("unexpected update payload: %#v", adminService.lastNodeUpdate)
 			}
 		})
+	}
+}
+
+func TestRouterAdminManagedServerUpdateEntryGroupEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/vmess/update", strings.NewReader(`{"auth_data":"jwt-admin","id":9,"entry_group_id":7}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", rec.Code, rec.Body.String())
+	}
+	if adminService.lastNodeUpdateType != "vmess" || adminService.lastNodeUpdateID != 9 {
+		t.Fatalf("unexpected update target: type=%q id=%d", adminService.lastNodeUpdateType, adminService.lastNodeUpdateID)
+	}
+	if strings.TrimSpace(adminService.lastNodeUpdate["entry_group_id"].(json.Number).String()) != "7" {
+		t.Fatalf("unexpected update payload: %#v", adminService.lastNodeUpdate)
+	}
+}
+
+func TestRouterAdminManagedServerClearEntryGroupEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/vmess/update", strings.NewReader(`{"auth_data":"jwt-admin","id":9,"entry_group_id":null}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", rec.Code, rec.Body.String())
+	}
+	if adminService.lastNodeUpdateType != "vmess" || adminService.lastNodeUpdateID != 9 {
+		t.Fatalf("unexpected update target: type=%q id=%d", adminService.lastNodeUpdateType, adminService.lastNodeUpdateID)
+	}
+	if value, ok := adminService.lastNodeUpdate["entry_group_id"]; !ok || value != nil {
+		t.Fatalf("unexpected clear payload: %#v", adminService.lastNodeUpdate)
 	}
 }
 
