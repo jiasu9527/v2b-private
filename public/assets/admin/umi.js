@@ -145638,7 +145638,7 @@
                     O = _.fetchLoading,
                     A = _.sortMode,
                     R = this.props.serverGroup.groups,
-                    N = this.state.searchKey,
+                    searchText = this.state.searchKey,
                     H = this.state.showBulkHostEditor,
                     B = this.state.bulkOldHost,
                     U = this.state.bulkNewHost,
@@ -146411,13 +146411,13 @@
                                     ? y.a.createElement(o["a"], {
                                           className: "forest-table",
                                           itemLayout: "vertical",
-                                          dataSource: N
+                                          dataSource: searchText
                                               ? E.filter(
                                                     (e) =>
                                                         -1 !==
                                                         JSON.stringify(
                                                             e,
-                                                        ).indexOf(N),
+                                                        ).indexOf(searchText),
                                                 )
                                               : E,
                                           renderItem: (e) =>
@@ -146548,13 +146548,15 @@
                                                   },
                                                   disableRightClick: A,
                                                   tableLayout: "auto",
-                                                  dataSource: N
+                                                  dataSource: searchText
                                                       ? E.filter(
                                                             (e) =>
                                                                 -1 !==
                                                                 JSON.stringify(
                                                                     e,
-                                                                ).indexOf(N),
+                                                                ).indexOf(
+                                                                    searchText,
+                                                                ),
                                                         )
                                                       : E,
                                                   columns: A
@@ -152756,12 +152758,408 @@
                 );
             }
         }
-        t["default"] = Object(p["c"])((e) => {
+        var RoutePageConnected = Object(p["c"])((e) => {
             var t = e.serverRoute;
             return {
                 serverRoute: t,
             };
         })(_);
+        class ClientEntryModal extends f.a.Component {
+            constructor(e) {
+                (super(e),
+                    (this.state = {
+                        route: e.route || {},
+                        visible: !1,
+                    }));
+            }
+            save() {
+                var e = u()({}, this.state.route);
+                if (Array.isArray(e.match)) {
+                    e.match = e.match
+                        .map((e) =>
+                            "string" === typeof e ? e.trim() : e,
+                        )
+                        .filter((e) => !!e);
+                } else if (e.match && "string" === typeof e.match) {
+                    e.match = e.match
+                        .split(",")
+                        .map((e) => e.trim())
+                        .filter((e) => !!e);
+                } else {
+                    e.match = [];
+                }
+                this.props.dispatch({
+                    type: "serverRoute/save",
+                    params: e,
+                    callback: () => {
+                        this.setState({
+                            visible: !1,
+                        });
+                    },
+                });
+            }
+            render() {
+                var e, t, n,
+                    r = this.props.serverRoute.fetchLoading;
+                return f.a.createElement(
+                    f.a.Fragment,
+                    null,
+                    f.a.cloneElement(this.props.children, {
+                        onClick: () =>
+                            this.setState({
+                                visible: !0,
+                            }),
+                    }),
+                    f.a.createElement(
+                        g["a"],
+                        {
+                            title: this.state.route.id
+                                ? "\u7f16\u8f91\u5ba2\u6237\u7aef\u5165\u53e3\u7ec4"
+                                : "\u521b\u5efa\u5ba2\u6237\u7aef\u5165\u53e3\u7ec4",
+                            visible: this.state.visible,
+                            onCancel: () =>
+                                this.setState({
+                                    visible: !1,
+                                }),
+                            onOk: () => r || this.save(),
+                            okText: r
+                                ? f.a.createElement(s["a"], {
+                                      type: "loading",
+                                  })
+                                : this.state.route.id
+                                  ? "\u4fdd\u5b58\u66f4\u6539"
+                                  : "\u521b\u5efa\u5165\u53e3\u7ec4",
+                            cancelText: "\u53d6\u6d88",
+                        },
+                        f.a.createElement(
+                            "div",
+                            null,
+                            f.a.createElement(
+                                "div",
+                                {
+                                    className: "form-group",
+                                },
+                                f.a.createElement(
+                                    "label",
+                                    {
+                                        for: "example-text-input-alt",
+                                    },
+                                    "\u5165\u53e3\u7ec4\u540d\u79f0",
+                                ),
+                                f.a.createElement(y["a"], {
+                                    placeholder:
+                                        "\u8bf7\u8f93\u5165\u5165\u53e3\u7ec4\u540d\u79f0",
+                                    value: this.state.route.remarks,
+                                    onChange: (e) => {
+                                        this.setState({
+                                            route: u()({}, this.state.route, {
+                                                remarks: e.target.value,
+                                            }),
+                                        });
+                                    },
+                                }),
+                            ),
+                            f.a.createElement(
+                                "div",
+                                {
+                                    className: "form-group",
+                                },
+                                f.a.createElement(
+                                    "label",
+                                    {
+                                        for: "example-text-input-alt",
+                                    },
+                                    "\u5165\u53e3 IP \u5217\u8868",
+                                ),
+                                f.a.createElement(y["a"].TextArea, {
+                                    rows: 5,
+                                    placeholder:
+                                        "1.1.1.1\n8.8.8.8\n203.0.113.10",
+                                    value:
+                                        "object" ===
+                                        typeof this.state.route.match
+                                            ? null ===
+                                                  (e =
+                                                      this.state.route.match) ||
+                                              void 0 === e
+                                                ? void 0
+                                                : e.join("\n")
+                                            : null ===
+                                                    (t =
+                                                        this.state.route
+                                                            .match) ||
+                                                void 0 === t
+                                              ? void 0
+                                              : null === (n = t.split(",")) ||
+                                                  void 0 === n
+                                                ? void 0
+                                                : n.join("\n"),
+                                    onChange: (e) => {
+                                        var t;
+                                        this.setState({
+                                            route: u()(
+                                                {},
+                                                this.state.route,
+                                                {
+                                                    match:
+                                                        null ===
+                                                            (t =
+                                                                e.target
+                                                                    .value) ||
+                                                        void 0 === t
+                                                            ? void 0
+                                                            : t.split("\n"),
+                                                },
+                                            ),
+                                        });
+                                    },
+                                }),
+                            ),
+                            f.a.createElement(
+                                "div",
+                                {
+                                    className: "form-group",
+                                },
+                                f.a.createElement(
+                                    "label",
+                                    {
+                                        for: "example-text-input-alt",
+                                    },
+                                    "\u5165\u53e3 IP \u5207\u6362\u7b56\u7565",
+                                ),
+                                f.a.createElement(
+                                    "div",
+                                    null,
+                                    f.a.createElement(
+                                        v["a"],
+                                        {
+                                            value: this.state.route.action,
+                                            placeholder:
+                                                "\u8bf7\u9009\u62e9\u5165\u53e3 IP \u5207\u6362\u7b56\u7565",
+                                            style: {
+                                                width: "100%",
+                                            },
+                                            onChange: (e) =>
+                                                this.setState({
+                                                    route: u()(
+                                                        {},
+                                                        this.state.route,
+                                                        {
+                                                            action: e,
+                                                        },
+                                                    ),
+                                                }),
+                                        },
+                                        f.a.createElement(
+                                            v["a"].Option,
+                                            {
+                                                value: "latency-first",
+                                            },
+                                            "\u5148\u6d4b\u901f\u518d\u9009\u6700\u4f18",
+                                        ),
+                                        f.a.createElement(
+                                            v["a"].Option,
+                                            {
+                                                value: "sticky-low-latency",
+                                            },
+                                            "\u4f4e\u5ef6\u8fdf\u7c98\u6ede\u5207\u6362",
+                                        ),
+                                        f.a.createElement(
+                                            v["a"].Option,
+                                            {
+                                                value: "ordered-fallback",
+                                            },
+                                            "\u6309\u987a\u5e8f\u6545\u969c\u8f6c\u79fb",
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                );
+            }
+        }
+        var ClientEntryModalConnected = Object(p["c"])((e) => {
+            var t = e.serverRoute;
+            return {
+                serverRoute: t,
+            };
+        })(ClientEntryModal);
+        class ClientEntryPage extends f.a.Component {
+            componentDidMount() {
+                this.props.dispatch({
+                    type: "serverRoute/fetch",
+                });
+            }
+            drop(e) {
+                this.props.dispatch({
+                    type: "serverRoute/drop",
+                    id: e,
+                });
+            }
+            render() {
+                var e = this.props.serverRoute,
+                    t = Array.isArray(e.routes) ? e.routes : [],
+                    n = e.fetchLoading,
+                    r = [
+                        {
+                            title: "ID",
+                            dataIndex: "id",
+                            key: "id",
+                        },
+                        {
+                            title: "\u5165\u53e3\u7ec4\u540d\u79f0",
+                            dataIndex: "remarks",
+                            key: "remarks",
+                        },
+                        {
+                            title: "\u5165\u53e3 IP \u6570\u91cf",
+                            dataIndex: "match",
+                            key: "match",
+                            render: (e) => {
+                                var t,
+                                    n =
+                                        "string" === typeof e
+                                            ? null ===
+                                                  (t = e
+                                                      .split(",")
+                                                      .filter((e) => !!e)) ||
+                                              void 0 === t
+                                                ? void 0
+                                                : t.length
+                                            : Array.isArray(e)
+                                              ? e.length
+                                              : 0;
+                                return 0 === n
+                                    ? "\u672a\u914d\u7f6e\u5165\u53e3IP"
+                                    : "\u5171 ".concat(
+                                          n,
+                                          " \u4e2aIP",
+                                      );
+                            },
+                        },
+                        {
+                            title: "\u5165\u53e3 IP \u5207\u6362\u7b56\u7565",
+                            dataIndex: "action",
+                            key: "action",
+                            render: (e) => {
+                                return (
+                                    {
+                                        "latency-first":
+                                            "\u5148\u6d4b\u901f\u518d\u9009\u6700\u4f18",
+                                        "sticky-low-latency":
+                                            "\u4f4e\u5ef6\u8fdf\u7c98\u6ede\u5207\u6362",
+                                        "ordered-fallback":
+                                            "\u6309\u987a\u5e8f\u6545\u969c\u8f6c\u79fb",
+                                    }[e] || e
+                                );
+                            },
+                        },
+                        {
+                            title: "\u64cd\u4f5c",
+                            dataIndex: "action2",
+                            key: "action2",
+                            align: "right",
+                            render: (e, t) => {
+                                return f.a.createElement(
+                                    "div",
+                                    null,
+                                    f.a.createElement(
+                                        ClientEntryModalConnected,
+                                        {
+                                            route: t,
+                                            key: t.id,
+                                        },
+                                        f.a.createElement(
+                                            "a",
+                                            {
+                                                href: "javascript:void(0);",
+                                            },
+                                            "\u7f16\u8f91",
+                                        ),
+                                    ),
+                                    f.a.createElement(l["a"], {
+                                        type: "vertical",
+                                    }),
+                                    f.a.createElement(
+                                        "a",
+                                        {
+                                            href: "javascript:void(0);",
+                                            onClick: () => this.drop(t.id),
+                                        },
+                                        "\u5220\u9664",
+                                    ),
+                                );
+                            },
+                        },
+                    ];
+                return f.a.createElement(
+                    d["a"],
+                    i()({}, this.props, {
+                        title: "\u5ba2\u6237\u7aef\u5165\u53e3\u7ec4",
+                    }),
+                    f.a.createElement("div", {
+                        className:
+                            "d-flex justify-content-between align-items-center",
+                    }),
+                    f.a.createElement(
+                        m["a"],
+                        {
+                            loading: n,
+                        },
+                        f.a.createElement(
+                            "div",
+                            {
+                                className: "block block-rounded",
+                            },
+                            f.a.createElement(
+                                "div",
+                                {
+                                    className: "bg-white",
+                                },
+                                f.a.createElement(
+                                    "div",
+                                    {
+                                        style: {
+                                            padding: 15,
+                                        },
+                                    },
+                                    f.a.createElement(
+                                        ClientEntryModalConnected,
+                                        null,
+                                        f.a.createElement(
+                                            a["a"],
+                                            null,
+                                            f.a.createElement(s["a"], {
+                                                type: "plus",
+                                            }),
+                                            " \u65b0\u5efa\u5ba2\u6237\u7aef\u5165\u53e3\u7ec4",
+                                        ),
+                                    ),
+                                ),
+                                f.a.createElement(o["a"], {
+                                    tableLayout: "auto",
+                                    columns: r,
+                                    dataSource: t,
+                                    pagination: !1,
+                                }),
+                            ),
+                        ),
+                    ),
+                );
+            }
+        }
+        var ClientEntryPageConnected = Object(p["c"])((e) => {
+            var t = e.serverRoute;
+            return {
+                serverRoute: t,
+            };
+        })(ClientEntryPage);
+        t["default"] = function (e) {
+            return "/server/client-entry" === window.location.pathname
+                ? f.a.createElement(ClientEntryPageConnected, e)
+                : f.a.createElement(RoutePageConnected, e);
+        };
     },
     x1Ya: function (e, t, n) {
         "use strict";
