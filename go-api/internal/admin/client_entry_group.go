@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -11,17 +12,27 @@ import (
 )
 
 const fixedClientEntryGroupStrategy = "ordered-fallback"
+const defaultClientEntryRemoteSSHPort int64 = 0
+const defaultClientEntryRemoteRefreshSec int64 = 300
 
 type clientEntryGroupRow struct {
-	ID              int64
-	Code            string
-	Name            string
-	DisplayName     string
-	Strategy        string
-	HideMemberNodes int64
-	Show            int64
-	CreatedAt       int64
-	UpdatedAt       int64
+	ID                 int64
+	Code               string
+	Name               string
+	DisplayName        string
+	Strategy           string
+	HideMemberNodes    int64
+	Show               int64
+	RemoteEnabled      int64
+	RemoteHost         string
+	RemoteSSHPort      int64
+	RemoteSSHUser      string
+	RemoteSSHPassword  string
+	RemoteGroupRef     string
+	RemoteExcludeNames string
+	RemoteRefreshSec   int64
+	CreatedAt          int64
+	UpdatedAt          int64
 }
 
 func (s *DBService) ListClientEntryGroups(ctx context.Context, id *int64) ([]ClientEntryGroupRecord, error) {
@@ -29,7 +40,7 @@ func (s *DBService) ListClientEntryGroups(ctx context.Context, id *int64) ([]Cli
 		return nil, ErrUnavailable
 	}
 
-	query := `SELECT id, code, name, display_name, strategy, hide_member_nodes, "show", created_at, updated_at
+	query := `SELECT id, code, name, display_name, strategy, hide_member_nodes, "show", remote_enabled, remote_host, remote_ssh_port, remote_ssh_user, remote_ssh_password, remote_group_ref, remote_exclude_names, remote_refresh_sec, created_at, updated_at
 FROM v2_client_entry_group`
 	args := make([]any, 0, 1)
 	if id != nil {
@@ -56,23 +67,40 @@ FROM v2_client_entry_group`
 			&row.Strategy,
 			&row.HideMemberNodes,
 			&row.Show,
+			&row.RemoteEnabled,
+			&row.RemoteHost,
+			&row.RemoteSSHPort,
+			&row.RemoteSSHUser,
+			&row.RemoteSSHPassword,
+			&row.RemoteGroupRef,
+			&row.RemoteExcludeNames,
+			&row.RemoteRefreshSec,
 			&row.CreatedAt,
 			&row.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan client entry group: %w", err)
 		}
+		excludes := decodeClientEntryRemoteExcludeNames(row.RemoteExcludeNames)
 		result = append(result, ClientEntryGroupRecord{
-			ID:              row.ID,
-			Code:            strings.TrimSpace(row.Code),
-			Name:            strings.TrimSpace(row.Name),
-			DisplayName:     strings.TrimSpace(row.DisplayName),
-			Strategy:        normalizeClientEntryGroupStrategy(row.Strategy),
-			HideMemberNodes: row.HideMemberNodes != 0,
-			Show:            row.Show,
-			CreatedAt:       row.CreatedAt,
-			UpdatedAt:       row.UpdatedAt,
-			Members:         []ClientEntryGroupMemberRecord{},
-			IPs:             []ClientEntryGroupIPRecord{},
+			ID:                 row.ID,
+			Code:               strings.TrimSpace(row.Code),
+			Name:               strings.TrimSpace(row.Name),
+			DisplayName:        strings.TrimSpace(row.DisplayName),
+			Strategy:           normalizeClientEntryGroupStrategy(row.Strategy),
+			HideMemberNodes:    row.HideMemberNodes != 0,
+			Show:               row.Show,
+			RemoteEnabled:      row.RemoteEnabled != 0,
+			RemoteHost:         strings.TrimSpace(row.RemoteHost),
+			RemoteSSHPort:      normalizeClientEntryRemoteSSHPort(row.RemoteSSHPort),
+			RemoteSSHUser:      strings.TrimSpace(row.RemoteSSHUser),
+			RemoteSSHPassword:  strings.TrimSpace(row.RemoteSSHPassword),
+			RemoteGroupRef:     strings.TrimSpace(row.RemoteGroupRef),
+			RemoteExcludeNames: excludes,
+			RemoteRefreshSec:   normalizeClientEntryRemoteRefreshSec(row.RemoteRefreshSec),
+			CreatedAt:          row.CreatedAt,
+			UpdatedAt:          row.UpdatedAt,
+			Members:            []ClientEntryGroupMemberRecord{},
+			IPs:                []ClientEntryGroupIPRecord{},
 		})
 		ids = append(ids, row.ID)
 	}
@@ -107,6 +135,9 @@ func (s *DBService) SaveClientEntryGroup(ctx context.Context, req ClientEntryGro
 	req.Name = strings.TrimSpace(req.Name)
 	req.DisplayName = strings.TrimSpace(req.DisplayName)
 	req.Strategy = normalizeClientEntryGroupStrategy(req.Strategy)
+	if err := normalizeClientEntryRemoteSaveRequest(&req); err != nil {
+		return false, err
+	}
 	if req.Code == "" {
 		return false, errors.New("入口组标识不能为空")
 	}
@@ -116,7 +147,7 @@ func (s *DBService) SaveClientEntryGroup(ctx context.Context, req ClientEntryGro
 	if req.DisplayName == "" {
 		req.DisplayName = req.Name
 	}
-	if len(req.IPs) == 0 {
+	if len(req.IPs) == 0 && !req.RemoteEnabled {
 		return false, errors.New("入口IP不能为空")
 	}
 
@@ -134,8 +165,8 @@ func (s *DBService) SaveClientEntryGroup(ctx context.Context, req ClientEntryGro
 
 	groupID := int64(0)
 	if req.ID == nil {
-		if err := tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_group (code, name, display_name, strategy, hide_member_nodes, "show", created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		if err := tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_group (code, name, display_name, strategy, hide_member_nodes, "show", remote_enabled, remote_host, remote_ssh_port, remote_ssh_user, remote_ssh_password, remote_group_ref, remote_exclude_names, remote_refresh_sec, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 RETURNING id`,
 			req.Code,
 			req.Name,
@@ -143,6 +174,14 @@ RETURNING id`,
 			req.Strategy,
 			boolToInt64(req.HideMemberNodes),
 			show,
+			boolToInt64(req.RemoteEnabled),
+			req.RemoteHost,
+			req.RemoteSSHPort,
+			req.RemoteSSHUser,
+			req.RemoteSSHPassword,
+			req.RemoteGroupRef,
+			encodeClientEntryRemoteExcludeNames(req.RemoteExcludeNames),
+			req.RemoteRefreshSec,
 			now,
 			now,
 		).Scan(&groupID); err != nil {
@@ -151,13 +190,21 @@ RETURNING id`,
 	} else {
 		groupID = *req.ID
 		result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_group
-SET code = $2,
+	SET code = $2,
 	name = $3,
 	display_name = $4,
 	strategy = $5,
 	hide_member_nodes = $6,
 	"show" = $7,
-	updated_at = $8
+	remote_enabled = $8,
+	remote_host = $9,
+	remote_ssh_port = $10,
+	remote_ssh_user = $11,
+	remote_ssh_password = $12,
+	remote_group_ref = $13,
+	remote_exclude_names = $14,
+	remote_refresh_sec = $15,
+	updated_at = $16
 WHERE id = $1`,
 			groupID,
 			req.Code,
@@ -166,6 +213,14 @@ WHERE id = $1`,
 			req.Strategy,
 			boolToInt64(req.HideMemberNodes),
 			show,
+			boolToInt64(req.RemoteEnabled),
+			req.RemoteHost,
+			req.RemoteSSHPort,
+			req.RemoteSSHUser,
+			req.RemoteSSHPassword,
+			req.RemoteGroupRef,
+			encodeClientEntryRemoteExcludeNames(req.RemoteExcludeNames),
+			req.RemoteRefreshSec,
 			now,
 		)
 		if err != nil {
@@ -210,6 +265,88 @@ VALUES ($1, $2, $3, $4, $5)`,
 
 func normalizeClientEntryGroupStrategy(_ string) string {
 	return fixedClientEntryGroupStrategy
+}
+
+func normalizeClientEntryRemoteSaveRequest(req *ClientEntryGroupSaveRequest) error {
+	req.RemoteHost = strings.TrimSpace(req.RemoteHost)
+	req.RemoteSSHUser = strings.TrimSpace(req.RemoteSSHUser)
+	req.RemoteSSHPassword = strings.TrimSpace(req.RemoteSSHPassword)
+	req.RemoteGroupRef = strings.TrimSpace(req.RemoteGroupRef)
+	req.RemoteSSHPort = normalizeClientEntryRemoteSSHPort(req.RemoteSSHPort)
+	req.RemoteRefreshSec = normalizeClientEntryRemoteRefreshSec(req.RemoteRefreshSec)
+	req.RemoteExcludeNames = normalizeClientEntryRemoteExcludeList(req.RemoteExcludeNames)
+	if !req.RemoteEnabled {
+		req.RemoteHost = ""
+		req.RemoteSSHPort = 0
+		req.RemoteSSHUser = ""
+		req.RemoteSSHPassword = ""
+		req.RemoteGroupRef = ""
+		req.RemoteExcludeNames = nil
+		return nil
+	}
+	switch {
+	case req.RemoteHost == "":
+		return errors.New("远程站点地址不能为空")
+	case req.RemoteSSHUser == "":
+		return errors.New("远程站点账号不能为空")
+	case req.RemoteSSHPassword == "":
+		return errors.New("远程站点密码不能为空")
+	case req.RemoteGroupRef == "":
+		return errors.New("远程设备组不能为空")
+	default:
+		return nil
+	}
+}
+
+func normalizeClientEntryRemoteSSHPort(value int64) int64 {
+	if value <= 0 {
+		return defaultClientEntryRemoteSSHPort
+	}
+	return value
+}
+
+func normalizeClientEntryRemoteRefreshSec(value int64) int64 {
+	if value <= 0 {
+		return defaultClientEntryRemoteRefreshSec
+	}
+	return value
+}
+
+func normalizeClientEntryRemoteExcludeList(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func decodeClientEntryRemoteExcludeNames(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{}
+	}
+	var result []string
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return []string{}
+	}
+	return normalizeClientEntryRemoteExcludeList(result)
+}
+
+func encodeClientEntryRemoteExcludeNames(values []string) string {
+	raw, err := json.Marshal(normalizeClientEntryRemoteExcludeList(values))
+	if err != nil {
+		return "[]"
+	}
+	return string(raw)
 }
 
 func (s *DBService) DeleteClientEntryGroup(ctx context.Context, id int64) (bool, error) {

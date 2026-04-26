@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -24,7 +26,7 @@ const (
 	fixedClientEntryStrategy          = "ordered-fallback"
 )
 
-func handleUserForestRuntimeProfile(w http.ResponseWriter, r *http.Request, cfg config.Config, sessionService session.Service, userService usersvc.Service) bool {
+func handleUserForestRuntimeProfile(w http.ResponseWriter, r *http.Request, cfg config.Config, sessionService session.Service, userService usersvc.Service, resolver clientEntryRemoteResolver) bool {
 	identity, ok := authenticateRequest(w, r, sessionService, false)
 	if !ok {
 		return true
@@ -48,7 +50,7 @@ func handleUserForestRuntimeProfile(w http.ResponseWriter, r *http.Request, cfg 
 	}
 
 	payload := map[string]any{
-		"entry_groups": buildForestRuntimeEntryGroups(r, cfg, subscribe.Token, servers, groups),
+		"entry_groups": buildForestRuntimeEntryGroups(r.Context(), r, cfg, subscribe.Token, servers, groups, resolver),
 	}
 	if capability := strings.TrimSpace(r.URL.Query().Get("cap")); capability != "" {
 		payload["capability"] = capability
@@ -57,7 +59,7 @@ func handleUserForestRuntimeProfile(w http.ResponseWriter, r *http.Request, cfg 
 	return true
 }
 
-func handleClientForestEntryProvider(w http.ResponseWriter, r *http.Request, cfg config.Config, userService usersvc.Service) bool {
+func handleClientForestEntryProvider(w http.ResponseWriter, r *http.Request, cfg config.Config, userService usersvc.Service, resolver clientEntryRemoteResolver) bool {
 	userID, ok := authenticateClientUser(w, r, userService)
 	if !ok {
 		return true
@@ -98,7 +100,7 @@ func handleClientForestEntryProvider(w http.ResponseWriter, r *http.Request, cfg
 	}
 
 	memberServers, _ := matchForestEntryGroupServers(servers, group)
-	proxies := buildForestEntryProviderProxies(subscribe.UUID, memberServers, group)
+	proxies := buildForestEntryProviderProxies(r.Context(), subscribe.UUID, memberServers, group, resolver)
 
 	raw, err := yaml.Marshal(map[string]any{"proxies": proxies})
 	if err != nil {
@@ -157,18 +159,26 @@ func handleAdminClientEntryGroupSave(w http.ResponseWriter, r *http.Request, ses
 	}
 
 	var payload struct {
-		ID              *json.Number `json:"id"`
-		Code            string       `json:"code"`
-		Name            string       `json:"name"`
-		DisplayName     string       `json:"display_name"`
-		Remarks         string       `json:"remarks"`
-		Strategy        string       `json:"strategy"`
-		Action          string       `json:"action"`
-		ActionValue     *string      `json:"action_value"`
-		HideMemberNodes *bool        `json:"hide_member_nodes"`
-		Show            *json.Number `json:"show"`
-		Match           []string     `json:"match"`
-		IPs             []struct {
+		ID                 *json.Number `json:"id"`
+		Code               string       `json:"code"`
+		Name               string       `json:"name"`
+		DisplayName        string       `json:"display_name"`
+		Remarks            string       `json:"remarks"`
+		Strategy           string       `json:"strategy"`
+		Action             string       `json:"action"`
+		ActionValue        *string      `json:"action_value"`
+		HideMemberNodes    *bool        `json:"hide_member_nodes"`
+		Show               *json.Number `json:"show"`
+		RemoteEnabled      *bool        `json:"remote_enabled"`
+		RemoteHost         string       `json:"remote_host"`
+		RemoteSSHPort      *json.Number `json:"remote_ssh_port"`
+		RemoteSSHUser      string       `json:"remote_ssh_user"`
+		RemoteSSHPassword  string       `json:"remote_ssh_password"`
+		RemoteGroupRef     string       `json:"remote_group_ref"`
+		RemoteExcludeNames []string     `json:"remote_exclude_names"`
+		RemoteRefreshSec   *json.Number `json:"remote_refresh_sec"`
+		Match              []string     `json:"match"`
+		IPs                []struct {
 			IP   string       `json:"ip"`
 			Sort *json.Number `json:"sort"`
 		} `json:"ips"`
@@ -226,6 +236,42 @@ func handleAdminClientEntryGroupSave(w http.ResponseWriter, r *http.Request, ses
 			payload.Show = &value
 		}
 	}
+	if payload.RemoteEnabled == nil {
+		if raw, ok := inputs["remote_enabled"]; ok && strings.TrimSpace(raw) != "" {
+			value := parseBoolish(raw)
+			payload.RemoteEnabled = &value
+		}
+	}
+	if strings.TrimSpace(payload.RemoteHost) == "" {
+		payload.RemoteHost = strings.TrimSpace(inputs["remote_host"])
+	}
+	if payload.RemoteSSHPort == nil {
+		if raw := strings.TrimSpace(inputs["remote_ssh_port"]); raw != "" {
+			value := json.Number(raw)
+			payload.RemoteSSHPort = &value
+		}
+	}
+	if strings.TrimSpace(payload.RemoteSSHUser) == "" {
+		payload.RemoteSSHUser = strings.TrimSpace(inputs["remote_ssh_user"])
+	}
+	if strings.TrimSpace(payload.RemoteSSHPassword) == "" {
+		payload.RemoteSSHPassword = strings.TrimSpace(inputs["remote_ssh_password"])
+	}
+	if strings.TrimSpace(payload.RemoteGroupRef) == "" {
+		payload.RemoteGroupRef = strings.TrimSpace(inputs["remote_group_ref"])
+	}
+	if len(payload.RemoteExcludeNames) == 0 {
+		payload.RemoteExcludeNames = splitClientEntryTextList(strings.TrimSpace(inputs["remote_exclude_names"]))
+		if len(payload.RemoteExcludeNames) == 0 {
+			payload.RemoteExcludeNames = indexedStrings(inputs, "remote_exclude_names")
+		}
+	}
+	if payload.RemoteRefreshSec == nil {
+		if raw := strings.TrimSpace(inputs["remote_refresh_sec"]); raw != "" {
+			value := json.Number(raw)
+			payload.RemoteRefreshSec = &value
+		}
+	}
 	if len(payload.Match) == 0 {
 		payload.Match = indexedStrings(inputs, "match")
 	}
@@ -263,6 +309,28 @@ func handleAdminClientEntryGroupSave(w http.ResponseWriter, r *http.Request, ses
 			return true
 		}
 		show = value
+	}
+	var remoteSSHPort int64
+	if payload.RemoteSSHPort != nil {
+		value, err := jsonNumberToInt64Pointer(payload.RemoteSSHPort)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": "保存失败"})
+			return true
+		}
+		if value != nil {
+			remoteSSHPort = *value
+		}
+	}
+	var remoteRefreshSec int64
+	if payload.RemoteRefreshSec != nil {
+		value, err := jsonNumberToInt64Pointer(payload.RemoteRefreshSec)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": "保存失败"})
+			return true
+		}
+		if value != nil {
+			remoteRefreshSec = *value
+		}
 	}
 
 	ips := make([]admin.ClientEntryGroupIPSaveRequest, 0, len(payload.IPs))
@@ -313,14 +381,22 @@ func handleAdminClientEntryGroupSave(w http.ResponseWriter, r *http.Request, ses
 	}
 
 	saved, err := adminService.SaveClientEntryGroup(r.Context(), admin.ClientEntryGroupSaveRequest{
-		ID:              id,
-		Code:            code,
-		Name:            name,
-		DisplayName:     displayName,
-		Strategy:        strategy,
-		HideMemberNodes: payload.HideMemberNodes != nil && *payload.HideMemberNodes,
-		Show:            show,
-		IPs:             ips,
+		ID:                 id,
+		Code:               code,
+		Name:               name,
+		DisplayName:        displayName,
+		Strategy:           strategy,
+		HideMemberNodes:    payload.HideMemberNodes != nil && *payload.HideMemberNodes,
+		Show:               show,
+		RemoteEnabled:      payload.RemoteEnabled != nil && *payload.RemoteEnabled,
+		RemoteHost:         payload.RemoteHost,
+		RemoteSSHPort:      remoteSSHPort,
+		RemoteSSHUser:      payload.RemoteSSHUser,
+		RemoteSSHPassword:  payload.RemoteSSHPassword,
+		RemoteGroupRef:     payload.RemoteGroupRef,
+		RemoteExcludeNames: payload.RemoteExcludeNames,
+		RemoteRefreshSec:   remoteRefreshSec,
+		IPs:                ips,
 	})
 	if err != nil {
 		return handleAdminError(w, err)
@@ -357,11 +433,12 @@ func handleAdminClientEntryGroupDrop(w http.ResponseWriter, r *http.Request, ses
 	return true
 }
 
-func buildForestRuntimeEntryGroups(r *http.Request, cfg config.Config, clientToken string, servers []map[string]any, groups []usersvc.ClientEntryGroup) []map[string]any {
+func buildForestRuntimeEntryGroups(ctx context.Context, r *http.Request, cfg config.Config, clientToken string, servers []map[string]any, groups []usersvc.ClientEntryGroup, resolver clientEntryRemoteResolver) []map[string]any {
 	result := make([]map[string]any, 0, len(groups))
 	for _, group := range groups {
 		memberServers, memberNames := matchForestEntryGroupServers(servers, group)
-		if len(memberServers) == 0 || len(group.IPs) == 0 || strings.TrimSpace(clientToken) == "" {
+		effectiveIPs := effectiveClientEntryGroupIPs(ctx, group, resolver)
+		if len(memberServers) == 0 || len(effectiveIPs) == 0 || strings.TrimSpace(clientToken) == "" {
 			continue
 		}
 
@@ -515,22 +592,30 @@ func decorateClientEntryGroupForAdminPage(group admin.ClientEntryGroupRecord) ma
 	strategy := normalizeClientEntryStrategy(group.Strategy)
 
 	return map[string]any{
-		"id":                group.ID,
-		"code":              group.Code,
-		"name":              group.Name,
-		"display_name":      group.DisplayName,
-		"strategy":          strategy,
-		"hide_member_nodes": group.HideMemberNodes,
-		"show":              group.Show,
-		"members":           group.Members,
-		"ips":               group.IPs,
-		"ip_count":          len(group.IPs),
-		"created_at":        group.CreatedAt,
-		"updated_at":        group.UpdatedAt,
-		"remarks":           group.DisplayName,
-		"match":             match,
-		"action":            strategy,
-		"action_value":      group.Code,
+		"id":                   group.ID,
+		"code":                 group.Code,
+		"name":                 group.Name,
+		"display_name":         group.DisplayName,
+		"strategy":             strategy,
+		"hide_member_nodes":    group.HideMemberNodes,
+		"show":                 group.Show,
+		"remote_enabled":       group.RemoteEnabled,
+		"remote_host":          group.RemoteHost,
+		"remote_ssh_port":      group.RemoteSSHPort,
+		"remote_ssh_user":      group.RemoteSSHUser,
+		"remote_ssh_password":  group.RemoteSSHPassword,
+		"remote_group_ref":     group.RemoteGroupRef,
+		"remote_exclude_names": group.RemoteExcludeNames,
+		"remote_refresh_sec":   group.RemoteRefreshSec,
+		"members":              group.Members,
+		"ips":                  group.IPs,
+		"ip_count":             len(group.IPs),
+		"created_at":           group.CreatedAt,
+		"updated_at":           group.UpdatedAt,
+		"remarks":              group.DisplayName,
+		"match":                match,
+		"action":               strategy,
+		"action_value":         group.Code,
 	}
 }
 
@@ -547,10 +632,11 @@ func parseClientEntryMatchItem(raw string) (string, int64, bool) {
 	return serverType, serverID, true
 }
 
-func buildForestEntryProviderProxies(userUUID string, servers []map[string]any, group usersvc.ClientEntryGroup) []any {
-	proxies := make([]any, 0, len(servers)*len(group.IPs))
+func buildForestEntryProviderProxies(ctx context.Context, userUUID string, servers []map[string]any, group usersvc.ClientEntryGroup, resolver clientEntryRemoteResolver) []any {
+	effectiveIPs := effectiveClientEntryGroupIPs(ctx, group, resolver)
+	proxies := make([]any, 0, len(servers)*len(effectiveIPs))
 	for _, server := range servers {
-		for _, item := range group.IPs {
+		for _, item := range effectiveIPs {
 			ip := strings.TrimSpace(item.IP)
 			if ip == "" {
 				continue
@@ -566,6 +652,36 @@ func buildForestEntryProviderProxies(userUUID string, servers []map[string]any, 
 		}
 	}
 	return proxies
+}
+
+func effectiveClientEntryGroupIPs(ctx context.Context, group usersvc.ClientEntryGroup, resolver clientEntryRemoteResolver) []usersvc.ClientEntryGroupIP {
+	result := make([]usersvc.ClientEntryGroupIP, 0, len(group.IPs)+2)
+	seen := make(map[string]struct{}, len(group.IPs)+2)
+	appendIP := func(ip string, sort *int64) {
+		ip = strings.TrimSpace(ip)
+		if ip == "" || net.ParseIP(ip) == nil {
+			return
+		}
+		if _, exists := seen[ip]; exists {
+			return
+		}
+		seen[ip] = struct{}{}
+		result = append(result, usersvc.ClientEntryGroupIP{IP: ip, Sort: sort})
+	}
+	for _, item := range group.IPs {
+		appendIP(item.IP, item.Sort)
+	}
+	if !group.RemoteEnabled || resolver == nil {
+		return result
+	}
+	remoteIPs, err := resolver.ResolveRemoteIPs(ctx, group)
+	if err != nil {
+		return result
+	}
+	for _, ip := range remoteIPs {
+		appendIP(ip, nil)
+	}
+	return result
 }
 
 func buildForestEntryVariantName(name, ip string) string {
@@ -667,4 +783,19 @@ func stringSliceContains(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func splitClientEntryTextList(raw string) []string {
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	raw = strings.ReplaceAll(raw, ",", "\n")
+	parts := strings.Split(raw, "\n")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		result = append(result, part)
+	}
+	return result
 }

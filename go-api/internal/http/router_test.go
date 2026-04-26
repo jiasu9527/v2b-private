@@ -3648,12 +3648,23 @@ func TestRouterAdminClientEntryGroupFetchEndpoint(t *testing.T) {
 	adminService := &fakeAdminService{
 		clientEntryGroups: []admin.ClientEntryGroupRecord{
 			{
-				ID:              int64(7),
-				Code:            "asia",
-				Name:            "Asia",
-				DisplayName:     "Asia Entry",
-				Strategy:        "sticky-low-latency",
-				HideMemberNodes: true,
+				ID:                int64(7),
+				Code:              "asia",
+				Name:              "Asia",
+				DisplayName:       "Asia Entry",
+				Strategy:          "sticky-low-latency",
+				HideMemberNodes:   true,
+				RemoteEnabled:     true,
+				RemoteHost:        "192.0.2.10",
+				RemoteSSHPort:     2222,
+				RemoteSSHUser:     "root",
+				RemoteSSHPassword: "secret",
+				RemoteGroupRef:    "专线直出 (#15)",
+				RemoteExcludeNames: []string{
+					"alice",
+					"bob",
+				},
+				RemoteRefreshSec: 300,
 				IPs: []admin.ClientEntryGroupIPRecord{
 					{IP: "1.1.1.1"},
 					{IP: "8.8.8.8"},
@@ -3680,6 +3691,9 @@ func TestRouterAdminClientEntryGroupFetchEndpoint(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"asia"`) || !strings.Contains(rec.Body.String(), `"ordered-fallback"`) || !strings.Contains(rec.Body.String(), `"1.1.1.1"`) {
 		t.Fatalf("expected client entry payload, got %s", rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), `"remote_enabled":true`) || !strings.Contains(rec.Body.String(), `"remote_group_ref":"专线直出 (#15)"`) || !strings.Contains(rec.Body.String(), `"remote_exclude_names":["alice","bob"]`) {
+		t.Fatalf("expected client entry payload, got %s", rec.Body.String())
+	}
 }
 
 func TestRouterAdminClientEntryGroupSaveEndpoint(t *testing.T) {
@@ -3691,7 +3705,7 @@ func TestRouterAdminClientEntryGroupSaveEndpoint(t *testing.T) {
 		WithAdminService(adminService),
 	)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry/save", strings.NewReader(`{"auth_data":"jwt-admin","id":7,"code":"asia","name":"Asia","display_name":"Asia Entry","strategy":"sticky-low-latency","hide_member_nodes":true,"match":["1.1.1.1","8.8.8.8"]}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry/save", strings.NewReader(`{"auth_data":"jwt-admin","id":7,"code":"asia","name":"Asia","display_name":"Asia Entry","strategy":"sticky-low-latency","hide_member_nodes":true,"match":["1.1.1.1","8.8.8.8"],"remote_enabled":true,"remote_host":"192.0.2.10","remote_ssh_port":2222,"remote_ssh_user":"root","remote_ssh_password":"secret","remote_group_ref":"专线直出 (#15)","remote_exclude_names":["alice","bob"],"remote_refresh_sec":300}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -3710,6 +3724,12 @@ func TestRouterAdminClientEntryGroupSaveEndpoint(t *testing.T) {
 	}
 	if len(adminService.lastClientEntrySave.IPs) != 2 || adminService.lastClientEntrySave.IPs[0].IP != "1.1.1.1" || adminService.lastClientEntrySave.IPs[1].IP != "8.8.8.8" {
 		t.Fatalf("unexpected client entry ips: %#v", adminService.lastClientEntrySave.IPs)
+	}
+	if !adminService.lastClientEntrySave.RemoteEnabled || adminService.lastClientEntrySave.RemoteHost != "192.0.2.10" || adminService.lastClientEntrySave.RemoteSSHPort != 2222 || adminService.lastClientEntrySave.RemoteGroupRef != "专线直出 (#15)" || adminService.lastClientEntrySave.RemoteRefreshSec != 300 {
+		t.Fatalf("unexpected client entry remote payload: %#v", adminService.lastClientEntrySave)
+	}
+	if len(adminService.lastClientEntrySave.RemoteExcludeNames) != 2 || adminService.lastClientEntrySave.RemoteExcludeNames[0] != "alice" || adminService.lastClientEntrySave.RemoteExcludeNames[1] != "bob" {
+		t.Fatalf("unexpected client entry remote excludes: %#v", adminService.lastClientEntrySave.RemoteExcludeNames)
 	}
 }
 

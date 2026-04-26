@@ -15,9 +15,9 @@ func TestDBServiceClientEntryGroupsReturnsShownGroupsWithBindingsAndIPs(t *testi
 	defer db.Close()
 
 	service := &DBService{db: db}
-	groupRows := sqlmock.NewRows([]string{"id", "code", "name", "display_name", "strategy", "hide_member_nodes", "show", "created_at", "updated_at"}).
-		AddRow(int64(7), "asia", "Asia", "Asia Entry", "sticky-low-latency", int64(1), int64(1), int64(100), int64(200))
-	mock.ExpectQuery(`SELECT id, code, name, display_name, strategy, hide_member_nodes, "show", created_at, updated_at\s+FROM v2_client_entry_group\s+WHERE "show" = 1\s+ORDER BY id ASC`).
+	groupRows := sqlmock.NewRows([]string{"id", "code", "name", "display_name", "strategy", "hide_member_nodes", "show", "remote_enabled", "remote_host", "remote_ssh_port", "remote_ssh_user", "remote_ssh_password", "remote_group_ref", "remote_exclude_names", "remote_refresh_sec", "created_at", "updated_at"}).
+		AddRow(int64(7), "asia", "Asia", "Asia Entry", "sticky-low-latency", int64(1), int64(1), int64(1), "192.0.2.10", int64(2222), "root", "secret", "专线直出 (#15)", `["alice","bob"]`, int64(300), int64(100), int64(200))
+	mock.ExpectQuery(`SELECT id, code, name, display_name, strategy, hide_member_nodes, "show", remote_enabled, remote_host, remote_ssh_port, remote_ssh_user, remote_ssh_password, remote_group_ref, remote_exclude_names, remote_refresh_sec, created_at, updated_at\s+FROM v2_client_entry_group\s+WHERE "show" = 1\s+ORDER BY id ASC`).
 		WillReturnRows(groupRows)
 
 	memberRows := sqlmock.NewRows([]string{"entry_group_id", "server_type", "server_id", "sort"}).
@@ -42,6 +42,12 @@ func TestDBServiceClientEntryGroupsReturnsShownGroupsWithBindingsAndIPs(t *testi
 	}
 	if groups[0].Code != "asia" || groups[0].DisplayName != "Asia Entry" || !groups[0].HideMemberNodes {
 		t.Fatalf("unexpected client entry group: %#v", groups[0])
+	}
+	if !groups[0].RemoteEnabled || groups[0].RemoteHost != "192.0.2.10" || groups[0].RemoteSSHPort != 2222 || groups[0].RemoteGroupRef != "专线直出 (#15)" || groups[0].RemoteRefreshSec != 300 {
+		t.Fatalf("unexpected client entry remote config: %#v", groups[0])
+	}
+	if len(groups[0].RemoteExcludeNames) != 2 || groups[0].RemoteExcludeNames[0] != "alice" || groups[0].RemoteExcludeNames[1] != "bob" {
+		t.Fatalf("unexpected client entry remote excludes: %#v", groups[0].RemoteExcludeNames)
 	}
 	if len(groups[0].Members) != 1 || groups[0].Members[0].ServerType != "vmess" || groups[0].Members[0].ServerID != 11 {
 		t.Fatalf("unexpected client entry group members: %#v", groups[0].Members)

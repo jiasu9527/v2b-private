@@ -152801,6 +152801,68 @@
                 } else {
                     e.match = [];
                 }
+                if (Array.isArray(e.remote_exclude_names)) {
+                    e.remote_exclude_names = e.remote_exclude_names
+                        .map((e) =>
+                            "string" === typeof e ? e.trim() : e,
+                        )
+                        .filter(
+                            (e, t, n) => !!e && n.indexOf(e) === t,
+                        );
+                } else if (
+                    e.remote_exclude_names &&
+                    "string" === typeof e.remote_exclude_names
+                ) {
+                    e.remote_exclude_names = e.remote_exclude_names
+                        .split(/\n|,/)
+                        .map((e) => e.trim())
+                        .filter(
+                            (e, t, n) => !!e && n.indexOf(e) === t,
+                        );
+                } else {
+                    e.remote_exclude_names = [];
+                }
+                var t =
+                    "string" === typeof e.display_name
+                        ? e.display_name.trim()
+                        : "string" === typeof e.name
+                          ? e.name.trim()
+                          : "string" === typeof e.remarks
+                            ? e.remarks.trim()
+                            : "";
+                t &&
+                    ((e.display_name = t),
+                    (e.name = t),
+                    (e.remarks = t));
+                ((e.remote_enabled = !!e.remote_enabled),
+                    (e.remote_host =
+                        "string" === typeof e.remote_host
+                            ? e.remote_host.trim()
+                            : ""),
+                    (e.remote_ssh_user =
+                        "string" === typeof e.remote_ssh_user
+                            ? e.remote_ssh_user.trim()
+                            : ""),
+                    (e.remote_ssh_password =
+                        "string" === typeof e.remote_ssh_password
+                            ? e.remote_ssh_password.trim()
+                            : ""),
+                    (e.remote_group_ref =
+                        "string" === typeof e.remote_group_ref
+                            ? e.remote_group_ref.trim()
+                            : ""),
+                    (e.remote_ssh_port =
+                        parseInt(e.remote_ssh_port, 10) || 0),
+                    (e.remote_refresh_sec =
+                        parseInt(e.remote_refresh_sec, 10) || 0));
+                e.remote_enabled ||
+                    ((e.remote_host = ""),
+                    (e.remote_ssh_port = 0),
+                    (e.remote_ssh_user = ""),
+                    (e.remote_ssh_password = ""),
+                    (e.remote_group_ref = ""),
+                    (e.remote_exclude_names = []),
+                    (e.remote_refresh_sec = 0));
                 delete e.ips;
                 ((e.action = "ordered-fallback"),
                     (e.strategy = "ordered-fallback"));
@@ -152866,15 +152928,78 @@
                                 f.a.createElement(y["a"], {
                                     placeholder:
                                         "\u8bf7\u8f93\u5165\u5165\u53e3\u7ec4\u540d\u79f0",
-                                    value: this.state.route.remarks,
+                                    value:
+                                        this.state.route.display_name ||
+                                        this.state.route.name ||
+                                        this.state.route.remarks,
                                     onChange: (e) => {
+                                        var t = e.target.value;
                                         this.setState({
                                             route: u()({}, this.state.route, {
-                                                remarks: e.target.value,
+                                                display_name: t,
+                                                name: t,
+                                                remarks: t,
                                             }),
                                         });
                                     },
                                 }),
+                            ),
+                            f.a.createElement(
+                                "div",
+                                {
+                                    className: "form-group",
+                                },
+                                f.a.createElement(
+                                    "label",
+                                    {
+                                        for: "example-text-input-alt",
+                                    },
+                                    "\u6570\u636e\u6e90",
+                                ),
+                                f.a.createElement(
+                                    "div",
+                                    {
+                                        className: "text-muted",
+                                        style: {
+                                            marginBottom: 8,
+                                        },
+                                    },
+                                    "\u6700\u7ec8\u4e0b\u53d1 = \u624b\u586b IP + \u8fdc\u7a0b\u7ad9\u70b9\u6293\u53d6 IP\uff0c\u7cfb\u7edf\u4f1a\u767b\u5f55\u7ad9\u70b9\u5e76\u8bfb\u53d6\u8bbe\u5907\u7ec4\u5728\u7ebf\u8bbe\u5907\u7684 ip4 / ip6\uff0c\u518d\u81ea\u52a8\u5408\u5e76\u53bb\u91cd\u3002",
+                                ),
+                                f.a.createElement(
+                                    "label",
+                                    {
+                                        style: {
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            marginBottom: 0,
+                                        },
+                                    },
+                                    f.a.createElement("input", {
+                                        type: "checkbox",
+                                        checked:
+                                            !!this.state.route
+                                                .remote_enabled,
+                                        onChange: (e) => {
+                                            this.setState({
+                                                route: u()(
+                                                    {},
+                                                    this.state.route,
+                                                    {
+                                                        remote_enabled:
+                                                            e.target.checked,
+                                                    },
+                                                ),
+                                            });
+                                        },
+                                    }),
+                                    f.a.createElement(
+                                        "span",
+                                        null,
+                                        "\u542f\u7528\u8fdc\u7a0b\u7ad9\u70b9\u6293\u53d6",
+                                    ),
+                                ),
                             ),
                             f.a.createElement(
                                 "div",
@@ -152932,6 +153057,242 @@
                                     },
                                 }),
                             ),
+                            this.state.route.remote_enabled &&
+                                f.a.createElement(
+                                    f.a.Fragment,
+                                    null,
+                                    f.a.createElement(
+                                        "div",
+                                        {
+                                            className: "form-group",
+                                        },
+                                        f.a.createElement(
+                                            "label",
+                                            {
+                                                for:
+                                                    "example-text-input-alt",
+                                            },
+                                            "\u8fdc\u7a0b\u7ad9\u70b9\u5730\u5740",
+                                        ),
+                                        f.a.createElement(y["a"], {
+                                            placeholder:
+                                                "https://iso.sllbaidu.com",
+                                            value:
+                                                this.state.route
+                                                    .remote_host,
+                                            onChange: (e) => {
+                                                this.setState({
+                                                    route: u()(
+                                                        {},
+                                                        this.state
+                                                            .route,
+                                                        {
+                                                            remote_host:
+                                                                e.target
+                                                                    .value,
+                                                        },
+                                                    ),
+                                                });
+                                            },
+                                        }),
+                                    ),
+                                    f.a.createElement(
+                                        "div",
+                                        {
+                                            className: "form-group",
+                                        },
+                                        f.a.createElement(
+                                            "label",
+                                            {
+                                                for:
+                                                    "example-text-input-alt",
+                                            },
+                                            "\u767b\u5f55\u8d26\u53f7",
+                                        ),
+                                        f.a.createElement(y["a"], {
+                                            placeholder: "admin",
+                                            value:
+                                                this.state.route
+                                                    .remote_ssh_user,
+                                            onChange: (e) => {
+                                                this.setState({
+                                                    route: u()(
+                                                        {},
+                                                        this.state
+                                                            .route,
+                                                        {
+                                                            remote_ssh_user:
+                                                                e.target
+                                                                    .value,
+                                                        },
+                                                    ),
+                                                });
+                                            },
+                                        }),
+                                    ),
+                                    f.a.createElement(
+                                        "div",
+                                        {
+                                            className: "form-group",
+                                        },
+                                        f.a.createElement(
+                                            "label",
+                                            {
+                                                for:
+                                                    "example-text-input-alt",
+                                            },
+                                            "\u767b\u5f55\u5bc6\u7801",
+                                        ),
+                                        f.a.createElement(y["a"], {
+                                            type: "password",
+                                            placeholder:
+                                                "\u8bf7\u8f93\u5165\u7ad9\u70b9\u767b\u5f55\u5bc6\u7801",
+                                            value:
+                                                this.state.route
+                                                    .remote_ssh_password,
+                                            onChange: (e) => {
+                                                this.setState({
+                                                    route: u()(
+                                                        {},
+                                                        this.state
+                                                            .route,
+                                                        {
+                                                            remote_ssh_password:
+                                                                e.target
+                                                                    .value,
+                                                        },
+                                                    ),
+                                                });
+                                            },
+                                        }),
+                                    ),
+                                    f.a.createElement(
+                                        "div",
+                                        {
+                                            className: "form-group",
+                                        },
+                                        f.a.createElement(
+                                            "label",
+                                            {
+                                                for:
+                                                    "example-text-input-alt",
+                                            },
+                                            "\u8bbe\u5907\u7ec4\u540d\u79f0 / \u5f15\u7528",
+                                        ),
+                                        f.a.createElement(y["a"], {
+                                            placeholder:
+                                                "\u4e13\u7ebf\u76f4\u51fa (#15)",
+                                            value:
+                                                this.state.route
+                                                    .remote_group_ref,
+                                            onChange: (e) => {
+                                                this.setState({
+                                                    route: u()(
+                                                        {},
+                                                        this.state
+                                                            .route,
+                                                        {
+                                                            remote_group_ref:
+                                                                e.target
+                                                                    .value,
+                                                        },
+                                                    ),
+                                                });
+                                            },
+                                        }),
+                                    ),
+                                    f.a.createElement(
+                                        "div",
+                                        {
+                                            className: "form-group",
+                                        },
+                                        f.a.createElement(
+                                            "label",
+                                            {
+                                                for:
+                                                    "example-text-input-alt",
+                                            },
+                                            "\u6392\u9664\u8bbe\u5907\u540d",
+                                        ),
+                                        f.a.createElement(y["a"].TextArea, {
+                                            rows: 4,
+                                            placeholder:
+                                                "alice\nbob",
+                                            value: Array.isArray(
+                                                this.state.route
+                                                    .remote_exclude_names,
+                                            )
+                                                ? this.state.route.remote_exclude_names.join(
+                                                      "\n",
+                                                  )
+                                                : "string" ===
+                                                    typeof this.state
+                                                        .route
+                                                        .remote_exclude_names
+                                                  ? this.state.route
+                                                        .remote_exclude_names
+                                                  : "",
+                                            onChange: (e) => {
+                                                var t;
+                                                this.setState({
+                                                    route: u()(
+                                                        {},
+                                                        this.state
+                                                            .route,
+                                                        {
+                                                            remote_exclude_names:
+                                                                null ===
+                                                                    (t =
+                                                                        e.target
+                                                                            .value) ||
+                                                                void 0 ===
+                                                                    t
+                                                                    ? void 0
+                                                                    : t.split(
+                                                                          "\n",
+                                                                      ),
+                                                        },
+                                                    ),
+                                                });
+                                            },
+                                        }),
+                                    ),
+                                    f.a.createElement(
+                                        "div",
+                                        {
+                                            className: "form-group",
+                                        },
+                                        f.a.createElement(
+                                            "label",
+                                            {
+                                                for:
+                                                    "example-text-input-alt",
+                                            },
+                                            "\u8fdc\u7a0b\u5237\u65b0\u95f4\u9694\uff08\u79d2\uff09",
+                                        ),
+                                        f.a.createElement(y["a"], {
+                                            type: "number",
+                                            placeholder: "300",
+                                            value:
+                                                this.state.route
+                                                    .remote_refresh_sec,
+                                            onChange: (e) => {
+                                                this.setState({
+                                                    route: u()(
+                                                        {},
+                                                        this.state
+                                                            .route,
+                                                        {
+                                                            remote_refresh_sec:
+                                                                e.target
+                                                                    .value,
+                                                        },
+                                                    ),
+                                                });
+                                            },
+                                        }),
+                                    ),
+                                ),
                             f.a.createElement(
                                 "div",
                                 {
@@ -152991,28 +153352,66 @@
                             key: "remarks",
                         },
                         {
+                            title: "\u6570\u636e\u6e90",
+                            dataIndex: "remote_enabled",
+                            key: "remote_enabled",
+                            render: (e, t) => {
+                                var n = Array.isArray(t.match)
+                                        ? t.match.length
+                                        : "string" === typeof t.match
+                                          ? t.match
+                                                .split(",")
+                                                .filter((e) => !!e)
+                                                .length
+                                          : 0,
+                                    r = [];
+                                return e
+                                    ? (t.remote_host &&
+                                          r.push(t.remote_host),
+                                      t.remote_group_ref &&
+                                          r.push(
+                                              t.remote_group_ref,
+                                          ),
+                                      "".concat(
+                                          n > 0
+                                              ? "\u624b\u586b + \u8fdc\u7a0b"
+                                              : "\u4ec5\u8fdc\u7a0b",
+                                          r.length > 0
+                                              ? " / ".concat(
+                                                    r.join(" / "),
+                                                )
+                                              : "",
+                                      ))
+                                    : "\u4ec5\u624b\u586b";
+                            },
+                        },
+                        {
                             title: "\u5165\u53e3 IP \u6570\u91cf",
                             dataIndex: "match",
                             key: "match",
-                            render: (e) => {
-                                var t,
-                                    n =
+                            render: (e, t) => {
+                                var n,
+                                    r =
                                         "string" === typeof e
                                             ? null ===
-                                                  (t = e
+                                                  (n = e
                                                       .split(",")
                                                       .filter((e) => !!e)) ||
-                                              void 0 === t
+                                              void 0 === n
                                                 ? void 0
-                                                : t.length
+                                                : n.length
                                             : Array.isArray(e)
                                               ? e.length
                                               : 0;
-                                return 0 === n
-                                    ? "\u672a\u914d\u7f6e\u5165\u53e3IP"
+                                return 0 === r
+                                    ? t.remote_enabled
+                                        ? "\u8fdc\u7a0b\u6e90\u5df2\u542f\u7528"
+                                        : "\u672a\u914d\u7f6e\u5165\u53e3IP"
                                     : "\u5171 ".concat(
-                                          n,
-                                          " \u4e2aIP",
+                                          r,
+                                          t.remote_enabled
+                                              ? " \u4e2a\u624b\u586bIP + \u8fdc\u7a0b\u6e90"
+                                              : " \u4e2aIP",
                                       );
                             },
                         },

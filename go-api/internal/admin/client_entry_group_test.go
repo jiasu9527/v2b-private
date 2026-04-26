@@ -15,9 +15,9 @@ func TestDBServiceListClientEntryGroupsIncludesMembersAndIPs(t *testing.T) {
 	defer db.Close()
 
 	service := &DBService{db: db}
-	groupRows := sqlmock.NewRows([]string{"id", "code", "name", "display_name", "strategy", "hide_member_nodes", "show", "created_at", "updated_at"}).
-		AddRow(int64(7), "asia", "Asia", "Asia Entry", "sticky-low-latency", int64(1), int64(1), int64(100), int64(200))
-	mock.ExpectQuery(`SELECT id, code, name, display_name, strategy, hide_member_nodes, "show", created_at, updated_at\s+FROM v2_client_entry_group\s+ORDER BY id ASC`).
+	groupRows := sqlmock.NewRows([]string{"id", "code", "name", "display_name", "strategy", "hide_member_nodes", "show", "remote_enabled", "remote_host", "remote_ssh_port", "remote_ssh_user", "remote_ssh_password", "remote_group_ref", "remote_exclude_names", "remote_refresh_sec", "created_at", "updated_at"}).
+		AddRow(int64(7), "asia", "Asia", "Asia Entry", "sticky-low-latency", int64(1), int64(1), int64(1), "192.0.2.10", int64(2222), "root", "secret", "专线直出 (#15)", `["alice","bob"]`, int64(300), int64(100), int64(200))
+	mock.ExpectQuery(`SELECT id, code, name, display_name, strategy, hide_member_nodes, "show", remote_enabled, remote_host, remote_ssh_port, remote_ssh_user, remote_ssh_password, remote_group_ref, remote_exclude_names, remote_refresh_sec, created_at, updated_at\s+FROM v2_client_entry_group\s+ORDER BY id ASC`).
 		WillReturnRows(groupRows)
 
 	memberRows := sqlmock.NewRows([]string{"entry_group_id", "server_type", "server_id", "sort"}).
@@ -44,6 +44,12 @@ func TestDBServiceListClientEntryGroupsIncludesMembersAndIPs(t *testing.T) {
 	if groups[0].Code != "asia" || groups[0].DisplayName != "Asia Entry" || groups[0].Strategy != "ordered-fallback" {
 		t.Fatalf("unexpected client entry group: %#v", groups[0])
 	}
+	if !groups[0].RemoteEnabled || groups[0].RemoteHost != "192.0.2.10" || groups[0].RemoteSSHPort != 2222 || groups[0].RemoteGroupRef != "专线直出 (#15)" || groups[0].RemoteRefreshSec != 300 {
+		t.Fatalf("unexpected client entry remote config: %#v", groups[0])
+	}
+	if len(groups[0].RemoteExcludeNames) != 2 || groups[0].RemoteExcludeNames[0] != "alice" || groups[0].RemoteExcludeNames[1] != "bob" {
+		t.Fatalf("unexpected client entry remote excludes: %#v", groups[0].RemoteExcludeNames)
+	}
 	if len(groups[0].Members) != 2 || groups[0].Members[0].ServerType != "vmess" || groups[0].Members[1].ServerID != 12 {
 		t.Fatalf("unexpected client entry group members: %#v", groups[0].Members)
 	}
@@ -67,8 +73,8 @@ func TestDBServiceSaveClientEntryGroupCreatesIPs(t *testing.T) {
 	sortB := int64(2)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`INSERT INTO v2_client_entry_group \(code, name, display_name, strategy, hide_member_nodes, "show", created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8\)\s+RETURNING id`).
-		WithArgs("asia", "Asia", "Asia Entry", "ordered-fallback", int64(1), int64(1), sqlmock.AnyArg(), sqlmock.AnyArg()).
+	mock.ExpectQuery(`INSERT INTO v2_client_entry_group \(code, name, display_name, strategy, hide_member_nodes, "show", remote_enabled, remote_host, remote_ssh_port, remote_ssh_user, remote_ssh_password, remote_group_ref, remote_exclude_names, remote_refresh_sec, created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13, \$14, \$15, \$16\)\s+RETURNING id`).
+		WithArgs("asia", "Asia", "Asia Entry", "ordered-fallback", int64(1), int64(1), int64(1), "192.0.2.10", int64(2222), "root", "secret", "专线直出 (#15)", `["alice","bob"]`, int64(300), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(7)))
 	mock.ExpectExec(`INSERT INTO v2_client_entry_group_ip \(entry_group_id, ip, sort, created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, \$5\)`).
 		WithArgs(int64(7), "1.1.1.1", int64(1), sqlmock.AnyArg(), sqlmock.AnyArg()).
@@ -79,11 +85,22 @@ func TestDBServiceSaveClientEntryGroupCreatesIPs(t *testing.T) {
 	mock.ExpectCommit()
 
 	saved, err := service.SaveClientEntryGroup(context.Background(), ClientEntryGroupSaveRequest{
-		Code:            "asia",
-		Name:            "Asia",
-		DisplayName:     "Asia Entry",
-		Strategy:        "sticky-low-latency",
-		HideMemberNodes: true,
+		Code:              "asia",
+		Name:              "Asia",
+		DisplayName:       "Asia Entry",
+		Strategy:          "sticky-low-latency",
+		HideMemberNodes:   true,
+		RemoteEnabled:     true,
+		RemoteHost:        "192.0.2.10",
+		RemoteSSHPort:     2222,
+		RemoteSSHUser:     "root",
+		RemoteSSHPassword: "secret",
+		RemoteGroupRef:    "专线直出 (#15)",
+		RemoteExcludeNames: []string{
+			"alice",
+			"bob",
+		},
+		RemoteRefreshSec: 300,
 		IPs: []ClientEntryGroupIPSaveRequest{
 			{IP: "1.1.1.1", Sort: &sortA},
 			{IP: "8.8.8.8", Sort: &sortB},
@@ -97,5 +114,40 @@ func TestDBServiceSaveClientEntryGroupCreatesIPs(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestNormalizeClientEntryRemoteSaveRequestUsesWebsiteDefaults(t *testing.T) {
+	t.Helper()
+
+	req := ClientEntryGroupSaveRequest{
+		RemoteEnabled:     true,
+		RemoteHost:        "iso.sllbaidu.com",
+		RemoteSSHUser:     "admin",
+		RemoteSSHPassword: "secret",
+		RemoteGroupRef:    "专线直出 (#15)",
+	}
+	if err := normalizeClientEntryRemoteSaveRequest(&req); err != nil {
+		t.Fatalf("normalize remote save request: %v", err)
+	}
+	if req.RemoteSSHPort != 0 {
+		t.Fatalf("expected remote website port to stay unset, got %d", req.RemoteSSHPort)
+	}
+	if req.RemoteRefreshSec != 300 {
+		t.Fatalf("expected default refresh 300, got %d", req.RemoteRefreshSec)
+	}
+
+	req.RemoteEnabled = false
+	req.RemoteHost = "https://example.com"
+	req.RemoteSSHPort = 8443
+	req.RemoteSSHUser = "admin"
+	req.RemoteSSHPassword = "secret"
+	req.RemoteGroupRef = "group"
+	req.RemoteExcludeNames = []string{"a"}
+	if err := normalizeClientEntryRemoteSaveRequest(&req); err != nil {
+		t.Fatalf("normalize disabled remote request: %v", err)
+	}
+	if req.RemoteHost != "" || req.RemoteSSHPort != 0 || req.RemoteSSHUser != "" || req.RemoteSSHPassword != "" || req.RemoteGroupRef != "" || len(req.RemoteExcludeNames) != 0 {
+		t.Fatalf("expected disabled remote config to be cleared, got %#v", req)
 	}
 }

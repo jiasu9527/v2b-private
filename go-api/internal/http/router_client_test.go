@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,23 @@ import (
 	"forest/go-api/internal/session"
 	"forest/go-api/internal/user"
 )
+
+type fakeClientEntryRemoteResolver struct {
+	ipsByCode map[string][]string
+	lastGroup user.ClientEntryGroup
+	err       error
+}
+
+func (f *fakeClientEntryRemoteResolver) ResolveRemoteIPs(_ context.Context, group user.ClientEntryGroup) ([]string, error) {
+	f.lastGroup = group
+	if f.err != nil {
+		return nil, f.err
+	}
+	values := f.ipsByCode[group.Code]
+	result := make([]string, 0, len(values))
+	result = append(result, values...)
+	return result, nil
+}
 
 func TestRouterClientAppGetVersionEndpoint(t *testing.T) {
 	t.Setenv("WINDOWS_VERSION", "1.2.3")
@@ -277,6 +295,178 @@ func TestRouterClientForestEntryProviderEndpoint(t *testing.T) {
 	}
 	if userService.lastClientToken != "token-1" {
 		t.Fatalf("expected provider endpoint to use client token, got %q", userService.lastClientToken)
+	}
+}
+
+func TestRouterUserForestRuntimeProfileEndpointIncludesRemoteOnlyEntryGroup(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 10}}
+	userService := &fakeUserService{
+		subscribe: user.Subscribe{
+			Token: "client-token-1",
+		},
+		servers: []map[string]any{
+			{
+				"id":      int64(11),
+				"type":    "vmess",
+				"name":    "JP-1",
+				"host":    "jp.example.com",
+				"port":    int64(443),
+				"network": "ws",
+				"tls":     int64(1),
+				"tls_settings": map[string]any{
+					"server_name": "jp.example.com",
+				},
+				"network_settings": map[string]any{
+					"path": "/ws",
+					"headers": map[string]any{
+						"Host": "jp.example.com",
+					},
+				},
+			},
+		},
+		clientEntryGroups: []user.ClientEntryGroup{
+			{
+				ID:                int64(7),
+				Code:              "asia",
+				Name:              "Asia",
+				DisplayName:       "Asia Entry",
+				Strategy:          "sticky-low-latency",
+				HideMemberNodes:   true,
+				RemoteEnabled:     true,
+				RemoteHost:        "192.0.2.10",
+				RemoteSSHPort:     2222,
+				RemoteSSHUser:     "root",
+				RemoteSSHPassword: "secret",
+				RemoteGroupRef:    "专线直出 (#15)",
+				RemoteExcludeNames: []string{
+					"alice",
+				},
+				RemoteRefreshSec: 300,
+				Members: []user.ClientEntryGroupMember{
+					{ServerType: "vmess", ServerID: int64(11)},
+				},
+			},
+		},
+	}
+	resolver := &fakeClientEntryRemoteResolver{
+		ipsByCode: map[string][]string{
+			"asia": {"8.8.8.8"},
+		},
+	}
+	router := NewRouter(
+		config.Config{AppURL: "https://panel.example.com"},
+		WithSessionService(sessionService),
+		WithUserService(userService),
+		WithClientEntryRemoteResolver(resolver),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/user/forest/runtime-profile?cap=entry-provider-v1", nil)
+	req.Header.Set("Authorization", "jwt-user")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("expected json body: %v", err)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object, got %#v", payload["data"])
+	}
+	entryGroups, ok := data["entry_groups"].([]any)
+	if !ok || len(entryGroups) != 1 {
+		t.Fatalf("expected one remote-backed entry group, got %#v", data["entry_groups"])
+	}
+	if resolver.lastGroup.Code != "asia" || resolver.lastGroup.RemoteGroupRef != "专线直出 (#15)" || len(resolver.lastGroup.RemoteExcludeNames) != 1 || resolver.lastGroup.RemoteExcludeNames[0] != "alice" {
+		t.Fatalf("unexpected resolver contract: %#v", resolver.lastGroup)
+	}
+}
+
+func TestRouterClientForestEntryProviderEndpointMergesRemoteIPs(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: int64(10),
+		subscribe: user.Subscribe{
+			UUID: "user-uuid",
+		},
+		servers: []map[string]any{
+			{
+				"id":      int64(11),
+				"type":    "vmess",
+				"name":    "JP-1",
+				"host":    "jp.example.com",
+				"port":    int64(443),
+				"network": "ws",
+				"tls":     int64(1),
+				"tls_settings": map[string]any{
+					"server_name": "jp.example.com",
+				},
+				"network_settings": map[string]any{
+					"path": "/ws",
+					"headers": map[string]any{
+						"Host": "jp.example.com",
+					},
+				},
+			},
+		},
+		clientEntryGroups: []user.ClientEntryGroup{
+			{
+				ID:                int64(7),
+				Code:              "asia",
+				Name:              "Asia",
+				DisplayName:       "Asia Entry",
+				Strategy:          "sticky-low-latency",
+				RemoteEnabled:     true,
+				RemoteHost:        "192.0.2.10",
+				RemoteSSHPort:     2222,
+				RemoteSSHUser:     "root",
+				RemoteSSHPassword: "secret",
+				RemoteGroupRef:    "专线直出 (#15)",
+				RemoteExcludeNames: []string{
+					"alice",
+				},
+				RemoteRefreshSec: 300,
+				IPs: []user.ClientEntryGroupIP{
+					{IP: "1.1.1.1"},
+				},
+				Members: []user.ClientEntryGroupMember{
+					{ServerType: "vmess", ServerID: int64(11)},
+				},
+			},
+		},
+	}
+	resolver := &fakeClientEntryRemoteResolver{
+		ipsByCode: map[string][]string{
+			"asia": {"8.8.8.8", "1.1.1.1"},
+		},
+	}
+	router := NewRouter(
+		config.Config{},
+		WithUserService(userService),
+		WithClientEntryRemoteResolver(resolver),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/forest/entry-provider?token=token-1&code=asia", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "JP-1 @1.1.1.1") || !strings.Contains(body, "JP-1 @8.8.8.8") {
+		t.Fatalf("expected provider yaml to include merged manual + remote ips, got %q", body)
+	}
+	if strings.Count(body, "JP-1 @1.1.1.1") != 1 {
+		t.Fatalf("expected provider yaml to dedupe duplicate ips, got %q", body)
+	}
+	if resolver.lastGroup.Code != "asia" || resolver.lastGroup.RemoteGroupRef != "专线直出 (#15)" {
+		t.Fatalf("unexpected resolver contract: %#v", resolver.lastGroup)
 	}
 }
 

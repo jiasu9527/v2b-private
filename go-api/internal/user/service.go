@@ -114,17 +114,25 @@ type ClientEntryGroupIP struct {
 }
 
 type ClientEntryGroup struct {
-	ID              int64                    `json:"id"`
-	Code            string                   `json:"code"`
-	Name            string                   `json:"name"`
-	DisplayName     string                   `json:"display_name"`
-	Strategy        string                   `json:"strategy"`
-	HideMemberNodes bool                     `json:"hide_member_nodes"`
-	Show            int64                    `json:"show"`
-	Members         []ClientEntryGroupMember `json:"members,omitempty"`
-	IPs             []ClientEntryGroupIP     `json:"ips,omitempty"`
-	CreatedAt       int64                    `json:"created_at,omitempty"`
-	UpdatedAt       int64                    `json:"updated_at,omitempty"`
+	ID                 int64                    `json:"id"`
+	Code               string                   `json:"code"`
+	Name               string                   `json:"name"`
+	DisplayName        string                   `json:"display_name"`
+	Strategy           string                   `json:"strategy"`
+	HideMemberNodes    bool                     `json:"hide_member_nodes"`
+	Show               int64                    `json:"show"`
+	RemoteEnabled      bool                     `json:"remote_enabled"`
+	RemoteHost         string                   `json:"remote_host"`
+	RemoteSSHPort      int64                    `json:"remote_ssh_port"`
+	RemoteSSHUser      string                   `json:"remote_ssh_user"`
+	RemoteSSHPassword  string                   `json:"remote_ssh_password"`
+	RemoteGroupRef     string                   `json:"remote_group_ref"`
+	RemoteExcludeNames []string                 `json:"remote_exclude_names,omitempty"`
+	RemoteRefreshSec   int64                    `json:"remote_refresh_sec"`
+	Members            []ClientEntryGroupMember `json:"members,omitempty"`
+	IPs                []ClientEntryGroupIP     `json:"ips,omitempty"`
+	CreatedAt          int64                    `json:"created_at,omitempty"`
+	UpdatedAt          int64                    `json:"updated_at,omitempty"`
 }
 
 type OrderSaveRequest struct {

@@ -34,17 +34,18 @@ type telegramWebhookService interface {
 }
 
 type routerState struct {
-	readyCheck func(context.Context) error
-	runtime    *config.RuntimeState
-	guest      guest.Service
-	passport   passport.Service
-	session    session.Service
-	user       usersvc.Service
-	payment    payment.Service
-	admin      admin.Service
-	node       nodeapi.Service
-	jobs       queue.Enqueuer
-	telegram   telegramWebhookService
+	readyCheck        func(context.Context) error
+	runtime           *config.RuntimeState
+	guest             guest.Service
+	passport          passport.Service
+	session           session.Service
+	user              usersvc.Service
+	payment           payment.Service
+	admin             admin.Service
+	node              nodeapi.Service
+	jobs              queue.Enqueuer
+	telegram          telegramWebhookService
+	clientEntryRemote clientEntryRemoteResolver
 }
 
 var managedServerRouterTypes = map[string]struct{}{
@@ -124,8 +125,16 @@ func WithTelegramService(service telegramWebhookService) Option {
 	}
 }
 
+func WithClientEntryRemoteResolver(resolver clientEntryRemoteResolver) Option {
+	return func(state *routerState) {
+		state.clientEntryRemote = resolver
+	}
+}
+
 func NewRouter(cfg config.Config, options ...Option) http.Handler {
-	state := &routerState{}
+	state := &routerState{
+		clientEntryRemote: newHTTPClientEntryRemoteResolver(),
+	}
 	for _, option := range options {
 		option(state)
 	}
@@ -301,7 +310,7 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 				return
 			}
 		case r.URL.Path == "/api/v1/client/forest/entry-provider":
-			if handleClientForestEntryProvider(w, r, cfg, state.user) {
+			if handleClientForestEntryProvider(w, r, cfg, state.user, state.clientEntryRemote) {
 				return
 			}
 		case isClientSubscribePath(cfg, r.URL.Path):
@@ -325,7 +334,7 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 				return
 			}
 		case r.URL.Path == "/api/v1/user/forest/runtime-profile":
-			if handleUserForestRuntimeProfile(w, r, cfg, state.session, state.user) {
+			if handleUserForestRuntimeProfile(w, r, cfg, state.session, state.user, state.clientEntryRemote) {
 				return
 			}
 		case r.URL.Path == "/api/v1/user/unbindTelegram":

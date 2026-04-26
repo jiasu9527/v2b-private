@@ -3,6 +3,7 @@ package user
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -13,7 +14,7 @@ func (s *DBService) ClientEntryGroups(ctx context.Context, userID int64) ([]Clie
 		return nil, ErrUnavailable
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT id, code, name, display_name, strategy, hide_member_nodes, "show", created_at, updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id, code, name, display_name, strategy, hide_member_nodes, "show", remote_enabled, remote_host, remote_ssh_port, remote_ssh_user, remote_ssh_password, remote_group_ref, remote_exclude_names, remote_refresh_sec, created_at, updated_at
 FROM v2_client_entry_group
 WHERE "show" = 1
 ORDER BY id ASC`)
@@ -26,8 +27,16 @@ ORDER BY id ASC`)
 	ids := make([]int64, 0)
 	for rows.Next() {
 		var (
-			group           ClientEntryGroup
-			hideMemberNodes int64
+			group              ClientEntryGroup
+			hideMemberNodes    int64
+			remoteEnabled      int64
+			remoteHost         string
+			remoteSSHPort      int64
+			remoteSSHUser      string
+			remoteSSHPassword  string
+			remoteGroupRef     string
+			remoteExcludeNames string
+			remoteRefreshSec   int64
 		)
 		if err := rows.Scan(
 			&group.ID,
@@ -37,6 +46,14 @@ ORDER BY id ASC`)
 			&group.Strategy,
 			&hideMemberNodes,
 			&group.Show,
+			&remoteEnabled,
+			&remoteHost,
+			&remoteSSHPort,
+			&remoteSSHUser,
+			&remoteSSHPassword,
+			&remoteGroupRef,
+			&remoteExcludeNames,
+			&remoteRefreshSec,
 			&group.CreatedAt,
 			&group.UpdatedAt,
 		); err != nil {
@@ -47,6 +64,14 @@ ORDER BY id ASC`)
 		group.DisplayName = strings.TrimSpace(group.DisplayName)
 		group.Strategy = strings.TrimSpace(group.Strategy)
 		group.HideMemberNodes = hideMemberNodes != 0
+		group.RemoteEnabled = remoteEnabled != 0
+		group.RemoteHost = strings.TrimSpace(remoteHost)
+		group.RemoteSSHPort = normalizeClientEntryRemoteSSHPort(remoteSSHPort)
+		group.RemoteSSHUser = strings.TrimSpace(remoteSSHUser)
+		group.RemoteSSHPassword = strings.TrimSpace(remoteSSHPassword)
+		group.RemoteGroupRef = strings.TrimSpace(remoteGroupRef)
+		group.RemoteExcludeNames = decodeClientEntryRemoteExcludeNames(remoteExcludeNames)
+		group.RemoteRefreshSec = normalizeClientEntryRemoteRefreshSec(remoteRefreshSec)
 		group.Members = []ClientEntryGroupMember{}
 		group.IPs = []ClientEntryGroupIP{}
 		result = append(result, group)
@@ -166,4 +191,43 @@ func buildInt64Placeholders(startAt int, values []int64) (string, []any) {
 		args = append(args, value)
 	}
 	return strings.Join(parts, ", "), args
+}
+
+func normalizeClientEntryRemoteSSHPort(value int64) int64 {
+	if value <= 0 {
+		return 0
+	}
+	return value
+}
+
+func normalizeClientEntryRemoteRefreshSec(value int64) int64 {
+	if value <= 0 {
+		return 300
+	}
+	return value
+}
+
+func decodeClientEntryRemoteExcludeNames(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{}
+	}
+	var result []string
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return []string{}
+	}
+	seen := make(map[string]struct{}, len(result))
+	normalized := make([]string, 0, len(result))
+	for _, value := range result {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	return normalized
 }
