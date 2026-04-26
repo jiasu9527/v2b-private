@@ -3318,6 +3318,7 @@
                                                 type: "setState",
                                                 payload: {
                                                     fetchLoading: !0,
+                                                    routes: [],
                                                 },
                                             })
                                         );
@@ -152822,6 +152823,7 @@
                         onClick: () =>
                             this.setState({
                                 visible: !0,
+                                route: this.props.route || {},
                             }),
                     }),
                     f.a.createElement(
