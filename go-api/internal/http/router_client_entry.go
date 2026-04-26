@@ -172,9 +172,80 @@ func handleAdminClientEntryGroupSave(w http.ResponseWriter, r *http.Request, ses
 			Sort *json.Number `json:"sort"`
 		} `json:"ips"`
 	}
-	if err := readJSONBody(r, &payload); err != nil {
+	if strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
+		if err := readJSONBody(r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+			return true
+		}
+	}
+
+	inputs, err := readInputs(r)
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
 		return true
+	}
+	if payload.ID == nil {
+		if raw := strings.TrimSpace(inputs["id"]); raw != "" {
+			value := json.Number(raw)
+			payload.ID = &value
+		}
+	}
+	if strings.TrimSpace(payload.Code) == "" {
+		payload.Code = strings.TrimSpace(inputs["code"])
+	}
+	if strings.TrimSpace(payload.Name) == "" {
+		payload.Name = strings.TrimSpace(inputs["name"])
+	}
+	if strings.TrimSpace(payload.DisplayName) == "" {
+		payload.DisplayName = strings.TrimSpace(inputs["display_name"])
+	}
+	if strings.TrimSpace(payload.Remarks) == "" {
+		payload.Remarks = strings.TrimSpace(inputs["remarks"])
+	}
+	if strings.TrimSpace(payload.Strategy) == "" {
+		payload.Strategy = strings.TrimSpace(inputs["strategy"])
+	}
+	if strings.TrimSpace(payload.Action) == "" {
+		payload.Action = strings.TrimSpace(inputs["action"])
+	}
+	if payload.ActionValue == nil {
+		if raw := strings.TrimSpace(inputs["action_value"]); raw != "" {
+			payload.ActionValue = &raw
+		}
+	}
+	if payload.HideMemberNodes == nil {
+		if raw, ok := inputs["hide_member_nodes"]; ok && strings.TrimSpace(raw) != "" {
+			value := parseBoolish(raw)
+			payload.HideMemberNodes = &value
+		}
+	}
+	if payload.Show == nil {
+		if raw := strings.TrimSpace(inputs["show"]); raw != "" {
+			value := json.Number(raw)
+			payload.Show = &value
+		}
+	}
+	if len(payload.Match) == 0 {
+		payload.Match = indexedStrings(inputs, "match")
+	}
+	if len(payload.IPs) == 0 {
+		for _, entry := range indexedNestedFieldMap(inputs, "ips") {
+			if strings.TrimSpace(entry["ip"]) == "" {
+				continue
+			}
+			var sortValue *json.Number
+			if raw := strings.TrimSpace(entry["sort"]); raw != "" {
+				value := json.Number(raw)
+				sortValue = &value
+			}
+			payload.IPs = append(payload.IPs, struct {
+				IP   string       `json:"ip"`
+				Sort *json.Number `json:"sort"`
+			}{
+				IP:   strings.TrimSpace(entry["ip"]),
+				Sort: sortValue,
+			})
+		}
 	}
 
 	id, err := jsonNumberToInt64Pointer(payload.ID)

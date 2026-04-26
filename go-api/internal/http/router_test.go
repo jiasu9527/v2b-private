@@ -3710,6 +3710,38 @@ func TestRouterAdminClientEntryGroupSaveEndpoint(t *testing.T) {
 	}
 }
 
+func TestRouterAdminClientEntryGroupSaveEndpointAcceptsLegacyFormPayload(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	body := strings.NewReader("auth_data=jwt-admin&remarks=Asia+Entry&action=sticky-low-latency&match%5B0%5D=1.1.1.1&match%5B1%5D=8.8.8.8")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry/save", body)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if adminService.lastClientEntrySave.Name != "Asia Entry" || adminService.lastClientEntrySave.DisplayName != "Asia Entry" {
+		t.Fatalf("unexpected client entry name payload: %#v", adminService.lastClientEntrySave)
+	}
+	if adminService.lastClientEntrySave.Code != "asia-entry" {
+		t.Fatalf("unexpected generated client entry code: %#v", adminService.lastClientEntrySave)
+	}
+	if adminService.lastClientEntrySave.Strategy != "sticky-low-latency" {
+		t.Fatalf("unexpected client entry strategy: %#v", adminService.lastClientEntrySave)
+	}
+	if len(adminService.lastClientEntrySave.IPs) != 2 || adminService.lastClientEntrySave.IPs[0].IP != "1.1.1.1" || adminService.lastClientEntrySave.IPs[1].IP != "8.8.8.8" {
+		t.Fatalf("unexpected client entry ips: %#v", adminService.lastClientEntrySave.IPs)
+	}
+}
+
 func TestRouterAdminClientEntryGroupDropEndpoint(t *testing.T) {
 	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
 	adminService := &fakeAdminService{}
