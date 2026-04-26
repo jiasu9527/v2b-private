@@ -470,6 +470,64 @@ func TestRouterClientForestEntryProviderEndpointMergesRemoteIPs(t *testing.T) {
 	}
 }
 
+func TestRouterClientForestEntryProviderEndpointKeepsManualDomains(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: int64(10),
+		subscribe: user.Subscribe{
+			UUID: "user-uuid",
+		},
+		servers: []map[string]any{
+			{
+				"id":      int64(11),
+				"type":    "vmess",
+				"name":    "JP-1",
+				"host":    "jp.example.com",
+				"port":    int64(443),
+				"network": "ws",
+				"tls":     int64(1),
+				"tls_settings": map[string]any{
+					"server_name": "jp.example.com",
+				},
+				"network_settings": map[string]any{
+					"path": "/ws",
+					"headers": map[string]any{
+						"Host": "jp.example.com",
+					},
+				},
+			},
+		},
+		clientEntryGroups: []user.ClientEntryGroup{
+			{
+				ID:          int64(7),
+				Code:        "asia",
+				Name:        "Asia",
+				DisplayName: "Asia Entry",
+				Strategy:    "ordered-fallback",
+				IPs: []user.ClientEntryGroupIP{
+					{IP: "entry-a.example.com"},
+				},
+				Members: []user.ClientEntryGroupMember{
+					{ServerType: "vmess", ServerID: int64(11)},
+				},
+			},
+		},
+	}
+	router := NewRouter(config.Config{}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/forest/entry-provider?token=token-1&code=asia", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "entry-a.example.com") {
+		t.Fatalf("expected provider yaml to keep manual domain entry, got %q", body)
+	}
+}
+
 func TestRouterClientSubscribeEndpoint(t *testing.T) {
 	userService := &fakeUserService{
 		resolvedClientUserID: 10,

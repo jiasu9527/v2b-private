@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 
 	"forest/go-api/internal/admin"
 	"forest/go-api/internal/config"
+	"forest/go-api/internal/platform/addrutil"
 	"forest/go-api/internal/session"
 	usersvc "forest/go-api/internal/user"
 
@@ -659,7 +659,7 @@ func effectiveClientEntryGroupIPs(ctx context.Context, group usersvc.ClientEntry
 	seen := make(map[string]struct{}, len(group.IPs)+2)
 	appendIP := func(ip string, sort *int64) {
 		ip = strings.TrimSpace(ip)
-		if ip == "" || net.ParseIP(ip) == nil {
+		if !addrutil.IsIPOrHostname(ip) {
 			return
 		}
 		if _, exists := seen[ip]; exists {

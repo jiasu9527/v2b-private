@@ -153011,12 +153011,12 @@
                                     {
                                         for: "example-text-input-alt",
                                     },
-                                    "\u5165\u53e3 IP \u5217\u8868",
+                                    "\u5165\u53e3\u5730\u5740\u5217\u8868\uff08\u652f\u6301 IP / \u57df\u540d\uff09",
                                 ),
                                 f.a.createElement(y["a"].TextArea, {
                                     rows: 5,
                                     placeholder:
-                                        "1.1.1.1\n8.8.8.8\n203.0.113.10",
+                                        "1.1.1.1\n8.8.8.8\nentry-a.example.com",
                                     value:
                                         "object" ===
                                         typeof this.state.route.match

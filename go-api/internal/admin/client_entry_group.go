@@ -6,9 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"strings"
 	"time"
+
+	"forest/go-api/internal/platform/addrutil"
 )
 
 const fixedClientEntryGroupStrategy = "ordered-fallback"
@@ -244,8 +245,8 @@ WHERE id = $1`,
 	seenIPs := make(map[string]struct{}, len(req.IPs))
 	for _, item := range req.IPs {
 		ip := strings.TrimSpace(item.IP)
-		if net.ParseIP(ip) == nil {
-			return false, errors.New("入口IP格式不正确")
+		if !addrutil.IsIPOrHostname(ip) {
+			return false, errors.New("入口地址格式不正确")
 		}
 		if _, exists := seenIPs[ip]; exists {
 			continue
