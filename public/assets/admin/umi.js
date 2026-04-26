@@ -152565,7 +152565,7 @@
                 var e = this.props.serverRoute,
                     t = e.routes,
                     n = e.fetchLoading,
-                    o = "/server/client-entry" === window.location.pathname,
+                    A = "/server/client-entry" === window.location.pathname,
                     r = [
                         {
                             title: "ID",
@@ -152573,14 +152573,14 @@
                             key: "id",
                         },
                         {
-                            title: o
+                            title: A
                                 ? "\u5165\u53e3\u7ec4\u540d\u79f0"
                                 : "\u5907\u6ce8",
                             dataIndex: "remarks",
                             key: "remarks",
                         },
                         {
-                            title: o
+                            title: A
                                 ? "\u6210\u5458\u6570\u91cf"
                                 : "\u5339\u914d\u6570\u91cf",
                             dataIndex: "match",
@@ -152600,28 +152600,28 @@
                                               ? e.length
                                               : 0;
                                 return 0 === n
-                                    ? o
+                                    ? A
                                         ? "\u672a\u914d\u7f6e\u6210\u5458"
                                         : "\u65e0\u89c4\u5219\u65f6\u9ed8\u8ba4"
                                     : "".concat(
-                                          o
+                                          A
                                               ? "\u5171 "
                                               : "\u5339\u914d ",
                                           n,
-                                          o
+                                          A
                                               ? " \u4e2a\u6210\u5458"
                                               : " \u6761\u89c4\u5219",
                                       );
                             },
                         },
                         {
-                            title: o
+                            title: A
                                 ? "\u5207\u6362\u7b56\u7565"
                                 : "\u52a8\u4f5c",
                             dataIndex: "action",
                             key: "action",
                             render: (e) => {
-                                return o
+                                return A
                                     ? {
                                           "latency-first":
                                               "\u5148\u6d4b\u901f\u518d\u9009\u6700\u4f18",
@@ -152674,7 +152674,7 @@
                 return f.a.createElement(
                     d["a"],
                     i()({}, this.props, {
-                        title: o
+                        title: A
                             ? "\u5ba2\u6237\u7aef\u5165\u53e3"
                             : "\u8def\u7531\u7ba1\u7406",
                     }),
@@ -152716,7 +152716,7 @@
                                             f.a.createElement(s["a"], {
                                                 type: "plus",
                                             }),
-                                            o
+                                            A
                                                 ? " \u6dfb\u52a0\u5ba2\u6237\u7aef\u5165\u53e3"
                                                 : " \u6dfb\u52a0\u8def\u7531",
                                         ),
