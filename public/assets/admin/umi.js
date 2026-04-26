@@ -3288,6 +3288,12 @@
             saveLoading: !1,
             fetchLoading: !1,
         };
+        function currentAdminRoutePath() {
+            var e = window.location.hash || "",
+                t = e.indexOf("#"),
+                n = t >= 0 ? e.slice(t + 1) : e;
+            return n && "/" !== n.charAt(0) && (n = "/" + n), n || window.location.pathname;
+        }
         t["default"] = {
             name: "serverRoute",
             state: i()({}, s),
@@ -3323,7 +3329,7 @@
                                                     window.settings
                                                         .secure_path +
                                                     ("/server/client-entry" ===
-                                                    window.location.pathname
+                                                    currentAdminRoutePath()
                                                         ? "/server/client-entry/fetch"
                                                         : "/server/route/fetch"),
                                             )
@@ -3378,7 +3384,7 @@
                                                     window.settings
                                                         .secure_path +
                                                     ("/server/client-entry" ===
-                                                    window.location.pathname
+                                                    currentAdminRoutePath()
                                                         ? "/server/client-entry/drop"
                                                         : "/server/route/drop"),
                                                 {
@@ -3423,7 +3429,7 @@
                                                     window.settings
                                                         .secure_path +
                                                     ("/server/client-entry" ===
-                                                    window.location.pathname
+                                                    currentAdminRoutePath()
                                                         ? "/server/client-entry/save"
                                                         : "/server/route/save"),
                                                 n,
@@ -152130,6 +152136,12 @@
             v = (n("OaEy"), n("2fM7")),
             y = (n("5NDa"), n("5rEg")),
             b = n("tI4l");
+        function currentAdminHashRoutePath() {
+            var e = window.location.hash || "",
+                t = e.indexOf("#"),
+                n = t >= 0 ? e.slice(t + 1) : e;
+            return n && "/" !== n.charAt(0) && (n = "/" + n), n || window.location.pathname;
+        }
         class w extends f.a.Component {
             constructor(e) {
                 (super(e),
@@ -152162,7 +152174,7 @@
                     t,
                     n,
                     r = this.props.serverRoute.fetchLoading,
-                    o = "/server/client-entry" === window.location.pathname;
+                    o = "/server/client-entry" === currentAdminHashRoutePath();
                 return f.a.createElement(
                     f.a.Fragment,
                     null,
@@ -152589,7 +152601,7 @@
                 var e = this.props.serverRoute,
                     t = e.routes,
                     n = e.fetchLoading,
-                    A = "/server/client-entry" === window.location.pathname,
+                    A = "/server/client-entry" === currentAdminHashRoutePath(),
                     r = [
                         {
                             title: "ID",
@@ -153156,7 +153168,7 @@
             };
         })(ClientEntryPage);
         t["default"] = function (e) {
-            return "/server/client-entry" === window.location.pathname
+            return "/server/client-entry" === currentAdminHashRoutePath()
                 ? f.a.createElement(ClientEntryPageConnected, e)
                 : f.a.createElement(RoutePageConnected, e);
         };
