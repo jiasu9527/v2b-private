@@ -185,6 +185,9 @@ func TestRouterUserForestRuntimeProfileEndpoint(t *testing.T) {
 	if group["code"] != "asia" || group["display_name"] != "Asia Entry" {
 		t.Fatalf("unexpected runtime entry group: %#v", group)
 	}
+	if group["strategy"] != "ordered-fallback" {
+		t.Fatalf("unexpected normalized runtime strategy: %#v", group["strategy"])
+	}
 	if group["provider_url"] != "https://panel.example.com/api/v1/client/forest/entry-provider?token=client-token-1&code=asia" {
 		t.Fatalf("unexpected provider_url: %#v", group["provider_url"])
 	}

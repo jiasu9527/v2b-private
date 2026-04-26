@@ -21,6 +21,7 @@ const (
 	forestEntryHealthcheckURL         = "https://cp.cloudflare.com/generate_204"
 	forestEntryHealthcheckIntervalSec = 180
 	forestEntryHealthcheckTimeoutMS   = 3000
+	fixedClientEntryStrategy          = "ordered-fallback"
 )
 
 func handleUserForestRuntimeProfile(w http.ResponseWriter, r *http.Request, cfg config.Config, sessionService session.Service, userService usersvc.Service) bool {
@@ -306,6 +307,7 @@ func handleAdminClientEntryGroupSave(w http.ResponseWriter, r *http.Request, ses
 	if strategy == "" {
 		strategy = strings.TrimSpace(payload.Action)
 	}
+	strategy = normalizeClientEntryStrategy(strategy)
 	if code == "" {
 		code = normalizeClientEntryCode(displayName)
 	}
@@ -498,10 +500,10 @@ func int64FromAny(value any) int64 {
 
 func normalizeClientEntryStrategy(value string) string {
 	switch strings.TrimSpace(value) {
-	case "latency-first", "sticky-low-latency", "ordered-fallback":
-		return strings.TrimSpace(value)
+	case "latency-first", "sticky-low-latency", "ordered-fallback", "":
+		return fixedClientEntryStrategy
 	default:
-		return "ordered-fallback"
+		return fixedClientEntryStrategy
 	}
 }
 
@@ -510,13 +512,14 @@ func decorateClientEntryGroupForAdminPage(group admin.ClientEntryGroupRecord) ma
 	for _, item := range group.IPs {
 		match = append(match, strings.TrimSpace(item.IP))
 	}
+	strategy := normalizeClientEntryStrategy(group.Strategy)
 
 	return map[string]any{
 		"id":                group.ID,
 		"code":              group.Code,
 		"name":              group.Name,
 		"display_name":      group.DisplayName,
-		"strategy":          group.Strategy,
+		"strategy":          strategy,
 		"hide_member_nodes": group.HideMemberNodes,
 		"show":              group.Show,
 		"members":           group.Members,
@@ -526,7 +529,7 @@ func decorateClientEntryGroupForAdminPage(group admin.ClientEntryGroupRecord) ma
 		"updated_at":        group.UpdatedAt,
 		"remarks":           group.DisplayName,
 		"match":             match,
-		"action":            group.Strategy,
+		"action":            strategy,
 		"action_value":      group.Code,
 	}
 }

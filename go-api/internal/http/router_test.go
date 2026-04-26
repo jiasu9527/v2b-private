@@ -3677,7 +3677,7 @@ func TestRouterAdminClientEntryGroupFetchEndpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), `"asia"`) || !strings.Contains(rec.Body.String(), `"sticky-low-latency"`) || !strings.Contains(rec.Body.String(), `"1.1.1.1"`) {
+	if !strings.Contains(rec.Body.String(), `"asia"`) || !strings.Contains(rec.Body.String(), `"ordered-fallback"`) || !strings.Contains(rec.Body.String(), `"1.1.1.1"`) {
 		t.Fatalf("expected client entry payload, got %s", rec.Body.String())
 	}
 }
@@ -3704,6 +3704,9 @@ func TestRouterAdminClientEntryGroupSaveEndpoint(t *testing.T) {
 	}
 	if adminService.lastClientEntrySave.Code != "asia" || adminService.lastClientEntrySave.DisplayName != "Asia Entry" {
 		t.Fatalf("unexpected client entry save payload: %#v", adminService.lastClientEntrySave)
+	}
+	if adminService.lastClientEntrySave.Strategy != "ordered-fallback" {
+		t.Fatalf("unexpected normalized client entry strategy: %#v", adminService.lastClientEntrySave)
 	}
 	if len(adminService.lastClientEntrySave.IPs) != 2 || adminService.lastClientEntrySave.IPs[0].IP != "1.1.1.1" || adminService.lastClientEntrySave.IPs[1].IP != "8.8.8.8" {
 		t.Fatalf("unexpected client entry ips: %#v", adminService.lastClientEntrySave.IPs)
@@ -3734,7 +3737,7 @@ func TestRouterAdminClientEntryGroupSaveEndpointAcceptsLegacyFormPayload(t *test
 	if adminService.lastClientEntrySave.Code != "asia-entry" {
 		t.Fatalf("unexpected generated client entry code: %#v", adminService.lastClientEntrySave)
 	}
-	if adminService.lastClientEntrySave.Strategy != "sticky-low-latency" {
+	if adminService.lastClientEntrySave.Strategy != "ordered-fallback" {
 		t.Fatalf("unexpected client entry strategy: %#v", adminService.lastClientEntrySave)
 	}
 	if len(adminService.lastClientEntrySave.IPs) != 2 || adminService.lastClientEntrySave.IPs[0].IP != "1.1.1.1" || adminService.lastClientEntrySave.IPs[1].IP != "8.8.8.8" {

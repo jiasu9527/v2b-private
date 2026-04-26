@@ -152800,6 +152800,8 @@
                 } else {
                     e.match = [];
                 }
+                ((e.action = "ordered-fallback"),
+                    (e.strategy = "ordered-fallback"));
                 this.props.dispatch({
                     type: "serverRoute/save",
                     params: e,
@@ -152937,53 +152939,14 @@
                                     {
                                         for: "example-text-input-alt",
                                     },
-                                    "\u5165\u53e3 IP \u5207\u6362\u7b56\u7565",
+                                    "\u5165\u53e3\u5207\u6362\u903b\u8f91",
                                 ),
                                 f.a.createElement(
                                     "div",
-                                    null,
-                                    f.a.createElement(
-                                        v["a"],
-                                        {
-                                            value: this.state.route.action,
-                                            placeholder:
-                                                "\u8bf7\u9009\u62e9\u5165\u53e3 IP \u5207\u6362\u7b56\u7565",
-                                            style: {
-                                                width: "100%",
-                                            },
-                                            onChange: (e) =>
-                                                this.setState({
-                                                    route: u()(
-                                                        {},
-                                                        this.state.route,
-                                                        {
-                                                            action: e,
-                                                        },
-                                                    ),
-                                                }),
-                                        },
-                                        f.a.createElement(
-                                            v["a"].Option,
-                                            {
-                                                value: "latency-first",
-                                            },
-                                            "\u5148\u6d4b\u901f\u518d\u9009\u6700\u4f18",
-                                        ),
-                                        f.a.createElement(
-                                            v["a"].Option,
-                                            {
-                                                value: "sticky-low-latency",
-                                            },
-                                            "\u4f4e\u5ef6\u8fdf\u7c98\u6ede\u5207\u6362",
-                                        ),
-                                        f.a.createElement(
-                                            v["a"].Option,
-                                            {
-                                                value: "ordered-fallback",
-                                            },
-                                            "\u6309\u987a\u5e8f\u6545\u969c\u8f6c\u79fb",
-                                        ),
-                                    ),
+                                    {
+                                        className: "text-muted",
+                                    },
+                                    "\u56fa\u5b9a\u903b\u8f91\uff1a\u5148\u6d4b\u901f\u6392\u5e8f\uff0c\u5f02\u5e38\u65f6\u81ea\u52a8\u5207\u6362\u540c\u8282\u70b9\u5165\u53e3",
                                 ),
                             ),
                         ),
@@ -153051,20 +153014,11 @@
                             },
                         },
                         {
-                            title: "\u5165\u53e3 IP \u5207\u6362\u7b56\u7565",
+                            title: "\u5165\u53e3\u5207\u6362\u903b\u8f91",
                             dataIndex: "action",
                             key: "action",
-                            render: (e) => {
-                                return (
-                                    {
-                                        "latency-first":
-                                            "\u5148\u6d4b\u901f\u518d\u9009\u6700\u4f18",
-                                        "sticky-low-latency":
-                                            "\u4f4e\u5ef6\u8fdf\u7c98\u6ede\u5207\u6362",
-                                        "ordered-fallback":
-                                            "\u6309\u987a\u5e8f\u6545\u969c\u8f6c\u79fb",
-                                    }[e] || e
-                                );
+                            render: () => {
+                                return "\u56fa\u5b9a\uff1a\u5148\u6d4b\u901f\u6392\u5e8f\uff0c\u5f02\u5e38\u65f6\u81ea\u52a8\u5207\u6362\u540c\u8282\u70b9\u5165\u53e3";
                             },
                         },
                         {

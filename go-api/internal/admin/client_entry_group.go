@@ -10,11 +10,7 @@ import (
 	"time"
 )
 
-var allowedClientEntryStrategies = map[string]struct{}{
-	"latency-first":      {},
-	"sticky-low-latency": {},
-	"ordered-fallback":   {},
-}
+const fixedClientEntryGroupStrategy = "ordered-fallback"
 
 type clientEntryGroupRow struct {
 	ID              int64
@@ -70,7 +66,7 @@ FROM v2_client_entry_group`
 			Code:            strings.TrimSpace(row.Code),
 			Name:            strings.TrimSpace(row.Name),
 			DisplayName:     strings.TrimSpace(row.DisplayName),
-			Strategy:        strings.TrimSpace(row.Strategy),
+			Strategy:        normalizeClientEntryGroupStrategy(row.Strategy),
 			HideMemberNodes: row.HideMemberNodes != 0,
 			Show:            row.Show,
 			CreatedAt:       row.CreatedAt,
@@ -110,7 +106,7 @@ func (s *DBService) SaveClientEntryGroup(ctx context.Context, req ClientEntryGro
 	req.Code = strings.TrimSpace(req.Code)
 	req.Name = strings.TrimSpace(req.Name)
 	req.DisplayName = strings.TrimSpace(req.DisplayName)
-	req.Strategy = strings.TrimSpace(req.Strategy)
+	req.Strategy = normalizeClientEntryGroupStrategy(req.Strategy)
 	if req.Code == "" {
 		return false, errors.New("入口组标识不能为空")
 	}
@@ -119,9 +115,6 @@ func (s *DBService) SaveClientEntryGroup(ctx context.Context, req ClientEntryGro
 	}
 	if req.DisplayName == "" {
 		req.DisplayName = req.Name
-	}
-	if _, ok := allowedClientEntryStrategies[req.Strategy]; !ok {
-		return false, errors.New("入口组策略不正确")
 	}
 	if len(req.IPs) == 0 {
 		return false, errors.New("入口IP不能为空")
@@ -213,6 +206,10 @@ VALUES ($1, $2, $3, $4, $5)`,
 		return false, errors.New("保存失败")
 	}
 	return true, nil
+}
+
+func normalizeClientEntryGroupStrategy(_ string) string {
+	return fixedClientEntryGroupStrategy
 }
 
 func (s *DBService) DeleteClientEntryGroup(ctx context.Context, id int64) (bool, error) {

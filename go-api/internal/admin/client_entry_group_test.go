@@ -41,7 +41,7 @@ func TestDBServiceListClientEntryGroupsIncludesMembersAndIPs(t *testing.T) {
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 group, got %#v", groups)
 	}
-	if groups[0].Code != "asia" || groups[0].DisplayName != "Asia Entry" || groups[0].Strategy != "sticky-low-latency" {
+	if groups[0].Code != "asia" || groups[0].DisplayName != "Asia Entry" || groups[0].Strategy != "ordered-fallback" {
 		t.Fatalf("unexpected client entry group: %#v", groups[0])
 	}
 	if len(groups[0].Members) != 2 || groups[0].Members[0].ServerType != "vmess" || groups[0].Members[1].ServerID != 12 {
@@ -68,7 +68,7 @@ func TestDBServiceSaveClientEntryGroupCreatesIPs(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_group \(code, name, display_name, strategy, hide_member_nodes, "show", created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8\)\s+RETURNING id`).
-		WithArgs("asia", "Asia", "Asia Entry", "sticky-low-latency", int64(1), int64(1), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs("asia", "Asia", "Asia Entry", "ordered-fallback", int64(1), int64(1), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(7)))
 	mock.ExpectExec(`INSERT INTO v2_client_entry_group_ip \(entry_group_id, ip, sort, created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, \$5\)`).
 		WithArgs(int64(7), "1.1.1.1", int64(1), sqlmock.AnyArg(), sqlmock.AnyArg()).
