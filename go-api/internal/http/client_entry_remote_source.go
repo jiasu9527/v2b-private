@@ -23,6 +23,10 @@ type clientEntryRemoteResolver interface {
 	ResolveRemoteIPs(ctx context.Context, group usersvc.ClientEntryGroup) ([]string, error)
 }
 
+type clientEntryRemoteRefresher interface {
+	RefreshRemoteIPs(ctx context.Context, group usersvc.ClientEntryGroup) ([]string, error)
+}
+
 type clientEntryRemoteCacheEntry struct {
 	IPs       []string
 	ExpiresAt time.Time
@@ -71,6 +75,14 @@ func newHTTPClientEntryRemoteResolver() clientEntryRemoteResolver {
 }
 
 func (r *httpClientEntryRemoteResolver) ResolveRemoteIPs(ctx context.Context, group usersvc.ClientEntryGroup) ([]string, error) {
+	return r.resolveRemoteIPs(ctx, group, false)
+}
+
+func (r *httpClientEntryRemoteResolver) RefreshRemoteIPs(ctx context.Context, group usersvc.ClientEntryGroup) ([]string, error) {
+	return r.resolveRemoteIPs(ctx, group, true)
+}
+
+func (r *httpClientEntryRemoteResolver) resolveRemoteIPs(ctx context.Context, group usersvc.ClientEntryGroup, force bool) ([]string, error) {
 	if !group.RemoteEnabled {
 		return nil, nil
 	}
@@ -80,7 +92,7 @@ func (r *httpClientEntryRemoteResolver) ResolveRemoteIPs(ctx context.Context, gr
 
 	r.mu.Lock()
 	cached, cachedOK := r.cache[cacheKey]
-	if cachedOK && now.Before(cached.ExpiresAt) {
+	if !force && cachedOK && now.Before(cached.ExpiresAt) {
 		values := append([]string(nil), cached.IPs...)
 		r.mu.Unlock()
 		return values, nil
@@ -89,7 +101,7 @@ func (r *httpClientEntryRemoteResolver) ResolveRemoteIPs(ctx context.Context, gr
 
 	values, err := fetchClientEntryRemoteIPsOverHTTP(ctx, r.client, group)
 	if err != nil {
-		if cachedOK && len(cached.IPs) > 0 {
+		if !force && cachedOK && len(cached.IPs) > 0 {
 			return append([]string(nil), cached.IPs...), nil
 		}
 		return nil, err

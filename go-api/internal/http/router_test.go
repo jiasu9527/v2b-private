@@ -3696,6 +3696,118 @@ func TestRouterAdminClientEntryGroupFetchEndpoint(t *testing.T) {
 	}
 }
 
+func TestRouterAdminClientEntryGroupFetchEndpointIncludesRemotePreview(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{
+		clientEntryGroups: []admin.ClientEntryGroupRecord{
+			{
+				ID:               7,
+				Code:             "asia",
+				Name:             "Asia",
+				DisplayName:      "Asia Entry",
+				Strategy:         "ordered-fallback",
+				RemoteEnabled:    true,
+				RemoteHost:       "https://iso.example.com",
+				RemoteGroupRef:   "专线直出 (#15)",
+				RemoteRefreshSec: 300,
+				IPs: []admin.ClientEntryGroupIPRecord{
+					{IP: "1.1.1.1"},
+				},
+			},
+		},
+	}
+	resolver := &fakeClientEntryRemoteResolver{
+		ipsByCode: map[string][]string{
+			"asia": {"203.0.113.7", "entry-a.example.com"},
+		},
+	}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+		WithClientEntryRemoteResolver(resolver),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/server/client-entry/fetch?auth_data=jwt-admin", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"remote_resolved_ips":["203.0.113.7","entry-a.example.com"]`) {
+		t.Fatalf("expected remote preview in payload, got %s", body)
+	}
+	if !strings.Contains(body, `"remote_resolved_count":2`) {
+		t.Fatalf("expected remote resolved count, got %s", body)
+	}
+	if !strings.Contains(body, `"effective_entries":["1.1.1.1","203.0.113.7","entry-a.example.com"]`) {
+		t.Fatalf("expected effective entries in payload, got %s", body)
+	}
+	if !strings.Contains(body, `"effective_entry_count":3`) {
+		t.Fatalf("expected effective entry count, got %s", body)
+	}
+	if resolver.lastGroup.Code != "asia" {
+		t.Fatalf("expected resolver to receive asia group, got %#v", resolver.lastGroup)
+	}
+}
+
+func TestRouterAdminClientEntryGroupResolveEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{
+		clientEntryGroups: []admin.ClientEntryGroupRecord{
+			{
+				ID:               7,
+				Code:             "asia",
+				Name:             "Asia",
+				DisplayName:      "Asia Entry",
+				Strategy:         "ordered-fallback",
+				RemoteEnabled:    true,
+				RemoteHost:       "https://iso.example.com",
+				RemoteGroupRef:   "专线直出 (#15)",
+				RemoteRefreshSec: 300,
+				IPs: []admin.ClientEntryGroupIPRecord{
+					{IP: "1.1.1.1"},
+				},
+			},
+		},
+	}
+	resolver := &fakeClientEntryRemoteResolver{
+		ipsByCode: map[string][]string{
+			"asia": {"203.0.113.9", "entry-b.example.com"},
+		},
+	}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+		WithClientEntryRemoteResolver(resolver),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry/resolve", strings.NewReader("auth_data=jwt-admin&id=7"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"id":7`) {
+		t.Fatalf("expected resolved group id in payload, got %s", body)
+	}
+	if !strings.Contains(body, `"remote_resolved_ips":["203.0.113.9","entry-b.example.com"]`) {
+		t.Fatalf("expected remote resolve payload, got %s", body)
+	}
+	if !strings.Contains(body, `"effective_entry_count":3`) {
+		t.Fatalf("expected effective entry count, got %s", body)
+	}
+	if adminService.lastClientEntryID == nil || *adminService.lastClientEntryID != 7 {
+		t.Fatalf("expected resolve endpoint to query group 7, got %#v", adminService.lastClientEntryID)
+	}
+}
+
 func TestRouterAdminClientEntryGroupSaveEndpoint(t *testing.T) {
 	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
 	adminService := &fakeAdminService{}

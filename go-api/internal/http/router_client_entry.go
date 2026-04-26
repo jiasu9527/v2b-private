@@ -113,7 +113,7 @@ func handleClientForestEntryProvider(w http.ResponseWriter, r *http.Request, cfg
 	return true
 }
 
-func handleAdminClientEntryGroupFetch(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+func handleAdminClientEntryGroupFetch(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service, resolver clientEntryRemoteResolver) bool {
 	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
 		return true
 	}
@@ -143,9 +143,45 @@ func handleAdminClientEntryGroupFetch(w http.ResponseWriter, r *http.Request, se
 	}
 	payload := make([]map[string]any, 0, len(data))
 	for _, group := range data {
-		payload = append(payload, decorateClientEntryGroupForAdminPage(group))
+		payload = append(payload, buildAdminClientEntryGroupPayload(r.Context(), group, resolver, false))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": payload})
+	return true
+}
+
+func handleAdminClientEntryGroupResolve(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service, resolver clientEntryRemoteResolver) bool {
+	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+
+	inputs, err := readInputs(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+	rawID := strings.TrimSpace(inputs["id"])
+	id, err := strconv.ParseInt(rawID, 10, 64)
+	if err != nil || id <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "入口组不存在"})
+		return true
+	}
+
+	data, err := adminService.ListClientEntryGroups(r.Context(), &id)
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	if len(data) == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]any{"message": "入口组不存在"})
+		return true
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data": buildAdminClientEntryGroupPayload(r.Context(), data[0], resolver, true),
+	})
 	return true
 }
 
@@ -617,6 +653,129 @@ func decorateClientEntryGroupForAdminPage(group admin.ClientEntryGroupRecord) ma
 		"action":               strategy,
 		"action_value":         group.Code,
 	}
+}
+
+func buildAdminClientEntryGroupPayload(ctx context.Context, group admin.ClientEntryGroupRecord, resolver clientEntryRemoteResolver, forceRefresh bool) map[string]any {
+	payload := decorateClientEntryGroupForAdminPage(group)
+	staticEntries := sanitizeClientEntryPreviewValues(payload["match"])
+	remoteEntries := make([]string, 0)
+	remoteError := ""
+
+	if group.RemoteEnabled && resolver != nil {
+		values, err := resolveClientEntryGroupPreviewRemoteIPs(ctx, resolver, adminClientEntryGroupRecordToUserGroup(group), forceRefresh)
+		if err != nil {
+			remoteError = err.Error()
+		} else {
+			remoteEntries = sanitizeClientEntryPreviewValues(values)
+		}
+	}
+
+	effectiveEntries := mergeClientEntryPreviewValues(staticEntries, remoteEntries)
+	payload["static_entries"] = staticEntries
+	payload["static_entry_count"] = len(staticEntries)
+	payload["remote_resolved_ips"] = remoteEntries
+	payload["remote_resolved_count"] = len(remoteEntries)
+	payload["remote_resolve_error"] = remoteError
+	payload["effective_entries"] = effectiveEntries
+	payload["effective_entry_count"] = len(effectiveEntries)
+	return payload
+}
+
+func resolveClientEntryGroupPreviewRemoteIPs(ctx context.Context, resolver clientEntryRemoteResolver, group usersvc.ClientEntryGroup, forceRefresh bool) ([]string, error) {
+	if resolver == nil {
+		return nil, nil
+	}
+	if forceRefresh {
+		if refresher, ok := resolver.(clientEntryRemoteRefresher); ok {
+			return refresher.RefreshRemoteIPs(ctx, group)
+		}
+	}
+	return resolver.ResolveRemoteIPs(ctx, group)
+}
+
+func adminClientEntryGroupRecordToUserGroup(group admin.ClientEntryGroupRecord) usersvc.ClientEntryGroup {
+	result := usersvc.ClientEntryGroup{
+		ID:                 group.ID,
+		Code:               strings.TrimSpace(group.Code),
+		Name:               strings.TrimSpace(group.Name),
+		DisplayName:        strings.TrimSpace(group.DisplayName),
+		Strategy:           normalizeClientEntryStrategy(group.Strategy),
+		HideMemberNodes:    group.HideMemberNodes,
+		RemoteEnabled:      group.RemoteEnabled,
+		RemoteHost:         strings.TrimSpace(group.RemoteHost),
+		RemoteSSHPort:      group.RemoteSSHPort,
+		RemoteSSHUser:      strings.TrimSpace(group.RemoteSSHUser),
+		RemoteSSHPassword:  strings.TrimSpace(group.RemoteSSHPassword),
+		RemoteGroupRef:     strings.TrimSpace(group.RemoteGroupRef),
+		RemoteExcludeNames: append([]string(nil), group.RemoteExcludeNames...),
+		RemoteRefreshSec:   group.RemoteRefreshSec,
+		Members:            make([]usersvc.ClientEntryGroupMember, 0, len(group.Members)),
+		IPs:                make([]usersvc.ClientEntryGroupIP, 0, len(group.IPs)),
+	}
+	for _, member := range group.Members {
+		result.Members = append(result.Members, usersvc.ClientEntryGroupMember{
+			ServerType: strings.TrimSpace(member.ServerType),
+			ServerID:   member.ServerID,
+			Sort:       member.Sort,
+		})
+	}
+	for _, item := range group.IPs {
+		result.IPs = append(result.IPs, usersvc.ClientEntryGroupIP{
+			IP:   strings.TrimSpace(item.IP),
+			Sort: item.Sort,
+		})
+	}
+	return result
+}
+
+func sanitizeClientEntryPreviewValues(raw any) []string {
+	seen := make(map[string]struct{})
+	result := make([]string, 0)
+	appendValue := func(value string) {
+		value = strings.TrimSpace(value)
+		if !addrutil.IsIPOrHostname(value) {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	switch values := raw.(type) {
+	case []string:
+		for _, value := range values {
+			appendValue(value)
+		}
+	case []any:
+		for _, value := range values {
+			appendValue(fmt.Sprint(value))
+		}
+	}
+	return result
+}
+
+func mergeClientEntryPreviewValues(staticEntries, remoteEntries []string) []string {
+	result := make([]string, 0, len(staticEntries)+len(remoteEntries))
+	seen := make(map[string]struct{}, len(staticEntries)+len(remoteEntries))
+	appendValue := func(value string) {
+		value = strings.TrimSpace(value)
+		if !addrutil.IsIPOrHostname(value) {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	for _, value := range staticEntries {
+		appendValue(value)
+	}
+	for _, value := range remoteEntries {
+		appendValue(value)
+	}
+	return result
 }
 
 func parseClientEntryMatchItem(raw string) (string, int64, bool) {

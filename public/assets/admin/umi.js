@@ -3458,6 +3458,51 @@
                         }, e);
                     })();
                 },
+                resolve(e, t) {
+                    var n = e.id,
+                        r = e.callback,
+                        i = t.put;
+                    return a().mark(function e() {
+                        var t;
+                        return a().wrap(function (e) {
+                            while (1)
+                                switch ((e.prev = e.next)) {
+                                    case 0:
+                                        return (
+                                            (e.next = 2),
+                                            Object(o["b"])(
+                                                "/" +
+                                                    window.settings
+                                                        .secure_path +
+                                                    "/server/client-entry/resolve",
+                                                {
+                                                    id: n,
+                                                },
+                                            )
+                                        );
+                                    case 2:
+                                        if (((t = e.sent), 200 === t.code)) {
+                                            e.next = 5;
+                                            break;
+                                        }
+                                        e.next = 7;
+                                        break;
+                                    case 5:
+                                        return (
+                                            (e.next = 7),
+                                            i({
+                                                type: "fetch",
+                                            })
+                                        );
+                                    case 7:
+                                        "function" === typeof r && r(t);
+                                    case 8:
+                                    case "end":
+                                        return e.stop();
+                                }
+                        }, e);
+                    })();
+                },
             },
         };
     },
@@ -153325,6 +153370,12 @@
             };
         })(ClientEntryModal);
         class ClientEntryPage extends f.a.Component {
+            constructor(e) {
+                (super(e),
+                    (this.state = {
+                        resolvingID: 0,
+                    }));
+            }
             componentDidMount() {
                 this.props.dispatch({
                     type: "serverRoute/fetch",
@@ -153336,11 +153387,26 @@
                     id: e,
                 });
             }
+            resolve(e) {
+                this.setState({
+                    resolvingID: e,
+                }),
+                    this.props.dispatch({
+                        type: "serverRoute/resolve",
+                        id: e,
+                        callback: () => {
+                            this.setState({
+                                resolvingID: 0,
+                            });
+                        },
+                    });
+            }
             render() {
                 var e = this.props.serverRoute,
                     t = Array.isArray(e.routes) ? e.routes : [],
                     n = e.fetchLoading,
-                    r = [
+                    r = this.state.resolvingID,
+                    c = [
                         {
                             title: "ID",
                             dataIndex: "id",
@@ -153386,33 +153452,126 @@
                             },
                         },
                         {
-                            title: "\u5165\u53e3 IP \u6570\u91cf",
-                            dataIndex: "match",
-                            key: "match",
+                            title: "\u5165\u53e3\u6570\u91cf",
+                            dataIndex: "effective_entry_count",
+                            key: "effective_entry_count",
                             render: (e, t) => {
-                                var n,
+                                var n =
+                                        "number" ===
+                                        typeof t.static_entry_count
+                                            ? t.static_entry_count
+                                            : Array.isArray(t.match)
+                                              ? t.match.length
+                                              : 0,
                                     r =
-                                        "string" === typeof e
-                                            ? null ===
-                                                  (n = e
-                                                      .split(",")
-                                                      .filter((e) => !!e)) ||
-                                              void 0 === n
-                                                ? void 0
-                                                : n.length
-                                            : Array.isArray(e)
-                                              ? e.length
-                                              : 0;
-                                return 0 === r
+                                        "number" ===
+                                        typeof t.remote_resolved_count
+                                            ? t.remote_resolved_count
+                                            : 0,
+                                    i =
+                                        "number" === typeof e
+                                            ? e
+                                            : "number" ===
+                                                typeof t.effective_entry_count
+                                              ? t.effective_entry_count
+                                              : n + r;
+                                return 0 === i
                                     ? t.remote_enabled
-                                        ? "\u8fdc\u7a0b\u6e90\u5df2\u542f\u7528"
-                                        : "\u672a\u914d\u7f6e\u5165\u53e3IP"
-                                    : "\u5171 ".concat(
-                                          r,
-                                          t.remote_enabled
-                                              ? " \u4e2a\u624b\u586bIP + \u8fdc\u7a0b\u6e90"
-                                              : " \u4e2aIP",
+                                        ? "\u6682\u65e0\u53ef\u7528\u5165\u53e3"
+                                        : "\u672a\u914d\u7f6e\u5165\u53e3"
+                                    : f.a.createElement(
+                                          "div",
+                                          null,
+                                          f.a.createElement(
+                                              "div",
+                                              null,
+                                              "\u5171 ".concat(
+                                                  i,
+                                                  " \u4e2a\u5165\u53e3",
+                                              ),
+                                          ),
+                                          f.a.createElement(
+                                              "div",
+                                              {
+                                                  className:
+                                                      "text-muted",
+                                              },
+                                              "\u624b\u586b ".concat(
+                                                  n,
+                                                  " / \u8fdc\u7a0b ",
+                                              ).concat(r),
+                                          ),
                                       );
+                            },
+                        },
+                        {
+                            title: "\u8fdc\u7a0b\u62c9\u53d6\u7ed3\u679c",
+                            dataIndex: "remote_resolved_ips",
+                            key: "remote_resolved_ips",
+                            render: (e, t) => {
+                                var n = Array.isArray(e)
+                                        ? e.filter((e) => !!e)
+                                        : [],
+                                    r =
+                                        "string" ===
+                                        typeof t.remote_resolve_error
+                                            ? t.remote_resolve_error
+                                            : "";
+                                return t.remote_enabled
+                                    ? f.a.createElement(
+                                          "div",
+                                          {
+                                              style: {
+                                                  maxWidth: 320,
+                                                  whiteSpace:
+                                                      "pre-wrap",
+                                                  wordBreak:
+                                                      "break-all",
+                                              },
+                                          },
+                                          t.remote_group_ref
+                                              ? f.a.createElement(
+                                                    "div",
+                                                    {
+                                                        className:
+                                                            "text-muted",
+                                                        style: {
+                                                            marginBottom: 4,
+                                                        },
+                                                    },
+                                                    t.remote_group_ref,
+                                                )
+                                              : null,
+                                          r
+                                              ? f.a.createElement(
+                                                    "div",
+                                                    {
+                                                        style: {
+                                                            color: "#cf1322",
+                                                            marginBottom:
+                                                                n.length >
+                                                                0
+                                                                    ? 6
+                                                                    : 0,
+                                                        },
+                                                    },
+                                                    r,
+                                                )
+                                              : null,
+                                          f.a.createElement(
+                                              "div",
+                                              {
+                                                  className:
+                                                      n.length > 0
+                                                          ? ""
+                                                          : "text-muted",
+                                              },
+                                              n.length > 0
+                                                  ? n.join("\n")
+                                                  : "\u6682\u65e0\u8fdc\u7a0b\u7ed3\u679c",
+                                          ),
+                                      )
+                                    : "-";
                             },
                         },
                         {
@@ -153436,7 +153595,9 @@
                                         ClientEntryModalConnected,
                                         {
                                             route: t,
-                                            key: t.id,
+                                            key: "edit-".concat(
+                                                t.id,
+                                            ),
                                         },
                                         f.a.createElement(
                                             "a",
@@ -153446,6 +153607,51 @@
                                             "\u7f16\u8f91",
                                         ),
                                     ),
+                                    t.remote_enabled
+                                        ? f.a.createElement(
+                                              f.a.Fragment,
+                                              null,
+                                              f.a.createElement(
+                                                  l["a"],
+                                                  {
+                                                      type: "vertical",
+                                                  },
+                                              ),
+                                              f.a.createElement(
+                                                  "a",
+                                                  {
+                                                      href: "javascript:void(0);",
+                                                      style:
+                                                          r === t.id
+                                                              ? {
+                                                                    pointerEvents:
+                                                                        "none",
+                                                                    color: "#999",
+                                                                }
+                                                              : null,
+                                                      onClick: () =>
+                                                          r !==
+                                                              t.id &&
+                                                          this.resolve(
+                                                              t.id,
+                                                          ),
+                                                  },
+                                                  r === t.id
+                                                      ? f.a.createElement(
+                                                            f.a.Fragment,
+                                                            null,
+                                                            f.a.createElement(
+                                                                s["a"],
+                                                                {
+                                                                    type: "loading",
+                                                                },
+                                                            ),
+                                                            " \u7acb\u5373\u62c9\u53d6",
+                                                        )
+                                                      : "\u7acb\u5373\u62c9\u53d6",
+                                              ),
+                                          )
+                                        : null,
                                     f.a.createElement(l["a"], {
                                         type: "vertical",
                                     }),
@@ -153453,7 +153659,8 @@
                                         "a",
                                         {
                                             href: "javascript:void(0);",
-                                            onClick: () => this.drop(t.id),
+                                            onClick: () =>
+                                                this.drop(t.id),
                                         },
                                         "\u5220\u9664",
                                     ),
@@ -153507,7 +153714,7 @@
                                 ),
                                 f.a.createElement(o["a"], {
                                     tableLayout: "auto",
-                                    columns: r,
+                                    columns: c,
                                     dataSource: t,
                                     pagination: !1,
                                 }),

@@ -662,7 +662,11 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/server/client-entry/fetch":
-			if handleAdminClientEntryGroupFetch(w, r, state.session, state.admin) {
+			if handleAdminClientEntryGroupFetch(w, r, state.session, state.admin, state.clientEntryRemote) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/server/client-entry/resolve":
+			if handleAdminClientEntryGroupResolve(w, r, state.session, state.admin, state.clientEntryRemote) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/server/client-entry/save":
