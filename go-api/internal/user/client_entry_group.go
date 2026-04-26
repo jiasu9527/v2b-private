@@ -13,6 +13,9 @@ func (s *DBService) ClientEntryGroups(ctx context.Context, userID int64) ([]Clie
 	if s.db == nil {
 		return nil, ErrUnavailable
 	}
+	if err := s.ensureClientEntrySchema(ctx); err != nil {
+		return nil, err
+	}
 
 	rows, err := s.db.QueryContext(ctx, `SELECT id, code, name, display_name, strategy, hide_member_nodes, "show", remote_enabled, remote_host, remote_ssh_port, remote_ssh_user, remote_ssh_password, remote_group_ref, remote_exclude_names, remote_refresh_sec, created_at, updated_at
 FROM v2_client_entry_group

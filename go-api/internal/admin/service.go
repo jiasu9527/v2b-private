@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"forest/go-api/internal/config"
@@ -390,6 +391,9 @@ type DBService struct {
 	authCache  *session.AuthCache
 	mailSender func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error
 	sleep      func(context.Context, time.Duration) error
+
+	clientEntryEnsureOnce sync.Once
+	clientEntryEnsureErr  error
 }
 
 type paymentRow struct {

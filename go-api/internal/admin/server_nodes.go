@@ -390,6 +390,9 @@ func optionalManagedServerEntryGroupField(payload map[string]any, key, errMsg st
 }
 
 func (s *DBService) replaceManagedServerEntryGroup(ctx context.Context, serverType string, serverID int64, entryGroupID any, now int64) error {
+	if err := s.ensureClientEntrySchema(ctx); err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

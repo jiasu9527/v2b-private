@@ -7,6 +7,38 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
+func expectEnsureClientEntrySchema(mock sqlmock.Sqlmock) {
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_group`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_group_member`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_group_ip`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	for _, item := range []struct {
+		table  string
+		column string
+	}{
+		{"v2_client_entry_group", "remote_enabled"},
+		{"v2_client_entry_group", "remote_host"},
+		{"v2_client_entry_group", "remote_ssh_port"},
+		{"v2_client_entry_group", "remote_ssh_user"},
+		{"v2_client_entry_group", "remote_ssh_password"},
+		{"v2_client_entry_group", "remote_group_ref"},
+		{"v2_client_entry_group", "remote_exclude_names"},
+		{"v2_client_entry_group", "remote_refresh_sec"},
+	} {
+		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+			WithArgs(item.table, item.column).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	}
+
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_group_member_group ON v2_client_entry_group_member\(entry_group_id\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_group_ip_group ON v2_client_entry_group_ip\(entry_group_id\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+}
+
 func TestDBServiceListClientEntryGroupsIncludesMembersAndIPs(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -15,6 +47,7 @@ func TestDBServiceListClientEntryGroupsIncludesMembersAndIPs(t *testing.T) {
 	defer db.Close()
 
 	service := &DBService{db: db}
+	expectEnsureClientEntrySchema(mock)
 	groupRows := sqlmock.NewRows([]string{"id", "code", "name", "display_name", "strategy", "hide_member_nodes", "show", "remote_enabled", "remote_host", "remote_ssh_port", "remote_ssh_user", "remote_ssh_password", "remote_group_ref", "remote_exclude_names", "remote_refresh_sec", "created_at", "updated_at"}).
 		AddRow(int64(7), "asia", "Asia", "Asia Entry", "sticky-low-latency", int64(1), int64(1), int64(1), "192.0.2.10", int64(2222), "root", "secret", "专线直出 (#15)", `["alice","bob"]`, int64(300), int64(100), int64(200))
 	mock.ExpectQuery(`SELECT id, code, name, display_name, strategy, hide_member_nodes, "show", remote_enabled, remote_host, remote_ssh_port, remote_ssh_user, remote_ssh_password, remote_group_ref, remote_exclude_names, remote_refresh_sec, created_at, updated_at\s+FROM v2_client_entry_group\s+ORDER BY id ASC`).
@@ -72,6 +105,7 @@ func TestDBServiceSaveClientEntryGroupCreatesIPs(t *testing.T) {
 	sortA := int64(1)
 	sortB := int64(2)
 
+	expectEnsureClientEntrySchema(mock)
 	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_group \(code, name, display_name, strategy, hide_member_nodes, "show", remote_enabled, remote_host, remote_ssh_port, remote_ssh_user, remote_ssh_password, remote_group_ref, remote_exclude_names, remote_refresh_sec, created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13, \$14, \$15, \$16\)\s+RETURNING id`).
 		WithArgs("asia", "Asia", "Asia Entry", "ordered-fallback", int64(1), int64(1), int64(1), "192.0.2.10", int64(2222), "root", "secret", "专线直出 (#15)", `["alice","bob"]`, int64(300), sqlmock.AnyArg(), sqlmock.AnyArg()).

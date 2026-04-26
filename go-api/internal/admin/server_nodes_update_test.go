@@ -19,6 +19,7 @@ func TestDBServiceUpdateManagedServerReplacesEntryGroupBinding(t *testing.T) {
 	mock.ExpectQuery(`SELECT 1 FROM "v2_server_vmess" WHERE id = \$1 LIMIT 1`).
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(int64(1)))
+	expectEnsureClientEntrySchema(mock)
 	mock.ExpectBegin()
 	mock.ExpectExec(`DELETE FROM v2_client_entry_group_member WHERE server_type = \$1 AND server_id = \$2`).
 		WithArgs("vmess", int64(9)).
@@ -57,6 +58,7 @@ func TestDBServiceUpdateManagedServerClearsEntryGroupBinding(t *testing.T) {
 	mock.ExpectQuery(`SELECT 1 FROM "v2_server_vmess" WHERE id = \$1 LIMIT 1`).
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(int64(1)))
+	expectEnsureClientEntrySchema(mock)
 	mock.ExpectBegin()
 	mock.ExpectExec(`DELETE FROM v2_client_entry_group_member WHERE server_type = \$1 AND server_id = \$2`).
 		WithArgs("vmess", int64(9)).

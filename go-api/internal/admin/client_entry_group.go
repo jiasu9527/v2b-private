@@ -39,6 +39,9 @@ func (s *DBService) ListClientEntryGroups(ctx context.Context, id *int64) ([]Cli
 	if s.db == nil {
 		return nil, ErrUnavailable
 	}
+	if err := s.ensureClientEntrySchema(ctx); err != nil {
+		return nil, err
+	}
 
 	query := `SELECT id, code, name, display_name, strategy, hide_member_nodes, "show", remote_enabled, remote_host, remote_ssh_port, remote_ssh_user, remote_ssh_password, remote_group_ref, remote_exclude_names, remote_refresh_sec, created_at, updated_at
 FROM v2_client_entry_group`
@@ -129,6 +132,9 @@ FROM v2_client_entry_group`
 func (s *DBService) SaveClientEntryGroup(ctx context.Context, req ClientEntryGroupSaveRequest) (bool, error) {
 	if s.db == nil {
 		return false, ErrUnavailable
+	}
+	if err := s.ensureClientEntrySchema(ctx); err != nil {
+		return false, err
 	}
 
 	req.Code = strings.TrimSpace(req.Code)
@@ -352,6 +358,9 @@ func encodeClientEntryRemoteExcludeNames(values []string) string {
 func (s *DBService) DeleteClientEntryGroup(ctx context.Context, id int64) (bool, error) {
 	if s.db == nil {
 		return false, ErrUnavailable
+	}
+	if err := s.ensureClientEntrySchema(ctx); err != nil {
+		return false, err
 	}
 	if id <= 0 {
 		return false, errors.New("入口组不存在")

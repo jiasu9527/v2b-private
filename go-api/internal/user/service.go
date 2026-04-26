@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"forest/go-api/internal/config"
@@ -242,6 +243,9 @@ type DBService struct {
 	notifier  ticketAdminNotifier
 	jobs      queue.Enqueuer
 	authCache *session.AuthCache
+
+	clientEntryEnsureOnce sync.Once
+	clientEntryEnsureErr  error
 }
 
 func NewDBService(cfg config.Config, db *sql.DB) *DBService {
