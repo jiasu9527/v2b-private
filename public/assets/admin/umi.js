@@ -3322,7 +3322,10 @@
                                                 "/" +
                                                     window.settings
                                                         .secure_path +
-                                                    "/server/route/fetch",
+                                                    ("/server/client-entry" ===
+                                                    window.location.pathname
+                                                        ? "/server/client-entry/fetch"
+                                                        : "/server/route/fetch"),
                                             )
                                         );
                                     case 4:
@@ -3374,7 +3377,10 @@
                                                 "/" +
                                                     window.settings
                                                         .secure_path +
-                                                    "/server/route/drop",
+                                                    ("/server/client-entry" ===
+                                                    window.location.pathname
+                                                        ? "/server/client-entry/drop"
+                                                        : "/server/route/drop"),
                                                 {
                                                     id: n,
                                                 },
@@ -3416,7 +3422,10 @@
                                                 "/" +
                                                     window.settings
                                                         .secure_path +
-                                                    "/server/route/save",
+                                                    ("/server/client-entry" ===
+                                                    window.location.pathname
+                                                        ? "/server/client-entry/save"
+                                                        : "/server/route/save"),
                                                 n,
                                             )
                                         );
@@ -27920,6 +27929,15 @@
                                 title: "\u8def\u7531\u7ba1\u7406",
                                 type: "item",
                                 href: "/server/route",
+                                icon: o.a.createElement("i", {
+                                    className:
+                                        "nav-main-link-icon si si-shuffle",
+                                }),
+                            },
+                            {
+                                title: "\u5ba2\u6237\u7aef\u5165\u53e3",
+                                type: "item",
+                                href: "/server/client-entry",
                                 icon: o.a.createElement("i", {
                                     className:
                                         "nav-main-link-icon si si-shuffle",
@@ -111731,6 +111749,11 @@
                     component: n("wtkT").default,
                 },
                 {
+                    path: "/server/client-entry",
+                    exact: !0,
+                    component: n("wtkT").default,
+                },
+                {
                     path: "/ticket/:ticket_id",
                     exact: !0,
                     component: n("FPmv").default,
@@ -146015,6 +146038,30 @@
                             },
                         },
                         {
+                            title: "\u6240\u5c5e\u5165\u53e3\u7ec4",
+                            dataIndex: "entry_group_names",
+                            key: "entry_group_names",
+                            render: (e, t) => {
+                                var n = [];
+                                return (
+                                    (Array.isArray(t.entry_group_names)
+                                        ? t.entry_group_names
+                                        : []
+                                    ).map((e) => {
+                                        e &&
+                                            n.push(
+                                                y.a.createElement(
+                                                    g["a"],
+                                                    null,
+                                                    e,
+                                                ),
+                                            );
+                                    }),
+                                    y.a.createElement(y.a.Fragment, null, n)
+                                );
+                            },
+                        },
+                        {
                             title: "\u64cd\u4f5c",
                             dataIndex: "action",
                             key: "action",
@@ -152096,7 +152143,8 @@
                 var e,
                     t,
                     n,
-                    r = this.props.serverRoute.fetchLoading;
+                    r = this.props.serverRoute.fetchLoading,
+                    o = "/server/client-entry" === window.location.pathname;
                 return f.a.createElement(
                     f.a.Fragment,
                     null,
@@ -152109,11 +152157,17 @@
                     f.a.createElement(
                         g["a"],
                         {
-                            title: "".concat(
-                                this.state.route.id
-                                    ? "\u7f16\u8f91\u8def\u7531"
-                                    : "\u521b\u5efa\u8def\u7531",
-                            ),
+                            title: o
+                                ? "".concat(
+                                      this.state.route.id
+                                          ? "\u7f16\u8f91\u5ba2\u6237\u7aef\u5165\u53e3"
+                                          : "\u521b\u5efa\u5ba2\u6237\u7aef\u5165\u53e3",
+                                  )
+                                : "".concat(
+                                      this.state.route.id
+                                          ? "\u7f16\u8f91\u8def\u7531"
+                                          : "\u521b\u5efa\u8def\u7531",
+                                  ),
                             visible: this.state.visible,
                             onCancel: () =>
                                 this.setState({
@@ -152140,11 +152194,15 @@
                                     {
                                         for: "example-text-input-alt",
                                     },
-                                    "\u5907\u6ce8",
+                                    o
+                                        ? "\u5165\u53e3\u7ec4\u540d\u79f0"
+                                        : "\u5907\u6ce8",
                                 ),
                                 f.a.createElement(y["a"], {
                                     placeholder:
-                                        "\u8bf7\u8f93\u5165\u5907\u6ce8",
+                                        o
+                                            ? "\u8bf7\u8f93\u5165\u5165\u53e3\u7ec4\u540d\u79f0"
+                                            : "\u8bf7\u8f93\u5165\u5907\u6ce8",
                                     value: this.state.route.remarks,
                                     onChange: (e) => {
                                         this.setState({
@@ -152166,21 +152224,27 @@
                                         {
                                             for: "example-text-input-alt",
                                         },
-                                        "\u5339\u914d\u503c",
-                                        f.a.createElement(
-                                            "a",
-                                            {
-                                                href: "https://xtls.github.io/config/routing.html#ruleobject",
-                                            },
-                                            f.a.createElement(a["a"], {
-                                                type: "link",
-                                            }),
-                                            "\u586b\u5199\u53c2\u8003",
-                                        ),
+                                        o
+                                            ? "\u6210\u5458\u8282\u70b9"
+                                            : "\u5339\u914d\u503c",
+                                        !o &&
+                                            f.a.createElement(
+                                                "a",
+                                                {
+                                                    href: "https://xtls.github.io/config/routing.html#ruleobject",
+                                                },
+                                                f.a.createElement(a["a"], {
+                                                    type: "link",
+                                                }),
+                                                "\u586b\u5199\u53c2\u8003",
+                                            ),
                                     ),
                                     f.a.createElement(y["a"].TextArea, {
                                         rows: 5,
                                         placeholder: (() => {
+                                            if (o) {
+                                                return "vmess:11\ntrojan:22\nvless:33";
+                                            }
                                             const action =
                                                 this.state.route.action;
                                             if (action === "protocol") {
@@ -152251,7 +152315,7 @@
                                     {
                                         for: "example-text-input-alt",
                                     },
-                                    "\u52a8\u4f5c",
+                                    o ? "\u5207\u6362\u7b56\u7565" : "\u52a8\u4f5c",
                                 ),
                                 f.a.createElement(
                                     "div",
@@ -152261,7 +152325,9 @@
                                         {
                                             value: this.state.route.action,
                                             placeholder:
-                                                "\u8bf7\u9009\u62e9\u52a8\u4f5c",
+                                                o
+                                                    ? "\u8bf7\u9009\u62e9\u5207\u6362\u7b56\u7565"
+                                                    : "\u8bf7\u9009\u62e9\u52a8\u4f5c",
                                             style: {
                                                 width: "100%",
                                             },
@@ -152276,66 +152342,92 @@
                                                     ),
                                                 }),
                                         },
-                                        f.a.createElement(
-                                            v["a"].Option,
-                                            {
-                                                value: "block",
-                                            },
-                                            b["a"].routeActionText["block"],
-                                        ),
-                                        f.a.createElement(
-                                            v["a"].Option,
-                                            {
-                                                value: "block_ip",
-                                            },
-                                            b["a"].routeActionText["block_ip"],
-                                        ),
-                                        f.a.createElement(
-                                            v["a"].Option,
-                                            {
-                                                value: "block_port",
-                                            },
-                                            b["a"].routeActionText[
-                                                "block_port"
-                                            ],
-                                        ),
-                                        f.a.createElement(
-                                            v["a"].Option,
-                                            {
-                                                value: "protocol",
-                                            },
-                                            b["a"].routeActionText["protocol"],
-                                        ),
-                                        f.a.createElement(
-                                            v["a"].Option,
-                                            {
-                                                value: "dns",
-                                            },
-                                            b["a"].routeActionText["dns"],
-                                        ),
-                                        f.a.createElement(
-                                            v["a"].Option,
-                                            {
-                                                value: "route",
-                                            },
-                                            b["a"].routeActionText["route"],
-                                        ),
-                                        f.a.createElement(
-                                            v["a"].Option,
-                                            {
-                                                value: "route_ip",
-                                            },
-                                            b["a"].routeActionText["route_ip"],
-                                        ),
-                                        f.a.createElement(
-                                            v["a"].Option,
-                                            {
-                                                value: "default_out",
-                                            },
-                                            b["a"].routeActionText[
-                                                "default_out"
-                                            ],
-                                        ),
+                                        o
+                                            ? [
+                                                  f.a.createElement(
+                                                      v["a"].Option,
+                                                      {
+                                                          value: "latency-first",
+                                                      },
+                                                      "\u5148\u6d4b\u901f\u518d\u9009\u6700\u4f18",
+                                                  ),
+                                                  f.a.createElement(
+                                                      v["a"].Option,
+                                                      {
+                                                          value: "sticky-low-latency",
+                                                      },
+                                                      "\u4f4e\u5ef6\u8fdf\u7c98\u6ede\u5207\u6362",
+                                                  ),
+                                                  f.a.createElement(
+                                                      v["a"].Option,
+                                                      {
+                                                          value: "ordered-fallback",
+                                                      },
+                                                      "\u6309\u987a\u5e8f\u6545\u969c\u8f6c\u79fb",
+                                                  ),
+                                              ]
+                                            : [
+                                                  f.a.createElement(
+                                                      v["a"].Option,
+                                                      {
+                                                          value: "block",
+                                                      },
+                                                      b["a"].routeActionText["block"],
+                                                  ),
+                                                  f.a.createElement(
+                                                      v["a"].Option,
+                                                      {
+                                                          value: "block_ip",
+                                                      },
+                                                      b["a"].routeActionText["block_ip"],
+                                                  ),
+                                                  f.a.createElement(
+                                                      v["a"].Option,
+                                                      {
+                                                          value: "block_port",
+                                                      },
+                                                      b["a"].routeActionText[
+                                                          "block_port"
+                                                      ],
+                                                  ),
+                                                  f.a.createElement(
+                                                      v["a"].Option,
+                                                      {
+                                                          value: "protocol",
+                                                      },
+                                                      b["a"].routeActionText["protocol"],
+                                                  ),
+                                                  f.a.createElement(
+                                                      v["a"].Option,
+                                                      {
+                                                          value: "dns",
+                                                      },
+                                                      b["a"].routeActionText["dns"],
+                                                  ),
+                                                  f.a.createElement(
+                                                      v["a"].Option,
+                                                      {
+                                                          value: "route",
+                                                      },
+                                                      b["a"].routeActionText["route"],
+                                                  ),
+                                                  f.a.createElement(
+                                                      v["a"].Option,
+                                                      {
+                                                          value: "route_ip",
+                                                      },
+                                                      b["a"].routeActionText["route_ip"],
+                                                  ),
+                                                  f.a.createElement(
+                                                      v["a"].Option,
+                                                      {
+                                                          value: "default_out",
+                                                      },
+                                                      b["a"].routeActionText[
+                                                          "default_out"
+                                                      ],
+                                                  ),
+                                              ],
                                     ),
                                 ),
                             ),
@@ -152473,6 +152565,7 @@
                 var e = this.props.serverRoute,
                     t = e.routes,
                     n = e.fetchLoading,
+                    o = "/server/client-entry" === window.location.pathname,
                     r = [
                         {
                             title: "ID",
@@ -152480,38 +152573,64 @@
                             key: "id",
                         },
                         {
-                            title: "\u5907\u6ce8",
+                            title: o
+                                ? "\u5165\u53e3\u7ec4\u540d\u79f0"
+                                : "\u5907\u6ce8",
                             dataIndex: "remarks",
                             key: "remarks",
                         },
                         {
-                            title: "\u5339\u914d\u6570\u91cf",
+                            title: o
+                                ? "\u6210\u5458\u6570\u91cf"
+                                : "\u5339\u914d\u6570\u91cf",
                             dataIndex: "match",
                             key: "match",
                             render: (e) => {
-                                var t;
-                                return e.length == 0
-                                    ? "\u65e0\u89c4\u5219\u65f6\u9ed8\u8ba4"
-                                    : "\u5339\u914d ".concat(
-                                          "string" === typeof e
-                                              ? null ===
-                                                    (t = e
-                                                        .split(",")
-                                                        .filter((e) => !!e)) ||
-                                                void 0 === t
-                                                  ? void 0
-                                                  : t.length
-                                              : e.length,
-                                          " \u6761\u89c4\u5219",
+                                var t,
+                                    n =
+                                        "string" === typeof e
+                                            ? null ===
+                                                  (t = e
+                                                      .split(",")
+                                                      .filter((e) => !!e)) ||
+                                              void 0 === t
+                                                ? void 0
+                                                : t.length
+                                            : Array.isArray(e)
+                                              ? e.length
+                                              : 0;
+                                return 0 === n
+                                    ? o
+                                        ? "\u672a\u914d\u7f6e\u6210\u5458"
+                                        : "\u65e0\u89c4\u5219\u65f6\u9ed8\u8ba4"
+                                    : "".concat(
+                                          o
+                                              ? "\u5171 "
+                                              : "\u5339\u914d ",
+                                          n,
+                                          o
+                                              ? " \u4e2a\u6210\u5458"
+                                              : " \u6761\u89c4\u5219",
                                       );
                             },
                         },
                         {
-                            title: "\u52a8\u4f5c",
+                            title: o
+                                ? "\u5207\u6362\u7b56\u7565"
+                                : "\u52a8\u4f5c",
                             dataIndex: "action",
                             key: "action",
                             render: (e) => {
-                                return b["a"].routeActionText[e];
+                                return o
+                                    ? {
+                                          "latency-first":
+                                              "\u5148\u6d4b\u901f\u518d\u9009\u6700\u4f18",
+                                          "sticky-low-latency":
+                                              "\u4f4e\u5ef6\u8fdf\u7c98\u6ede\u5207\u6362",
+                                          "ordered-fallback":
+                                              "\u6309\u987a\u5e8f\u6545\u969c\u8f6c\u79fb",
+                                      }[e] || e
+                                    : b["a"].routeActionText[e];
                             },
                         },
                         {
@@ -152555,7 +152674,9 @@
                 return f.a.createElement(
                     d["a"],
                     i()({}, this.props, {
-                        title: "\u8def\u7531\u7ba1\u7406",
+                        title: o
+                            ? "\u5ba2\u6237\u7aef\u5165\u53e3"
+                            : "\u8def\u7531\u7ba1\u7406",
                     }),
                     f.a.createElement("div", {
                         className:
@@ -152595,7 +152716,9 @@
                                             f.a.createElement(s["a"], {
                                                 type: "plus",
                                             }),
-                                            " \u6dfb\u52a0\u8def\u7531",
+                                            o
+                                                ? " \u6dfb\u52a0\u5ba2\u6237\u7aef\u5165\u53e3"
+                                                : " \u6dfb\u52a0\u8def\u7531",
                                         ),
                                     ),
                                 ),

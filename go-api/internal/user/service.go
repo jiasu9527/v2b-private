@@ -102,6 +102,25 @@ type Subscribe struct {
 	AllowNewPeriod string         `json:"allow_new_period"`
 }
 
+type ClientEntryGroupMember struct {
+	ServerType string `json:"server_type"`
+	ServerID   int64  `json:"server_id"`
+	Sort       *int64 `json:"sort,omitempty"`
+}
+
+type ClientEntryGroup struct {
+	ID              int64                    `json:"id"`
+	Code            string                   `json:"code"`
+	Name            string                   `json:"name"`
+	DisplayName     string                   `json:"display_name"`
+	Strategy        string                   `json:"strategy"`
+	HideMemberNodes bool                     `json:"hide_member_nodes"`
+	Show            int64                    `json:"show"`
+	Members         []ClientEntryGroupMember `json:"members,omitempty"`
+	CreatedAt       int64                    `json:"created_at,omitempty"`
+	UpdatedAt       int64                    `json:"updated_at,omitempty"`
+}
+
 type OrderSaveRequest struct {
 	PlanID        int64
 	Period        string
@@ -153,6 +172,7 @@ type Service interface {
 	NewPeriod(ctx context.Context, userID int64) (bool, error)
 	RedeemGiftcard(ctx context.Context, userID int64, code string) (map[string]any, error)
 	Servers(ctx context.Context, userID int64, ua string) ([]map[string]any, error)
+	ClientEntryGroups(ctx context.Context, userID int64) ([]ClientEntryGroup, error)
 	Plans(ctx context.Context, userID int64, planID *int64) (any, error)
 	NoticeDetail(ctx context.Context, id int64) (map[string]any, error)
 	Notices(ctx context.Context, current, pageSize int64) ([]map[string]any, int64, error)

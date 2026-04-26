@@ -11,6 +11,7 @@ import (
 
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/nodeapi"
+	"forest/go-api/internal/session"
 	"forest/go-api/internal/user"
 )
 
@@ -89,6 +90,179 @@ func TestRouterClientAppGetConfigEndpoint(t *testing.T) {
 	}
 	if userService.lastClientToken != "token-1" || userService.lastServerUA != "" {
 		t.Fatalf("unexpected client auth/request state: token=%q ua=%q", userService.lastClientToken, userService.lastServerUA)
+	}
+}
+
+func TestRouterUserForestRuntimeProfileEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 10}}
+	userService := &fakeUserService{
+		subscribe: user.Subscribe{
+			Token: "client-token-1",
+		},
+		servers: []map[string]any{
+			{
+				"id":      int64(11),
+				"type":    "vmess",
+				"name":    "JP-1",
+				"host":    "jp.example.com",
+				"port":    int64(443),
+				"network": "ws",
+				"tls":     int64(1),
+				"tls_settings": map[string]any{
+					"server_name": "jp.example.com",
+				},
+				"network_settings": map[string]any{
+					"path": "/ws",
+					"headers": map[string]any{
+						"Host": "jp.example.com",
+					},
+				},
+			},
+			{
+				"id":          int64(12),
+				"type":        "trojan",
+				"name":        "US-1",
+				"host":        "us.example.com",
+				"port":        int64(443),
+				"network":     "tcp",
+				"server_name": "us.example.com",
+			},
+		},
+		clientEntryGroups: []user.ClientEntryGroup{
+			{
+				ID:              int64(7),
+				Code:            "asia",
+				Name:            "Asia",
+				DisplayName:     "Asia Entry",
+				Strategy:        "sticky-low-latency",
+				HideMemberNodes: true,
+				Members: []user.ClientEntryGroupMember{
+					{ServerType: "vmess", ServerID: int64(11)},
+				},
+			},
+		},
+	}
+	router := NewRouter(
+		config.Config{AppURL: "https://panel.example.com"},
+		WithSessionService(sessionService),
+		WithUserService(userService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/user/forest/runtime-profile?cap=entry-provider-v1", nil)
+	req.Header.Set("Authorization", "jwt-user")
+	req.Header.Set("User-Agent", "forest-desktop/1.0")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("expected json body: %v", err)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object, got %#v", payload["data"])
+	}
+	if data["capability"] != "entry-provider-v1" {
+		t.Fatalf("unexpected capability: %#v", data["capability"])
+	}
+	entryGroups, ok := data["entry_groups"].([]any)
+	if !ok || len(entryGroups) != 1 {
+		t.Fatalf("expected one entry group, got %#v", data["entry_groups"])
+	}
+	group, ok := entryGroups[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected entry group object, got %#v", entryGroups[0])
+	}
+	if group["code"] != "asia" || group["display_name"] != "Asia Entry" {
+		t.Fatalf("unexpected runtime entry group: %#v", group)
+	}
+	if group["provider_url"] != "https://panel.example.com/api/v1/client/forest/entry-provider?token=client-token-1&code=asia" {
+		t.Fatalf("unexpected provider_url: %#v", group["provider_url"])
+	}
+	memberNames, ok := group["member_names"].([]any)
+	if !ok || len(memberNames) != 1 || memberNames[0] != "JP-1" {
+		t.Fatalf("unexpected member names: %#v", group["member_names"])
+	}
+	if userService.lastServerUA != "forest-desktop/1.0" {
+		t.Fatalf("expected runtime profile to forward ua, got %q", userService.lastServerUA)
+	}
+}
+
+func TestRouterClientForestEntryProviderEndpoint(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: int64(10),
+		subscribe: user.Subscribe{
+			UUID: "user-uuid",
+		},
+		servers: []map[string]any{
+			{
+				"id":      int64(11),
+				"type":    "vmess",
+				"name":    "JP-1",
+				"host":    "jp.example.com",
+				"port":    int64(443),
+				"network": "ws",
+				"tls":     int64(1),
+				"tls_settings": map[string]any{
+					"server_name": "jp.example.com",
+				},
+				"network_settings": map[string]any{
+					"path": "/ws",
+					"headers": map[string]any{
+						"Host": "jp.example.com",
+					},
+				},
+			},
+			{
+				"id":          int64(12),
+				"type":        "trojan",
+				"name":        "US-1",
+				"host":        "us.example.com",
+				"port":        int64(443),
+				"network":     "tcp",
+				"server_name": "us.example.com",
+			},
+		},
+		clientEntryGroups: []user.ClientEntryGroup{
+			{
+				ID:          int64(7),
+				Code:        "asia",
+				Name:        "Asia",
+				DisplayName: "Asia Entry",
+				Strategy:    "sticky-low-latency",
+				Members: []user.ClientEntryGroupMember{
+					{ServerType: "vmess", ServerID: int64(11)},
+				},
+			},
+		},
+	}
+	router := NewRouter(config.Config{}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/forest/entry-provider?token=token-1&code=asia", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "yaml") {
+		t.Fatalf("expected yaml content type, got %q", contentType)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "proxies:") || !strings.Contains(body, "JP-1") {
+		t.Fatalf("expected forest provider yaml, got %q", body)
+	}
+	if strings.Contains(body, "US-1") {
+		t.Fatalf("expected provider yaml to exclude non-member nodes, got %q", body)
+	}
+	if userService.lastClientToken != "token-1" {
+		t.Fatalf("expected provider endpoint to use client token, got %q", userService.lastClientToken)
 	}
 }
 

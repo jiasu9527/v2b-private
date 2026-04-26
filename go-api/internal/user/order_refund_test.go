@@ -161,7 +161,7 @@ func TestRefundManagedOrderCarriesCommissionDebtWhenFundsInsufficient(t *testing
 	now := time.Now()
 	targetPaidAt := now.AddDate(0, 0, -3).Unix()
 	expectedExpiredAt := now.AddDate(0, 0, 27).Unix()
-	currentExpiredAt := time.Unix(expectedExpiredAt, 0).AddDate(0, 0, 30).Unix()
+	currentExpiredAt := time.Unix(expectedExpiredAt, 0).AddDate(0, 1, 0).Unix()
 
 	service := NewDBService(config.Config{}, db)
 
@@ -238,7 +238,7 @@ func TestRefundManagedOrderCarriesCommissionDebtWhenWithdrawClosed(t *testing.T)
 	now := time.Now()
 	targetPaidAt := now.AddDate(0, 0, -2).Unix()
 	expectedExpiredAt := now.AddDate(0, 0, 28).Unix()
-	currentExpiredAt := time.Unix(expectedExpiredAt, 0).AddDate(0, 0, 30).Unix()
+	currentExpiredAt := time.Unix(expectedExpiredAt, 0).AddDate(0, 1, 0).Unix()
 
 	service := NewDBService(config.Config{WithdrawCloseEnable: true}, db)
 

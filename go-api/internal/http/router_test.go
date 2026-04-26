@@ -341,6 +341,7 @@ type fakeUserService struct {
 	knowledgeCats              []string
 	trafficLogs                []map[string]any
 	servers                    []map[string]any
+	clientEntryGroups          []user.ClientEntryGroup
 	plans                      any
 	noticeDetail               map[string]any
 	notices                    []map[string]any
@@ -440,6 +441,11 @@ func (f *fakeUserService) Servers(_ context.Context, userID int64, ua string) ([
 	f.lastUserID = userID
 	f.lastServerUA = ua
 	return f.servers, f.err
+}
+
+func (f *fakeUserService) ClientEntryGroups(_ context.Context, userID int64) ([]user.ClientEntryGroup, error) {
+	f.lastUserID = userID
+	return f.clientEntryGroups, f.err
 }
 
 func (f *fakeUserService) Plans(_ context.Context, userID int64, planID *int64) (any, error) {
@@ -617,143 +623,147 @@ func (f *fakeUserService) CancelOrder(_ context.Context, userID int64, tradeNo s
 }
 
 type fakeAdminService struct {
-	systemStatus       admin.SystemStatus
-	queueStats         admin.QueueStats
-	workload           []map[string]any
-	systemLogs         []map[string]any
-	systemLogsTotal    int64
-	statOverride       map[string]any
-	statOrder          []map[string]any
-	statSummary        map[string]any
-	statRanking        []map[string]any
-	statRecords        []map[string]any
-	serverLastRank     []map[string]any
-	serverTodayRank    []map[string]any
-	inviteLastRank     []map[string]any
-	inviteTodayRank    []map[string]any
-	userLastRank       []map[string]any
-	userTodayRank      []map[string]any
-	statUserRecords    []map[string]any
-	statUserTotal      int64
-	inviteList         admin.InviteCampaignListResult
-	inviteDetail       map[string]any
-	inviteRecords      admin.InviteCampaignRecordListResult
-	serverGroups       []admin.ServerGroupRecord
-	serverRoutes       []admin.ServerRouteRecord
-	managedServers     []map[string]any
-	hostUpdateResult   admin.ManagedServerHostUpdateResult
-	configData         map[string]any
-	themes             map[string]any
-	themeConfig        map[string]any
-	emailTemplates     []string
-	themeTemplates     []string
-	mailTestLog        admin.ConfigMailTestLog
-	plans              []admin.PlanRecord
-	notices            []admin.NoticeRecord
-	couponList         admin.CouponListResult
-	giftcardList       admin.GiftcardListResult
-	knowledges         []admin.KnowledgeRecord
-	knowledgeDetail    admin.KnowledgeRecord
-	knowledgeCats      []string
-	payments           []admin.PaymentRecord
-	methods            []string
-	form               map[string]admin.PaymentFormField
-	orderList          admin.OrderListResult
-	orderDetail        map[string]any
-	ticketList         admin.TicketListResult
-	ticketDetail       admin.TicketDetail
-	lastPlanSave       admin.PlanSaveRequest
-	lastPlanDropID     int64
-	lastPlanUpdate     admin.PlanToggleRequest
-	lastPlanSortIDs    []int64
-	lastNoticeSave     admin.NoticeSaveRequest
-	lastNoticeDrop     int64
-	lastNoticeShow     int64
-	lastCouponList     admin.CouponListRequest
-	lastCouponSave     admin.CouponGenerateRequest
-	lastCouponDrop     int64
-	lastCouponShow     int64
-	couponCSV          string
-	lastGiftcardList   admin.GiftcardListRequest
-	lastGiftcardSave   admin.GiftcardGenerateRequest
-	lastGiftcardDrop   int64
-	giftcardCSV        string
-	lastKnowledgeID    int64
-	lastKnowledgeSave  admin.KnowledgeSaveRequest
-	lastKnowledgeShow  int64
-	lastKnowledgeDrop  int64
-	lastKnowledgeSort  []int64
-	lastFormID         *int64
-	lastGateway        string
-	lastSave           admin.PaymentSaveRequest
-	lastDropID         int64
-	lastShowID         int64
-	lastSortIDs        []int64
-	lastFetch          admin.OrderFetchRequest
-	lastDetailID       int64
-	lastUpdate         admin.OrderUpdateRequest
-	lastPaid           string
-	lastCancel         string
-	lastRefund         string
-	lastAssign         admin.OrderAssignRequest
-	lastTicketFetch    admin.TicketListRequest
-	lastTicketID       int64
-	lastTicketReply    admin.TicketReplyRequest
-	lastTicketClose    int64
-	lastLogCurrent     int64
-	lastLogPageSize    int64
-	lastLogLevel       string
-	lastStatStartAt    int64
-	lastStatEndAt      int64
-	lastRankingType    string
-	lastRankingLimit   int64
-	lastRecordType     string
-	lastRecordStartAt  int64
-	lastRecordEndAt    int64
-	lastStatUserID     int64
-	lastStatCurrent    int64
-	lastStatPageSize   int64
-	lastInviteList     admin.InviteCampaignListRequest
-	lastInviteID       int64
-	lastInviteRecords  admin.InviteCampaignRecordListRequest
-	lastGroupID        *int64
-	lastGroupSave      admin.ServerGroupSaveRequest
-	lastGroupDrop      int64
-	lastRouteSave      admin.ServerRouteSaveRequest
-	lastRouteDrop      int64
-	lastManagedSort    map[string]map[int64]int64
-	lastOldHost        string
-	lastNewHost        string
-	lastNodeSaveType   string
-	lastNodeSave       map[string]any
-	lastNodeDropType   string
-	lastNodeDropID     int64
-	lastNodeUpdateType string
-	lastNodeUpdateID   int64
-	lastNodeUpdate     map[string]any
-	lastNodeCopyType   string
-	lastNodeCopyID     int64
-	lastConfigKey      string
-	lastConfigSave     map[string]any
-	lastWebhookToken   string
-	lastMailTestEmail  string
-	userList           admin.UserListResult
-	userInfoDetail     map[string]any
-	userGenerateCSV    string
-	userGenerateBatch  bool
-	userDumpCSV        string
-	lastUserFetch      admin.UserFetchRequest
-	lastUserInfoID     int64
-	lastUserUpdate     admin.UserUpdateRequest
-	lastUserGenerate   admin.UserGenerateRequest
-	lastUserMail       admin.UserMailRequest
-	lastUserDump       []admin.UserFilter
-	lastUserBan        []admin.UserFilter
-	lastUserResetID    int64
-	lastUserDeleteID   int64
-	lastUserDeleteAll  []admin.UserFilter
-	assignTrade        string
-	err                error
+	systemStatus        admin.SystemStatus
+	queueStats          admin.QueueStats
+	workload            []map[string]any
+	systemLogs          []map[string]any
+	systemLogsTotal     int64
+	statOverride        map[string]any
+	statOrder           []map[string]any
+	statSummary         map[string]any
+	statRanking         []map[string]any
+	statRecords         []map[string]any
+	serverLastRank      []map[string]any
+	serverTodayRank     []map[string]any
+	inviteLastRank      []map[string]any
+	inviteTodayRank     []map[string]any
+	userLastRank        []map[string]any
+	userTodayRank       []map[string]any
+	statUserRecords     []map[string]any
+	statUserTotal       int64
+	inviteList          admin.InviteCampaignListResult
+	inviteDetail        map[string]any
+	inviteRecords       admin.InviteCampaignRecordListResult
+	serverGroups        []admin.ServerGroupRecord
+	clientEntryGroups   []admin.ClientEntryGroupRecord
+	serverRoutes        []admin.ServerRouteRecord
+	managedServers      []map[string]any
+	hostUpdateResult    admin.ManagedServerHostUpdateResult
+	configData          map[string]any
+	themes              map[string]any
+	themeConfig         map[string]any
+	emailTemplates      []string
+	themeTemplates      []string
+	mailTestLog         admin.ConfigMailTestLog
+	plans               []admin.PlanRecord
+	notices             []admin.NoticeRecord
+	couponList          admin.CouponListResult
+	giftcardList        admin.GiftcardListResult
+	knowledges          []admin.KnowledgeRecord
+	knowledgeDetail     admin.KnowledgeRecord
+	knowledgeCats       []string
+	payments            []admin.PaymentRecord
+	methods             []string
+	form                map[string]admin.PaymentFormField
+	orderList           admin.OrderListResult
+	orderDetail         map[string]any
+	ticketList          admin.TicketListResult
+	ticketDetail        admin.TicketDetail
+	lastPlanSave        admin.PlanSaveRequest
+	lastPlanDropID      int64
+	lastPlanUpdate      admin.PlanToggleRequest
+	lastPlanSortIDs     []int64
+	lastNoticeSave      admin.NoticeSaveRequest
+	lastNoticeDrop      int64
+	lastNoticeShow      int64
+	lastCouponList      admin.CouponListRequest
+	lastCouponSave      admin.CouponGenerateRequest
+	lastCouponDrop      int64
+	lastCouponShow      int64
+	couponCSV           string
+	lastGiftcardList    admin.GiftcardListRequest
+	lastGiftcardSave    admin.GiftcardGenerateRequest
+	lastGiftcardDrop    int64
+	giftcardCSV         string
+	lastKnowledgeID     int64
+	lastKnowledgeSave   admin.KnowledgeSaveRequest
+	lastKnowledgeShow   int64
+	lastKnowledgeDrop   int64
+	lastKnowledgeSort   []int64
+	lastFormID          *int64
+	lastGateway         string
+	lastSave            admin.PaymentSaveRequest
+	lastDropID          int64
+	lastShowID          int64
+	lastSortIDs         []int64
+	lastFetch           admin.OrderFetchRequest
+	lastDetailID        int64
+	lastUpdate          admin.OrderUpdateRequest
+	lastPaid            string
+	lastCancel          string
+	lastRefund          string
+	lastAssign          admin.OrderAssignRequest
+	lastTicketFetch     admin.TicketListRequest
+	lastTicketID        int64
+	lastTicketReply     admin.TicketReplyRequest
+	lastTicketClose     int64
+	lastLogCurrent      int64
+	lastLogPageSize     int64
+	lastLogLevel        string
+	lastStatStartAt     int64
+	lastStatEndAt       int64
+	lastRankingType     string
+	lastRankingLimit    int64
+	lastRecordType      string
+	lastRecordStartAt   int64
+	lastRecordEndAt     int64
+	lastStatUserID      int64
+	lastStatCurrent     int64
+	lastStatPageSize    int64
+	lastInviteList      admin.InviteCampaignListRequest
+	lastInviteID        int64
+	lastInviteRecords   admin.InviteCampaignRecordListRequest
+	lastGroupID         *int64
+	lastGroupSave       admin.ServerGroupSaveRequest
+	lastGroupDrop       int64
+	lastClientEntryID   *int64
+	lastClientEntrySave admin.ClientEntryGroupSaveRequest
+	lastClientEntryDrop int64
+	lastRouteSave       admin.ServerRouteSaveRequest
+	lastRouteDrop       int64
+	lastManagedSort     map[string]map[int64]int64
+	lastOldHost         string
+	lastNewHost         string
+	lastNodeSaveType    string
+	lastNodeSave        map[string]any
+	lastNodeDropType    string
+	lastNodeDropID      int64
+	lastNodeUpdateType  string
+	lastNodeUpdateID    int64
+	lastNodeUpdate      map[string]any
+	lastNodeCopyType    string
+	lastNodeCopyID      int64
+	lastConfigKey       string
+	lastConfigSave      map[string]any
+	lastWebhookToken    string
+	lastMailTestEmail   string
+	userList            admin.UserListResult
+	userInfoDetail      map[string]any
+	userGenerateCSV     string
+	userGenerateBatch   bool
+	userDumpCSV         string
+	lastUserFetch       admin.UserFetchRequest
+	lastUserInfoID      int64
+	lastUserUpdate      admin.UserUpdateRequest
+	lastUserGenerate    admin.UserGenerateRequest
+	lastUserMail        admin.UserMailRequest
+	lastUserDump        []admin.UserFilter
+	lastUserBan         []admin.UserFilter
+	lastUserResetID     int64
+	lastUserDeleteID    int64
+	lastUserDeleteAll   []admin.UserFilter
+	assignTrade         string
+	err                 error
 }
 
 type fakePaymentService struct {
@@ -896,6 +906,21 @@ func (f *fakeAdminService) SaveServerGroup(_ context.Context, req admin.ServerGr
 
 func (f *fakeAdminService) DeleteServerGroup(_ context.Context, id int64) (bool, error) {
 	f.lastGroupDrop = id
+	return true, f.err
+}
+
+func (f *fakeAdminService) ListClientEntryGroups(_ context.Context, id *int64) ([]admin.ClientEntryGroupRecord, error) {
+	f.lastClientEntryID = id
+	return f.clientEntryGroups, f.err
+}
+
+func (f *fakeAdminService) SaveClientEntryGroup(_ context.Context, req admin.ClientEntryGroupSaveRequest) (bool, error) {
+	f.lastClientEntrySave = req
+	return true, f.err
+}
+
+func (f *fakeAdminService) DeleteClientEntryGroup(_ context.Context, id int64) (bool, error) {
+	f.lastClientEntryDrop = id
 	return true, f.err
 }
 
@@ -3589,6 +3614,16 @@ func TestRouterAdminServerManageGetNodesEndpoint(t *testing.T) {
 		managedServers: []map[string]any{
 			{"id": int64(11), "type": "vmess", "name": "JP-1", "host": "jp.example.com", "port": "443", "available_status": int64(0)},
 		},
+		clientEntryGroups: []admin.ClientEntryGroupRecord{
+			{
+				ID:          int64(7),
+				Code:        "asia",
+				DisplayName: "Asia Entry",
+				Members: []admin.ClientEntryGroupMemberRecord{
+					{ServerType: "vmess", ServerID: int64(11)},
+				},
+			},
+		},
 	}
 	router := NewRouter(
 		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
@@ -3603,8 +3638,93 @@ func TestRouterAdminServerManageGetNodesEndpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), `"JP-1"`) {
+	if !strings.Contains(rec.Body.String(), `"JP-1"`) || !strings.Contains(rec.Body.String(), `"Asia Entry"`) {
 		t.Fatalf("expected managed server payload, got %s", rec.Body.String())
+	}
+}
+
+func TestRouterAdminClientEntryGroupFetchEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{
+		clientEntryGroups: []admin.ClientEntryGroupRecord{
+			{
+				ID:              int64(7),
+				Code:            "asia",
+				Name:            "Asia",
+				DisplayName:     "Asia Entry",
+				Strategy:        "sticky-low-latency",
+				HideMemberNodes: true,
+				Members: []admin.ClientEntryGroupMemberRecord{
+					{ServerType: "vmess", ServerID: int64(11)},
+				},
+			},
+		},
+	}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/server/client-entry/fetch?auth_data=jwt-admin", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"asia"`) || !strings.Contains(rec.Body.String(), `"sticky-low-latency"`) {
+		t.Fatalf("expected client entry payload, got %s", rec.Body.String())
+	}
+}
+
+func TestRouterAdminClientEntryGroupSaveEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry/save", strings.NewReader(`{"auth_data":"jwt-admin","id":7,"code":"asia","name":"Asia","display_name":"Asia Entry","strategy":"sticky-low-latency","hide_member_nodes":true,"members":[{"server_type":"vmess","server_id":11}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if adminService.lastClientEntrySave.ID == nil || *adminService.lastClientEntrySave.ID != 7 {
+		t.Fatalf("unexpected client entry save id: %#v", adminService.lastClientEntrySave)
+	}
+	if adminService.lastClientEntrySave.Code != "asia" || adminService.lastClientEntrySave.DisplayName != "Asia Entry" {
+		t.Fatalf("unexpected client entry save payload: %#v", adminService.lastClientEntrySave)
+	}
+	if len(adminService.lastClientEntrySave.Members) != 1 || adminService.lastClientEntrySave.Members[0].ServerType != "vmess" || adminService.lastClientEntrySave.Members[0].ServerID != 11 {
+		t.Fatalf("unexpected client entry members: %#v", adminService.lastClientEntrySave.Members)
+	}
+}
+
+func TestRouterAdminClientEntryGroupDropEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry/drop", strings.NewReader("auth_data=jwt-admin&id=7"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if adminService.lastClientEntryDrop != 7 {
+		t.Fatalf("expected drop client entry id 7, got %d", adminService.lastClientEntryDrop)
 	}
 }
 

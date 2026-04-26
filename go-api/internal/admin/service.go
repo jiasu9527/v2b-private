@@ -215,6 +215,42 @@ type ServerRouteSaveRequest struct {
 	ActionValue *string
 }
 
+type ClientEntryGroupMemberRecord struct {
+	ServerType string `json:"server_type"`
+	ServerID   int64  `json:"server_id"`
+	Sort       *int64 `json:"sort,omitempty"`
+}
+
+type ClientEntryGroupRecord struct {
+	ID              int64                          `json:"id"`
+	Code            string                         `json:"code"`
+	Name            string                         `json:"name"`
+	DisplayName     string                         `json:"display_name"`
+	Strategy        string                         `json:"strategy"`
+	HideMemberNodes bool                           `json:"hide_member_nodes"`
+	Show            int64                          `json:"show"`
+	Members         []ClientEntryGroupMemberRecord `json:"members,omitempty"`
+	CreatedAt       int64                          `json:"created_at,omitempty"`
+	UpdatedAt       int64                          `json:"updated_at,omitempty"`
+}
+
+type ClientEntryGroupMemberSaveRequest struct {
+	ServerType string
+	ServerID   int64
+	Sort       *int64
+}
+
+type ClientEntryGroupSaveRequest struct {
+	ID              *int64
+	Code            string
+	Name            string
+	DisplayName     string
+	Strategy        string
+	HideMemberNodes bool
+	Show            *int64
+	Members         []ClientEntryGroupMemberSaveRequest
+}
+
 type ManagedServerHostUpdateResult struct {
 	UpdatedTotal   int64            `json:"updated_total"`
 	UpdatedByTable map[string]int64 `json:"updated_by_table"`
@@ -253,6 +289,9 @@ type Service interface {
 	ListServerGroups(ctx context.Context, groupID *int64) ([]ServerGroupRecord, error)
 	SaveServerGroup(ctx context.Context, req ServerGroupSaveRequest) (bool, error)
 	DeleteServerGroup(ctx context.Context, id int64) (bool, error)
+	ListClientEntryGroups(ctx context.Context, id *int64) ([]ClientEntryGroupRecord, error)
+	SaveClientEntryGroup(ctx context.Context, req ClientEntryGroupSaveRequest) (bool, error)
+	DeleteClientEntryGroup(ctx context.Context, id int64) (bool, error)
 	ListServerRoutes(ctx context.Context) ([]ServerRouteRecord, error)
 	SaveServerRoute(ctx context.Context, req ServerRouteSaveRequest) (bool, error)
 	DeleteServerRoute(ctx context.Context, id int64) (bool, error)

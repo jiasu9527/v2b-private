@@ -300,6 +300,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleClientAppGetConfig(w, r, cfg, state.user) {
 				return
 			}
+		case r.URL.Path == "/api/v1/client/forest/entry-provider":
+			if handleClientForestEntryProvider(w, r, cfg, state.user) {
+				return
+			}
 		case isClientSubscribePath(cfg, r.URL.Path):
 			if handleClientSubscribe(w, r, cfg, state.user) {
 				return
@@ -318,6 +322,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			}
 		case r.URL.Path == "/api/v1/user/getSubscribe":
 			if handleUserGetSubscribe(w, r, state.session, state.user) {
+				return
+			}
+		case r.URL.Path == "/api/v1/user/forest/runtime-profile":
+			if handleUserForestRuntimeProfile(w, r, cfg, state.session, state.user) {
 				return
 			}
 		case r.URL.Path == "/api/v1/user/unbindTelegram":
@@ -642,6 +650,18 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			}
 		case r.URL.Path == adminPrefix+"/server/route/drop":
 			if handleAdminServerRouteDrop(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/server/client-entry/fetch":
+			if handleAdminClientEntryGroupFetch(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/server/client-entry/save":
+			if handleAdminClientEntryGroupSave(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/server/client-entry/drop":
+			if handleAdminClientEntryGroupDrop(w, r, state.session, state.admin) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/server/manage/getNodes":
@@ -3741,6 +3761,11 @@ func handleAdminServerManageGetNodes(w http.ResponseWriter, r *http.Request, ses
 	if err != nil {
 		return handleAdminError(w, err)
 	}
+	groups, err := adminService.ListClientEntryGroups(r.Context(), nil)
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	data = enrichManagedServersWithClientEntryGroups(data, groups)
 	writeJSON(w, http.StatusOK, map[string]any{"data": data})
 	return true
 }
