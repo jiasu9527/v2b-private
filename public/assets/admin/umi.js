@@ -153516,59 +153516,92 @@
                                         "string" ===
                                         typeof t.remote_resolve_error
                                             ? t.remote_resolve_error
-                                            : "";
+                                            : "",
+                                    i = r
+                                        ? "\u62c9\u53d6\u5f02\u5e38\uff0c\u70b9\u51fb\u5c55\u5f00"
+                                        : n.length > 0
+                                          ? "\u5df2\u62c9\u53d6 ".concat(
+                                                n.length,
+                                                " \u6761\uff0c\u70b9\u51fb\u5c55\u5f00",
+                                            )
+                                          : "\u6682\u65e0\u8fdc\u7a0b\u7ed3\u679c";
                                 return t.remote_enabled
                                     ? f.a.createElement(
-                                          "div",
+                                          "details",
                                           {
                                               style: {
                                                   maxWidth: 320,
-                                                  whiteSpace:
-                                                      "pre-wrap",
-                                                  wordBreak:
-                                                      "break-all",
                                               },
                                           },
-                                          t.remote_group_ref
-                                              ? f.a.createElement(
-                                                    "div",
-                                                    {
-                                                        className:
-                                                            "text-muted",
-                                                        style: {
-                                                            marginBottom: 4,
-                                                        },
-                                                    },
-                                                    t.remote_group_ref,
-                                                )
-                                              : null,
-                                          r
-                                              ? f.a.createElement(
-                                                    "div",
-                                                    {
-                                                        style: {
-                                                            color: "#cf1322",
-                                                            marginBottom:
-                                                                n.length >
-                                                                0
-                                                                    ? 6
-                                                                    : 0,
-                                                        },
-                                                    },
-                                                    r,
-                                                )
-                                              : null,
+                                          f.a.createElement(
+                                              "summary",
+                                              {
+                                                  style: {
+                                                      cursor: "pointer",
+                                                      color: r
+                                                          ? "#cf1322"
+                                                          : "#1890ff",
+                                                      outline: "none",
+                                                      userSelect:
+                                                          "none",
+                                                  },
+                                              },
+                                              i,
+                                          ),
                                           f.a.createElement(
                                               "div",
                                               {
-                                                  className:
-                                                      n.length > 0
-                                                          ? ""
-                                                          : "text-muted",
+                                                  style: {
+                                                      marginTop: 8,
+                                                      whiteSpace:
+                                                          "pre-wrap",
+                                                      wordBreak:
+                                                          "break-all",
+                                                  },
                                               },
+                                              t.remote_group_ref
+                                                  ? f.a.createElement(
+                                                        "div",
+                                                        {
+                                                            className:
+                                                                "text-muted",
+                                                            style: {
+                                                                marginBottom: 4,
+                                                            },
+                                                        },
+                                                        t.remote_group_ref,
+                                                    )
+                                                  : null,
+                                              r
+                                                  ? f.a.createElement(
+                                                        "div",
+                                                        {
+                                                            style: {
+                                                                color: "#cf1322",
+                                                                marginBottom:
+                                                                    n.length >
+                                                                    0
+                                                                        ? 6
+                                                                        : 0,
+                                                            },
+                                                        },
+                                                        r,
+                                                    )
+                                                  : null,
                                               n.length > 0
-                                                  ? n.join("\n")
-                                                  : "\u6682\u65e0\u8fdc\u7a0b\u7ed3\u679c",
+                                                  ? f.a.createElement(
+                                                        "div",
+                                                        null,
+                                                        n.join("\n"),
+                                                    )
+                                                  : f.a.createElement(
+                                                        "div",
+                                                        {
+                                                            className:
+                                                                "text-muted",
+                                                        },
+                                                        "\u6682\u65e0\u8fdc\u7a0b\u7ed3\u679c",
+                                                    ),
                                           ),
                                       )
                                     : "-";
