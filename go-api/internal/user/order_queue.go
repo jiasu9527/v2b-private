@@ -167,14 +167,12 @@ func (s *DBService) runAutomaticMonthlyActiveExpiringReset(ctx context.Context, 
 	}
 
 	nowUnix := now.Unix()
-	defaultMethod := s.runtimeValues().ResetTrafficMethod
 	result, err := s.db.ExecContext(ctx, `UPDATE v2_user AS u
 SET u = 0, d = 0, updated_at = $1
 FROM v2_plan AS p
 WHERE p.id = u.plan_id
   AND u.plan_id IS NOT NULL
-  AND u.expired_at > $1
-  AND COALESCE(p.reset_traffic_method, $2) = 0`, nowUnix, defaultMethod)
+  AND u.expired_at > $1`, nowUnix)
 	if err != nil {
 		return 0, fmt.Errorf("automatic monthly traffic reset: %w", err)
 	}
