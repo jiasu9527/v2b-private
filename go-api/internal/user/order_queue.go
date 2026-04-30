@@ -112,22 +112,22 @@ LIMIT $1`, orderHandleBatchLimit, cutoff)
 	if err := s.cleanupExpiredOrders(ctx); err != nil {
 		return err
 	}
-	if _, err := s.runTrafficResetSweep(ctx, true); err != nil {
+	if _, err := s.runTrafficResetSweep(ctx, true, false); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (s *DBService) SweepTrafficResets(ctx context.Context) (TrafficResetSweepResult, error) {
-	return s.runTrafficResetSweep(ctx, false)
+	return s.runTrafficResetSweep(ctx, false, true)
 }
 
-func (s *DBService) runTrafficResetSweep(ctx context.Context, limited bool) (TrafficResetSweepResult, error) {
+func (s *DBService) runTrafficResetSweep(ctx context.Context, limited bool, forceBackfill bool) (TrafficResetSweepResult, error) {
 	now := time.Now()
-	query := `SELECT u.id, u.plan_id, u.u, u.d, u.expired_at, u.updated_at, p.reset_traffic_method
+	query := `SELECT u.id, u.plan_id, u.u, u.d, COALESCE(u.expired_at, 0), u.updated_at, p.reset_traffic_method
 FROM v2_user u
 JOIN v2_plan p ON p.id = u.plan_id
-WHERE u.plan_id IS NOT NULL AND u.expired_at > $1
+WHERE u.plan_id IS NOT NULL AND (u.expired_at > $1 OR u.expired_at IS NULL OR u.expired_at <= 0)
 ORDER BY u.id ASC`
 
 	var (
@@ -160,7 +160,7 @@ LIMIT $2`, now.Unix(), orderHandleBatchLimit)
 			return TrafficResetSweepResult{}, fmt.Errorf("scan traffic reset candidate: %w", err)
 		}
 		result.Scanned++
-		applied, err := s.applyTrafficResetCandidate(ctx, item, now)
+		applied, err := s.applyTrafficResetCandidate(ctx, item, now, forceBackfill)
 		if err != nil {
 			return TrafficResetSweepResult{}, err
 		}
@@ -179,7 +179,7 @@ LIMIT $2`, now.Unix(), orderHandleBatchLimit)
 	return result, nil
 }
 
-func (s *DBService) applyTrafficResetCandidate(ctx context.Context, item trafficResetCandidate, now time.Time) (trafficResetApplyResult, error) {
+func (s *DBService) applyTrafficResetCandidate(ctx context.Context, item trafficResetCandidate, now time.Time, forceBackfill bool) (trafficResetApplyResult, error) {
 	method := s.runtimeValues().ResetTrafficMethod
 	if item.PlanResetTrafficMethod.Valid {
 		method = item.PlanResetTrafficMethod.Int64
@@ -199,7 +199,7 @@ func (s *DBService) applyTrafficResetCandidate(ctx context.Context, item traffic
 	}
 
 	applied := trafficResetApplyMarkedOnly
-	if item.UpdatedAt < cycle.StartAt && (item.U > 0 || item.D > 0) {
+	if (forceBackfill || item.UpdatedAt < cycle.StartAt) && (item.U > 0 || item.D > 0) {
 		if err := s.resetUserTrafficUsage(ctx, item.UserID); err != nil {
 			return trafficResetApplySkipped, err
 		}
@@ -223,7 +223,7 @@ func trafficResetCycleKVKey(userID int64) string {
 }
 
 func trafficResetCurrentCycle(planID, method, expiredAt int64, now time.Time) (trafficResetCycle, bool) {
-	if expiredAt <= 0 {
+	if expiredAt <= 0 && method != 0 && method != 3 {
 		return trafficResetCycle{}, false
 	}
 
