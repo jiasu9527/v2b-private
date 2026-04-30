@@ -13,6 +13,13 @@ import (
 const orderHandleBatchLimit = 500
 const trafficResetMarkerTTLSeconds = 400 * 24 * 3600
 
+type TrafficResetSweepResult struct {
+	Scanned    int64
+	Reset      int64
+	MarkedOnly int64
+	Skipped    int64
+}
+
 type trafficResetCandidate struct {
 	UserID                 int64
 	PlanID                 int64
@@ -27,6 +34,14 @@ type trafficResetCycle struct {
 	Marker  string
 	StartAt int64
 }
+
+type trafficResetApplyResult int
+
+const (
+	trafficResetApplySkipped trafficResetApplyResult = iota
+	trafficResetApplyMarkedOnly
+	trafficResetApplyReset
+)
 
 func (s *DBService) HandlePendingOrders(ctx context.Context) error {
 	if s.db == nil {
@@ -97,22 +112,37 @@ LIMIT $1`, orderHandleBatchLimit, cutoff)
 	if err := s.cleanupExpiredOrders(ctx); err != nil {
 		return err
 	}
-	if err := s.sweepTrafficResets(ctx); err != nil {
+	if _, err := s.runTrafficResetSweep(ctx, true); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (s *DBService) sweepTrafficResets(ctx context.Context) error {
+func (s *DBService) SweepTrafficResets(ctx context.Context) (TrafficResetSweepResult, error) {
+	return s.runTrafficResetSweep(ctx, false)
+}
+
+func (s *DBService) runTrafficResetSweep(ctx context.Context, limited bool) (TrafficResetSweepResult, error) {
 	now := time.Now()
-	rows, err := s.db.QueryContext(ctx, `SELECT u.id, u.plan_id, u.u, u.d, u.expired_at, u.updated_at, p.reset_traffic_method
+	query := `SELECT u.id, u.plan_id, u.u, u.d, u.expired_at, u.updated_at, p.reset_traffic_method
 FROM v2_user u
 JOIN v2_plan p ON p.id = u.plan_id
 WHERE u.plan_id IS NOT NULL AND u.expired_at > $1
-ORDER BY u.id ASC
+ORDER BY u.id ASC`
+
+	var (
+		rows   *sql.Rows
+		err    error
+		result TrafficResetSweepResult
+	)
+	if limited {
+		rows, err = s.db.QueryContext(ctx, query+`
 LIMIT $2`, now.Unix(), orderHandleBatchLimit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, query, now.Unix())
+	}
 	if err != nil {
-		return fmt.Errorf("query traffic reset candidates: %w", err)
+		return TrafficResetSweepResult{}, fmt.Errorf("query traffic reset candidates: %w", err)
 	}
 	defer rows.Close()
 
@@ -127,46 +157,58 @@ LIMIT $2`, now.Unix(), orderHandleBatchLimit)
 			&item.UpdatedAt,
 			&item.PlanResetTrafficMethod,
 		); err != nil {
-			return fmt.Errorf("scan traffic reset candidate: %w", err)
+			return TrafficResetSweepResult{}, fmt.Errorf("scan traffic reset candidate: %w", err)
 		}
-		if err := s.applyTrafficResetCandidate(ctx, item, now); err != nil {
-			return err
+		result.Scanned++
+		applied, err := s.applyTrafficResetCandidate(ctx, item, now)
+		if err != nil {
+			return TrafficResetSweepResult{}, err
+		}
+		switch applied {
+		case trafficResetApplyReset:
+			result.Reset++
+		case trafficResetApplyMarkedOnly:
+			result.MarkedOnly++
+		default:
+			result.Skipped++
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate traffic reset candidates: %w", err)
+		return TrafficResetSweepResult{}, fmt.Errorf("iterate traffic reset candidates: %w", err)
 	}
-	return nil
+	return result, nil
 }
 
-func (s *DBService) applyTrafficResetCandidate(ctx context.Context, item trafficResetCandidate, now time.Time) error {
+func (s *DBService) applyTrafficResetCandidate(ctx context.Context, item trafficResetCandidate, now time.Time) (trafficResetApplyResult, error) {
 	method := s.runtimeValues().ResetTrafficMethod
 	if item.PlanResetTrafficMethod.Valid {
 		method = item.PlanResetTrafficMethod.Int64
 	}
 	cycle, ok := trafficResetCurrentCycle(item.PlanID, method, item.ExpiredAt, now)
 	if !ok {
-		return nil
+		return trafficResetApplySkipped, nil
 	}
 
 	markerKey := trafficResetCycleKVKey(item.UserID)
 	lastMarker, found, err := s.kvGet(ctx, markerKey)
 	if err != nil {
-		return fmt.Errorf("load traffic reset marker for user %d: %w", item.UserID, err)
+		return trafficResetApplySkipped, fmt.Errorf("load traffic reset marker for user %d: %w", item.UserID, err)
 	}
 	if found && strings.TrimSpace(lastMarker) == cycle.Marker {
-		return nil
+		return trafficResetApplySkipped, nil
 	}
 
+	applied := trafficResetApplyMarkedOnly
 	if item.UpdatedAt < cycle.StartAt && (item.U > 0 || item.D > 0) {
 		if err := s.resetUserTrafficUsage(ctx, item.UserID); err != nil {
-			return err
+			return trafficResetApplySkipped, err
 		}
+		applied = trafficResetApplyReset
 	}
 	if err := s.kvSet(ctx, markerKey, cycle.Marker, trafficResetMarkerTTLSeconds); err != nil {
-		return fmt.Errorf("save traffic reset marker for user %d: %w", item.UserID, err)
+		return trafficResetApplySkipped, fmt.Errorf("save traffic reset marker for user %d: %w", item.UserID, err)
 	}
-	return nil
+	return applied, nil
 }
 
 func (s *DBService) resetUserTrafficUsage(ctx context.Context, userID int64) error {

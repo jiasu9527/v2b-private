@@ -74,4 +74,12 @@ if [[ "$(filtered_actions)" != "merge-mysql" ]]; then
   exit 1
 fi
 
+: > "${APPCTL_LOG}"
+printf '4\n11\ny\n\n0\n0\n' | APPCTL_BIN="${TMP_DIR}/scripts/appctl" bash "${TMP_DIR}/menu.sh" >/tmp/test-menu-routing-reset-traffic.out 2>/tmp/test-menu-routing-reset-traffic.err
+if [[ "$(filtered_actions)" != "reset-traffic" ]]; then
+  echo "expected reset-traffic action"
+  cat "${APPCTL_LOG}"
+  exit 1
+fi
+
 echo "menu routing test passed"

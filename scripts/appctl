@@ -1277,6 +1277,15 @@ run_ops_update() {
   "${GO_BIN}" "${args[@]}"
 }
 
+run_ops_reset_traffic() {
+  local args=(run ./cmd/ops reset-traffic)
+  if [[ -n "${POSTGRES_DSN:-}" ]]; then
+    args+=(--dsn "${POSTGRES_DSN}")
+  fi
+  cd "${GO_DIR}"
+  "${GO_BIN}" "${args[@]}"
+}
+
 run_ops_migrate_mysql() {
   local source_env="$1"
   local reset_target="${2:-false}"
@@ -2110,6 +2119,13 @@ cmd_seed_demo() {
   "${GO_BIN}" "${args[@]}"
 }
 
+cmd_reset_traffic() {
+  ensure_go
+  load_env
+  resolve_postgres_dsn
+  run_ops_reset_traffic
+}
+
 cmd_env_file() {
   printf '%s\n' "$(resolve_env_path)"
 }
@@ -2265,6 +2281,7 @@ usage() {
   ./scripts/appctl test
   ./scripts/appctl create-admin
   ./scripts/appctl seed-demo
+  ./scripts/appctl reset-traffic
   ./scripts/appctl env-file
   ./scripts/appctl prompt-db [--optional]
   ./scripts/appctl doctor
@@ -2305,6 +2322,7 @@ case "${action}" in
   test) cmd_test ;;
   create-admin) cmd_create_admin ;;
   seed-demo) cmd_seed_demo ;;
+  reset-traffic) cmd_reset_traffic ;;
   env-file) cmd_env_file ;;
   prompt-db) shift; cmd_prompt_db "$@" ;;
   service-template) cmd_service_template ;;

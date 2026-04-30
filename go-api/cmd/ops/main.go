@@ -14,6 +14,8 @@ import (
 	"time"
 
 	adminsvc "forest/go-api/internal/admin"
+	"forest/go-api/internal/config"
+	usersvc "forest/go-api/internal/user"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"golang.org/x/crypto/bcrypt"
@@ -40,6 +42,10 @@ func main() {
 		}
 	case "seed-demo":
 		if err := runSeedDemo(os.Args[2:]); err != nil {
+			exitWithErr(err)
+		}
+	case "reset-traffic":
+		if err := runResetTraffic(os.Args[2:]); err != nil {
 			exitWithErr(err)
 		}
 	case "migrate-config":
@@ -167,6 +173,33 @@ func runCreateAdmin(args []string) error {
 		return err
 	}
 	fmt.Printf("admin ready: email=%s password=%s\n", strings.TrimSpace(*adminEmail), adminPass)
+	return nil
+}
+
+func runResetTraffic(args []string) error {
+	flags := flag.NewFlagSet("reset-traffic", flag.ContinueOnError)
+	dsn := flags.String("dsn", "", "PostgreSQL DSN")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+
+	resolvedDSN, err := resolveDSN(*dsn)
+	if err != nil {
+		return err
+	}
+
+	db, err := openDB(resolvedDSN)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	svc := usersvc.NewDBService(config.Load(), db)
+	result, err := svc.SweepTrafficResets(context.Background())
+	if err != nil {
+		return err
+	}
+	fmt.Printf("traffic reset finished: scanned=%d reset=%d marked_only=%d skipped=%d\n", result.Scanned, result.Reset, result.MarkedOnly, result.Skipped)
 	return nil
 }
 
@@ -539,6 +572,7 @@ func printUsage() {
   go run ./cmd/ops update [--dsn=...]
   go run ./cmd/ops create-admin --admin-email=admin@example.com [--admin-password=xxx] [--dsn=...]
   go run ./cmd/ops seed-demo [--admin-email=admin@example.com] [--admin-password=xxx] [--dsn=...]
+  go run ./cmd/ops reset-traffic [--dsn=...]
   go run ./cmd/ops migrate-config [--legacy-root=...] [--target-root=...]
   go run ./cmd/ops migrate-mysql --source-env=../.env [--target-dsn=...] [--install-sql=...]
   go run ./cmd/ops inspect-merge-mysql --source-host=127.0.0.1 --source-port=3306 --source-database=legacy --source-username=root --source-password=xxx [--target-dsn=...]

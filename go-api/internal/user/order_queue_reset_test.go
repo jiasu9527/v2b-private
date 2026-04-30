@@ -145,3 +145,59 @@ func TestHandlePendingOrdersSeedsMonthlyTrafficCycleWithoutResetForFreshSubscrip
 		t.Fatalf("expectations: %v", err)
 	}
 }
+
+func TestSweepTrafficResetsReturnsSummaryCounts(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := NewDBService(config.Config{
+		ResetTrafficMethod: 0,
+	}, db)
+
+	now := time.Now()
+	expiredAt := now.Add(7 * 24 * time.Hour).Unix()
+	cycleStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Unix()
+	expectedMarker := fmt.Sprintf("plan:%d|method:%d|start:%d", int64(7), int64(0), cycleStart)
+
+	mock.ExpectQuery(`SELECT u.id, u.plan_id, u.u, u.d, u.expired_at, u.updated_at, p.reset_traffic_method\s+FROM v2_user u\s+JOIN v2_plan p ON p.id = u.plan_id\s+WHERE u.plan_id IS NOT NULL AND u.expired_at > \$1\s+ORDER BY u.id ASC`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "plan_id", "u", "d", "expired_at", "updated_at", "reset_traffic_method"}).
+			AddRow(int64(10), int64(7), int64(123), int64(456), expiredAt, cycleStart-3600, nil).
+			AddRow(int64(11), int64(7), int64(12), int64(34), expiredAt, cycleStart+3600, nil).
+			AddRow(int64(12), int64(7), int64(56), int64(78), expiredAt, cycleStart-3600, nil),
+		)
+	mock.ExpectQuery(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = \$1 LIMIT 1`).
+		WithArgs(trafficResetCycleKeyPrefix + "10").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec(`UPDATE v2_user SET u = 0, d = 0, updated_at = \$2 WHERE id = \$1`).
+		WithArgs(int64(10), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO v2_runtime_kv \(k, v, expire_at, created_at, updated_at\)`).
+		WithArgs(trafficResetCycleKeyPrefix+"10", expectedMarker, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = \$1 LIMIT 1`).
+		WithArgs(trafficResetCycleKeyPrefix + "11").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec(`INSERT INTO v2_runtime_kv \(k, v, expire_at, created_at, updated_at\)`).
+		WithArgs(trafficResetCycleKeyPrefix+"11", expectedMarker, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = \$1 LIMIT 1`).
+		WithArgs(trafficResetCycleKeyPrefix + "12").
+		WillReturnRows(sqlmock.NewRows([]string{"v", "expire_at"}).
+			AddRow(expectedMarker, int64(0)),
+		)
+
+	result, err := service.SweepTrafficResets(context.Background())
+	if err != nil {
+		t.Fatalf("sweep traffic resets: %v", err)
+	}
+	if result.Scanned != 3 || result.Reset != 1 || result.MarkedOnly != 1 || result.Skipped != 1 {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}

@@ -223,6 +223,7 @@ show_advanced_menu() {
 8. 安装全局 forest 命令
 9. 安全卸载当前部署
 10. 合并 MySQL 用户库
+11. 手动执行流量重置
 0. 返回上级
 TEXT
 }
@@ -246,6 +247,19 @@ prompt_text() {
     return 0
   fi
   printf '%s' "${value}"
+}
+
+confirm_yes() {
+  local label="$1"
+  local value=""
+  printf '%s [y/N]: ' "${label}" >&2
+  if ! IFS= read -r value; then
+    return 1
+  fi
+  case "$(normalize_choice "${value}")" in
+    y|Y|yes|YES) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 show_env_summary() {
@@ -442,6 +456,14 @@ advanced_menu() {
       8) run_appctl install-link; pause_screen ;;
       9) run_appctl uninstall; pause_screen ;;
       10) run_appctl merge-mysql; pause_screen ;;
+      11)
+        if confirm_yes "确认执行一次符合条件的全量流量重置"; then
+          run_appctl reset-traffic
+        else
+          echo "已取消"
+        fi
+        pause_screen
+        ;;
       *) echo "无效编号"; pause_screen ;;
     esac
   done
