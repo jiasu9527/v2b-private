@@ -12,6 +12,7 @@ import (
 
 const orderHandleBatchLimit = 500
 const trafficResetMarkerTTLSeconds = 400 * 24 * 3600
+const trafficResetActiveMonthlyKVKey = "TRAFFIC_RESET_ACTIVE_EXPIRING_MONTHLY"
 
 type TrafficResetSweepResult struct {
 	Scanned    int64
@@ -112,6 +113,9 @@ LIMIT $1`, orderHandleBatchLimit, cutoff)
 	if err := s.cleanupExpiredOrders(ctx); err != nil {
 		return err
 	}
+	if _, err := s.runAutomaticMonthlyActiveExpiringReset(ctx, time.Now()); err != nil {
+		return err
+	}
 	if _, err := s.runTrafficResetSweep(ctx, true, false); err != nil {
 		return err
 	}
@@ -142,6 +146,46 @@ WHERE plan_id IS NOT NULL AND expired_at > $1`, now)
 		Scanned: affected,
 		Reset:   affected,
 	}, nil
+}
+
+func (s *DBService) runAutomaticMonthlyActiveExpiringReset(ctx context.Context, now time.Time) (int64, error) {
+	if s.db == nil {
+		return 0, ErrUnavailable
+	}
+	if now.Day() != 1 {
+		return 0, nil
+	}
+
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Unix()
+	marker := strconv.FormatInt(monthStart, 10)
+	lastMarker, found, err := s.kvGet(ctx, trafficResetActiveMonthlyKVKey)
+	if err != nil {
+		return 0, fmt.Errorf("load active monthly traffic reset marker: %w", err)
+	}
+	if found && strings.TrimSpace(lastMarker) == marker {
+		return 0, nil
+	}
+
+	nowUnix := now.Unix()
+	defaultMethod := s.runtimeValues().ResetTrafficMethod
+	result, err := s.db.ExecContext(ctx, `UPDATE v2_user AS u
+SET u = 0, d = 0, updated_at = $1
+FROM v2_plan AS p
+WHERE p.id = u.plan_id
+  AND u.plan_id IS NOT NULL
+  AND u.expired_at > $1
+  AND COALESCE(p.reset_traffic_method, $2) = 0`, nowUnix, defaultMethod)
+	if err != nil {
+		return 0, fmt.Errorf("automatic monthly traffic reset: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count automatic monthly traffic reset: %w", err)
+	}
+	if err := s.kvSet(ctx, trafficResetActiveMonthlyKVKey, marker, trafficResetMarkerTTLSeconds); err != nil {
+		return 0, fmt.Errorf("save active monthly traffic reset marker: %w", err)
+	}
+	return affected, nil
 }
 
 func (s *DBService) runTrafficResetSweep(ctx context.Context, limited bool, forceBackfill bool) (TrafficResetSweepResult, error) {

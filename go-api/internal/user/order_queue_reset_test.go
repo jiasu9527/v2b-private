@@ -271,3 +271,36 @@ func TestResetAllTrafficUsageZerosActiveExpiringUsers(t *testing.T) {
 		t.Fatalf("expectations: %v", err)
 	}
 }
+
+func TestAutomaticMonthlyActiveExpiringResetRunsOnceOnFirstDay(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := NewDBService(config.Config{ResetTrafficMethod: 0}, db)
+	now := time.Date(2026, time.May, 1, 0, 5, 0, 0, time.Local)
+	marker := fmt.Sprintf("%d", time.Date(2026, time.May, 1, 0, 0, 0, 0, time.Local).Unix())
+
+	mock.ExpectQuery(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = \$1 LIMIT 1`).
+		WithArgs(trafficResetActiveMonthlyKVKey).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec(`UPDATE v2_user AS u\s+SET u = 0, d = 0, updated_at = \$1\s+FROM v2_plan AS p\s+WHERE p.id = u.plan_id\s+AND u.plan_id IS NOT NULL\s+AND u.expired_at > \$1\s+AND COALESCE\(p.reset_traffic_method, \$2\) = 0`).
+		WithArgs(now.Unix(), int64(0)).
+		WillReturnResult(sqlmock.NewResult(0, 12000))
+	mock.ExpectExec(`INSERT INTO v2_runtime_kv \(k, v, expire_at, created_at, updated_at\)`).
+		WithArgs(trafficResetActiveMonthlyKVKey, marker, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	affected, err := service.runAutomaticMonthlyActiveExpiringReset(context.Background(), now)
+	if err != nil {
+		t.Fatalf("automatic monthly reset: %v", err)
+	}
+	if affected != 12000 {
+		t.Fatalf("expected affected=12000, got %d", affected)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
