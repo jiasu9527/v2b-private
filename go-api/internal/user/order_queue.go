@@ -11,6 +11,22 @@ import (
 )
 
 const orderHandleBatchLimit = 500
+const trafficResetMarkerTTLSeconds = 400 * 24 * 3600
+
+type trafficResetCandidate struct {
+	UserID                 int64
+	PlanID                 int64
+	U                      int64
+	D                      int64
+	ExpiredAt              int64
+	UpdatedAt              int64
+	PlanResetTrafficMethod sql.NullInt64
+}
+
+type trafficResetCycle struct {
+	Marker  string
+	StartAt int64
+}
 
 func (s *DBService) HandlePendingOrders(ctx context.Context) error {
 	if s.db == nil {
@@ -81,7 +97,141 @@ LIMIT $1`, orderHandleBatchLimit, cutoff)
 	if err := s.cleanupExpiredOrders(ctx); err != nil {
 		return err
 	}
+	if err := s.sweepTrafficResets(ctx); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (s *DBService) sweepTrafficResets(ctx context.Context) error {
+	now := time.Now()
+	rows, err := s.db.QueryContext(ctx, `SELECT u.id, u.plan_id, u.u, u.d, u.expired_at, u.updated_at, p.reset_traffic_method
+FROM v2_user u
+JOIN v2_plan p ON p.id = u.plan_id
+WHERE u.plan_id IS NOT NULL AND u.expired_at > $1
+ORDER BY u.id ASC
+LIMIT $2`, now.Unix(), orderHandleBatchLimit)
+	if err != nil {
+		return fmt.Errorf("query traffic reset candidates: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var item trafficResetCandidate
+		if err := rows.Scan(
+			&item.UserID,
+			&item.PlanID,
+			&item.U,
+			&item.D,
+			&item.ExpiredAt,
+			&item.UpdatedAt,
+			&item.PlanResetTrafficMethod,
+		); err != nil {
+			return fmt.Errorf("scan traffic reset candidate: %w", err)
+		}
+		if err := s.applyTrafficResetCandidate(ctx, item, now); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate traffic reset candidates: %w", err)
+	}
+	return nil
+}
+
+func (s *DBService) applyTrafficResetCandidate(ctx context.Context, item trafficResetCandidate, now time.Time) error {
+	method := s.runtimeValues().ResetTrafficMethod
+	if item.PlanResetTrafficMethod.Valid {
+		method = item.PlanResetTrafficMethod.Int64
+	}
+	cycle, ok := trafficResetCurrentCycle(item.PlanID, method, item.ExpiredAt, now)
+	if !ok {
+		return nil
+	}
+
+	markerKey := trafficResetCycleKVKey(item.UserID)
+	lastMarker, found, err := s.kvGet(ctx, markerKey)
+	if err != nil {
+		return fmt.Errorf("load traffic reset marker for user %d: %w", item.UserID, err)
+	}
+	if found && strings.TrimSpace(lastMarker) == cycle.Marker {
+		return nil
+	}
+
+	if item.UpdatedAt < cycle.StartAt && (item.U > 0 || item.D > 0) {
+		if err := s.resetUserTrafficUsage(ctx, item.UserID); err != nil {
+			return err
+		}
+	}
+	if err := s.kvSet(ctx, markerKey, cycle.Marker, trafficResetMarkerTTLSeconds); err != nil {
+		return fmt.Errorf("save traffic reset marker for user %d: %w", item.UserID, err)
+	}
+	return nil
+}
+
+func (s *DBService) resetUserTrafficUsage(ctx context.Context, userID int64) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE v2_user SET u = 0, d = 0, updated_at = $2 WHERE id = $1`, userID, time.Now().Unix()); err != nil {
+		return fmt.Errorf("reset user traffic usage: %w", err)
+	}
+	return nil
+}
+
+func trafficResetCycleKVKey(userID int64) string {
+	return fmt.Sprintf("TRAFFIC_RESET_CYCLE_USER_%d", userID)
+}
+
+func trafficResetCurrentCycle(planID, method, expiredAt int64, now time.Time) (trafficResetCycle, bool) {
+	if expiredAt <= 0 {
+		return trafficResetCycle{}, false
+	}
+
+	var start time.Time
+	switch method {
+	case 0:
+		start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	case 1:
+		start = trafficResetMonthlyAnchor(expiredAt, now)
+	case 2:
+		return trafficResetCycle{}, false
+	case 3:
+		start = time.Date(now.Year(), time.January, 1, 0, 0, 0, 0, now.Location())
+	case 4:
+		start = trafficResetYearlyAnchor(expiredAt, now)
+	default:
+		return trafficResetCycle{}, false
+	}
+
+	return trafficResetCycle{
+		Marker:  fmt.Sprintf("plan:%d|method:%d|start:%d", planID, method, start.Unix()),
+		StartAt: start.Unix(),
+	}, true
+}
+
+func trafficResetMonthlyAnchor(expiredAt int64, now time.Time) time.Time {
+	target := time.Unix(expiredAt, 0).In(now.Location())
+	candidate := trafficResetClippedDate(now.Year(), now.Month(), target.Day(), now.Location())
+	if candidate.After(now) {
+		prev := now.AddDate(0, -1, 0)
+		return trafficResetClippedDate(prev.Year(), prev.Month(), target.Day(), now.Location())
+	}
+	return candidate
+}
+
+func trafficResetYearlyAnchor(expiredAt int64, now time.Time) time.Time {
+	target := time.Unix(expiredAt, 0).In(now.Location())
+	candidate := trafficResetClippedDate(now.Year(), target.Month(), target.Day(), now.Location())
+	if candidate.After(now) {
+		return trafficResetClippedDate(now.Year()-1, target.Month(), target.Day(), now.Location())
+	}
+	return candidate
+}
+
+func trafficResetClippedDate(year int, month time.Month, day int, loc *time.Location) time.Time {
+	lastDay := time.Date(year, month+1, 0, 0, 0, 0, 0, loc).Day()
+	if day > lastDay {
+		day = lastDay
+	}
+	return time.Date(year, month, day, 0, 0, 0, 0, loc)
 }
 
 func (s *DBService) handleQueuedOrder(ctx context.Context, tradeNo string) error {

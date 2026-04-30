@@ -63,6 +63,7 @@ func TestHandlePendingOrdersAutoConfirmsCommission(t *testing.T) {
 		WithArgs(int64(9), int64(2), int64(120), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
+	expectNoTrafficResetCandidates(mock)
 
 	if err := service.HandlePendingOrders(context.Background()); err != nil {
 		t.Fatalf("handle pending orders: %v", err)
@@ -127,6 +128,7 @@ func TestHandlePendingOrdersOffsetsCommissionDebtBeforeBalanceCredit(t *testing.
 		WithArgs(int64(10), int64(2), int64(120), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
+	expectNoTrafficResetCandidates(mock)
 
 	if err := service.HandlePendingOrders(context.Background()); err != nil {
 		t.Fatalf("handle pending orders: %v", err)

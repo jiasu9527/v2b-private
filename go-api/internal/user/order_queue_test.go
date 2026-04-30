@@ -49,6 +49,7 @@ func TestHandlePendingOrdersCleansExpiredOrders(t *testing.T) {
 	mock.ExpectExec(`DELETE FROM v2_order WHERE id IN \(\$1,\$2,\$3,\$4\)`).
 		WithArgs(int64(10), int64(11), int64(20), int64(21)).
 		WillReturnResult(sqlmock.NewResult(0, 4))
+	expectNoTrafficResetCandidates(mock)
 
 	if err := service.HandlePendingOrders(context.Background()); err != nil {
 		t.Fatalf("handle pending orders: %v", err)
