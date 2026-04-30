@@ -195,7 +195,7 @@ func runResetTraffic(args []string) error {
 	defer db.Close()
 
 	svc := usersvc.NewDBService(config.Load(), db)
-	result, err := svc.SweepTrafficResets(context.Background())
+	result, err := svc.ResetAllTrafficUsage(context.Background())
 	if err != nil {
 		return err
 	}

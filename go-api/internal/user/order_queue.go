@@ -122,6 +122,25 @@ func (s *DBService) SweepTrafficResets(ctx context.Context) (TrafficResetSweepRe
 	return s.runTrafficResetSweep(ctx, false, true)
 }
 
+func (s *DBService) ResetAllTrafficUsage(ctx context.Context) (TrafficResetSweepResult, error) {
+	if s.db == nil {
+		return TrafficResetSweepResult{}, ErrUnavailable
+	}
+
+	result, err := s.db.ExecContext(ctx, `UPDATE v2_user SET u = 0, d = 0, updated_at = $1`, time.Now().Unix())
+	if err != nil {
+		return TrafficResetSweepResult{}, fmt.Errorf("reset all user traffic usage: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return TrafficResetSweepResult{}, fmt.Errorf("count reset all user traffic usage: %w", err)
+	}
+	return TrafficResetSweepResult{
+		Scanned: affected,
+		Reset:   affected,
+	}, nil
+}
+
 func (s *DBService) runTrafficResetSweep(ctx context.Context, limited bool, forceBackfill bool) (TrafficResetSweepResult, error) {
 	now := time.Now()
 	query := `SELECT u.id, u.plan_id, u.u, u.d, COALESCE(u.expired_at, 0), u.updated_at, p.reset_traffic_method

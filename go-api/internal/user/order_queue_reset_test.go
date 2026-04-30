@@ -246,3 +246,28 @@ func TestSweepTrafficResetsIncludesNoExpiryMonthlyUsers(t *testing.T) {
 		t.Fatalf("expectations: %v", err)
 	}
 }
+
+func TestResetAllTrafficUsageZerosEveryUser(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := NewDBService(config.Config{}, db)
+
+	mock.ExpectExec(`UPDATE v2_user SET u = 0, d = 0, updated_at = \$1`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 16363))
+
+	result, err := service.ResetAllTrafficUsage(context.Background())
+	if err != nil {
+		t.Fatalf("reset all traffic usage: %v", err)
+	}
+	if result.Scanned != 16363 || result.Reset != 16363 || result.MarkedOnly != 0 || result.Skipped != 0 {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
