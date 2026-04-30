@@ -12,7 +12,7 @@ import (
 
 const orderHandleBatchLimit = 500
 const trafficResetMarkerTTLSeconds = 400 * 24 * 3600
-const trafficResetActiveMonthlyKVKey = "TRAFFIC_RESET_ACTIVE_EXPIRING_MONTHLY"
+const trafficResetDailySweepKVKey = "TRAFFIC_RESET_DAILY_SWEEP"
 
 type TrafficResetSweepResult struct {
 	Scanned    int64
@@ -28,6 +28,7 @@ type trafficResetCandidate struct {
 	D                      int64
 	ExpiredAt              int64
 	UpdatedAt              int64
+	SubscriptionStartedAt  int64
 	PlanResetTrafficMethod sql.NullInt64
 }
 
@@ -113,10 +114,7 @@ LIMIT $1`, orderHandleBatchLimit, cutoff)
 	if err := s.cleanupExpiredOrders(ctx); err != nil {
 		return err
 	}
-	if _, err := s.runAutomaticMonthlyActiveExpiringReset(ctx, time.Now()); err != nil {
-		return err
-	}
-	if _, err := s.runTrafficResetSweep(ctx, true, false); err != nil {
+	if _, err := s.runDailyTrafficResetSweep(ctx, time.Now()); err != nil {
 		return err
 	}
 	return nil
@@ -148,50 +146,48 @@ WHERE plan_id IS NOT NULL AND expired_at > $1`, now)
 	}, nil
 }
 
-func (s *DBService) runAutomaticMonthlyActiveExpiringReset(ctx context.Context, now time.Time) (int64, error) {
+func (s *DBService) runDailyTrafficResetSweep(ctx context.Context, now time.Time) (TrafficResetSweepResult, error) {
 	if s.db == nil {
-		return 0, ErrUnavailable
-	}
-	if now.Day() != 1 {
-		return 0, nil
+		return TrafficResetSweepResult{}, ErrUnavailable
 	}
 
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Unix()
-	marker := strconv.FormatInt(monthStart, 10)
-	lastMarker, found, err := s.kvGet(ctx, trafficResetActiveMonthlyKVKey)
+	marker := now.Format("2006-01-02")
+	lastMarker, found, err := s.kvGet(ctx, trafficResetDailySweepKVKey)
 	if err != nil {
-		return 0, fmt.Errorf("load active monthly traffic reset marker: %w", err)
+		return TrafficResetSweepResult{}, fmt.Errorf("load daily traffic reset marker: %w", err)
 	}
 	if found && strings.TrimSpace(lastMarker) == marker {
-		return 0, nil
+		return TrafficResetSweepResult{}, nil
 	}
 
-	nowUnix := now.Unix()
-	result, err := s.db.ExecContext(ctx, `UPDATE v2_user AS u
-SET u = 0, d = 0, updated_at = $1
-FROM v2_plan AS p
-WHERE p.id = u.plan_id
-  AND u.plan_id IS NOT NULL
-  AND u.expired_at > $1`, nowUnix)
+	result, err := s.runTrafficResetSweepAt(ctx, now, false, false)
 	if err != nil {
-		return 0, fmt.Errorf("automatic monthly traffic reset: %w", err)
+		return TrafficResetSweepResult{}, err
 	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("count automatic monthly traffic reset: %w", err)
+	if err := s.kvSet(ctx, trafficResetDailySweepKVKey, marker, trafficResetMarkerTTLSeconds); err != nil {
+		return TrafficResetSweepResult{}, fmt.Errorf("save daily traffic reset marker: %w", err)
 	}
-	if err := s.kvSet(ctx, trafficResetActiveMonthlyKVKey, marker, trafficResetMarkerTTLSeconds); err != nil {
-		return 0, fmt.Errorf("save active monthly traffic reset marker: %w", err)
-	}
-	return affected, nil
+	return result, nil
 }
 
 func (s *DBService) runTrafficResetSweep(ctx context.Context, limited bool, forceBackfill bool) (TrafficResetSweepResult, error) {
-	now := time.Now()
-	query := `SELECT u.id, u.plan_id, u.u, u.d, COALESCE(u.expired_at, 0), u.updated_at, p.reset_traffic_method
+	return s.runTrafficResetSweepAt(ctx, time.Now(), limited, forceBackfill)
+}
+
+func (s *DBService) runTrafficResetSweepAt(ctx context.Context, now time.Time, limited bool, forceBackfill bool) (TrafficResetSweepResult, error) {
+	query := `SELECT u.id, u.plan_id, u.u, u.d, COALESCE(u.expired_at, 0), u.updated_at,
+COALESCE((
+  SELECT MAX(o.paid_at)
+  FROM v2_order o
+  WHERE o.user_id = u.id
+    AND o.status = 3
+    AND o.plan_id = u.plan_id
+    AND o.period NOT IN ('reset_price', 'deposit')
+    AND o.paid_at IS NOT NULL
+), u.created_at, 0), p.reset_traffic_method
 FROM v2_user u
 JOIN v2_plan p ON p.id = u.plan_id
-WHERE u.plan_id IS NOT NULL AND (u.expired_at > $1 OR u.expired_at IS NULL OR u.expired_at <= 0)
+WHERE u.plan_id IS NOT NULL AND u.expired_at > $1
 ORDER BY u.id ASC`
 
 	var (
@@ -219,6 +215,7 @@ LIMIT $2`, now.Unix(), orderHandleBatchLimit)
 			&item.D,
 			&item.ExpiredAt,
 			&item.UpdatedAt,
+			&item.SubscriptionStartedAt,
 			&item.PlanResetTrafficMethod,
 		); err != nil {
 			return TrafficResetSweepResult{}, fmt.Errorf("scan traffic reset candidate: %w", err)
@@ -263,7 +260,11 @@ func (s *DBService) applyTrafficResetCandidate(ctx context.Context, item traffic
 	}
 
 	applied := trafficResetApplyMarkedOnly
-	if (forceBackfill || item.UpdatedAt < cycle.StartAt) && (item.U > 0 || item.D > 0) {
+	subscriptionStartedAt := item.SubscriptionStartedAt
+	if subscriptionStartedAt <= 0 {
+		subscriptionStartedAt = item.UpdatedAt
+	}
+	if (forceBackfill || subscriptionStartedAt < cycle.StartAt) && (item.U > 0 || item.D > 0) {
 		if err := s.resetUserTrafficUsage(ctx, item.UserID); err != nil {
 			return trafficResetApplySkipped, err
 		}
