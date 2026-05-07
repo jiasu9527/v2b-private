@@ -21,17 +21,17 @@ export const resources: Record<string, ResourceConfig> = {
     key: 'plans', title: '套餐管理', fetch: '/plan/fetch', save: '/plan/save', drop: '/plan/drop', sort: '/plan/sort', searchKey: 'name',
     columns: [
       { key: 'id', title: 'ID', width: 70 }, { key: 'name', title: '名称', width: 180 }, { key: 'group_id', title: '权限组', width: 90 },
-      { key: 'transfer_enable', title: '流量(GB)', width: 130 }, { key: 'month_price', title: '月付', type: 'money', width: 100 },
+      { key: 'transfer_enable', title: '流量(GB)', width: 130 }, { key: 'month_price', title: '月付', width: 100 },
       { key: 'reset_traffic_method', title: '重置方式', width: 100 }, { key: 'show', title: '显示', type: 'bool', width: 80 }, { key: 'capacity_limit', title: '容量', width: 80 }
     ],
     fields: [
       { name: 'name', label: '套餐名称', required: true }, { name: 'group_id', label: '权限组ID', type: 'number', required: true },
       { name: 'transfer_enable', label: '流量(GB)', type: 'number', required: true }, { name: 'device_limit', label: '设备限制', type: 'number' },
       { name: 'speed_limit', label: '限速 Mbps', type: 'number' }, { name: 'capacity_limit', label: '最大容纳用户', type: 'number' },
-      { name: 'month_price', label: '月付(分)', type: 'number' }, { name: 'quarter_price', label: '季付(分)', type: 'number' },
-      { name: 'half_year_price', label: '半年付(分)', type: 'number' }, { name: 'year_price', label: '年付(分)', type: 'number' },
-      { name: 'two_year_price', label: '两年付(分)', type: 'number' }, { name: 'three_year_price', label: '三年付(分)', type: 'number' },
-      { name: 'onetime_price', label: '一次性(分)', type: 'number' }, { name: 'reset_price', label: '重置流量(分)', type: 'number' },
+      { name: 'month_price', label: '月付(元)', type: 'number' }, { name: 'quarter_price', label: '季付(元)', type: 'number' },
+      { name: 'half_year_price', label: '半年付(元)', type: 'number' }, { name: 'year_price', label: '年付(元)', type: 'number' },
+      { name: 'two_year_price', label: '两年付(元)', type: 'number' }, { name: 'three_year_price', label: '三年付(元)', type: 'number' },
+      { name: 'onetime_price', label: '一次性(元)', type: 'number' }, { name: 'reset_price', label: '重置流量(元)', type: 'number' },
       { name: 'reset_traffic_method', label: '流量重置方式', type: 'select', options: resetOptions },
       { name: 'content', label: '套餐说明', type: 'textarea', span: 24 }, { name: 'force_update', label: '强制更新用户', type: 'switch' }
     ],

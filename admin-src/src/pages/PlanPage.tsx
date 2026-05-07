@@ -3,7 +3,7 @@ import { Button, Card, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Se
 import { DeleteOutlined, DownOutlined, EditOutlined, MenuOutlined, PlusOutlined, QuestionCircleOutlined, UserOutlined } from '@ant-design/icons';
 import { apiGet, apiPost } from '../lib/api';
 
-function price(v: any) { return v !== null && v !== undefined ? (Number(v || 0) / 100).toFixed(2) : '-'; }
+function price(v: any) { return v !== null && v !== undefined ? Number(v || 0).toFixed(2) : '-'; }
 function gb(v: any) { return v !== null && v !== undefined ? Number(v || 0).toString() : '-'; }
 
 export default function PlanPage() {
@@ -74,14 +74,14 @@ export default function PlanPage() {
         <Form.Item name="device_limit" label="设备数限制"><InputNumber style={{ width: '100%' }} /></Form.Item>
         <Form.Item name="speed_limit" label="限速 Mbps"><InputNumber style={{ width: '100%' }} /></Form.Item>
         <Form.Item name="capacity_limit" label="最大容纳用户"><InputNumber style={{ width: '100%' }} /></Form.Item>
-        <Form.Item name="month_price" label="月付(分)"><InputNumber style={{ width: '100%' }} /></Form.Item>
-        <Form.Item name="quarter_price" label="季付(分)"><InputNumber style={{ width: '100%' }} /></Form.Item>
-        <Form.Item name="half_year_price" label="半年付(分)"><InputNumber style={{ width: '100%' }} /></Form.Item>
-        <Form.Item name="year_price" label="年付(分)"><InputNumber style={{ width: '100%' }} /></Form.Item>
-        <Form.Item name="two_year_price" label="两年付(分)"><InputNumber style={{ width: '100%' }} /></Form.Item>
-        <Form.Item name="three_year_price" label="三年付(分)"><InputNumber style={{ width: '100%' }} /></Form.Item>
-        <Form.Item name="onetime_price" label="一次性(分)"><InputNumber style={{ width: '100%' }} /></Form.Item>
-        <Form.Item name="reset_price" label="重置包(分)"><InputNumber style={{ width: '100%' }} /></Form.Item>
+        <Form.Item name="month_price" label="月付(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
+        <Form.Item name="quarter_price" label="季付(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
+        <Form.Item name="half_year_price" label="半年付(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
+        <Form.Item name="year_price" label="年付(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
+        <Form.Item name="two_year_price" label="两年付(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
+        <Form.Item name="three_year_price" label="三年付(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
+        <Form.Item name="onetime_price" label="一次性(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
+        <Form.Item name="reset_price" label="重置包(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
         <Form.Item name="show" label="销售状态"><Select options={[{ label: '显示', value: 1 }, { label: '隐藏', value: 0 }]} /></Form.Item>
         <Form.Item name="renew" label="续费"><Select options={[{ label: '允许', value: 1 }, { label: '禁止', value: 0 }]} /></Form.Item>
         <Form.Item name="content" label="说明"><Input.TextArea rows={4} /></Form.Item>
