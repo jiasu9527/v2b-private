@@ -83,8 +83,8 @@ func TestRouterServesAdminShellAndCatchAll(t *testing.T) {
 		}
 		body := rec.Body.String()
 		for _, needle := range []string{
-			`/assets/admin/umi.js`,
-			`/assets/admin/custom.js`,
+			`/assets/admin-new/admin.js`,
+			`/assets/admin-new/index.css`,
 			`<div id="root"></div>`,
 			`"secure_path":"localadmin"`,
 		} {
@@ -114,7 +114,7 @@ func TestRouterServesOnlyAdminInviteCampaignPage(t *testing.T) {
 		needle string
 	}{
 		{path: "/invite-campaign", code: 0},
-		{path: "/localadmin/invite-campaign", code: http.StatusOK, needle: `InviteCampaignAdminPage`},
+		{path: "/localadmin/invite-campaign", code: http.StatusOK, needle: `/assets/admin-new/admin.js`},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
@@ -252,6 +252,8 @@ func writeUIFixture(t *testing.T, root string) {
   "frontend_background_url": "https://cdn.example.com/bg.jpg"
 }`)
 	for _, path := range []string{
+		filepath.Join(root, "public", "assets", "admin-new", "admin.js"),
+		filepath.Join(root, "public", "assets", "admin-new", "index.css"),
 		filepath.Join(root, "public", "assets", "admin", "vendors.async.js"),
 		filepath.Join(root, "public", "assets", "admin", "components.async.js"),
 		filepath.Join(root, "public", "assets", "admin", "umi.js"),

@@ -31,58 +31,25 @@ type uiSiteSettings struct {
 }
 
 type adminShellData struct {
-	Title            string
-	VersionSuffix    string
-	SettingsJSON     template.JS
-	IncludeCustomJS  bool
-	IncludeCustomCSS bool
-}
-
-type invitePageData struct {
 	Title         string
 	VersionSuffix string
-	ConfigJSON    template.JS
+	SettingsJSON  template.JS
 }
 
 var (
 	adminShellTemplate = template.Must(template.New("admin-shell").Parse(`<!DOCTYPE html>
 <html>
 <head>
-    <link rel="stylesheet" href="/assets/admin/components.chunk.css{{.VersionSuffix}}">
-    <link rel="stylesheet" href="/assets/admin/umi.css{{.VersionSuffix}}">
-    {{if .IncludeCustomCSS}}<link rel="stylesheet" href="/assets/admin/custom.css{{.VersionSuffix}}">{{end}}
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no">
     <title>{{.Title}}</title>
+    <link rel="stylesheet" href="/assets/admin-new/index.css{{.VersionSuffix}}">
     <script>window.routerBase = "/";</script>
     <script>window.settings = {{.SettingsJSON}};</script>
 </head>
 <body>
 <div id="root"></div>
-<script src="/assets/admin/vendors.async.js{{.VersionSuffix}}"></script>
-<script src="/assets/admin/components.async.js{{.VersionSuffix}}"></script>
-<script src="/assets/admin/umi.js{{.VersionSuffix}}"></script>
-{{if .IncludeCustomJS}}<script src="/assets/admin/custom.js{{.VersionSuffix}}"></script>{{end}}
-</body>
-</html>
-`))
-	inviteAdminTemplate = template.Must(template.New("invite-admin").Parse(`<!DOCTYPE html>
-<html>
-<head>
-    <link rel="stylesheet" href="/assets/admin/components.chunk.css{{.VersionSuffix}}">
-    <link rel="stylesheet" href="/assets/admin/umi.css{{.VersionSuffix}}">
-    <link rel="stylesheet" href="/assets/admin/custom.css{{.VersionSuffix}}">
-    <link rel="stylesheet" href="/assets/invite-campaign-common.css{{.VersionSuffix}}">
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no">
-    <title>{{.Title}} - 任务管理</title>
-    <script>window.InviteCampaignAdminPage = {{.ConfigJSON}};</script>
-</head>
-<body class="campaign-page">
-<div id="invite-campaign-admin-app" class="campaign-shell">
-    <div class="campaign-card campaign-loading">正在加载任务列表...</div>
-</div>
-<script src="/assets/admin-invite-campaign-page.js{{.VersionSuffix}}"></script>
+<script type="module" src="/assets/admin-new/admin.js{{.VersionSuffix}}"></script>
 </body>
 </html>
 `))
@@ -90,11 +57,8 @@ var (
 
 func maybeServeUIPage(cfg config.Config, w http.ResponseWriter, r *http.Request) bool {
 	switch resolveUIPageKind(cfg, r.URL.Path) {
-	case uiPageAdmin:
+	case uiPageAdmin, uiPageAdminInviteCampaign:
 		renderAdminShell(w, cfg)
-		return true
-	case uiPageAdminInviteCampaign:
-		renderInviteAdminPage(w, cfg)
 		return true
 	default:
 		return false
@@ -124,10 +88,8 @@ func renderAdminShell(w http.ResponseWriter, cfg config.Config) {
 	settings := loadUISiteSettings(cfg)
 	publicDir := resolvePublicDir(cfg.PublicDir)
 	versionSuffix := assetVersionSuffix(
-		filepath.Join(publicDir, "assets", "admin", "vendors.async.js"),
-		filepath.Join(publicDir, "assets", "admin", "components.async.js"),
-		filepath.Join(publicDir, "assets", "admin", "umi.js"),
-		filepath.Join(publicDir, "assets", "admin", "custom.js"),
+		filepath.Join(publicDir, "assets", "admin-new", "admin.js"),
+		filepath.Join(publicDir, "assets", "admin-new", "index.css"),
 	)
 
 	renderHTML(w, adminShellTemplate, adminShellData{
@@ -144,28 +106,6 @@ func renderAdminShell(w http.ResponseWriter, cfg config.Config) {
 			"background_url": settings.AdminBackgroundURL,
 			"logo":           settings.Logo,
 			"secure_path":    settings.AdminPath,
-		}),
-		IncludeCustomJS:  fileExists(filepath.Join(publicDir, "assets", "admin", "custom.js")),
-		IncludeCustomCSS: fileExists(filepath.Join(publicDir, "assets", "admin", "custom.css")),
-	})
-}
-
-func renderInviteAdminPage(w http.ResponseWriter, cfg config.Config) {
-	settings := loadUISiteSettings(cfg)
-	publicDir := resolvePublicDir(cfg.PublicDir)
-	versionSuffix := assetVersionSuffix(
-		filepath.Join(publicDir, "assets", "admin-invite-campaign-page.js"),
-		filepath.Join(publicDir, "assets", "invite-campaign-common.css"),
-	)
-
-	renderHTML(w, inviteAdminTemplate, invitePageData{
-		Title:         settings.Title,
-		VersionSuffix: versionSuffix,
-		ConfigJSON: marshalPageSettings(map[string]any{
-			"apiBase":    "/api/v1",
-			"securePath": settings.AdminPath,
-			"loginPath":  "/" + settings.AdminPath,
-			"backPath":   "/" + settings.AdminPath,
 		}),
 	})
 }
