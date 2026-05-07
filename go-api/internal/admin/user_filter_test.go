@@ -49,3 +49,21 @@ func TestBuildUserWhereSupportsLastOnlineFilter(t *testing.T) {
 		t.Fatalf("expected last online args, got %#v", args)
 	}
 }
+
+func TestBuildUserWhereAcceptsLastLoginAtAsLastOnlineAlias(t *testing.T) {
+	service := &DBService{}
+
+	whereClause, args, err := service.buildUserWhere(t.Context(), []UserFilter{
+		{Key: "last_login_at", Condition: ">=", Value: "1710000000"},
+	})
+	if err != nil {
+		t.Fatalf("build user where: %v", err)
+	}
+
+	if !strings.Contains(whereClause, "u.t >= $1") {
+		t.Fatalf("expected last online alias predicate, got %s", whereClause)
+	}
+	if len(args) != 1 || args[0] != int64(1710000000) {
+		t.Fatalf("expected last online alias args, got %#v", args)
+	}
+}

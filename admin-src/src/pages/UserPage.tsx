@@ -21,7 +21,7 @@ const filterDefinitions = [
   { key: 'invite_user_id', title: '邀请人ID', condition: ['='] },
   { key: 'remarks', title: '备注', condition: ['模糊'] },
   { key: 'is_admin', title: '管理员', condition: ['='], type: 'select', options: [{ label: '是', value: 1 }, { label: '否', value: 0 }] },
-  { key: 'last_login_at', title: '最后在线', condition: ['>=', '>', '<', '<='], type: 'date' },
+  { key: 't', title: '最后在线', condition: ['>=', '>', '<', '<='], type: 'date' },
 ];
 
 function dateText(ts: any) {
@@ -197,7 +197,7 @@ export default function UserPage() {
     { title: '余额', dataIndex: 'balance', sorter: true, width: 90, render: moneyText },
     { title: '佣金', dataIndex: 'commission_balance', sorter: true, width: 90, render: moneyText },
     { title: '加入时间', dataIndex: 'created_at', sorter: true, width: 160, render: dateText },
-    { title: '最后在线', dataIndex: 'last_login_at', width: 160, render: (_: any, row: any) => row.last_login_at ? unixTime(row.last_login_at) : (row.t ? unixTime(row.t) : '-') },
+    { title: '最后在线', dataIndex: 't', width: 160, render: (_: any, row: any) => row.t ? unixTime(row.t) : (row.last_login_at ? unixTime(row.last_login_at) : '-') },
     { title: '操作', dataIndex: 'action', align: 'right', fixed: 'right', width: 120, render: (_: any, row: any) => <Dropdown trigger={['click']} menu={{ items: rowMenu(row) }}><a>操作 <DownOutlined /></a></Dropdown> },
   ];
 
