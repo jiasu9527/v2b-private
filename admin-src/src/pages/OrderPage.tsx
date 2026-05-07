@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Badge, Button, Card, Col, Divider, Dropdown, Input, Modal, Row, Select, Skeleton, Space, Table, Tag, Tooltip, message } from 'antd';
+import { Badge, Button, Card, Dropdown, Modal, Skeleton, Space, Table, Tag, Tooltip, message } from 'antd';
 import type { MenuProps } from 'antd';
 import { CaretDownOutlined, PlusOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -42,12 +42,25 @@ function time(v: any) { return v ? dayjs(Number(v) * 1000).format('YYYY/MM/DD HH
 function fullTime(v: any) { return v ? dayjs(Number(v) * 1000).format('YYYY-MM-DD HH:mm:ss') : '-'; }
 function shortTradeNo(v: any) { const s = String(v || ''); return s.length > 8 ? `${s.slice(0, 3)}...${s.slice(-3)}` : s; }
 function pathUrl(path: string) { return `/${getAdminPath()}${path}`; }
+function periodLabel(value: any) {
+  const key = String(value || '');
+  if (!key || key === 'deposit') return '';
+  if (Object.prototype.hasOwnProperty.call(periodText, key)) return periodText[key];
+  return key;
+}
 
-function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return <Row gutter={[16, 16]} className="legacy-detail-row">
-    <Col span={6} className="legacy-detail-label">{label}</Col>
-    <Col span={18} className="legacy-detail-value">{children || '-'}</Col>
-  </Row>;
+function DetailRow({ label, children, empty = '-' }: { label: string; children: React.ReactNode; empty?: React.ReactNode }) {
+  return <div className="legacy-detail-row">
+    <div className="legacy-detail-label">{label}</div>
+    <div className="legacy-detail-value">{children || empty}</div>
+  </div>;
+}
+
+function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return <section className="legacy-detail-section">
+    <div className="legacy-detail-section-title">{title}</div>
+    <div className="legacy-detail-grid">{children}</div>
+  </section>;
 }
 
 export default function OrderPage() {
@@ -117,7 +130,10 @@ export default function OrderPage() {
     { title: '# 订单号', dataIndex: 'trade_no', width: 130, render: (v: any, row: any) => <a onClick={() => openDetail(row)}>{shortTradeNo(v)}</a> },
     { title: '类型', dataIndex: 'type', width: 90, render: (v: any) => orderTypeText[Number(v)] || v },
     { title: '订阅计划', dataIndex: 'plan_name', width: 180, render: (v: any) => v || '-' },
-    { title: '周期', dataIndex: 'period', align: 'center', width: 110, render: (v: any) => <Tag>{periodText[v] || v || '-'}</Tag> },
+    { title: '周期', dataIndex: 'period', align: 'center', width: 110, render: (v: any) => {
+      const label = periodLabel(v);
+      return label ? <Tag>{label}</Tag> : '';
+    } },
     { title: '支付金额', dataIndex: 'total_amount', align: 'right', width: 120, render: money },
     { title: <Tooltip title="标记为[已支付]后将会由系统进行开通后并完成">订单状态 <QuestionCircleOutlined /></Tooltip>, dataIndex: 'status', width: 150, render: (status: any, row: any) => {
       const menu: MenuProps['items'] = [{ key: '1', label: '已支付', onClick: () => act('/order/paid', row) }, { key: '2', label: '取消', onClick: () => act('/order/cancel', row) }];
@@ -146,29 +162,34 @@ export default function OrderPage() {
       </div>
       <Table className="forest-table" rowKey="id" loading={loading} dataSource={rows} columns={columns} pagination={{ total, current: page.current, pageSize: page.pageSize, size: 'small', showSizeChanger: true, pageSizeOptions: [10, 50, 100, 150] }} scroll={{ x: 1200 }} onChange={(pagination: any) => load({ current: pagination.current, pageSize: pagination.pageSize })} />
     </Card>
-    <Modal open={detailOpen} title="订单信息" footer={false} width={640} destroyOnHidden onCancel={() => { setDetailOpen(false); setDetail(null); }}>
+    <Modal open={detailOpen} title="订单信息" footer={false} width={760} className="order-detail-modal" destroyOnHidden onCancel={() => { setDetailOpen(false); setDetail(null); }}>
       {detailLoading && !order.trade_no ? <Skeleton active paragraph={{ rows: 8 }} /> : <div className="legacy-detail-modal">
-        <DetailRow label="邮箱">{detailUser.email ? <a onClick={() => jumpUserFilter('email', '模糊', detailUser.email)}>{detailUser.email}</a> : '-'}</DetailRow>
-        <DetailRow label="订单号">{order.trade_no}</DetailRow>
-        <DetailRow label="订单周期">{periodText[order.period] || order.period || '-'}</DetailRow>
-        <DetailRow label="订单状态">{orderStatusText[Number(order.status)] || order.status || '-'}</DetailRow>
-        <DetailRow label="订阅计划">{planName}</DetailRow>
-        <DetailRow label="回调单号">{order.callback_no || '-'}</DetailRow>
-        <Divider />
-        <DetailRow label="支付金额">{money(order.total_amount)}</DetailRow>
-        <DetailRow label="余额支付">{money(order.balance_amount)}</DetailRow>
-        <DetailRow label="优惠金额">{money(order.discount_amount)}</DetailRow>
-        <DetailRow label="退回金额">{money(order.refund_amount)}</DetailRow>
-        <DetailRow label="折抵金额">{money(order.surplus_amount)}</DetailRow>
-        <Divider />
-        <DetailRow label="创建时间">{fullTime(order.created_at)}</DetailRow>
-        <DetailRow label="更新时间">{fullTime(order.updated_at)}</DetailRow>
+        <DetailSection title="基础信息">
+          <DetailRow label="邮箱">{detailUser.email ? <a onClick={() => jumpUserFilter('email', '模糊', detailUser.email)}>{detailUser.email}</a> : '-'}</DetailRow>
+          <DetailRow label="订单号">{order.trade_no}</DetailRow>
+          <DetailRow label="订单周期" empty="">{periodLabel(order.period)}</DetailRow>
+          <DetailRow label="订单状态">{orderStatusText[Number(order.status)] || order.status || '-'}</DetailRow>
+          <DetailRow label="订阅计划">{planName}</DetailRow>
+          <DetailRow label="回调单号">{order.callback_no || '-'}</DetailRow>
+        </DetailSection>
+        <DetailSection title="金额信息">
+          <DetailRow label="支付金额">{money(order.total_amount)}</DetailRow>
+          <DetailRow label="余额支付">{money(order.balance_amount)}</DetailRow>
+          <DetailRow label="优惠金额">{money(order.discount_amount)}</DetailRow>
+          <DetailRow label="退回金额">{money(order.refund_amount)}</DetailRow>
+          <DetailRow label="折抵金额">{money(order.surplus_amount)}</DetailRow>
+        </DetailSection>
+        <DetailSection title="时间信息">
+          <DetailRow label="创建时间">{fullTime(order.created_at)}</DetailRow>
+          <DetailRow label="更新时间">{fullTime(order.updated_at)}</DetailRow>
+        </DetailSection>
         {!!order.invite_user_id && Number(order.status) === 3 && <>
-          <Divider />
-          <DetailRow label="邀请人">{inviteUser.email ? <Tooltip title="查看TA邀请的人"><a onClick={() => jumpUserFilter('invite_by_email', '模糊', inviteUser.email)}>{inviteUser.email}</a></Tooltip> : '-'}</DetailRow>
-          <DetailRow label="佣金金额">{money(order.commission_balance)}</DetailRow>
-          {!!order.actual_commission_balance && <DetailRow label="实际发放">{money(order.actual_commission_balance)}</DetailRow>}
-          <DetailRow label="佣金状态">{commissionStatusText[Number(order.commission_status)] || order.commission_status || '-'}</DetailRow>
+          <DetailSection title="邀请佣金">
+            <DetailRow label="邀请人">{inviteUser.email ? <Tooltip title="查看TA邀请的人"><a onClick={() => jumpUserFilter('invite_by_email', '模糊', inviteUser.email)}>{inviteUser.email}</a></Tooltip> : '-'}</DetailRow>
+            <DetailRow label="佣金金额">{money(order.commission_balance)}</DetailRow>
+            {!!order.actual_commission_balance && <DetailRow label="实际发放">{money(order.actual_commission_balance)}</DetailRow>}
+            <DetailRow label="佣金状态">{commissionStatusText[Number(order.commission_status)] || order.commission_status || '-'}</DetailRow>
+          </DetailSection>
         </>}
       </div>}
     </Modal>

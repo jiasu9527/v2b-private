@@ -26,6 +26,21 @@ html,body,#root{height:100%;margin:0}body{background:#f0f3f8;font-family:Inter,-
 .user-edit-form .ant-picker{width:100%}
 .user-edit-form .form-col-full{grid-column:1/-1}
 
+/* order detail modal */
+.order-detail-modal .ant-modal-body{padding-top:10px}
+.legacy-detail-modal{display:flex;flex-direction:column;gap:16px}
+.legacy-detail-section{border:1px solid var(--forest-line,#e5e5e5);background:#fff}
+.legacy-detail-section-title{padding:10px 14px;border-bottom:1px solid var(--forest-line,#e5e5e5);background:#fafafa;color:#111;font-size:13px;font-weight:700}
+.legacy-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;border-top:0}
+.legacy-detail-row{display:grid;grid-template-columns:94px minmax(0,1fr);gap:10px;align-items:start;min-height:42px;padding:10px 14px;border-top:1px dashed #ececec}
+.legacy-detail-row:nth-child(1),.legacy-detail-row:nth-child(2){border-top:0}
+.legacy-detail-label{color:#777;font-size:12px;line-height:22px}
+.legacy-detail-value{color:#222;font-size:13px;line-height:22px;word-break:break-all}
+
+/* client entry table */
+.client-entry-members summary{cursor:pointer;color:#111;white-space:nowrap}
+.client-entry-member-list{max-width:360px;max-height:180px;overflow:auto;margin-top:8px;padding:8px 10px;border:1px solid var(--forest-line,#e5e5e5);background:#fafafa;color:#555;font-size:12px;line-height:1.7;white-space:normal;word-break:break-all}
+
 /* Fully hide legacy sidebar when collapsed */
 .admin-sider.ant-layout-sider-collapsed{box-shadow:none!important;overflow:hidden!important}
 .admin-sider.ant-layout-sider-collapsed .brand,.admin-sider.ant-layout-sider-collapsed .legacy-nav{display:none!important}
@@ -95,6 +110,9 @@ html,body,#root{height:100%;margin:0}body{background:#f0f3f8;font-family:Inter,-
   .ant-modal{max-width:calc(100vw - 16px)!important;margin:8px auto!important}
   .ant-modal-content{max-height:calc(100dvh - 16px);overflow:auto}
   .ant-modal-body{max-height:calc(100dvh - 150px);overflow:auto;padding:14px!important}
+  .legacy-detail-grid{grid-template-columns:1fr}
+  .legacy-detail-row:nth-child(2){border-top:1px dashed #ececec}
+  .legacy-detail-row{grid-template-columns:82px minmax(0,1fr);padding:9px 10px}
   .ant-modal-header,.ant-modal-footer{padding-left:14px!important;padding-right:14px!important}
   .ant-drawer-content-wrapper{width:100vw!important;max-width:100vw!important}
   .legacy-drawer .ant-drawer-header{padding:12px}

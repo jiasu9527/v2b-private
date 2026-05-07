@@ -42,10 +42,12 @@ function pathUrl(path: string) {
   return `/${adminPath}${path}`;
 }
 
-echarts.registerTheme('vintage', {
-  color: ['#d87c7c', '#919e8b', '#d7ab82', '#6e7074', '#61a0a8', '#efa18d', '#787464', '#cc7e63', '#724e58', '#4b565b'],
-  graph: { color: ['#d87c7c', '#919e8b', '#d7ab82', '#6e7074', '#61a0a8', '#efa18d', '#787464', '#cc7e63', '#724e58', '#4b565b'] },
+echarts.registerTheme('forest-vivid', {
+  color: ['#2563eb', '#f97316', '#10b981', '#e11d48', '#8b5cf6', '#06b6d4', '#f59e0b', '#22c55e', '#ec4899', '#6366f1'],
+  graph: { color: ['#2563eb', '#f97316', '#10b981', '#e11d48', '#8b5cf6', '#06b6d4', '#f59e0b', '#22c55e', '#ec4899', '#6366f1'] },
 });
+
+const chartColors = ['#2563eb', '#f97316', '#10b981', '#e11d48', '#8b5cf6', '#06b6d4', '#f59e0b', '#22c55e', '#ec4899', '#6366f1'];
 
 function ChartBlock({ title, height = 400, option, themeName }: ChartBlockProps) {
   const el = useRef<HTMLDivElement | null>(null);
@@ -100,7 +102,18 @@ function buildOrderOption(rows: ChartPayload): echarts.EChartsOption {
     grid: { left: '1%', right: '1%', bottom: '3%', top: 48, containLabel: true },
     xAxis: { type: 'category', boundaryGap: false, data: dates },
     yAxis: { type: 'value' },
-    series: Array.from(seriesMap.entries()).map(([name, data]) => ({ name, type: 'line', smooth: true, data })),
+    series: Array.from(seriesMap.entries()).map(([name, data], index) => ({
+      name,
+      type: 'line',
+      smooth: true,
+      data,
+      symbol: 'circle',
+      symbolSize: 5,
+      lineStyle: { width: 3 },
+      itemStyle: { color: chartColors[index % chartColors.length] },
+      areaStyle: { opacity: 0.08 },
+      emphasis: { focus: 'series' },
+    })),
   };
 }
 
@@ -263,7 +276,7 @@ export default function Dashboard() {
       <SecondaryStats stat={stat} currency={currency} />
 
       <div className="block border-bottom mb-0">
-        <ChartBlock option={orderOption} height={400} themeName="vintage" />
+        <ChartBlock option={orderOption} height={400} themeName="forest-vivid" />
       </div>
 
       <Row gutter={[16, 16]} className="legacy-chart-grid">

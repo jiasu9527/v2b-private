@@ -247,9 +247,10 @@ export default function ClientEntryPage() {
     { title: '生效节点', dataIndex: 'members', key: 'members', width: 260, render: (_: any, row: any) => {
       const names = memberNames(row, serverOptionMap);
       if (names.length === 0) return <Tooltip title="未选择节点时，这个入口组不会下发给任何节点"><span className="text-muted">未选择节点</span></Tooltip>;
-      const first = names.slice(0, 3);
-      const extra = names.length - first.length;
-      return <Tooltip title={names.join('\n')}><span>{first.join('、')}{extra > 0 ? ` 等 ${names.length} 个` : ''}</span></Tooltip>;
+      return <details className="client-entry-members">
+        <summary>已选择 {names.length} 个节点</summary>
+        <div className="client-entry-member-list">{names.map((name) => <div key={name}>{name}</div>)}</div>
+      </details>;
     } },
     { title: '入口数量', dataIndex: 'effective_entry_count', key: 'effective_entry_count', width: 160, render: (value: any, row: any) => {
       const staticCount = typeof row.static_entry_count === 'number' ? row.static_entry_count : countList(row.match);
