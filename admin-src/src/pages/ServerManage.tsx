@@ -49,7 +49,7 @@ const typeColors: Record<string, string> = {
   v2node: '#FF0000',
 };
 
-const statusMap: Record<number, any> = { 0: 'error', 1: 'warning', 2: 'processing' };
+const statusMap: Record<number, any> = { 0: 'error', 1: 'warning', 2: 'success' };
 
 function listValue(value: any): string[] {
   const parsed = safeJsonParse(value, value);
@@ -436,7 +436,7 @@ export default function ServerManage() {
   ] : [
     { title: '节点ID', dataIndex: 'id', width: 150, filters: serverTypes.map((value) => ({ text: value, value })), onFilter: (value: any, row: any) => row.type === value, render: (id: any, row: any) => typeTag(row.type, row.parent_id ? `${id} => ${row.parent_id}` : id) },
     { title: '显隐', dataIndex: 'show', width: 90, render: (show: any, row: any) => <Switch size="small" checked={!!Number(show)} onClick={() => update(row, 'show', Number(show) ? 0 : 1)} /> },
-    { title: <Tooltip title={<div><Badge status="error" /> 未运行<br /><Badge status="warning" /> 无人使用或服务端上报异常<br /><Badge status="processing" /> 运行正常</div>}>节点 <QuestionCircleOutlined /></Tooltip>, dataIndex: 'name', render: (name: any, row: any) => <Space><Badge status={statusMap[Number(row.available_status)] || 'default'} /><span>{name}</span></Space> },
+    { title: <Tooltip title={<div><Badge status="error" /> 未运行<br /><Badge status="warning" /> 无人使用或服务端上报异常<br /><Badge status="success" /> 运行正常</div>}>节点 <QuestionCircleOutlined /></Tooltip>, dataIndex: 'name', render: (name: any, row: any) => <Space><Badge status={statusMap[Number(row.available_status)] || 'default'} /><span>{name}</span></Space> },
     { title: '地址', dataIndex: 'host', render: (_: any, row: any) => <a onClick={() => { navigator.clipboard?.writeText(`${row.host}:${row.port}`); message.success('复制成功'); }}>{row.host}:{row.port}</a> },
     { title: <Tooltip title="根据服务端上报频率而定">人数 <QuestionCircleOutlined /></Tooltip>, dataIndex: 'online', sorter: (a: any, b: any) => Number(a.online || 0) - Number(b.online || 0), width: 130, render: (online: any) => <span><UserOutlined /> {online || 0}</span> },
     { title: <Tooltip title="使用的流量将乘以倍率进行扣除">倍率 <QuestionCircleOutlined /></Tooltip>, dataIndex: 'rate', align: 'center', width: 100, render: (rate: any) => <Tag style={{ minWidth: 60 }}>{rate} x</Tag> },
