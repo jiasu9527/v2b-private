@@ -1,5 +1,5 @@
 import type { ResourceConfig } from './crud';
-import { boolNumber, gbToBytes, safeJsonParse } from './api';
+import { boolNumber, safeJsonParse } from './api';
 
 const resetOptions = [
   { label: '每月1号', value: 0 },
@@ -21,7 +21,7 @@ export const resources: Record<string, ResourceConfig> = {
     key: 'plans', title: '套餐管理', fetch: '/plan/fetch', save: '/plan/save', drop: '/plan/drop', sort: '/plan/sort', searchKey: 'name',
     columns: [
       { key: 'id', title: 'ID', width: 70 }, { key: 'name', title: '名称', width: 180 }, { key: 'group_id', title: '权限组', width: 90 },
-      { key: 'transfer_enable', title: '流量', type: 'bytes', width: 130 }, { key: 'month_price', title: '月付', type: 'money', width: 100 },
+      { key: 'transfer_enable', title: '流量(GB)', width: 130 }, { key: 'month_price', title: '月付', type: 'money', width: 100 },
       { key: 'reset_traffic_method', title: '重置方式', width: 100 }, { key: 'show', title: '显示', type: 'bool', width: 80 }, { key: 'capacity_limit', title: '容量', width: 80 }
     ],
     fields: [
@@ -36,7 +36,7 @@ export const resources: Record<string, ResourceConfig> = {
       { name: 'content', label: '套餐说明', type: 'textarea', span: 24 }, { name: 'force_update', label: '强制更新用户', type: 'switch' }
     ],
     beforeSave(values) {
-      return { ...values, transfer_enable: gbToBytes(values.transfer_enable), force_update: !!values.force_update };
+      return { ...values, force_update: !!values.force_update };
     }
   },
   notices: {

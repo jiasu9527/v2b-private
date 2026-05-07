@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Button, Card, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, message } from 'antd';
 import { DeleteOutlined, DownOutlined, EditOutlined, MenuOutlined, PlusOutlined, QuestionCircleOutlined, UserOutlined } from '@ant-design/icons';
-import { apiGet, apiPost, bytesToGB, gbToBytes } from '../lib/api';
+import { apiGet, apiPost } from '../lib/api';
 
 function price(v: any) { return v !== null && v !== undefined ? (Number(v || 0) / 100).toFixed(2) : '-'; }
-function gb(v: any) { return v !== null && v !== undefined ? bytesToGB(v) : '-'; }
+function gb(v: any) { return v !== null && v !== undefined ? Number(v || 0).toString() : '-'; }
 
 export default function PlanPage() {
   const [rows, setRows] = useState<any[]>([]);
@@ -27,11 +27,11 @@ export default function PlanPage() {
   const openEdit = (row: any = {}) => {
     setEdit(row);
     form.resetFields();
-    form.setFieldsValue({ ...row, transfer_enable: row.transfer_enable ? bytesToGB(row.transfer_enable) : row.transfer_enable });
+    form.setFieldsValue({ ...row });
   };
   const save = async () => {
     const values = await form.validateFields();
-    await apiPost('/plan/save', { ...edit, ...values, transfer_enable: gbToBytes(values.transfer_enable) });
+    await apiPost('/plan/save', { ...edit, ...values });
     message.success('保存成功'); setEdit(null); load();
   };
   const update = async (row: any, key: string, value: any) => { await apiPost('/plan/update', { id: row.id, [key]: value }, { form: true }); message.success('已更新'); load(); };

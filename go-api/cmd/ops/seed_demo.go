@@ -311,13 +311,13 @@ func buildDemoSeedSpec(now int64) demoSeedSpec {
 			{Key: "cn", Remarks: demoSeedPrefix + " CN Direct", Match: []string{"geosite:cn", "geoip:cn"}, Action: "direct"},
 		},
 		Plans: []demoSeedPlan{
-			{Key: "starter", Name: demoSeedPrefix + " Starter Plan", GroupKey: "basic", TransferEnable: 1073741824, DeviceLimit: 3, SpeedLimit: 200, Content: "<p>seed demo starter</p>", MonthPrice: 1299, YearPrice: 12999, ResetPrice: 499, CapacityLimit: 200, ResetTrafficWay: 1},
-			{Key: "pro", Name: demoSeedPrefix + " Pro Plan", GroupKey: "vip", TransferEnable: 1879048192, DeviceLimit: 6, SpeedLimit: 500, Content: "<p>seed demo pro</p>", MonthPrice: 2599, YearPrice: 25999, ResetPrice: 999, CapacityLimit: 500, ResetTrafficWay: 2},
+			{Key: "starter", Name: demoSeedPrefix + " Starter Plan", GroupKey: "basic", TransferEnable: 1, DeviceLimit: 3, SpeedLimit: 200, Content: "<p>seed demo starter</p>", MonthPrice: 1299, YearPrice: 12999, ResetPrice: 499, CapacityLimit: 200, ResetTrafficWay: 1},
+			{Key: "pro", Name: demoSeedPrefix + " Pro Plan", GroupKey: "vip", TransferEnable: 2, DeviceLimit: 6, SpeedLimit: 500, Content: "<p>seed demo pro</p>", MonthPrice: 2599, YearPrice: 25999, ResetPrice: 999, CapacityLimit: 500, ResetTrafficWay: 2},
 		},
 		Users: []demoSeedUser{
-			{Key: "staff", Email: "seed-demo-staff@example.com", Password: demoSeedPassword, IsStaff: 1, GroupKey: "vip", PlanKey: "pro", Balance: 5000, TransferEnable: 1879048192, DeviceLimit: 6, SpeedLimit: 500, LastSeenOffsetSec: -120, ExpireOffsetSec: 86400 * 90, Remarks: demoSeedPrefix + " staff"},
+			{Key: "staff", Email: "seed-demo-staff@example.com", Password: demoSeedPassword, IsStaff: 1, GroupKey: "vip", PlanKey: "pro", Balance: 5000, TransferEnable: 2147483648, DeviceLimit: 6, SpeedLimit: 500, LastSeenOffsetSec: -120, ExpireOffsetSec: 86400 * 90, Remarks: demoSeedPrefix + " staff"},
 			{Key: "owner", Email: "seed-demo-owner@example.com", Password: demoSeedPassword, GroupKey: "basic", PlanKey: "starter", Balance: 2500, CommissionRate: 10, CommissionBalance: 800, TransferEnable: 1073741824, DeviceLimit: 3, SpeedLimit: 200, TrafficUsed: 268435456, LastSeenOffsetSec: -60, ExpireOffsetSec: 86400 * 30, Remarks: demoSeedPrefix + " owner"},
-			{Key: "invitee", Email: "seed-demo-invitee@example.com", Password: demoSeedPassword, InviteUserKey: "owner", GroupKey: "vip", PlanKey: "pro", Balance: 1500, TransferEnable: 1879048192, DeviceLimit: 6, SpeedLimit: 500, TrafficUsed: 536870912, LastSeenOffsetSec: -180, ExpireOffsetSec: 86400 * 60, Remarks: demoSeedPrefix + " invitee"},
+			{Key: "invitee", Email: "seed-demo-invitee@example.com", Password: demoSeedPassword, InviteUserKey: "owner", GroupKey: "vip", PlanKey: "pro", Balance: 1500, TransferEnable: 2147483648, DeviceLimit: 6, SpeedLimit: 500, TrafficUsed: 536870912, LastSeenOffsetSec: -180, ExpireOffsetSec: 86400 * 60, Remarks: demoSeedPrefix + " invitee"},
 			{Key: "banned", Email: "seed-demo-banned@example.com", Password: demoSeedPassword, Banned: 1, GroupKey: "basic", PlanKey: "starter", TransferEnable: 805306368, DeviceLimit: 1, SpeedLimit: 50, TrafficUsed: 671088640, LastSeenOffsetSec: -7200, ExpireOffsetSec: 86400 * 7, Remarks: demoSeedPrefix + " banned"},
 		},
 		Payments: []demoSeedPayment{

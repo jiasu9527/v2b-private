@@ -75,6 +75,9 @@ func TestBuildDemoSeedSpecCoversCoreAdminData(t *testing.T) {
 		if item.TransferEnable > math.MaxInt32 {
 			t.Fatalf("plan %s transfer_enable exceeds int32: %d", item.Name, item.TransferEnable)
 		}
+		if item.TransferEnable > 10000 {
+			t.Fatalf("plan %s transfer_enable should be stored as GB units, got %d", item.Name, item.TransferEnable)
+		}
 	}
 }
 

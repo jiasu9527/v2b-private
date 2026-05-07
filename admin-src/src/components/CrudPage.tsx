@@ -4,7 +4,7 @@ import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { ResourceConfig, FieldConfig, ColumnConfig } from '../lib/crud';
 import { dropResource, fetchResource, saveResource } from '../lib/crud';
-import { bytes, bytesToGB, money, safeJsonParse, truthy, unixTime } from '../lib/api';
+import { bytes, money, safeJsonParse, truthy, unixTime } from '../lib/api';
 
 function renderCell(value: any, col: ColumnConfig) {
   if (col.type === 'money') return money(value);
@@ -37,7 +37,6 @@ function prepareInitialValues(row: any, config: ResourceConfig) {
     if (field.type === 'switch') next[field.name] = truthy(value);
     if (field.type === 'json' && value !== undefined && value !== null && typeof value !== 'string') next[field.name] = JSON.stringify(value, null, 2);
     if (field.type === 'textarea' && Array.isArray(value)) next[field.name] = value.join('\n');
-    if (config.key === 'plans' && field.name === 'transfer_enable') next[field.name] = bytesToGB(value);
   }
   return next;
 }
