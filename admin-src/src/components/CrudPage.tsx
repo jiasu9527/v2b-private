@@ -110,15 +110,17 @@ export default function CrudPage({ config }: { config: ResourceConfig }) {
     }
   };
 
-  return <div className="page-stack">
-    <Card className="page-card" title={config.title} extra={<Space wrap>
-      <Input.Search allowClear placeholder={config.searchKey ? '快速搜索' : '当前页筛选'} value={query} onChange={e => setQuery(e.target.value)} onSearch={load} style={{ width: 220 }} />
-      <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-      {config.save && <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); setOpen(true); }}>新增</Button>}
-    </Space>}>
-      <Table rowKey={(r) => r.id || r.code || r.trade_no || JSON.stringify(r)} loading={loading} columns={columns} dataSource={rows} scroll={{ x: 'max-content' }} pagination={{ total, pageSize: config.pageSize || 50, showSizeChanger: false }} />
+  return <div className="legacy-page crud-page">
+    <div className="content-heading">{config.title}</div>
+    <Card className="block-card" styles={{ body: { padding: 0 } }}>
+      <div className="forest-table-action"><Space wrap>
+        <Input.Search allowClear placeholder={config.searchKey ? '快速搜索' : '当前页筛选'} value={query} onChange={e => setQuery(e.target.value)} onSearch={load} style={{ width: 220 }} />
+        <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+        {config.save && <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); setOpen(true); }}>新增</Button>}
+      </Space></div>
+      <Table className="forest-table" rowKey={(r) => r.id || r.code || r.trade_no || JSON.stringify(r)} loading={loading} columns={columns} dataSource={rows} scroll={{ x: 'max-content' }} pagination={{ total, pageSize: config.pageSize || 50, showSizeChanger: false }} />
     </Card>
-    <Modal width={900} title={editing ? `编辑${config.title}` : `新增${config.title}`} open={open} onCancel={() => setOpen(false)} onOk={submit} confirmLoading={saving} destroyOnClose>
+    <Modal width={900} title={editing ? `编辑${config.title}` : `新增${config.title}`} open={open} onCancel={() => setOpen(false)} onOk={submit} confirmLoading={saving} destroyOnHidden>
       <Form form={form} layout="vertical">
         <Row gutter={16}>
           {config.fields.map((field) => <Col span={field.span || 12} key={field.name}>

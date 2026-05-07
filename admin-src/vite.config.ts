@@ -1,9 +1,9 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [react()],
-  base: '/assets/admin-new/',
+  base: command === 'build' ? '/assets/admin-new/' : '/',
   build: {
     outDir: '../public/assets/admin-new',
     emptyOutDir: true,
@@ -18,7 +18,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:8080'
+      '/api': 'http://127.0.0.1:8080',
+      '/monitor': 'http://127.0.0.1:8080'
     }
   }
-});
+}));

@@ -94,7 +94,7 @@ func TestDBServiceListClientEntryGroupsIncludesMembersAndIPs(t *testing.T) {
 	}
 }
 
-func TestDBServiceSaveClientEntryGroupCreatesIPs(t *testing.T) {
+func TestDBServiceSaveClientEntryGroupCreatesMembersAndIPs(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -110,6 +110,12 @@ func TestDBServiceSaveClientEntryGroupCreatesIPs(t *testing.T) {
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_group \(code, name, display_name, strategy, hide_member_nodes, "show", remote_enabled, remote_host, remote_ssh_port, remote_ssh_user, remote_ssh_password, remote_group_ref, remote_exclude_names, remote_refresh_sec, created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13, \$14, \$15, \$16\)\s+RETURNING id`).
 		WithArgs("asia", "Asia", "Asia Entry", "ordered-fallback", int64(1), int64(1), int64(1), "192.0.2.10", int64(2222), "root", "secret", "专线直出 (#15)", `["alice","bob"]`, int64(300), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(7)))
+	mock.ExpectExec(`INSERT INTO v2_client_entry_group_member \(entry_group_id, server_type, server_id, sort, created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, \$5, \$6\)`).
+		WithArgs(int64(7), "vmess", int64(11), int64(1), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`INSERT INTO v2_client_entry_group_member \(entry_group_id, server_type, server_id, sort, created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, \$5, \$6\)`).
+		WithArgs(int64(7), "trojan", int64(12), int64(2), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(2, 1))
 	mock.ExpectExec(`INSERT INTO v2_client_entry_group_ip \(entry_group_id, ip, sort, created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, \$5\)`).
 		WithArgs(int64(7), "1.1.1.1", int64(1), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -135,6 +141,11 @@ func TestDBServiceSaveClientEntryGroupCreatesIPs(t *testing.T) {
 			"bob",
 		},
 		RemoteRefreshSec: 300,
+		Members: []ClientEntryGroupMemberSaveRequest{
+			{ServerType: " vmess ", ServerID: 11, Sort: &sortA},
+			{ServerType: "trojan", ServerID: 12, Sort: &sortB},
+			{ServerType: "vmess", ServerID: 11, Sort: &sortB},
+		},
 		IPs: []ClientEntryGroupIPSaveRequest{
 			{IP: "1.1.1.1", Sort: &sortA},
 			{IP: "8.8.8.8", Sort: &sortB},
@@ -142,6 +153,60 @@ func TestDBServiceSaveClientEntryGroupCreatesIPs(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("save client entry group: %v", err)
+	}
+	if !saved {
+		t.Fatalf("expected save to succeed")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDBServiceSaveClientEntryGroupReplacesMembersAndIPs(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := &DBService{db: db}
+	id := int64(7)
+	sortA := int64(1)
+
+	expectEnsureClientEntrySchema(mock)
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE v2_client_entry_group\s+SET code = \$2,\s+name = \$3,\s+display_name = \$4,\s+strategy = \$5,\s+hide_member_nodes = \$6,\s+"show" = \$7,\s+remote_enabled = \$8,\s+remote_host = \$9,\s+remote_ssh_port = \$10,\s+remote_ssh_user = \$11,\s+remote_ssh_password = \$12,\s+remote_group_ref = \$13,\s+remote_exclude_names = \$14,\s+remote_refresh_sec = \$15,\s+updated_at = \$16\s+WHERE id = \$1`).
+		WithArgs(id, "asia", "Asia", "Asia Entry", "ordered-fallback", int64(0), int64(1), int64(0), "", int64(0), "", "", "", `[]`, int64(300), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_client_entry_group_ip WHERE entry_group_id = \$1`).
+		WithArgs(id).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec(`DELETE FROM v2_client_entry_group_member WHERE entry_group_id = \$1`).
+		WithArgs(id).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec(`INSERT INTO v2_client_entry_group_member \(entry_group_id, server_type, server_id, sort, created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, \$5, \$6\)`).
+		WithArgs(id, "shadowsocks", int64(21), int64(1), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`INSERT INTO v2_client_entry_group_ip \(entry_group_id, ip, sort, created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, \$5\)`).
+		WithArgs(id, "entry-a.example.com", nil, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	saved, err := service.SaveClientEntryGroup(context.Background(), ClientEntryGroupSaveRequest{
+		ID:          &id,
+		Code:        "asia",
+		Name:        "Asia",
+		DisplayName: "Asia Entry",
+		Strategy:    "ordered-fallback",
+		Members: []ClientEntryGroupMemberSaveRequest{
+			{ServerType: "shadowsocks", ServerID: 21, Sort: &sortA},
+		},
+		IPs: []ClientEntryGroupIPSaveRequest{
+			{IP: "entry-a.example.com"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("save client entry group update: %v", err)
 	}
 	if !saved {
 		t.Fatalf("expected save to succeed")

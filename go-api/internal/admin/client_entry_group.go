@@ -240,6 +240,33 @@ WHERE id = $1`,
 		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_group_ip WHERE entry_group_id = $1`, groupID); err != nil {
 			return false, errors.New("保存失败")
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_group_member WHERE entry_group_id = $1`, groupID); err != nil {
+			return false, errors.New("保存失败")
+		}
+	}
+
+	seenMembers := make(map[string]struct{}, len(req.Members))
+	for _, item := range req.Members {
+		serverType := strings.TrimSpace(item.ServerType)
+		if serverType == "" || item.ServerID <= 0 {
+			continue
+		}
+		key := serverType + ":" + fmt.Sprint(item.ServerID)
+		if _, exists := seenMembers[key]; exists {
+			continue
+		}
+		seenMembers[key] = struct{}{}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_group_member (entry_group_id, server_type, server_id, sort, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6)`,
+			groupID,
+			serverType,
+			item.ServerID,
+			clientEntryNullableInt64(item.Sort),
+			now,
+			now,
+		); err != nil {
+			return false, errors.New("保存失败")
+		}
 	}
 
 	seenIPs := make(map[string]struct{}, len(req.IPs))

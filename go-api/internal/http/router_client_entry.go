@@ -214,7 +214,12 @@ func handleAdminClientEntryGroupSave(w http.ResponseWriter, r *http.Request, ses
 		RemoteExcludeNames []string     `json:"remote_exclude_names"`
 		RemoteRefreshSec   *json.Number `json:"remote_refresh_sec"`
 		Match              []string     `json:"match"`
-		IPs                []struct {
+		Members            []struct {
+			ServerType string       `json:"server_type"`
+			ServerID   *json.Number `json:"server_id"`
+			Sort       *json.Number `json:"sort"`
+		} `json:"members"`
+		IPs []struct {
 			IP   string       `json:"ip"`
 			Sort *json.Number `json:"sort"`
 		} `json:"ips"`
@@ -311,6 +316,30 @@ func handleAdminClientEntryGroupSave(w http.ResponseWriter, r *http.Request, ses
 	if len(payload.Match) == 0 {
 		payload.Match = indexedStrings(inputs, "match")
 	}
+	if len(payload.Members) == 0 {
+		for _, entry := range indexedNestedFieldMap(inputs, "members") {
+			serverType := strings.TrimSpace(entry["server_type"])
+			serverIDRaw := strings.TrimSpace(entry["server_id"])
+			if serverType == "" || serverIDRaw == "" {
+				continue
+			}
+			serverID := json.Number(serverIDRaw)
+			var sortValue *json.Number
+			if raw := strings.TrimSpace(entry["sort"]); raw != "" {
+				value := json.Number(raw)
+				sortValue = &value
+			}
+			payload.Members = append(payload.Members, struct {
+				ServerType string       `json:"server_type"`
+				ServerID   *json.Number `json:"server_id"`
+				Sort       *json.Number `json:"sort"`
+			}{
+				ServerType: serverType,
+				ServerID:   &serverID,
+				Sort:       sortValue,
+			})
+		}
+	}
 	if len(payload.IPs) == 0 {
 		for _, entry := range indexedNestedFieldMap(inputs, "ips") {
 			if strings.TrimSpace(entry["ip"]) == "" {
@@ -367,6 +396,28 @@ func handleAdminClientEntryGroupSave(w http.ResponseWriter, r *http.Request, ses
 		if value != nil {
 			remoteRefreshSec = *value
 		}
+	}
+
+	members := make([]admin.ClientEntryGroupMemberSaveRequest, 0, len(payload.Members))
+	for _, item := range payload.Members {
+		serverID, err := jsonNumberToInt64Pointer(item.ServerID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": "保存失败"})
+			return true
+		}
+		if serverID == nil || *serverID <= 0 {
+			continue
+		}
+		sortValue, err := jsonNumberToInt64Pointer(item.Sort)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": "保存失败"})
+			return true
+		}
+		members = append(members, admin.ClientEntryGroupMemberSaveRequest{
+			ServerType: strings.TrimSpace(item.ServerType),
+			ServerID:   *serverID,
+			Sort:       sortValue,
+		})
 	}
 
 	ips := make([]admin.ClientEntryGroupIPSaveRequest, 0, len(payload.IPs))
@@ -432,6 +483,7 @@ func handleAdminClientEntryGroupSave(w http.ResponseWriter, r *http.Request, ses
 		RemoteGroupRef:     payload.RemoteGroupRef,
 		RemoteExcludeNames: payload.RemoteExcludeNames,
 		RemoteRefreshSec:   remoteRefreshSec,
+		Members:            members,
 		IPs:                ips,
 	})
 	if err != nil {

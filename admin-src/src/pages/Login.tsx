@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Button, Card, Form, Input, Typography, message } from 'antd';
-import { getSettings, passportLogin, setAuth } from '../lib/api';
+import { getSettings, passportLogin, setAdminUserInfo, setAuth } from '../lib/api';
 
 export default function Login({ onDone }: { onDone: () => void }) {
   const [loading, setLoading] = useState(false);
@@ -12,6 +12,7 @@ export default function Login({ onDone }: { onDone: () => void }) {
       const data = res.data || res;
       if (!data.is_admin) throw new Error('当前账号不是管理员');
       setAuth(data.auth_data || data.token);
+      setAdminUserInfo({ ...data, email: values.email });
       message.success('登录成功');
       onDone();
     } catch (e:any) { message.error(e.message || '登录失败'); }

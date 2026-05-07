@@ -1,21 +1,37 @@
 export type AnyRecord = Record<string, any>;
 
 const AUTH_KEY = 'forest_admin_auth_data';
+const ADMIN_USER_KEY = 'forest_admin_user_info';
 const ADMIN_PATH_KEY = 'forest_admin_path';
+const DEFAULT_ADMIN_PATH = 'localadmin';
 
 export function getSettings(): AnyRecord {
   return (window as any).settings || {};
 }
 
 export function getAdminPath(): string {
-  const saved = localStorage.getItem(ADMIN_PATH_KEY);
-  const fromSettings = getSettings().secure_path;
-  const path = saved || fromSettings || location.pathname.split('/').filter(Boolean)[0] || 'localadmin';
+  const saved = normalizeAdminPath(localStorage.getItem(ADMIN_PATH_KEY));
+  const fromSettings = normalizeAdminPath(getSettings().secure_path);
+  const path = saved || fromSettings || pathAdminSegment() || DEFAULT_ADMIN_PATH;
   return String(path).replace(/^\/+|\/+$/g, '');
 }
 
 export function setAdminPath(path: string) {
-  localStorage.setItem(ADMIN_PATH_KEY, path.replace(/^\/+|\/+$/g, ''));
+  localStorage.setItem(ADMIN_PATH_KEY, normalizeAdminPath(path) || DEFAULT_ADMIN_PATH);
+}
+
+export function pathAdminSegment(pathname = location.pathname): string {
+  const parts = pathname.split('/').filter(Boolean);
+  if (parts[0] === 'assets' && parts[1] === 'admin-new') {
+    return DEFAULT_ADMIN_PATH;
+  }
+  return parts[0] || '';
+}
+
+function normalizeAdminPath(value: any): string {
+  const path = String(value || '').replace(/^\/+|\/+$/g, '');
+  if (!path || path === 'assets' || path === 'admin-new' || path.startsWith('assets/')) return '';
+  return path;
 }
 
 export function getAuth(): string {
@@ -26,8 +42,27 @@ export function setAuth(token: string) {
   localStorage.setItem(AUTH_KEY, token || '');
 }
 
+export function getAdminUserInfo(): AnyRecord {
+  try {
+    return JSON.parse(localStorage.getItem(ADMIN_USER_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
+}
+
+export function setAdminUserInfo(user: AnyRecord = {}) {
+  const email = String(user.email || user.mail || user.account || '').trim();
+  const payload = { ...user, email };
+  localStorage.setItem(ADMIN_USER_KEY, JSON.stringify(payload));
+}
+
+export function clearAdminUserInfo() {
+  localStorage.removeItem(ADMIN_USER_KEY);
+}
+
 export function clearAuth() {
   localStorage.removeItem(AUTH_KEY);
+  clearAdminUserInfo();
 }
 
 function appendValue(q: URLSearchParams, key: string, value: any) {
@@ -113,6 +148,11 @@ export async function checkLogin() {
   return parseResponse(res);
 }
 
+export async function getCurrentUserInfo() {
+  const res = await fetch(`/api/v1/user/info?${toQuery()}`, { credentials: 'same-origin' });
+  return parseResponse(res);
+}
+
 export function unwrapList(payload: any): any[] {
   const data = payload?.data;
   if (Array.isArray(data)) return data;
@@ -149,6 +189,13 @@ export function gbToBytes(value: any) {
   const n = Number(value || 0);
   if (!Number.isFinite(n)) return value;
   return Math.round(n * 1024 * 1024 * 1024);
+}
+
+
+export function bytesToGBText(value: any) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return '-';
+  return (n / 1024 / 1024 / 1024).toFixed(2);
 }
 
 export function bytesToGB(value: any) {

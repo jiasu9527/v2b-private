@@ -276,6 +276,7 @@ type ClientEntryGroupSaveRequest struct {
 	RemoteGroupRef     string
 	RemoteExcludeNames []string
 	RemoteRefreshSec   int64
+	Members            []ClientEntryGroupMemberSaveRequest
 	IPs                []ClientEntryGroupIPSaveRequest
 }
 
