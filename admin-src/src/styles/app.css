@@ -131,3 +131,18 @@ html,body,#root{height:100%;margin:0}body{background:#f0f3f8;font-family:Inter,-
   .legacy-quick-item:nth-child(odd){border-right:0!important}
   .legacy-quick-item:nth-last-child(n+2){border-bottom:1px solid var(--forest-line,#e5e5e5)!important}
 }
+
+/* system config tabs: distribute groups on wide admin screens */
+.config-page .ant-tabs-nav{margin-bottom:0}
+.config-page .ant-tabs-nav-wrap{overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}
+.config-page .ant-tabs-nav-list{min-width:max-content}
+.config-page .ant-tabs-tab{white-space:nowrap}
+.config-page .config-tab-content{border-top:1px solid var(--forest-line,#e5e5e5)}
+@media(min-width:1200px){
+  .config-page .ant-tabs-nav-wrap{flex:1;min-width:0}
+  .config-page .ant-tabs-nav-list{width:100%;min-width:100%;justify-content:space-between;gap:clamp(18px,3vw,56px)}
+  .config-page .ant-tabs-tab{margin:0!important;padding:20px 0 17px}
+}
+@media(min-width:1600px){
+  .config-page .ant-tabs-nav-list{gap:clamp(28px,3.5vw,72px)}
+}

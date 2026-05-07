@@ -107,6 +107,7 @@ function normalizePayload(values: any, edit: any) {
   delete payload.entry_group_names;
   delete payload.entry_group_options;
   delete payload.install_command;
+  delete payload.send_through;
   payload.group_id = listValue(payload.group_id);
   payload.route_id = listValue(payload.route_id);
   payload.tags = listValue(payload.tags);
@@ -118,7 +119,6 @@ function normalizePayload(values: any, edit: any) {
   if (type !== 'v2node') {
     delete payload.protocol;
     delete payload.listen_ip;
-    delete payload.send_through;
   }
   return payload;
 }
@@ -441,7 +441,7 @@ export default function ServerManage() {
     { title: <Tooltip title="根据服务端上报频率而定">人数 <QuestionCircleOutlined /></Tooltip>, dataIndex: 'online', sorter: (a: any, b: any) => Number(a.online || 0) - Number(b.online || 0), width: 130, render: (online: any) => <span><UserOutlined /> {online || 0}</span> },
     { title: <Tooltip title="使用的流量将乘以倍率进行扣除">倍率 <QuestionCircleOutlined /></Tooltip>, dataIndex: 'rate', align: 'center', width: 100, render: (rate: any) => <Tag style={{ minWidth: 60 }}>{rate} x</Tag> },
     { title: '权限组', dataIndex: 'group_id', filters: groups.map((group) => ({ text: group.name, value: group.id })), onFilter: (value: any, row: any) => listValue(row.group_id).includes(String(value)), render: (_: any, row: any) => listValue(row.group_id).map((id) => <Tag key={id}>{groups.find((g) => String(g.id) === String(id))?.name || id}</Tag>) },
-    { title: '入口/出口', width: 180, render: (_: any, row: any) => row.type === 'v2node' ? <div className="muted-lines"><div>监听：{row.listen_ip || '-'}</div><div>出口：{row.send_through || '-'}</div></div> : '-' },
+    { title: '监听地址', width: 150, render: (_: any, row: any) => row.type === 'v2node' ? <span className="muted-lines">{row.listen_ip || '-'}</span> : '-' },
     { title: '操作', dataIndex: 'action', fixed: 'right', align: 'right', width: 120, render: (_: any, row: any) => <Dropdown trigger={['click']} menu={{ items: [
       { key: 'edit', label: <span><EditOutlined /> 编辑</span>, onClick: () => openEditor(row) },
       { key: 'copy', label: <span><CopyOutlined /> 复制</span>, onClick: () => copy(row) },
@@ -485,7 +485,6 @@ export default function ServerManage() {
           <div className="form-col-24"><Form.Item name="group_id" label="权限组" rules={[{ required: true }]}><Select mode="multiple" placeholder="请选择权限组" options={groups.map((group) => ({ label: group.name, value: String(group.id) }))} /></Form.Item></div>
           <div className="form-col-12"><Form.Item name="host" label={currentType === 'v2node' ? '连接地址' : '节点地址'} rules={[{ required: true }]}><Input placeholder={currentType === 'v2node' || currentType === 'anytls' ? '地址或IP' : '请输入连接地址'} /></Form.Item></div>
           {currentType === 'v2node' && <div className="form-col-12"><Form.Item name="listen_ip" label="监听地址"><Input placeholder="地址或IP默认为0.0.0.0" /></Form.Item></div>}
-          {currentType === 'v2node' && <div className="form-col-12"><Form.Item name="send_through" label="出口地址"><Input placeholder="源进源出出口IP，留空自动" /></Form.Item></div>}
           <div className="form-col-12"><Form.Item name="port" label="连接端口" rules={[{ required: true }]}><Input placeholder="用户连接端口" /></Form.Item></div>
           <div className="form-col-12"><Form.Item name="server_port" label="服务端端口" rules={[{ required: true }]}><InputNumber style={{ width: '100%' }} placeholder="服务端开放端口" /></Form.Item></div>
           <Form.Item name="type" hidden><Input /></Form.Item>
