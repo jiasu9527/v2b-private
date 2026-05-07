@@ -2,6 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { Button, Card, Checkbox, Form, Input, Modal, Select, Space, Spin, Table, Tooltip, message } from 'antd';
 import { LoadingOutlined, PlusOutlined } from '@ant-design/icons';
 import { apiGet, apiPost } from '../lib/api';
+import {
+  buildVisibleServerOptions,
+  memberKey,
+  normalizeEntryForVisibleMembers,
+  splitMemberKey,
+  visibleMemberNames,
+  type ClientEntryServerOption,
+} from './clientEntryHelpers';
 
 function listText(value: any) {
   if (Array.isArray(value)) return value.filter(Boolean).join('\n');
@@ -20,50 +28,7 @@ function countList(value: any) {
   return 0;
 }
 
-function memberKey(member: any) {
-  const serverType = String(member?.server_type || member?.serverType || '').trim();
-  const serverID = String(member?.server_id ?? member?.serverID ?? '').trim();
-  return serverType && serverID ? `${serverType}:${serverID}` : '';
-}
-
-function splitMemberKey(value: any) {
-  const raw = String(value || '').trim();
-  const index = raw.indexOf(':');
-  if (index <= 0) return null;
-  const serverType = raw.slice(0, index).trim();
-  const serverID = Number(raw.slice(index + 1));
-  if (!serverType || !Number.isFinite(serverID) || serverID <= 0) return null;
-  return { server_type: serverType, server_id: serverID };
-}
-
-function nodeLabel(row: any) {
-  const type = String(row?.type || '').trim();
-  const id = row?.id ?? row?.server_id ?? '';
-  const name = String(row?.name || row?.remarks || '').trim() || `${type || 'node'} #${id}`;
-  const host = String(row?.host || '').trim();
-  const port = String(row?.port || row?.server_port || '').trim();
-  const endpoint = host ? `${host}${port ? `:${port}` : ''}` : '';
-  return [name, type && `/${type}`, id && `#${id}`, endpoint && `(${endpoint})`].filter(Boolean).join(' ');
-}
-
-function buildServerOptions(nodes: any[]) {
-  return nodes.map((row) => {
-    const value = memberKey({ server_type: row?.type, server_id: row?.id });
-    if (!value) return null;
-    return { value, label: nodeLabel(row) };
-  }).filter(Boolean) as { value: string; label: string }[];
-}
-
-function memberNames(row: any, serverOptionMap: Record<string, string>) {
-  return (Array.isArray(row?.members) ? row.members : [])
-    .map((member: any) => {
-      const key = memberKey(member);
-      return key ? (serverOptionMap[key] || key) : '';
-    })
-    .filter(Boolean);
-}
-
-function normalizeEntry(row: any = {}) {
+function normalizeEntry(row: any = {}, visibleMemberKeys?: Set<string>) {
   const displayName = row.display_name || row.name || row.remarks || '';
   return {
     ...row,
@@ -71,7 +36,7 @@ function normalizeEntry(row: any = {}) {
     name: row.name || displayName,
     remarks: row.remarks || displayName,
     match_text: listText(row.match),
-    members: (Array.isArray(row.members) ? row.members : []).map(memberKey).filter(Boolean),
+    members: normalizeEntryForVisibleMembers(row, visibleMemberKeys).members,
     remote_exclude_names_text: listText(row.remote_exclude_names),
     remote_enabled: !!row.remote_enabled,
   };
@@ -103,14 +68,14 @@ function savePayload(values: any) {
   };
 }
 
-function ClientEntryEditor({ row, children, onDone, serverOptions }: { row?: any; children: React.ReactElement; onDone: () => void; serverOptions: { value: string; label: string }[] }) {
+function ClientEntryEditor({ row, children, onDone, serverOptions }: { row?: any; children: React.ReactElement; onDone: () => void; serverOptions: ClientEntryServerOption[] }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
   const remoteEnabled = Form.useWatch('remote_enabled', form);
 
   const show = () => {
-    const next = normalizeEntry(row || {});
+    const next = normalizeEntry(row || {}, new Set(serverOptions.map((item) => item.value)));
     form.setFieldsValue(next);
     setOpen(true);
   };
@@ -188,7 +153,7 @@ function ClientEntryEditor({ row, children, onDone, serverOptions }: { row?: any
 
 export default function ClientEntryPage() {
   const [rows, setRows] = useState<any[]>([]);
-  const [serverOptions, setServerOptions] = useState<{ value: string; label: string }[]>([]);
+  const [serverOptions, setServerOptions] = useState<ClientEntryServerOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [resolvingId, setResolvingId] = useState<number | string | null>(null);
 
@@ -200,7 +165,7 @@ export default function ClientEntryPage() {
         apiGet('/server/manage/getNodes').catch(() => ({ data: [] })),
       ]);
       setRows(Array.isArray(res.data) ? res.data : []);
-      setServerOptions(buildServerOptions(Array.isArray(nodeRes.data) ? nodeRes.data : []));
+      setServerOptions(buildVisibleServerOptions(Array.isArray(nodeRes.data) ? nodeRes.data : []));
     } catch (e: any) {
       message.error(e.message || '加载失败');
     } finally {
@@ -245,7 +210,7 @@ export default function ClientEntryPage() {
       return enabled ? `${staticCount > 0 ? '手填 + 远程' : '仅远程'}${parts.length ? ` / ${parts.join(' / ')}` : ''}` : '仅手填';
     } },
     { title: '生效节点', dataIndex: 'members', key: 'members', width: 260, render: (_: any, row: any) => {
-      const names = memberNames(row, serverOptionMap);
+      const names = visibleMemberNames(row, serverOptionMap);
       if (names.length === 0) return <Tooltip title="未选择节点时，这个入口组不会下发给任何节点"><span className="text-muted">未选择节点</span></Tooltip>;
       return <details className="client-entry-members">
         <summary>已选择 {names.length} 个节点</summary>
