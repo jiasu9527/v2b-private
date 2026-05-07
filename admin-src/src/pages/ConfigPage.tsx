@@ -3,7 +3,7 @@ import { Button, Card, Form, Input, InputNumber, Select, Spin, Switch, Tabs, mes
 import { apiGet, apiPost, unwrapData } from '../lib/api';
 
 const groups = [
-  ['site', '站点'], ['safe', '安全'], ['subscribe', '订阅'], ['frontend', '前端'], ['server', '节点'],
+  ['site', '站点'], ['safe', '安全'], ['subscribe', '订阅'], ['server', '节点'],
   ['email', '邮件'], ['telegram', 'Telegram'], ['invite', '邀请'], ['deposit', '充值'], ['ticket', '工单'], ['app', 'APP']
 ];
 
