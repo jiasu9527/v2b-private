@@ -14,6 +14,16 @@ import (
 
 const trafficGB = int64(1073741824)
 
+func planTransferEnableBytes(value int64) int64 {
+	if value <= 0 {
+		return 0
+	}
+	if value >= trafficGB {
+		return value
+	}
+	return value * trafficGB
+}
+
 var allowedOrderPeriods = map[string]struct{}{
 	"month_price":      {},
 	"quarter_price":    {},
@@ -836,7 +846,7 @@ func applyOrderPeriod(userRow *userRecord, order orderRecord, plan planRecord) {
 	if order.Type == 3 {
 		userRow.ExpiredAt = sql.NullInt64{Int64: now, Valid: true}
 	}
-	userRow.TransferEnable = plan.TransferEnable * trafficGB
+	userRow.TransferEnable = planTransferEnableBytes(plan.TransferEnable)
 	userRow.DeviceLimit = plan.DeviceLimit
 	if !userRow.ExpiredAt.Valid {
 		userRow.U = 0
@@ -869,7 +879,7 @@ func applyOrderOneTime(userRow *userRecord, order orderRecord, plan planRecord) 
 	}
 	userRow.U = 0
 	userRow.D = 0
-	userRow.TransferEnable = transferEnable * trafficGB
+	userRow.TransferEnable = planTransferEnableBytes(transferEnable)
 	userRow.DeviceLimit = plan.DeviceLimit
 	userRow.PlanID = sql.NullInt64{Int64: plan.ID, Valid: true}
 	userRow.GroupID = sql.NullInt64{Int64: plan.GroupID, Valid: true}

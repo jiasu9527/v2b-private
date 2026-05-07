@@ -9,6 +9,18 @@ import (
 	"time"
 )
 
+const planTrafficGiB = int64(1073741824)
+
+func planTransferEnableBytes(value int64) int64 {
+	if value <= 0 {
+		return 0
+	}
+	if value >= planTrafficGiB {
+		return value
+	}
+	return value * planTrafficGiB
+}
+
 type PlanRecord struct {
 	ID                 int64   `json:"id"`
 	GroupID            int64   `json:"group_id"`
@@ -184,7 +196,7 @@ SET group_id = $2, transfer_enable = $3, device_limit = $4, speed_limit = $5, up
 WHERE plan_id = $1`,
 			*req.ID,
 			req.GroupID,
-			req.TransferEnable*1073741824,
+			planTransferEnableBytes(req.TransferEnable),
 			nullableInt64(req.DeviceLimit),
 			nullableInt64(req.SpeedLimit),
 			now,

@@ -2,6 +2,15 @@ import type { ResourceConfig } from './crud';
 import { boolNumber, money, safeJsonParse } from './api';
 
 
+const trafficGB = 1024 * 1024 * 1024;
+
+function planTrafficToGB(value: any) {
+  if (value === undefined || value === null || value === '') return value;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return value;
+  return n >= trafficGB ? Number((n / trafficGB).toFixed(2)) : n;
+}
+
 const planPriceFields = ['month_price', 'quarter_price', 'half_year_price', 'year_price', 'two_year_price', 'three_year_price', 'onetime_price', 'reset_price'];
 
 function centsToYuan(value: any) {
@@ -38,7 +47,7 @@ export const resources: Record<string, ResourceConfig> = {
     key: 'plans', title: '套餐管理', fetch: '/plan/fetch', save: '/plan/save', drop: '/plan/drop', sort: '/plan/sort', searchKey: 'name',
     columns: [
       { key: 'id', title: 'ID', width: 70 }, { key: 'name', title: '名称', width: 180 }, { key: 'group_id', title: '权限组', width: 90 },
-      { key: 'transfer_enable', title: '流量(GB)', width: 130 }, { key: 'month_price', title: '月付', width: 100, render: money },
+      { key: 'transfer_enable', title: '流量(GB)', width: 130, render: (value) => planTrafficToGB(value) }, { key: 'month_price', title: '月付', width: 100, render: money },
       { key: 'reset_traffic_method', title: '重置方式', width: 100 }, { key: 'show', title: '显示', type: 'bool', width: 80 }, { key: 'capacity_limit', title: '容量', width: 80 }
     ],
     fields: [

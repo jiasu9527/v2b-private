@@ -846,7 +846,7 @@ func (s *DBService) defaultTryOutProfileTx(ctx context.Context, tx *sql.Tx, now 
 	if plan == nil {
 		return tryOutProfile{}, nil
 	}
-	transferBytes := convertGBToBytes(plan.TransferEnable)
+	transferBytes := planTransferEnableBytes(plan.TransferEnable)
 	expiredAt := now + int64(math.Round(cfg.TryOutHour*3600))
 	return tryOutProfile{
 		TransferEnable: transferBytes,
@@ -873,7 +873,7 @@ func (s *DBService) campaignTryOutProfileTx(ctx context.Context, tx *sql.Tx, now
 
 	transferGB := cfg.InviteTryOutTransferGB
 	if transferGB <= 0 {
-		transferGB = plan.TransferEnable
+		transferGB = planTransferEnableGB(plan.TransferEnable)
 	}
 	hours := cfg.InviteTryOutHours
 	if hours <= 0 {
@@ -1536,6 +1536,26 @@ func randomMD5Token() (string, error) {
 	}
 	sum := md5.Sum([]byte(fmt.Sprintf("%s-%d", seed, time.Now().UnixNano())))
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func planTransferEnableBytes(value float64) int64 {
+	if value <= 0 {
+		return 0
+	}
+	if value >= float64(bytesPerGB) {
+		return int64(math.Round(value))
+	}
+	return convertGBToBytes(value)
+}
+
+func planTransferEnableGB(value float64) float64 {
+	if value <= 0 {
+		return 0
+	}
+	if value >= float64(bytesPerGB) {
+		return value / float64(bytesPerGB)
+	}
+	return value
 }
 
 func convertGBToBytes(gb float64) int64 {

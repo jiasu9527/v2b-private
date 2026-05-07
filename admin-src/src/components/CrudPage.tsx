@@ -38,6 +38,7 @@ function prepareInitialValues(row: any, config: ResourceConfig) {
     if (field.type === 'switch') next[field.name] = truthy(value);
     if (field.type === 'json' && value !== undefined && value !== null && typeof value !== 'string') next[field.name] = JSON.stringify(value, null, 2);
     if (field.type === 'textarea' && Array.isArray(value)) next[field.name] = value.join('\n');
+    if (config.key === 'plans' && field.name === 'transfer_enable') next[field.name] = next[field.name] === undefined || next[field.name] === null || next[field.name] === '' ? next[field.name] : (Number(next[field.name]) >= 1024 * 1024 * 1024 ? Number((Number(next[field.name]) / 1024 / 1024 / 1024).toFixed(2)) : next[field.name]);
     if (config.key === 'plans' && ['month_price', 'quarter_price', 'half_year_price', 'year_price', 'two_year_price', 'three_year_price', 'onetime_price', 'reset_price'].includes(field.name)) next[field.name] = next[field.name] === undefined || next[field.name] === null || next[field.name] === '' ? next[field.name] : Number((Number(next[field.name]) / 100).toFixed(2));
   }
   return next;

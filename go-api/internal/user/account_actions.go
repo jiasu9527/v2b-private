@@ -240,7 +240,7 @@ func (s *DBService) RedeemGiftcard(ctx context.Context, userID int64, code strin
 		}
 		userRow.PlanID = sql.NullInt64{Int64: plan.ID, Valid: true}
 		userRow.GroupID = sql.NullInt64{Int64: plan.GroupID, Valid: true}
-		userRow.TransferEnable = plan.TransferEnable * trafficGB
+		userRow.TransferEnable = planTransferEnableBytes(plan.TransferEnable)
 		userRow.DeviceLimit = plan.DeviceLimit
 		userRow.U = 0
 		userRow.D = 0

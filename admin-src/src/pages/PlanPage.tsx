@@ -4,7 +4,17 @@ import { DeleteOutlined, DownOutlined, EditOutlined, MenuOutlined, PlusOutlined,
 import { apiGet, apiPost } from '../lib/api';
 
 function price(v: any) { return v !== null && v !== undefined ? centsToYuan(v).toFixed(2) : '-'; }
-function gb(v: any) { return v !== null && v !== undefined ? Number(v || 0).toString() : '-'; }
+function gb(v: any) { return v !== null && v !== undefined ? planTrafficToGB(v).toString() : '-'; }
+
+const trafficGB = 1024 * 1024 * 1024;
+
+function planTrafficToGB(value: any) {
+  if (value === undefined || value === null || value === '') return value;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return value;
+  return n >= trafficGB ? Number((n / trafficGB).toFixed(2)) : n;
+}
+
 
 const priceFields = ['month_price', 'quarter_price', 'half_year_price', 'year_price', 'two_year_price', 'three_year_price', 'onetime_price', 'reset_price'];
 
@@ -25,6 +35,7 @@ function yuanToCents(value: any) {
 function planToFormValues(row: any = {}) {
   const next = { ...row };
   priceFields.forEach((key) => { next[key] = centsToYuan(next[key]); });
+  next.transfer_enable = planTrafficToGB(next.transfer_enable);
   return next;
 }
 

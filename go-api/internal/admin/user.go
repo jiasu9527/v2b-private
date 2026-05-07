@@ -1730,5 +1730,5 @@ func userPlanTransferEnable(plan *userPlanSnapshot) int64 {
 	if plan == nil {
 		return 0
 	}
-	return plan.TransferEnable * gibibyte
+	return planTransferEnableBytes(plan.TransferEnable)
 }

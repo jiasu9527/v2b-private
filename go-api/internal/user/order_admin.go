@@ -279,7 +279,7 @@ func applyHistoricalOrder(userRow *userRecord, order orderRecord, plan planRecor
 		}
 		userRow.U = 0
 		userRow.D = 0
-		userRow.TransferEnable = transferEnable * trafficGB
+		userRow.TransferEnable = planTransferEnableBytes(transferEnable)
 		userRow.DeviceLimit = plan.DeviceLimit
 		userRow.PlanID = sql.NullInt64{Int64: plan.ID, Valid: true}
 		userRow.GroupID = sql.NullInt64{Int64: plan.GroupID, Valid: true}
@@ -296,7 +296,7 @@ func applyHistoricalOrder(userRow *userRecord, order orderRecord, plan planRecor
 		if order.Type == 3 {
 			userRow.ExpiredAt = sql.NullInt64{Int64: effectiveAt, Valid: true}
 		}
-		userRow.TransferEnable = plan.TransferEnable * trafficGB
+		userRow.TransferEnable = planTransferEnableBytes(plan.TransferEnable)
 		userRow.DeviceLimit = plan.DeviceLimit
 		if !userRow.ExpiredAt.Valid || order.Type == 1 {
 			userRow.U = 0
