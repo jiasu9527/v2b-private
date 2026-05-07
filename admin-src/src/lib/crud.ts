@@ -32,6 +32,7 @@ export type ColumnConfig = {
   title: string;
   type?: 'text' | 'money' | 'bytes' | 'time' | 'bool' | 'tag' | 'json' | 'array';
   width?: number;
+  render?: (value: any) => any;
 };
 
 export async function fetchResource(cfg: ResourceConfig, params: any = {}) {

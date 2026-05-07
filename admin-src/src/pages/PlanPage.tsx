@@ -3,8 +3,36 @@ import { Button, Card, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Se
 import { DeleteOutlined, DownOutlined, EditOutlined, MenuOutlined, PlusOutlined, QuestionCircleOutlined, UserOutlined } from '@ant-design/icons';
 import { apiGet, apiPost } from '../lib/api';
 
-function price(v: any) { return v !== null && v !== undefined ? Number(v || 0).toFixed(2) : '-'; }
+function price(v: any) { return v !== null && v !== undefined ? centsToYuan(v).toFixed(2) : '-'; }
 function gb(v: any) { return v !== null && v !== undefined ? Number(v || 0).toString() : '-'; }
+
+const priceFields = ['month_price', 'quarter_price', 'half_year_price', 'year_price', 'two_year_price', 'three_year_price', 'onetime_price', 'reset_price'];
+
+function centsToYuan(value: any) {
+  if (value === undefined || value === null || value === '') return value;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return value;
+  return Number((n / 100).toFixed(2));
+}
+
+function yuanToCents(value: any) {
+  if (value === undefined || value === null || value === '') return value;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return value;
+  return Math.round(n * 100);
+}
+
+function planToFormValues(row: any = {}) {
+  const next = { ...row };
+  priceFields.forEach((key) => { next[key] = centsToYuan(next[key]); });
+  return next;
+}
+
+function planFormValuesToPayload(values: any = {}) {
+  const next = { ...values };
+  priceFields.forEach((key) => { next[key] = yuanToCents(next[key]); });
+  return next;
+}
 
 export default function PlanPage() {
   const [rows, setRows] = useState<any[]>([]);
@@ -27,11 +55,11 @@ export default function PlanPage() {
   const openEdit = (row: any = {}) => {
     setEdit(row);
     form.resetFields();
-    form.setFieldsValue({ ...row });
+    form.setFieldsValue(planToFormValues(row));
   };
   const save = async () => {
     const values = await form.validateFields();
-    await apiPost('/plan/save', { ...edit, ...values });
+    await apiPost('/plan/save', { ...edit, ...planFormValuesToPayload(values) });
     message.success('保存成功'); setEdit(null); load();
   };
   const update = async (row: any, key: string, value: any) => { await apiPost('/plan/update', { id: row.id, [key]: value }, { form: true }); message.success('已更新'); load(); };

@@ -7,6 +7,7 @@ import { dropResource, fetchResource, saveResource } from '../lib/crud';
 import { bytes, money, safeJsonParse, truthy, unixTime } from '../lib/api';
 
 function renderCell(value: any, col: ColumnConfig) {
+  if (col.render) return col.render(value);
   if (col.type === 'money') return money(value);
   if (col.type === 'bytes') return bytes(value);
   if (col.type === 'time') return unixTime(value);
@@ -37,6 +38,7 @@ function prepareInitialValues(row: any, config: ResourceConfig) {
     if (field.type === 'switch') next[field.name] = truthy(value);
     if (field.type === 'json' && value !== undefined && value !== null && typeof value !== 'string') next[field.name] = JSON.stringify(value, null, 2);
     if (field.type === 'textarea' && Array.isArray(value)) next[field.name] = value.join('\n');
+    if (config.key === 'plans' && ['month_price', 'quarter_price', 'half_year_price', 'year_price', 'two_year_price', 'three_year_price', 'onetime_price', 'reset_price'].includes(field.name)) next[field.name] = next[field.name] === undefined || next[field.name] === null || next[field.name] === '' ? next[field.name] : Number((Number(next[field.name]) / 100).toFixed(2));
   }
   return next;
 }
