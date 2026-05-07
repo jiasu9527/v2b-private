@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Badge, Button, Card, Dropdown, Modal, Skeleton, Space, Table, Tag, Tooltip, message } from 'antd';
+import { Badge, Button, Card, Dropdown, Modal, Popconfirm, Skeleton, Space, Table, Tag, Tooltip, message } from 'antd';
 import type { MenuProps } from 'antd';
 import { CaretDownOutlined, PlusOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -137,7 +137,7 @@ export default function OrderPage() {
     { title: '支付金额', dataIndex: 'total_amount', align: 'right', width: 120, render: money },
     { title: <Tooltip title="标记为[已支付]后将会由系统进行开通后并完成">订单状态 <QuestionCircleOutlined /></Tooltip>, dataIndex: 'status', width: 150, render: (status: any, row: any) => {
       const menu: MenuProps['items'] = [{ key: '1', label: '已支付', onClick: () => act('/order/paid', row) }, { key: '2', label: '取消', onClick: () => act('/order/cancel', row) }];
-      return <div><Dropdown disabled={Number(status) !== 0} trigger={['click']} menu={{ items: menu }}><span><Badge status={statusBadge[Number(status)] || 'default'} /> {orderStatusText[Number(status)] || status} {Number(status) === 0 && <a>标记为 <CaretDownOutlined /></a>}</span></Dropdown>{Number(status) === 2 && <a className="ml-2" onClick={() => act('/order/paid', row)}>补单</a>}</div>;
+      return <div><Dropdown disabled={Number(status) !== 0} trigger={['click']} menu={{ items: menu }}><span><Badge status={statusBadge[Number(status)] || 'default'} /> {orderStatusText[Number(status)] || status} {Number(status) === 0 && <a>标记为 <CaretDownOutlined /></a>}</span></Dropdown>{Number(status) === 2 && <a className="ml-2" onClick={() => act('/order/paid', row)}>补单</a>}{Number(status) === 3 && <Popconfirm title="确认退款该订单？" description="退款会回滚用户订阅和相关余额，请确认后操作。" okText="确认退款" cancelText="取消" onConfirm={() => act('/order/refund', row)}><a className="ml-2">退款</a></Popconfirm>}</div>;
     } },
     { title: '佣金金额', dataIndex: 'commission_balance', align: 'right', width: 120, render: (v: any, row: any) => Number(row.status) === 0 || Number(row.status) === 2 ? '-' : (v ? money(v) : '-') },
     { title: <Tooltip title="标记为[有效]后将会由系统处理后发放到用户并完成">佣金状态 <QuestionCircleOutlined /></Tooltip>, dataIndex: 'commission_status', width: 160, render: (status: any, row: any) => {
