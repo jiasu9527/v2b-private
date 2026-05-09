@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Badge, Button, Card, Dropdown, Modal, Popconfirm, Skeleton, Space, Table, Tag, Tooltip, message } from 'antd';
+import { Badge, Button, Card, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Select, Skeleton, Space, Table, Tag, Tooltip, message } from 'antd';
 import type { MenuProps } from 'antd';
 import { CaretDownOutlined, PlusOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -25,9 +25,13 @@ const filterDefs = [
   { key: 'created_at', title: '创建时间', condition: ['>=', '>', '<', '<='], type: 'date' },
 ];
 
-function defaultFilter() { return { key: 'trade_no', condition: '模糊', value: '' }; }
 function initialFilters() {
   const query = new URLSearchParams(location.search);
+  const key = query.get('filter_key');
+  if (key) {
+    const def = filterDefs.find((item) => item.key === key) || filterDefs[0];
+    return [{ key, condition: query.get('condition') || def.condition[0], value: query.get('value') || '' }];
+  }
   if (query.get('commission_pending') === '1') {
     return [
       { key: 'status', condition: '=', value: 3 },
@@ -47,6 +51,57 @@ function periodLabel(value: any) {
   if (!key || key === 'deposit') return '';
   if (Object.prototype.hasOwnProperty.call(periodText, key)) return periodText[key];
   return key;
+}
+
+
+const centsFromMoney = (value: any) => {
+  if (value === undefined || value === null || value === '') return value;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return value;
+  return Math.round(n * 100);
+};
+
+function AddOrderModal({ open, plans, onClose, onDone }: { open: boolean; plans: any[]; onClose: () => void; onDone: () => void }) {
+  const [form] = Form.useForm();
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    form.resetFields();
+    form.setFieldsValue({ email: '', plan_id: undefined, period: undefined, total_amount: undefined });
+  }, [open]);
+
+  const submit = async () => {
+    const values = await form.validateFields();
+    setLoading(true);
+    try {
+      await apiPost('/order/assign', { ...values, total_amount: centsFromMoney(values.total_amount) }, { form: true });
+      message.success('添加成功');
+      onClose();
+      onDone();
+    } catch (e: any) {
+      message.error(e.message || '添加失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return <Modal title="添加订单" open={open} onCancel={onClose} onOk={submit} okText="确定" cancelText="取消" confirmLoading={loading} destroyOnHidden>
+    <Form form={form} layout="vertical">
+      <Form.Item name="email" label="用户邮箱" rules={[{ required: true, message: '请输入用户邮箱' }]}>
+        <Input placeholder="请输入用户邮箱" />
+      </Form.Item>
+      <Form.Item name="plan_id" label="请选择订阅" rules={[{ required: true, message: '请选择订阅' }]}>
+        <Select placeholder="请选择订阅" options={plans.map((plan) => ({ label: plan.name, value: plan.id }))} />
+      </Form.Item>
+      <Form.Item name="period" label="请选择周期" rules={[{ required: true, message: '请选择周期' }]}>
+        <Select placeholder="请选择周期" options={Object.entries(periodText).map(([value, label]) => ({ value, label }))} />
+      </Form.Item>
+      <Form.Item name="total_amount" label="支付金额" rules={[{ required: true, message: '请输入需要支付的金额' }]}>
+        <InputNumber addonAfter="¥" min={0} precision={2} style={{ width: '100%' }} placeholder="请输入需要支付的金额" />
+      </Form.Item>
+    </Form>
+  </Modal>;
 }
 
 function DetailRow({ label, children, empty = '-' }: { label: string; children: React.ReactNode; empty?: React.ReactNode }) {
@@ -73,6 +128,7 @@ export default function OrderPage() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detail, setDetail] = useState<{ order: any; user: any; inviteUser: any } | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
   const effectiveFilters = useMemo(() => filters.filter((item) => String(item.value ?? '').trim() !== ''), [filters]);
 
   const load = async (override: any = {}, filterOverride?: any[]) => {
@@ -157,7 +213,7 @@ export default function OrderPage() {
           <LegacyFilterDrawer value={filters} keys={filterDefs as any} onOk={(next) => { setFilters(next); load({ current: 1 }, next.filter((item) => String(item.value ?? '').trim() !== '')); }}>
             <FilterButton active={effectiveFilters.length > 0} />
           </LegacyFilterDrawer>
-          <Button className="ml-2" icon={<PlusOutlined />}>添加订单</Button>
+          <Button className="ml-2" icon={<PlusOutlined />} onClick={() => setAddOpen(true)}>添加订单</Button>
         </Space>
       </div>
       <Table className="forest-table" rowKey="id" loading={loading} dataSource={rows} columns={columns} pagination={{ total, current: page.current, pageSize: page.pageSize, size: 'small', showSizeChanger: true, pageSizeOptions: [10, 50, 100, 150] }} scroll={{ x: 1200 }} onChange={(pagination: any) => load({ current: pagination.current, pageSize: pagination.pageSize })} />
@@ -193,5 +249,6 @@ export default function OrderPage() {
         </>}
       </div>}
     </Modal>
+    <AddOrderModal open={addOpen} plans={plans} onClose={() => setAddOpen(false)} onDone={() => load()} />
   </div>;
 }

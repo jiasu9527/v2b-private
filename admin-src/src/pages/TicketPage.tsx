@@ -46,7 +46,7 @@ function UserManageDrawer({ userId, open, onClose }: { userId?: any; open: boole
     const values = await form.validateFields();
     setSaving(true);
     try {
-      await apiPost('/user/update', { id: userId, ...userFormValuesToPayload(values) }, { form: true });
+      await apiPost('/user/update', { id: userId, ...userFormValuesToPayload(values) }, { form: true, keepEmpty: true });
       message.success('保存成功');
       onClose();
     } catch (e: any) {

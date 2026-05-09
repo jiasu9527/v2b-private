@@ -1291,6 +1291,8 @@ func userFilterField(key string) (string, bool) {
 		return "u.remarks", true
 	case "is_admin":
 		return "u.is_admin", true
+	case "is_staff":
+		return "u.is_staff", true
 	default:
 		return "", false
 	}
@@ -1318,6 +1320,8 @@ func userLikeFilterField(key string) string {
 		return "CAST(u.banned AS TEXT)"
 	case "is_admin":
 		return "CAST(u.is_admin AS TEXT)"
+	case "is_staff":
+		return "CAST(u.is_staff AS TEXT)"
 	default:
 		field, _ := userFilterField(key)
 		return field

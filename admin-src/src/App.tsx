@@ -171,7 +171,7 @@ export default function App() {
   };
 
   return <ConfigProvider locale={zhCN} theme={{ algorithm: theme.defaultAlgorithm, token: { colorPrimary: '#111111', colorInfo: '#111111', borderRadius: 4, colorLink: '#111111' } }}>
-    {isTicketDetailPath ? <Page path={path} /> :
+    {isTicketDetailPath ? <Page key={path} path={path} /> :
     <Layout className={`admin-layout${isMobile ? ' admin-layout-mobile' : ''}`}>
       <Sider width={238} collapsedWidth={0} collapsible collapsed={collapsed} trigger={null} className="admin-sider">
         <div className="brand"><div className="brand-mark">{logo ? <img src={logo} alt="logo" /> : 'F'}</div>{!collapsed && <Typography.Text strong>{title}</Typography.Text>}</div>
@@ -180,7 +180,7 @@ export default function App() {
       {isMobile && !collapsed && <div className="admin-sider-mask" onClick={() => setCollapsed(true)} />}
       <Layout>
         <Header className="admin-header"><Button type="text" aria-label={collapsed ? '展开菜单' : '收起菜单'} icon={collapsed ? <MenuUnfoldOutlined/> : <MenuFoldOutlined/>} onClick={()=>setCollapsed((value)=>!value)} /><div className="header-spacer"/><Dropdown trigger={['click']} menu={{ items: [{ key: 'logout', icon: <LogoutOutlined />, label: '退出登录', onClick: logout }] }}><Button type="text" className="admin-account-button"><Space size={6}><UserOutlined /><span className="admin-account-name" title={adminDisplayName}>{adminDisplayName}</span><DownOutlined /></Space></Button></Dropdown></Header>
-        <Content className="admin-content"><Page path={path} /></Content>
+        <Content className="admin-content"><Page key={path} path={path} /></Content>
       </Layout>
     </Layout>}
   </ConfigProvider>;

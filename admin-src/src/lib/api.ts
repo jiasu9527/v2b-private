@@ -65,28 +65,32 @@ export function clearAuth() {
   clearAdminUserInfo();
 }
 
-function appendValue(q: URLSearchParams, key: string, value: any) {
-  if (value === undefined || value === null || value === '') return;
+function appendValue(q: URLSearchParams, key: string, value: any, options: { keepEmpty?: boolean } = {}) {
+  if (value === undefined) return;
+  if (value === null || value === '') {
+    if (options.keepEmpty) q.set(key, '');
+    return;
+  }
   if (Array.isArray(value)) {
     value.forEach((item, index) => {
       if (typeof item === 'object' && item !== null) {
-        Object.entries(item).forEach(([childKey, childValue]) => appendValue(q, `${key}[${index}][${childKey}]`, childValue));
+        Object.entries(item).forEach(([childKey, childValue]) => appendValue(q, `${key}[${index}][${childKey}]`, childValue, options));
         return;
       }
-      appendValue(q, `${key}[${index}]`, item);
+      appendValue(q, `${key}[${index}]`, item, options);
     });
     return;
   }
   if (typeof value === 'object') {
-    Object.entries(value).forEach(([childKey, childValue]) => appendValue(q, `${key}[${childKey}]`, childValue));
+    Object.entries(value).forEach(([childKey, childValue]) => appendValue(q, `${key}[${childKey}]`, childValue, options));
     return;
   }
   q.set(key, String(value));
 }
 
-function toQuery(params: AnyRecord = {}) {
+function toQuery(params: AnyRecord = {}, options: { keepEmpty?: boolean } = {}) {
   const q = new URLSearchParams();
-  Object.entries(params).forEach(([k, v]) => appendValue(q, k, v));
+  Object.entries(params).forEach(([k, v]) => appendValue(q, k, v, options));
   const auth = getAuth();
   if (auth && !q.has('auth_data')) q.set('auth_data', auth);
   return q.toString();
@@ -96,8 +100,21 @@ function normalizeError(json: any, fallback: string) {
   return json?.message || json?.msg || json?.error || fallback;
 }
 
-async function parseResponse(res: Response) {
+async function parseResponse(res: Response, options: { raw?: boolean } = {}) {
   const text = await res.text();
+  if (options.raw) {
+    if (!res.ok) {
+      let fallback = text || res.statusText;
+      try {
+        const payload = text ? JSON.parse(text) : null;
+        fallback = normalizeError(payload, res.statusText);
+      } catch {
+        // keep plain-text fallback
+      }
+      throw new Error(fallback);
+    }
+    return text;
+  }
   let payload: any = null;
   try {
     payload = text ? JSON.parse(text) : null;
@@ -116,7 +133,7 @@ export async function apiGet(path: string, params: AnyRecord = {}) {
   return parseResponse(res);
 }
 
-export async function apiPost(path: string, body: AnyRecord = {}, options: { form?: boolean } = {}) {
+export async function apiPost(path: string, body: AnyRecord = {}, options: { form?: boolean; keepEmpty?: boolean; raw?: boolean } = {}) {
   const payload = { ...body, auth_data: body.auth_data ?? getAuth() };
   const init: RequestInit = {
     method: 'POST',
@@ -124,13 +141,13 @@ export async function apiPost(path: string, body: AnyRecord = {}, options: { for
   };
   if (options.form) {
     init.headers = { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' };
-    init.body = toQuery(payload);
+    init.body = toQuery(payload, { keepEmpty: options.keepEmpty });
   } else {
     init.headers = { 'Content-Type': 'application/json' };
     init.body = JSON.stringify(payload);
   }
   const res = await fetch(`/api/v1/${getAdminPath()}${path}`, init);
-  return parseResponse(res);
+  return parseResponse(res, { raw: options.raw });
 }
 
 export async function passportLogin(email: string, password: string) {

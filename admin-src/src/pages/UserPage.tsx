@@ -3,9 +3,19 @@ import { Badge, Button, Card, DatePicker, Dropdown, Form, Input, InputNumber, Mo
 import type { MenuProps } from 'antd';
 import { AccountBookOutlined, CopyOutlined, DeleteOutlined, DownOutlined, EditOutlined, ExportOutlined, MailOutlined, ReloadOutlined, SolutionOutlined, StopOutlined, UserAddOutlined, UsergroupAddOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { apiGet, apiPost, bytesToGB, bytesToGBText, gbToBytes, unixTime } from '../lib/api';
-import JsonModal from '../components/JsonModal';
+import { apiGet, apiPost, bytes, bytesToGB, bytesToGBText, gbToBytes, getAdminPath, unixTime } from '../lib/api';
 import LegacyFilterDrawer, { FilterButton } from '../components/LegacyFilterDrawer';
+
+const periodText: Record<string, string> = {
+  month_price: '月付',
+  quarter_price: '季付',
+  half_year_price: '半年付',
+  year_price: '年付',
+  two_year_price: '两年付',
+  three_year_price: '三年付',
+  onetime_price: '一次性',
+  reset_price: '流量重置包',
+};
 
 const filterDefinitions = [
   { key: 'email', title: '邮箱', condition: ['模糊'] },
@@ -36,16 +46,245 @@ function moneyText(value: any) {
   return (n / 100).toFixed(2);
 }
 
-function defaultFilter() {
-  return { key: 'email', condition: '模糊', value: '' };
-}
-
-function initialFilters() {
-  const query = new URLSearchParams(location.search);
+function initialFilters(search = location.search) {
+  const query = new URLSearchParams(search);
   const key = query.get('filter_key');
   if (!key) return [];
   const def = filterDefinitions.find((item) => item.key === key) || filterDefinitions[0];
   return [{ key, condition: query.get('condition') || def.condition[0], value: query.get('value') || '' }];
+}
+
+function pathUrl(path: string) {
+  return `/${getAdminPath()}${path}`;
+}
+
+function navigateAdmin(path: string) {
+  history.pushState(null, '', pathUrl(path));
+  window.dispatchEvent(new PopStateEvent('popstate'));
+}
+
+function UserTrafficModal({ user, open, onClose }: { user?: any; open: boolean; onClose: () => void }) {
+  const [records, setRecords] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [pagination, setPagination] = useState({ current: 1, pageSize: 10, total: 0 });
+
+  const load = async (override: any = {}) => {
+    if (!open || !user?.id) return;
+    const next = { ...pagination, ...override };
+    setLoading(true);
+    try {
+      const res = await apiGet('/stat/getStatUser', {
+        user_id: user.id,
+        current: next.current,
+        page: next.current,
+        pageSize: next.pageSize,
+      });
+      setRecords(res.data || []);
+      setPagination({ ...next, total: Number(res.total || 0) });
+    } catch (e: any) {
+      message.error(e.message || '流量记录加载失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (open) load({ current: 1 });
+  }, [open, user?.id]);
+
+  const columns: any[] = [
+    { title: '日期', dataIndex: 'record_at', key: 'record_at', render: (value: any) => value ? dayjs(Number(value) * 1000).format('YYYY-MM-DD') : '-' },
+    { title: '上行', dataIndex: 'u', key: 'u', align: 'right', render: bytes },
+    { title: '下行', dataIndex: 'd', key: 'd', align: 'right', render: bytes },
+    { title: '倍率', dataIndex: 'server_rate', key: 'server_rate', align: 'right' },
+  ];
+
+  return <Modal
+    title="流量记录"
+    open={open}
+    onCancel={onClose}
+    footer={null}
+    width="100%"
+    style={{ maxWidth: 1000, padding: '0 10px', top: 20 }}
+    styles={{ body: { padding: 0 } }}
+    destroyOnHidden
+  >
+    <Table
+      className="forest-table"
+      rowKey={(row, index) => `${row.record_at || row.id || 'row'}-${index}`}
+      loading={loading}
+      columns={columns}
+      dataSource={records}
+      pagination={{ ...pagination, size: 'small' }}
+      onChange={(pageInfo: any) => load({ current: pageInfo.current, pageSize: pageInfo.pageSize })}
+    />
+  </Modal>;
+}
+
+function UserAssignOrderModal({ user, open, plans, onClose, onDone }: { user?: any; open: boolean; plans: any[]; onClose: () => void; onDone: () => void }) {
+  const [form] = Form.useForm();
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    form.resetFields();
+    form.setFieldsValue({
+      email: user?.email || '',
+      plan_id: undefined,
+      period: undefined,
+      total_amount: undefined,
+    });
+  }, [open, user?.email]);
+
+  const submit = async () => {
+    const values = await form.validateFields();
+    setLoading(true);
+    try {
+      await apiPost('/order/assign', {
+        ...values,
+        total_amount: centsFromMoney(values.total_amount),
+      }, { form: true });
+      message.success('分配成功');
+      onClose();
+      onDone();
+    } catch (e: any) {
+      message.error(e.message || '分配失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return <Modal
+    title="订单分配"
+    open={open}
+    onCancel={onClose}
+    onOk={submit}
+    okText="确定"
+    cancelText="取消"
+    confirmLoading={loading}
+    destroyOnHidden
+  >
+    <Form form={form} layout="vertical">
+      <Form.Item name="email" label="用户邮箱" rules={[{ required: true, message: '请输入用户邮箱' }]}>
+        <Input placeholder="请输入用户邮箱" />
+      </Form.Item>
+      <Form.Item name="plan_id" label="请选择订阅" rules={[{ required: true, message: '请选择订阅' }]}>
+        <Select placeholder="请选择订阅" options={plans.map((plan) => ({ label: plan.name, value: plan.id }))} />
+      </Form.Item>
+      <Form.Item name="period" label="请选择周期" rules={[{ required: true, message: '请选择周期' }]}>
+        <Select placeholder="请选择周期" options={Object.entries(periodText).map(([value, label]) => ({ value, label }))} />
+      </Form.Item>
+      <Form.Item name="total_amount" label="支付金额" rules={[{ required: true, message: '请输入需要支付的金额' }]}>
+        <InputNumber addonAfter="¥" min={0} precision={2} style={{ width: '100%' }} placeholder="请输入需要支付的金额" />
+      </Form.Item>
+    </Form>
+  </Modal>;
+}
+
+
+function UserGenerateModal({ open, plans, onClose, onDone }: { open: boolean; plans: any[]; onClose: () => void; onDone: () => void }) {
+  const [form] = Form.useForm();
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    form.resetFields();
+    form.setFieldsValue({ email_prefix: '', email_suffix: '', generate_count: undefined, expired_at: null, plan_id: undefined, password: '' });
+  }, [open]);
+
+  const submit = async () => {
+    const values = await form.validateFields();
+    const payload: any = { ...values };
+    payload.expired_at = values.expired_at ? values.expired_at.unix() : '';
+    if (payload.plan_id === undefined || payload.plan_id === null) payload.plan_id = '';
+    setLoading(true);
+    try {
+      const res = await apiPost('/user/generate', payload, { form: true, keepEmpty: true, raw: !!payload.generate_count });
+      if (payload.generate_count && typeof res === 'string') {
+        downloadTextFile(`USER ${dayjs().format('YYYY-MM-DD HH:mm:ss')}.csv`, res);
+      }
+      message.success('生成成功');
+      onClose();
+      onDone();
+    } catch (e: any) {
+      message.error(e.message || '生成失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return <Modal
+    title="创建用户"
+    open={open}
+    onCancel={onClose}
+    onOk={submit}
+    okText="生成"
+    cancelText="取消"
+    confirmLoading={loading}
+    destroyOnHidden
+  >
+    <Form form={form} layout="vertical">
+      <Form.Item label="邮箱" required>
+        <Space.Compact style={{ width: '100%' }}>
+          <Form.Item name="email_prefix" noStyle>
+            <Input placeholder="账号（批量生成请留空）" style={{ width: '45%' }} />
+          </Form.Item>
+          <Input disabled placeholder="@" style={{ width: '10%', textAlign: 'center' }} />
+          <Form.Item name="email_suffix" noStyle rules={[{ required: true, message: '请输入邮箱域' }]}>
+            <Input placeholder="域" style={{ width: '45%' }} />
+          </Form.Item>
+        </Space.Compact>
+      </Form.Item>
+      <Form.Item name="password" label="密码">
+        <Input.Password placeholder="留空则密码与邮箱相同" autoComplete="new-password" />
+      </Form.Item>
+      <Form.Item name="expired_at" label="到期时间">
+        <DatePicker showTime style={{ width: '100%' }} placeholder="请选择用户到期日期，为空则不限制到期时间" />
+      </Form.Item>
+      <Form.Item name="plan_id" label="订阅计划">
+        <Select allowClear placeholder="请选择用户订阅计划" options={[{ label: '无', value: null }, ...plans.map((plan) => ({ label: plan.name, value: plan.id }))]} />
+      </Form.Item>
+      <Form.Item shouldUpdate noStyle>
+        {({ getFieldValue }) => !getFieldValue('email_prefix') && <Form.Item name="generate_count" label="生成数量">
+          <InputNumber min={1} max={500} precision={0} style={{ width: '100%' }} placeholder="如果为批量生成请输入生成数量" />
+        </Form.Item>}
+      </Form.Item>
+    </Form>
+  </Modal>;
+}
+
+
+function UserMailModal({ open, filtered, onClose, onSubmit }: { open: boolean; filtered: boolean; onClose: () => void; onSubmit: (values: any) => Promise<void> }) {
+  const [form] = Form.useForm();
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    form.resetFields();
+    form.setFieldsValue({ receiver: filtered ? '过滤用户' : '全部用户', subject: '', content: '' });
+  }, [open, filtered]);
+
+  const submit = async () => {
+    const values = await form.validateFields();
+    setLoading(true);
+    try {
+      await onSubmit({ subject: values.subject, content: values.content });
+      message.success('已提交发送');
+      onClose();
+    } catch (e: any) {
+      message.error(e.message || '发送失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return <Modal title="发送邮件" open={open} onCancel={onClose} onOk={submit} confirmLoading={loading} destroyOnHidden>
+    <Form form={form} layout="vertical">
+      <Form.Item name="receiver" label="收件人"><Input disabled /></Form.Item>
+      <Form.Item name="subject" label="主题" rules={[{ required: true, message: '请输入邮件主题' }]}><Input placeholder="请输入邮件主题" /></Form.Item>
+      <Form.Item name="content" label="发送内容" rules={[{ required: true, message: '请输入邮件内容' }]}><Input.TextArea rows={12} placeholder="请输入邮件内容" /></Form.Item>
+    </Form>
+  </Modal>;
 }
 
 
@@ -62,6 +301,20 @@ const centsFromMoney = (value: any) => {
   if (!Number.isFinite(n)) return value;
   return Math.round(n * 100);
 };
+
+
+function downloadTextFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: 'text/plain;charset=UTF-8' });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.style.display = 'none';
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
+}
 
 const bytesFromGBForm = (value: any) => {
   if (value === undefined || value === null || value === '') return value;
@@ -91,10 +344,12 @@ export function userFormValuesToPayload(values: any = {}) {
   payload.d = bytesFromGBForm(values.d);
   payload.balance = centsFromMoney(values.balance);
   payload.commission_balance = centsFromMoney(values.commission_balance);
-  payload.expired_at = values.expired_at ? values.expired_at.unix() : null;
+  payload.expired_at = values.expired_at ? values.expired_at.unix() : '';
+  ['plan_id', 'device_limit', 'commission_rate', 'discount', 'speed_limit'].forEach((key) => { if (payload[key] === undefined || payload[key] === null) payload[key] = ''; });
   if ('is_admin' in payload) payload.is_admin = boolToNumber(payload.is_admin);
   if ('is_staff' in payload) payload.is_staff = boolToNumber(payload.is_staff);
   if (payload.invite_user) delete payload.invite_user;
+  if (payload.invite_user_email === undefined || payload.invite_user_email === null) payload.invite_user_email = '';
   return payload;
 }
 
@@ -107,10 +362,14 @@ export default function UserPage() {
   const [plans, setPlans] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
   const [edit, setEdit] = useState<any>(null);
-  const [detail, setDetail] = useState<any>(null);
+  const [trafficUser, setTrafficUser] = useState<any>(null);
+  const [assignUser, setAssignUser] = useState<any>(null);
+  const [generateOpen, setGenerateOpen] = useState(false);
+  const [mailOpen, setMailOpen] = useState(false);
   const [form] = Form.useForm();
 
   const effectiveFilters = useMemo(() => filters.filter((item) => String(item.value ?? '').trim() !== ''), [filters]);
+
 
   const load = async (override: any = {}, filterOverride?: any[]) => {
     setLoading(true);
@@ -141,7 +400,7 @@ export default function UserPage() {
 
   const save = async () => {
     const values = await form.validateFields();
-    await apiPost('/user/update', { id: edit.id, ...userFormValuesToPayload(values) }, { form: true });
+    await apiPost('/user/update', { id: edit.id, ...userFormValuesToPayload(values) }, { form: true, keepEmpty: true });
     message.success('保存成功');
     setEdit(null);
     load();
@@ -165,21 +424,37 @@ export default function UserPage() {
     load();
   };
 
+  const dumpCSV = async () => {
+    if (!effectiveFilters.length) return message.warning('请先设置过滤器');
+    try {
+      const content = await apiPost('/user/dumpCSV', { filter: effectiveFilters }, { form: true, raw: true });
+      downloadTextFile(`${dayjs().format('YYYY-MM-DD HH:mm:ss')}.csv`, content);
+      message.success('已导出CSV');
+    } catch (e: any) {
+      message.error(e.message || '导出失败');
+    }
+  };
+
+  const sendMail = async (values: any) => {
+    await apiPost('/user/sendMail', { filter: effectiveFilters, ...values }, { form: true });
+    load();
+  };
+
   const rowMenu = (row: any): MenuProps['items'] => [
-    { key: 'edit', label: <span><EditOutlined /> 编辑</span>, onClick: async () => { const d = await apiGet('/user/getUserInfoById', { id: row.id }).catch(() => ({ data: row })); const data = d.data || row; setEdit(data); form.setFieldsValue(userToAdminFormValues(data)); } },
-    { key: 'assign', label: <span><UserAddOutlined /> 分配订单</span> },
+    { key: 'edit', label: <span><EditOutlined /> 编辑</span>, onClick: async () => { const d = await apiGet('/user/getUserInfoById', { id: row.id }).catch(() => ({ data: row })); const data = d.data || row; form.resetFields(); setEdit(data); form.setFieldsValue(userToAdminFormValues(data)); } },
+    { key: 'assign', label: <span><UserAddOutlined /> 分配订单</span>, onClick: () => setAssignUser(row) },
     { key: 'copy', label: <span><CopyOutlined /> 复制订阅URL</span>, onClick: () => copySubscribe(row) },
     { key: 'reset', danger: true, label: <span><ReloadOutlined /> 重置UUID及订阅URL</span>, onClick: () => resetSecret(row) },
-    { key: 'orders', label: <span><AccountBookOutlined /> TA的订单</span> },
+    { key: 'orders', label: <span><AccountBookOutlined /> TA的订单</span>, onClick: () => navigateAdmin(`/order?filter_key=user_id&condition=${encodeURIComponent('=')}&value=${encodeURIComponent(String(row.id))}`) },
     { key: 'invites', label: <span><UsergroupAddOutlined /> TA的邀请</span>, onClick: () => { const next = [{ key: 'invite_user_id', condition: '=', value: row.id }]; setFilters(next); load({ current: 1 }, next); } },
-    { key: 'traffic', label: <span><SolutionOutlined /> TA的流量记录</span>, onClick: () => setDetail({ title: '流量记录入口', user_id: row.id, email: row.email }) },
+    { key: 'traffic', label: <span><SolutionOutlined /> TA的流量记录</span>, onClick: () => setTrafficUser(row) },
     { type: 'divider' as const },
     { key: 'delete', danger: true, label: <Popconfirm title={`确定要删除 ${row.email} 的用户信息吗？`} onConfirm={async () => { await apiPost('/user/delUser', { id: row.id }, { form: true }); message.success('已删除'); load(); }}><span><DeleteOutlined /> 删除用户</span></Popconfirm> },
   ];
 
   const batchMenu: MenuProps['items'] = [
-    { key: 'csv', label: <span><ExportOutlined /> 导出CSV</span>, onClick: () => batchAction('/user/dumpCSV', '已提交导出') },
-    { key: 'mail', label: <span><MailOutlined /> 发送邮件</span> },
+    { key: 'csv', label: <span><ExportOutlined /> 导出CSV</span>, onClick: dumpCSV },
+    { key: 'mail', label: <span><MailOutlined /> 发送邮件</span>, onClick: () => setMailOpen(true) },
     { key: 'ban', label: <span><StopOutlined /> 批量封禁</span>, disabled: !effectiveFilters.length, onClick: () => batchAction('/user/ban', '已批量封禁') },
     { key: 'delete', danger: true, label: <span><DeleteOutlined /> 批量删除</span>, disabled: !effectiveFilters.length, onClick: () => batchAction('/user/allDel', '已批量删除') },
   ];
@@ -211,13 +486,13 @@ export default function UserPage() {
               <FilterButton active={effectiveFilters.length > 0} />
             </LegacyFilterDrawer>
             <Dropdown menu={{ items: batchMenu }}><Button>操作</Button></Dropdown>
-            <Button className="ml-2" icon={<UserAddOutlined />} onClick={() => { setEdit({}); form.resetFields(); form.setFieldsValue({ banned: 0, is_admin: 0, is_staff: 0, expired_at: null }); }} />
+            <Button className="ml-2" icon={<UserAddOutlined />} onClick={() => setGenerateOpen(true)} />
           </Space>
         </Tooltip>
       </div>
       <Table className="forest-table" rowKey="id" loading={loading} columns={columns} dataSource={rows} pagination={{ total, current: page.current, pageSize: page.pageSize, size: 'small', showSizeChanger: true, pageSizeOptions: [10, 50, 100, 150] }} scroll={{ x: 1700 }} onChange={(pagination: any, _filters: any, sorter: any) => load({ current: pagination.current, pageSize: pagination.pageSize, sort: sorter.field || page.sort, sort_type: sorter.order === 'ascend' ? 'ASC' : 'DESC' })} />
     </Card>
-    <Modal title="编辑用户" open={!!edit} onCancel={() => setEdit(null)} onOk={save} width={720}>
+    <Modal title="编辑用户" open={!!edit} onCancel={() => { setEdit(null); form.resetFields(); }} onOk={save} width={720} destroyOnHidden>
       <Form form={form} layout="vertical" className="modal-grid-form user-edit-form">
         <Form.Item name="email" label="邮箱"><Input placeholder="请输入邮箱" /></Form.Item>
         <Form.Item name="invite_user_email" label="邀请人邮箱"><Input placeholder="请输入邀请人邮箱" /></Form.Item>
@@ -241,6 +516,9 @@ export default function UserPage() {
         <Form.Item name="remarks" label="备注" className="form-col-full"><Input.TextArea rows={4} placeholder="请在这里记录.." /></Form.Item>
       </Form>
     </Modal>
-    <JsonModal open={!!detail} title="用户详情" data={detail} onClose={() => setDetail(null)} />
+    <UserTrafficModal user={trafficUser} open={!!trafficUser} onClose={() => setTrafficUser(null)} />
+    <UserAssignOrderModal user={assignUser} open={!!assignUser} plans={plans} onClose={() => setAssignUser(null)} onDone={() => load()} />
+    <UserGenerateModal open={generateOpen} plans={plans} onClose={() => setGenerateOpen(false)} onDone={() => load()} />
+    <UserMailModal open={mailOpen} filtered={effectiveFilters.length > 0} onClose={() => setMailOpen(false)} onSubmit={sendMail} />
   </div>;
 }
