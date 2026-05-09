@@ -322,8 +322,10 @@ const bytesFromGBForm = (value: any) => {
 };
 
 const boolToNumber = (value: any) => (value === true || value === 1 || value === '1' ? 1 : 0);
+const isNeverExpire = (value: any) => !Number(value || 0);
 
 export function userToAdminFormValues(data: any = {}) {
+  const expiredAt = Number(data.expired_at || 0);
   return {
     ...data,
     password: '',
@@ -333,7 +335,8 @@ export function userToAdminFormValues(data: any = {}) {
     balance: moneyFromCents(data.balance),
     commission_balance: moneyFromCents(data.commission_balance),
     invite_user_email: data.invite_user_email ?? data.invite_user?.email,
-    expired_at: data.expired_at ? dayjs(Number(data.expired_at) * 1000) : null,
+    never_expire: isNeverExpire(data.expired_at),
+    expired_at: expiredAt > 0 ? dayjs(expiredAt * 1000) : null,
   };
 }
 
@@ -344,7 +347,8 @@ export function userFormValuesToPayload(values: any = {}) {
   payload.d = bytesFromGBForm(values.d);
   payload.balance = centsFromMoney(values.balance);
   payload.commission_balance = centsFromMoney(values.commission_balance);
-  payload.expired_at = values.expired_at ? values.expired_at.unix() : '';
+  payload.expired_at = values.never_expire || !values.expired_at ? 0 : values.expired_at.unix();
+  delete payload.never_expire;
   ['plan_id', 'device_limit', 'commission_rate', 'discount', 'speed_limit'].forEach((key) => { if (payload[key] === undefined || payload[key] === null) payload[key] = ''; });
   if ('is_admin' in payload) payload.is_admin = boolToNumber(payload.is_admin);
   if ('is_staff' in payload) payload.is_staff = boolToNumber(payload.is_staff);
@@ -468,7 +472,7 @@ export default function UserPage() {
     { title: '已用(G)', dataIndex: 'total_used', sorter: true, width: 110, render: (_: any, row: any) => <Tag color={Number(row.total_used || row.u + row.d || 0) > Number(row.transfer_enable || 0) ? 'red' : 'green'}>{bytesToGBText(row.total_used ?? (Number(row.u || 0) + Number(row.d || 0)))}</Tag> },
     { title: '流量(G)', dataIndex: 'transfer_enable', sorter: true, width: 110, render: bytesToGBText },
     { title: '设备数', dataIndex: 'device_limit', sorter: true, width: 110, render: (_: any, row: any) => <Tooltip title={row.ips || ''}>{row.alive_ip ?? 0} / {row.device_limit ?? '∞'}</Tooltip> },
-    { title: '到期时间', dataIndex: 'expired_at', sorter: true, width: 160, render: (ts: any) => <Tag color={ts && Number(ts) < Date.now() / 1000 ? 'red' : 'green'}>{ts === null ? '长期有效' : dateText(ts)}</Tag> },
+    { title: '到期时间', dataIndex: 'expired_at', sorter: true, width: 160, render: (ts: any) => <Tag color={!isNeverExpire(ts) && Number(ts) < Date.now() / 1000 ? 'red' : 'green'}>{isNeverExpire(ts) ? '长期有效' : dateText(ts)}</Tag> },
     { title: '余额', dataIndex: 'balance', sorter: true, width: 90, render: moneyText },
     { title: '佣金', dataIndex: 'commission_balance', sorter: true, width: 90, render: moneyText },
     { title: '加入时间', dataIndex: 'created_at', sorter: true, width: 160, render: dateText },
@@ -504,7 +508,10 @@ export default function UserPage() {
         <Form.Item name="d" label="已用下行"><InputNumber addonAfter="GB" style={{ width: '100%' }} placeholder="已用下行" /></Form.Item>
         <Form.Item name="transfer_enable" label="流量"><InputNumber addonAfter="GB" style={{ width: '100%' }} placeholder="请输入流量" /></Form.Item>
         <Form.Item name="device_limit" label="设备数限制"><InputNumber style={{ width: '100%' }} placeholder="留空则不限制" /></Form.Item>
-        <Form.Item name="expired_at" label="到期时间"><DatePicker showTime style={{ width: '100%' }} placeholder="长期有效" /></Form.Item>
+        <Form.Item name="never_expire" label="长期有效" valuePropName="checked"><Switch checkedChildren="不限时" unCheckedChildren="指定时间" onChange={(checked) => { if (checked) form.setFieldValue('expired_at', null); }} /></Form.Item>
+        <Form.Item noStyle shouldUpdate={(prev, next) => prev.never_expire !== next.never_expire}>
+          {({ getFieldValue }) => <Form.Item name="expired_at" label="到期时间"><DatePicker showTime disabled={!!getFieldValue('never_expire')} style={{ width: '100%' }} placeholder="长期有效" /></Form.Item>}
+        </Form.Item>
         <Form.Item name="plan_id" label="订阅计划"><Select allowClear placeholder="请选择用户订阅计划" options={[{ label: '无', value: null }, ...plans.map((plan) => ({ label: plan.name, value: plan.id }))]} /></Form.Item>
         <Form.Item name="banned" label="账户状态"><Select options={[{ label: '封禁', value: 1 }, { label: '正常', value: 0 }]} /></Form.Item>
         <Form.Item name="commission_type" label="推荐返利类型"><Select options={[{ label: '跟随系统设置', value: 0 }, { label: '循环返利', value: 1 }, { label: '首次返利', value: 2 }]} /></Form.Item>

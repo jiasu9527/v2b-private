@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Badge, Button, DatePicker, Drawer, Form, Input, InputNumber, Modal, Radio, Space, Spin, Table, Tooltip, message } from 'antd';
+import { Badge, Button, DatePicker, Drawer, Form, Input, InputNumber, Modal, Radio, Space, Spin, Switch, Table, Tooltip, message } from 'antd';
 import { SolutionOutlined, UserOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { apiGet, apiPost, bytes, getAdminPath } from '../lib/api';
@@ -25,6 +25,7 @@ function UserManageDrawer({ userId, open, onClose }: { userId?: any; open: boole
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const neverExpire = Form.useWatch('never_expire', form);
 
   const load = async () => {
     if (!open || !userId) return;
@@ -72,7 +73,8 @@ function UserManageDrawer({ userId, open, onClose }: { userId?: any; open: boole
         <Form.Item name="d" label="已用下行"><InputNumber addonAfter="GB" style={{ width: '100%' }} placeholder="已用下行" /></Form.Item>
         <Form.Item name="transfer_enable" label="流量"><InputNumber addonAfter="GB" style={{ width: '100%' }} placeholder="请输入流量" /></Form.Item>
         <Form.Item name="device_limit" label="设备数限制"><InputNumber style={{ width: '100%' }} placeholder="留空则不限制" /></Form.Item>
-        <Form.Item name="expired_at" label="到期时间"><DatePicker showTime style={{ width: '100%' }} placeholder="长期有效" /></Form.Item>
+        <Form.Item name="never_expire" label="长期有效" valuePropName="checked"><Switch checkedChildren="不限时" unCheckedChildren="指定时间" onChange={(checked) => { if (checked) form.setFieldValue('expired_at', null); }} /></Form.Item>
+        <Form.Item name="expired_at" label="到期时间"><DatePicker showTime disabled={!!neverExpire} style={{ width: '100%' }} placeholder="长期有效" /></Form.Item>
         <Form.Item name="speed_limit" label="限速"><InputNumber addonAfter="Mbps" style={{ width: '100%' }} placeholder="留空则不限制" /></Form.Item>
         <Form.Item name="remarks" label="备注"><Input.TextArea rows={4} placeholder="请在这里记录.." /></Form.Item>
       </Form>

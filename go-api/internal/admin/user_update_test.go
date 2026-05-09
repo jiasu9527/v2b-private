@@ -96,6 +96,48 @@ func TestUpdateUserBannedInvalidatesAuthCache(t *testing.T) {
 	}
 }
 
+func TestUpdateUserCanClearExpiredAt(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	svc := &DBService{db: db}
+
+	mock.ExpectQuery(`SELECT email FROM v2_user WHERE id = \$1 LIMIT 1`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"email"}).AddRow("demo@example.com"))
+	mock.ExpectQuery(`SELECT id FROM v2_user WHERE LOWER\(email\) = \$1 LIMIT 1`).
+		WithArgs("demo@example.com").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE v2_user SET .*expired_at = \$[0-9]+.*updated_at = \$[0-9]+ WHERE id = \$1`).
+		WithArgs(int64(9), "demo@example.com", int64(0), int64(0), int64(0), nil, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	ok, err := svc.UpdateUser(context.Background(), UserUpdateRequest{
+		ID: 9,
+		Values: map[string]string{
+			"email":      "demo@example.com",
+			"banned":     "0",
+			"is_admin":   "0",
+			"is_staff":   "0",
+			"expired_at": "",
+		},
+	})
+	if err != nil {
+		t.Fatalf("update user: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected update success")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func TestUpdateUserPersistsSpeedLimit(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
