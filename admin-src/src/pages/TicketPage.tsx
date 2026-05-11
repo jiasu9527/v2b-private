@@ -58,8 +58,9 @@ function UserManageDrawer({ userId, open, onClose }: { userId?: any; open: boole
   };
 
   return <Drawer className="legacy-drawer ticket-user-drawer" title="用户管理" width="80%" open={open} onClose={onClose} destroyOnHidden>
-    <Spin spinning={loading}>
-      <Form form={form} layout="vertical" className="modal-grid-form ticket-user-form">
+    <div className="ticket-user-body">
+      <Spin spinning={loading}>
+        <Form form={form} layout="vertical" className="modal-grid-form ticket-user-form">
         <Form.Item hidden name="banned"><Input type="hidden" /></Form.Item>
         <Form.Item hidden name="is_admin"><Input type="hidden" /></Form.Item>
         <Form.Item hidden name="is_staff"><Input type="hidden" /></Form.Item>
@@ -77,8 +78,9 @@ function UserManageDrawer({ userId, open, onClose }: { userId?: any; open: boole
         <Form.Item name="expired_at" label="到期时间"><DatePicker showTime disabled={!!neverExpire} style={{ width: '100%' }} placeholder="长期有效" /></Form.Item>
         <Form.Item name="speed_limit" label="限速"><InputNumber addonAfter="Mbps" style={{ width: '100%' }} placeholder="留空则不限制" /></Form.Item>
         <Form.Item name="remarks" label="备注"><Input.TextArea rows={4} placeholder="请在这里记录.." /></Form.Item>
-      </Form>
-    </Spin>
+        </Form>
+      </Spin>
+    </div>
     <div className="forest-drawer-action"><Space><Button onClick={onClose}>取消</Button><Button loading={saving} type="primary" onClick={saveUser}>提交</Button></Space></div>
   </Drawer>;
 }
