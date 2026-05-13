@@ -476,8 +476,8 @@ export default function ServerManage() {
       <Table className="forest-table" rowKey={(row) => `${row.type}-${row.id}`} loading={loading} tableLayout="auto" columns={columns} dataSource={filteredRows} pagination={!sortMode && { pageSize: 10, pageSizeOptions: ['10', '50', '100', '500'], showSizeChanger: true }} scroll={{ x: 1300 }} rowClassName={(row) => row.parent_id ? 'child_node' : ''} />
     </Card>
 
-    <Drawer className="legacy-drawer" title={edit?.id ? '编辑节点' : '新建节点'} width="80%" open={!!edit} onClose={() => { setEdit(null); setChildEditor(null); }} maskClosable>
-      <Form form={form} layout="vertical" className="legacy-server-form">
+    <Drawer className="legacy-drawer fixed-action-drawer" title={edit?.id ? '编辑节点' : '新建节点'} width="80%" open={!!edit} onClose={() => { setEdit(null); setChildEditor(null); }} maskClosable>
+      <div className="fixed-action-drawer-body"><Form form={form} layout="vertical" className="legacy-server-form">
         <div className="form-grid">
           <div className="form-col-8"><Form.Item name="name" label="节点名称" rules={[{ required: true }]}><Input placeholder="请输入节点名称" /></Form.Item></div>
           <div className="form-col-4"><Form.Item name="rate" label="倍率" rules={[{ required: true }]}><InputNumber addonAfter="x" style={{ width: '100%' }} placeholder="请输入节点倍率" /></Form.Item></div>
@@ -494,7 +494,7 @@ export default function ServerManage() {
           <div className="form-col-24"><Form.Item name="route_id" label="路由组"><Select mode="multiple" placeholder="请选择路由组" options={routes.map((route) => ({ label: route.remarks || route.name || route.id, value: String(route.id) }))} /></Form.Item></div>
           {currentType === 'v2node' && <div className="form-col-24"><Form.Item name="install_command" label="一键安装指令"><Input.TextArea rows={4} readOnly style={{ backgroundColor: '#f5f5f5', cursor: 'text' }} /></Form.Item></div>}
         </div>
-      </Form>
+      </Form></div>
       <div className="forest-drawer-action"><Space><Button onClick={() => { setEdit(null); setChildEditor(null); }}>取消</Button><Button loading={loading} type="primary" onClick={save}>提交</Button></Space></div>
     </Drawer>
     <Drawer className="legacy-drawer legacy-child-drawer" closable={false} title={childEditor?.title} width="80%" open={!!childEditor} onClose={() => setChildEditor(null)} maskClosable>

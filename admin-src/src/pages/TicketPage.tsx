@@ -57,8 +57,8 @@ function UserManageDrawer({ userId, open, onClose }: { userId?: any; open: boole
     }
   };
 
-  return <Drawer className="legacy-drawer ticket-user-drawer" title="用户管理" width="80%" open={open} onClose={onClose} destroyOnHidden>
-    <div className="ticket-user-body">
+  return <Drawer className="legacy-drawer fixed-action-drawer ticket-user-drawer" title="用户管理" width="80%" open={open} onClose={onClose} destroyOnHidden>
+    <div className="fixed-action-drawer-body ticket-user-body">
       <Spin spinning={loading}>
         <Form form={form} layout="vertical" className="modal-grid-form ticket-user-form">
         <Form.Item hidden name="banned"><Input type="hidden" /></Form.Item>

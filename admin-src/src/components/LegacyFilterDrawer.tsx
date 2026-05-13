@@ -58,30 +58,32 @@ export default function LegacyFilterDrawer({ value, keys, onOk, children }: Prop
 
   return <>
     {trigger}
-    <Drawer title="过滤器" open={open} onClose={hide} className="forest-filter-drawer" footer={null} width={378} destroyOnClose>
-      {filters.map((filter, index) => {
-        const def = keys.find((item) => item.key === filter.key) || keys[0];
-        const conditionOptions = (def?.condition || []).map((condition) => ({ label: condition, value: condition }));
-        return <React.Fragment key={index}>
-          <Divider orientation="left">条件{index + 1} <DeleteOutlined className="forest-filter-delete" onClick={() => remove(index)} /></Divider>
-          <div className="form-group">
-            <label>字段名</label>
-            <Select value={filter.key} style={{ width: '100%' }} options={keys.map((item) => ({ label: item.title, value: item.key }))} onChange={(key) => {
-              const next = keys.find((item) => item.key === key) || keys[0];
-              update(index, { key, condition: next?.condition?.[0] || '=', value: '' });
-            }} />
-          </div>
-          <div className="form-group">
-            <label>条件</label>
-            <Select value={filter.condition} style={{ width: '100%' }} options={conditionOptions} onChange={(condition) => update(index, { condition })} />
-          </div>
-          <div className="form-group">
-            <label>欲检索内容</label>
-            {def?.type === 'select' || def?.options ? <Select value={filter.value === '' ? undefined : filter.value} style={{ width: '100%' }} placeholder="请选择值" options={(def.options || []).map((item) => ({ label: item.label ?? item.key, value: item.value }))} onChange={(nextValue) => update(index, { value: nextValue })} /> : def?.type === 'date' ? <DatePicker showTime style={{ width: '100%' }} value={filter.value ? dayjs(Number(filter.value) * 1000) : null} onChange={(date) => update(index, { value: date ? date.unix() : '' })} /> : <Input value={filter.value} placeholder="值" onChange={(event) => update(index, { value: event.target.value })} onPressEnter={() => submit()} />}
-          </div>
-        </React.Fragment>;
-      })}
-      <Button type="primary" block icon={<PlusOutlined />} onClick={add}>添加条件</Button>
+    <Drawer title="过滤器" open={open} onClose={hide} className="fixed-action-drawer forest-filter-drawer" footer={null} width={378} destroyOnClose>
+      <div className="fixed-action-drawer-body">
+        {filters.map((filter, index) => {
+          const def = keys.find((item) => item.key === filter.key) || keys[0];
+          const conditionOptions = (def?.condition || []).map((condition) => ({ label: condition, value: condition }));
+          return <React.Fragment key={index}>
+            <Divider orientation="left">条件{index + 1} <DeleteOutlined className="forest-filter-delete" onClick={() => remove(index)} /></Divider>
+            <div className="form-group">
+              <label>字段名</label>
+              <Select value={filter.key} style={{ width: '100%' }} options={keys.map((item) => ({ label: item.title, value: item.key }))} onChange={(key) => {
+                const next = keys.find((item) => item.key === key) || keys[0];
+                update(index, { key, condition: next?.condition?.[0] || '=', value: '' });
+              }} />
+            </div>
+            <div className="form-group">
+              <label>条件</label>
+              <Select value={filter.condition} style={{ width: '100%' }} options={conditionOptions} onChange={(condition) => update(index, { condition })} />
+            </div>
+            <div className="form-group">
+              <label>欲检索内容</label>
+              {def?.type === 'select' || def?.options ? <Select value={filter.value === '' ? undefined : filter.value} style={{ width: '100%' }} placeholder="请选择值" options={(def.options || []).map((item) => ({ label: item.label ?? item.key, value: item.value }))} onChange={(nextValue) => update(index, { value: nextValue })} /> : def?.type === 'date' ? <DatePicker showTime style={{ width: '100%' }} value={filter.value ? dayjs(Number(filter.value) * 1000) : null} onChange={(date) => update(index, { value: date ? date.unix() : '' })} /> : <Input value={filter.value} placeholder="值" onChange={(event) => update(index, { value: event.target.value })} onPressEnter={() => submit()} />}
+            </div>
+          </React.Fragment>;
+        })}
+        <Button type="primary" block icon={<PlusOutlined />} onClick={add}>添加条件</Button>
+      </div>
       <div className="forest-drawer-action">
         <Button danger disabled={!filters.length} onClick={reset} style={{ float: 'left' }}>重置</Button>
         <Space>
