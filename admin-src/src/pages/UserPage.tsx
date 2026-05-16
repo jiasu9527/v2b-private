@@ -349,7 +349,9 @@ export function userFormValuesToPayload(values: any = {}) {
   payload.commission_balance = centsFromMoney(values.commission_balance);
   payload.expired_at = values.never_expire || !values.expired_at ? 0 : values.expired_at.unix();
   delete payload.never_expire;
-  ['plan_id', 'device_limit', 'commission_rate', 'discount', 'speed_limit'].forEach((key) => { if (payload[key] === undefined || payload[key] === null) payload[key] = ''; });
+  ['plan_id', 'device_limit', 'commission_rate', 'discount', 'speed_limit'].forEach((key) => {
+    if (key in values && (payload[key] === undefined || payload[key] === null)) payload[key] = '';
+  });
   if ('is_admin' in payload) payload.is_admin = boolToNumber(payload.is_admin);
   if ('is_staff' in payload) payload.is_staff = boolToNumber(payload.is_staff);
   if (payload.invite_user) delete payload.invite_user;
