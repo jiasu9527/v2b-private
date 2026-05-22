@@ -1,12 +1,47 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	cfgpkg "forest/go-api/internal/config"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
+
+func TestSortManagedServersUpdatesMultipleTypes(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE v2_server_vmess SET sort = \$2, updated_at = \$3 WHERE id = \$1`).
+		WithArgs(int64(3), int64(0), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE v2_server_trojan SET sort = \$2, updated_at = \$3 WHERE id = \$1`).
+		WithArgs(int64(5), int64(1), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	service := NewDBService(cfgpkg.Config{}, db)
+	ok, err := service.SortManagedServers(context.Background(), map[string]map[int64]int64{
+		"vmess":  {3: 0},
+		"trojan": {5: 1},
+	})
+	if err != nil {
+		t.Fatalf("sort managed servers: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected ok")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
 
 func TestNormalizeManagedServerObjectFieldsParsesJSONString(t *testing.T) {
 	item := map[string]any{

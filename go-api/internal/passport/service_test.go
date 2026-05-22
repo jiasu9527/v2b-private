@@ -360,6 +360,49 @@ func TestRegisterTreatsStoredEmailAsDuplicateCaseInsensitively(t *testing.T) {
 	}
 }
 
+func TestRegisterRejectsNonSixDigitEmailCode(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := NewDBServiceWithConfig(config.Config{EmailVerify: true}, db)
+	service.ensureOne.Do(func() {})
+
+	_, err = service.Register(context.Background(), RegisterRequest{
+		Email:     "user@example.com",
+		Password:  "password123",
+		EmailCode: "12ab56",
+	})
+	if err == nil || !strings.Contains(err.Error(), "Incorrect email verification code") {
+		t.Fatalf("expected verification code error, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestForgetRejectsNonSixDigitEmailCode(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := NewDBServiceWithConfig(config.Config{}, db)
+	service.ensureOne.Do(func() {})
+
+	err = service.Forget(context.Background(), ForgetRequest{
+		Email:     "user@example.com",
+		Password:  "password123",
+		EmailCode: "12ab56",
+	})
+	if err == nil || !strings.Contains(err.Error(), "Incorrect email verification code") {
+		t.Fatalf("expected verification code error, got %v", err)
+	}
+}
+
 type smtpTestMode string
 
 const (

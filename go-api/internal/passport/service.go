@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	crand "crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"database/sql"
 	"encoding/hex"
@@ -309,14 +310,18 @@ func (s *DBService) Register(ctx context.Context, req RegisterRequest) (AuthData
 	}
 
 	if cfg.EmailVerify {
-		if strings.TrimSpace(req.EmailCode) == "" {
+		emailCode := strings.TrimSpace(req.EmailCode)
+		if emailCode == "" {
 			return AuthData{}, NewHTTPError(http.StatusInternalServerError, "Email verification code cannot be empty")
+		}
+		if !isSixDigitCode(emailCode) {
+			return AuthData{}, NewHTTPError(http.StatusInternalServerError, "Incorrect email verification code")
 		}
 		code, ok, err := s.kvGet(ctx, cacheKey(cacheEmailVerifyCode, email))
 		if err != nil {
 			return AuthData{}, err
 		}
-		if !ok || code != strings.TrimSpace(req.EmailCode) {
+		if !ok || subtle.ConstantTimeCompare([]byte(code), []byte(emailCode)) != 1 {
 			return AuthData{}, NewHTTPError(http.StatusInternalServerError, "Incorrect email verification code")
 		}
 	}
@@ -513,6 +518,9 @@ func (s *DBService) Forget(ctx context.Context, req ForgetRequest) error {
 	if emailCode == "" {
 		return NewHTTPError(http.StatusInternalServerError, "Email verification code cannot be empty")
 	}
+	if !isSixDigitCode(emailCode) {
+		return NewHTTPError(http.StatusInternalServerError, "Incorrect email verification code")
+	}
 
 	forgetLimitKey := cacheKey(cacheForgetRequestLimit, email)
 	forgetLimit, err := s.kvGetInt(ctx, forgetLimitKey)
@@ -527,7 +535,7 @@ func (s *DBService) Forget(ctx context.Context, req ForgetRequest) error {
 	if err != nil {
 		return err
 	}
-	if !ok || code != emailCode {
+	if !ok || subtle.ConstantTimeCompare([]byte(code), []byte(emailCode)) != 1 {
 		_ = s.kvSet(ctx, forgetLimitKey, strconv.FormatInt(forgetLimit+1, 10), 300)
 		return NewHTTPError(http.StatusInternalServerError, "Incorrect email verification code")
 	}
@@ -694,6 +702,18 @@ func (s *DBService) LoginWithMailLink(ctx context.Context, req LoginWithMailLink
 	})
 
 	return link, nil
+}
+
+func isSixDigitCode(code string) bool {
+	if len(code) != 6 {
+		return false
+	}
+	for i := 0; i < len(code); i++ {
+		if code[i] < '0' || code[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *DBService) ensureRuntimeTables(ctx context.Context) error {

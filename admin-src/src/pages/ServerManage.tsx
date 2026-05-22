@@ -28,6 +28,7 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import { apiGet, apiPost, safeJsonParse } from '../lib/api';
+import { moveItem } from '../lib/drag';
 import JsonModal from '../components/JsonModal';
 
 const serverTypes = ['v2node', 'shadowsocks', 'vmess', 'trojan', 'hysteria', 'tuic', 'vless', 'anytls'];
@@ -344,6 +345,7 @@ export default function ServerManage() {
   const [edit, setEdit] = useState<any>(null);
   const [detail, setDetail] = useState<any>(null);
   const [childEditor, setChildEditor] = useState<{ title: string; type: ChildEditorType } | null>(null);
+  const [draggingKey, setDraggingKey] = useState<string | null>(null);
   const [form] = Form.useForm();
   const watchType = Form.useWatch('type', form);
   const watchProtocol = Form.useWatch('protocol', form);
@@ -377,6 +379,8 @@ export default function ServerManage() {
     return rows.filter((row) => JSON.stringify(row).includes(key));
   }, [rows, searchKey]);
 
+  const sortRows = useMemo(() => rows.slice(), [rows]);
+
   const openEditor = (row?: any, type = 'v2node') => {
     const initial = normalizeInitial(row || baseDefaults(type));
     setEdit(initial);
@@ -398,6 +402,50 @@ export default function ServerManage() {
     await apiPost(`/server/${row.type}/update`, { id: row.id, [key]: value });
     message.success('已更新');
     load();
+  };
+
+  const saveSort = async (nextRows: any[]) => {
+    const payload: Record<string, Record<string, number>> = {};
+    nextRows.forEach((row, index) => {
+      if (!payload[row.type]) payload[row.type] = {};
+      payload[row.type][row.id] = index;
+    });
+    await apiPost('/server/manage/sort', payload);
+    message.success('排序已保存');
+    load();
+  };
+
+  const handleDragStart = (row: any) => {
+    setDraggingKey(`${row.type}-${row.id}`);
+  };
+
+  const handleDrop = async (targetRow: any) => {
+    if (!sortMode || !draggingKey) return;
+    const targetKey = `${targetRow.type}-${targetRow.id}`;
+    if (draggingKey === targetKey) {
+      setDraggingKey(null);
+      return;
+    }
+    const currentRows = sortRows.slice();
+    const fromIndex = currentRows.findIndex((row) => `${row.type}-${row.id}` === draggingKey);
+    const toIndex = currentRows.findIndex((row) => `${row.type}-${row.id}` === targetKey);
+    if (fromIndex < 0 || toIndex < 0) {
+      setDraggingKey(null);
+      return;
+    }
+    const nextRows = moveItem(currentRows, fromIndex, toIndex);
+    if (!searchKey.trim()) {
+      setRows(nextRows);
+    } else {
+      setRows((prev) => {
+        const nextKeys = new Set(nextRows.map((row) => `${row.type}-${row.id}`));
+        const nextMap = new Map(nextRows.map((row) => [`${row.type}-${row.id}`, row]));
+        const untouched = prev.filter((row) => !nextKeys.has(`${row.type}-${row.id}`));
+        return [...nextRows.map((row) => nextMap.get(`${row.type}-${row.id}`) || row), ...untouched];
+      });
+    }
+    setDraggingKey(null);
+    await saveSort(nextRows);
   };
 
   const copy = async (row: any) => {
@@ -473,7 +521,24 @@ export default function ServerManage() {
         <Button type="primary" loading={loading} onClick={bulkUpdateHost}>批量修改地址</Button>
         <Button onClick={() => setBulkOpen(false)}>取消</Button>
       </div>}
-      <Table className="forest-table" rowKey={(row) => `${row.type}-${row.id}`} loading={loading} tableLayout="auto" columns={columns} dataSource={filteredRows} pagination={!sortMode && { pageSize: 10, pageSizeOptions: ['10', '50', '100', '500'], showSizeChanger: true }} scroll={{ x: 1300 }} rowClassName={(row) => row.parent_id ? 'child_node' : ''} />
+      <Table
+        className="forest-table"
+        rowKey={(row) => `${row.type}-${row.id}`}
+        loading={loading}
+        tableLayout="auto"
+        columns={columns}
+        dataSource={sortMode ? sortRows : filteredRows}
+        pagination={!sortMode && { pageSize: 10, pageSizeOptions: ['10', '50', '100', '500'], showSizeChanger: true }}
+        scroll={{ x: 1300 }}
+        rowClassName={(row) => `${row.parent_id ? 'child_node' : ''} ${sortMode ? 'sortable-row' : ''} ${draggingKey === `${row.type}-${row.id}` ? 'dragging-row' : ''}`}
+        onRow={(row) => sortMode ? {
+          draggable: true,
+          onDragStart: () => handleDragStart(row),
+          onDragOver: (event) => event.preventDefault(),
+          onDrop: () => handleDrop(row),
+          onDragEnd: () => setDraggingKey(null),
+        } : {}}
+      />
     </Card>
 
     <Drawer className="legacy-drawer fixed-action-drawer" title={edit?.id ? '编辑节点' : '新建节点'} width="80%" open={!!edit} onClose={() => { setEdit(null); setChildEditor(null); }} maskClosable>
