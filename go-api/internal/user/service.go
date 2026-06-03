@@ -779,7 +779,7 @@ func (s *DBService) buildSubscribeURL(ctx context.Context, userID int64, token s
 		if err != nil {
 			return "", err
 		}
-		return appendTokenToURL(baseURL, path, newToken), nil
+		return appendTokenToURL(baseURL, path, newToken, cfg.SubscribeTokenInPath), nil
 	case 2:
 		ttl := cfg.ShowSubscribeExpire
 		if ttl <= 0 {
@@ -795,9 +795,9 @@ func (s *DBService) buildSubscribeURL(ctx context.Context, userID int64, token s
 		_, _ = mac.Write(counterBytes)
 		hashed := hex.EncodeToString(mac.Sum(nil))
 		clientToken := base64URLEncode(fmt.Sprintf("%d:%s", userID, hashed))
-		return appendTokenToURL(baseURL, path, clientToken), nil
+		return appendTokenToURL(baseURL, path, clientToken, cfg.SubscribeTokenInPath), nil
 	default:
-		return appendTokenToURL(baseURL, path, token), nil
+		return appendTokenToURL(baseURL, path, token, cfg.SubscribeTokenInPath), nil
 	}
 }
 
@@ -1045,8 +1045,15 @@ func boolToInt64(value bool) int64 {
 	return 0
 }
 
-func appendTokenToURL(baseURL, path, token string) string {
+func appendTokenToURL(baseURL, path, token string, tokenInPath bool) string {
 	path = normalizeSubscribePath(path)
+	if tokenInPath {
+		path = strings.TrimRight(path, "/") + "/" + url.PathEscape(token)
+		if baseURL == "" {
+			return path
+		}
+		return strings.TrimRight(baseURL, "/") + path
+	}
 	if baseURL == "" {
 		return path + "?token=" + url.QueryEscape(token)
 	}

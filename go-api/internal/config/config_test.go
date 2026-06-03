@@ -247,6 +247,7 @@ func TestLoadAdminJSONSiteFallbacks(t *testing.T) {
 		"app_description":            "Fast and stable",
 		"app_url":                    "https://forest.test",
 		"logo":                       "https://cdn.example.com/logo.png",
+		"subscribe_token_in_path":    1,
 		"show_info_to_server_enable": 1,
 	}, "", "  ")
 	if err != nil {
@@ -284,6 +285,9 @@ func TestLoadAdminJSONSiteFallbacks(t *testing.T) {
 	}
 	if cfg.Logo != "https://cdn.example.com/logo.png" {
 		t.Fatalf("expected logo from admin.json, got %q", cfg.Logo)
+	}
+	if !cfg.SubscribeTokenInPath {
+		t.Fatal("expected subscribe_token_in_path from admin.json")
 	}
 	if !cfg.ShowInfoToServerEnable {
 		t.Fatal("expected show_info_to_server_enable from admin.json")

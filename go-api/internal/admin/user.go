@@ -1407,7 +1407,7 @@ func (s *DBService) buildAdminUserSubscribeURL(ctx context.Context, userID int64
 		if err != nil {
 			return "", err
 		}
-		return appendAdminTokenToURL(baseURL, path, newToken), nil
+		return appendAdminTokenToURL(baseURL, path, newToken, cfg.SubscribeTokenInPath), nil
 	case 2:
 		ttl := cfg.ShowSubscribeExpire
 		if ttl <= 0 {
@@ -1423,9 +1423,9 @@ func (s *DBService) buildAdminUserSubscribeURL(ctx context.Context, userID int64
 		_, _ = mac.Write(counterBytes)
 		hashed := hex.EncodeToString(mac.Sum(nil))
 		clientToken := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("%d:%s", userID, hashed)))
-		return appendAdminTokenToURL(baseURL, path, clientToken), nil
+		return appendAdminTokenToURL(baseURL, path, clientToken, cfg.SubscribeTokenInPath), nil
 	default:
-		return appendAdminTokenToURL(baseURL, path, token), nil
+		return appendAdminTokenToURL(baseURL, path, token, cfg.SubscribeTokenInPath), nil
 	}
 }
 
@@ -1627,9 +1627,19 @@ func randomUUIDString() (string, error) {
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16]), nil
 }
 
-func appendAdminTokenToURL(baseURL, path, token string) string {
+func appendAdminTokenToURL(baseURL, path, token string, tokenInPath bool) string {
 	if strings.TrimSpace(path) == "" {
 		path = "/api/v1/client/subscribe"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	if tokenInPath {
+		path = strings.TrimRight(path, "/") + "/" + url.PathEscape(token)
+		if baseURL == "" {
+			return path
+		}
+		return strings.TrimRight(baseURL, "/") + path
 	}
 	if baseURL == "" {
 		return path + "?token=" + url.QueryEscape(token)

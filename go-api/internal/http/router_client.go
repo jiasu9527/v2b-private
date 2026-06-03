@@ -73,6 +73,7 @@ func handleClientAppGetConfig(w http.ResponseWriter, r *http.Request, cfg config
 }
 
 func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Config, service usersvc.Service) bool {
+	r = withClientSubscribePathToken(cfg, r)
 	userID, ok := authenticateClientUser(w, r, service)
 	if !ok {
 		return true
@@ -148,6 +149,20 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 
 	writePlainText(w, http.StatusOK, buildGeneralSubscribePayload(subscribe.UUID, servers))
 	return true
+}
+
+func withClientSubscribePathToken(cfg config.Config, r *http.Request) *http.Request {
+	token, ok := clientSubscribePathToken(cfg, r.URL.Path)
+	if !ok || strings.TrimSpace(token) == "" || strings.TrimSpace(r.URL.Query().Get("token")) != "" {
+		return r
+	}
+	next := r.Clone(r.Context())
+	urlCopy := *r.URL
+	query := urlCopy.Query()
+	query.Set("token", token)
+	urlCopy.RawQuery = query.Encode()
+	next.URL = &urlCopy
+	return next
 }
 
 func handleServerV2Config(w http.ResponseWriter, r *http.Request, cfg config.Config, service nodeapi.Service) bool {

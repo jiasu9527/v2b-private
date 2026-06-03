@@ -41,3 +41,23 @@ func TestBuildSubscribeURLSupportsMultipleBaseURLs(t *testing.T) {
 		t.Fatalf("unexpected subscribe url %q", got)
 	}
 }
+
+func TestBuildSubscribeURLCanPutTokenInPath(t *testing.T) {
+	service := NewDBService(config.Config{
+		AppURL:               "https://panel.example.com",
+		SubscribePath:        "/forest-sub",
+		SubscribeTokenInPath: true,
+	}, nil)
+
+	got, err := service.buildSubscribeURL(context.Background(), 1, "token-1")
+	if err != nil {
+		t.Fatalf("build subscribe url: %v", err)
+	}
+	want := "https://panel.example.com/forest-sub/token-1"
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+	if strings.Contains(got, "?token=") {
+		t.Fatalf("expected subscribe url to omit token query, got %q", got)
+	}
+}

@@ -47,6 +47,7 @@ type Config struct {
 	FailedJobsKeepDays           int64
 	SubscribeURL                 string
 	SubscribePath                string
+	SubscribeTokenInPath         bool
 	ShowInfoToServerEnable       bool
 	AllowNewPeriod               bool
 	ShowSubscribeMethod          int64
@@ -178,6 +179,7 @@ func Load() Config {
 		FailedJobsKeepDays:           managedInt64("FAILED_JOBS_KEEP_DAYS", "failed_jobs_keep_days", 0),
 		SubscribeURL:                 managedString("SUBSCRIBE_URL", "subscribe_url", ""),
 		SubscribePath:                managedString("SUBSCRIBE_PATH", "subscribe_path", "/api/v1/client/subscribe"),
+		SubscribeTokenInPath:         managedBool("SUBSCRIBE_TOKEN_IN_PATH", "subscribe_token_in_path", false),
 		ShowInfoToServerEnable:       managedBool("SHOW_INFO_TO_SERVER_ENABLE", "show_info_to_server_enable", false),
 		AllowNewPeriod:               managedBool("ALLOW_NEW_PERIOD", "allow_new_period", false),
 		ShowSubscribeMethod:          managedInt64("SHOW_SUBSCRIBE_METHOD", "show_subscribe_method", 0),

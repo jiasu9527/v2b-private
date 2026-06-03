@@ -925,12 +925,37 @@ func clientSubscribePath(cfg config.Config) string {
 }
 
 func isClientSubscribePath(cfg config.Config, path string) bool {
+	_, ok := clientSubscribePathToken(cfg, path)
+	return ok
+}
+
+func clientSubscribePathToken(cfg config.Config, path string) (string, bool) {
 	defaultPath := "/api/v1/client/subscribe"
 	customPath := clientSubscribePath(cfg)
-	if path == customPath {
-		return true
+	paths := []string{customPath}
+	if customPath != defaultPath {
+		paths = append(paths, defaultPath)
 	}
-	return customPath != defaultPath && path == defaultPath
+	for _, candidate := range paths {
+		candidate = strings.TrimRight(candidate, "/")
+		if path == candidate {
+			return "", true
+		}
+		prefix := candidate + "/"
+		if !strings.HasPrefix(path, prefix) {
+			continue
+		}
+		rawToken := strings.TrimPrefix(path, prefix)
+		if rawToken == "" || strings.Contains(rawToken, "/") {
+			return "", false
+		}
+		token, err := url.PathUnescape(rawToken)
+		if err != nil {
+			return "", false
+		}
+		return token, true
+	}
+	return "", false
 }
 
 func handleGuestConfig(w http.ResponseWriter, r *http.Request, service guest.Service) bool {
