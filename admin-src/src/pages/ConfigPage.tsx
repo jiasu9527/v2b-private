@@ -25,6 +25,7 @@ type ConfigMeta = {
   addonAfter?: string;
   options?: { label: string; value: any }[];
   input?: 'tryOutPlan';
+  switch?: boolean;
 };
 
 const fieldOrders: Record<string, string[]> = {
@@ -123,7 +124,7 @@ const configLabels: Record<string, ConfigMeta> = {
   logo: { title: 'LOGO', description: '用于显示需要LOGO的地方。' },
   subscribe_url: { title: '订阅URL', description: '用于订阅所使用，留空则为站点URL。如需多个订阅URL随机获取请使用逗号进行分割。', textarea: true },
   subscribe_path: { title: '订阅路径', description: '用于订阅所使用，留空则为/api/v1/client/subscribe。' },
-  subscribe_token_in_path: { title: '订阅Token路径模式', description: '开启后订阅链接使用/订阅路径/token，关闭则保持?token=token。' },
+  subscribe_token_in_path: { title: '订阅Token路径模式', description: '开启后订阅链接使用/订阅路径/token，关闭则保持?token=token。', switch: true },
   tos_url: { title: '用户条款(TOS)URL', description: '用于跳转到用户条款(TOS)。' },
   stop_register: { title: '停止新用户注册', description: '开启后任何人都将无法进行注册。' },
   try_out_plan_id: { title: '注册试用', description: '选择需要试用的订阅，如果没有选项请先前往订阅管理添加。', input: 'tryOutPlan' },
@@ -276,6 +277,7 @@ function isBooleanLike(value: any) {
 }
 
 function isSwitchField(fieldKey: string, value: any) {
+  if (configLabels[fieldKey]?.switch) return true;
   if (!isBooleanLike(value)) return false;
   if (configLabels[fieldKey]?.options || configLabels[fieldKey]?.input) return false;
   return /enable|status|force|verify|https|mode|register|expire|close/.test(String(fieldKey));
