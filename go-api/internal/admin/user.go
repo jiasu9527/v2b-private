@@ -1628,11 +1628,18 @@ func randomUUIDString() (string, error) {
 }
 
 func appendAdminTokenToURL(baseURL, path, token string, tokenInPath bool) string {
-	if strings.TrimSpace(path) == "" {
+	path = strings.TrimSpace(path)
+	if path == "" {
 		path = "/api/v1/client/subscribe"
 	}
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
+	}
+	if len(path) > 1 {
+		path = strings.TrimRight(path, "/")
+	}
+	if path == "" {
+		path = "/api/v1/client/subscribe"
 	}
 	if tokenInPath {
 		path = strings.TrimRight(path, "/") + "/" + url.PathEscape(token)

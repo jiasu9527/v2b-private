@@ -914,12 +914,22 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 }
 
 func clientSubscribePath(cfg config.Config) string {
-	path := strings.TrimSpace(cfg.SubscribePath)
+	return normalizeClientSubscribePath(cfg.SubscribePath)
+}
+
+func normalizeClientSubscribePath(path string) string {
+	path = strings.TrimSpace(path)
 	if path == "" {
 		return "/api/v1/client/subscribe"
 	}
 	if !strings.HasPrefix(path, "/") {
-		return "/" + path
+		path = "/" + path
+	}
+	if len(path) > 1 {
+		path = strings.TrimRight(path, "/")
+	}
+	if path == "" {
+		return "/api/v1/client/subscribe"
 	}
 	return path
 }
@@ -937,8 +947,8 @@ func clientSubscribePathToken(cfg config.Config, path string) (string, bool) {
 		paths = append(paths, defaultPath)
 	}
 	for _, candidate := range paths {
-		candidate = strings.TrimRight(candidate, "/")
-		if path == candidate {
+		candidate = normalizeClientSubscribePath(candidate)
+		if path == candidate || path == candidate+"/" {
 			return "", true
 		}
 		prefix := candidate + "/"

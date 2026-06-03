@@ -42,6 +42,22 @@ func TestBuildSubscribeURLSupportsMultipleBaseURLs(t *testing.T) {
 	}
 }
 
+func TestBuildSubscribeURLTrimsTrailingSlashForQueryToken(t *testing.T) {
+	service := NewDBService(config.Config{
+		AppURL:        "https://panel.example.com",
+		SubscribePath: "/forest-sub/",
+	}, nil)
+
+	got, err := service.buildSubscribeURL(context.Background(), 1, "token-1")
+	if err != nil {
+		t.Fatalf("build subscribe url: %v", err)
+	}
+	want := "https://panel.example.com/forest-sub?token=token-1"
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
 func TestBuildSubscribeURLCanPutTokenInPath(t *testing.T) {
 	service := NewDBService(config.Config{
 		AppURL:               "https://panel.example.com",

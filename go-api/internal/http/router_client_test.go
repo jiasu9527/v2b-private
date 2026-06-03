@@ -1135,6 +1135,28 @@ func TestRouterClientSubscribeCustomPathEndpoint(t *testing.T) {
 	}
 }
 
+func TestRouterClientSubscribeCustomPathEndpointAllowsTrailingSlash(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		subscribe: user.Subscribe{
+			UUID: "user-uuid",
+		},
+		servers: []map[string]any{},
+	}
+	router := NewRouter(config.Config{SubscribePath: "/forest-sub/"}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/forest-sub/?token=token-1", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected trailing slash custom subscribe path to work, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if userService.lastClientToken != "token-1" {
+		t.Fatalf("expected query token to be preserved, got %q", userService.lastClientToken)
+	}
+}
+
 func TestRouterClientSubscribeCustomPathTokenSegment(t *testing.T) {
 	userService := &fakeUserService{
 		resolvedClientUserID: 10,

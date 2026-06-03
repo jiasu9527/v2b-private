@@ -1066,7 +1066,13 @@ func normalizeSubscribePath(path string) string {
 		return "/api/v1/client/subscribe"
 	}
 	if !strings.HasPrefix(path, "/") {
-		return "/" + path
+		path = "/" + path
+	}
+	if len(path) > 1 {
+		path = strings.TrimRight(path, "/")
+	}
+	if path == "" {
+		return "/api/v1/client/subscribe"
 	}
 	return path
 }

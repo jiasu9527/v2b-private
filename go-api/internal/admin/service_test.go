@@ -191,6 +191,22 @@ func TestBuildAdminUserSubscribeURLUsesRuntimeConfig(t *testing.T) {
 	}
 }
 
+func TestBuildAdminUserSubscribeURLTrimsTrailingSlashForQueryToken(t *testing.T) {
+	service := &DBService{cfg: cfgpkg.Config{
+		SubscribeURL:  "https://sub.example.com",
+		SubscribePath: "/custom-sub/",
+	}}
+
+	got, err := service.buildAdminUserSubscribeURL(context.Background(), 1, "token-1")
+	if err != nil {
+		t.Fatalf("build admin subscribe url: %v", err)
+	}
+	want := "https://sub.example.com/custom-sub?token=token-1"
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
 func TestBuildAdminUserSubscribeURLCanPutTokenInPath(t *testing.T) {
 	service := &DBService{cfg: cfgpkg.Config{
 		SubscribeURL:         "https://sub.example.com",
