@@ -136,6 +136,18 @@ func (s *DBService) FetchConfig(_ context.Context, key string) (map[string]any, 
 			"server_node_report_min_traffic":   cfg.int64Value("server_node_report_min_traffic", 0),
 			"server_device_online_min_traffic": cfg.int64Value("server_device_online_min_traffic", 0),
 			"device_limit_mode":                cfg.int64Value("device_limit_mode", 0),
+			"server_cf_api_token":              cfg.nullableStringValue("server_cf_api_token"),
+			"server_cf_zone_id":                cfg.nullableStringValue("server_cf_zone_id"),
+			"server_cf_record_type":            cfg.stringValue("server_cf_record_type", "A"),
+			"server_cf_ttl":                    cfg.int64Value("server_cf_ttl", 1),
+			"server_cf_proxied":                cfg.int64Value("server_cf_proxied", 0),
+			"server_ddns_interval":             cfg.int64Value("server_ddns_interval", 1),
+			"server_block_check_url":           cfg.stringValue("server_block_check_url", "https://www.baidu.com/"),
+			"server_block_check_keyword":       cfg.nullableStringValue("server_block_check_keyword"),
+			"server_block_check_timeout":       cfg.int64Value("server_block_check_timeout", 10),
+			"server_block_check_threshold":     cfg.int64Value("server_block_check_threshold", 3),
+			"server_change_ip_wait":            cfg.int64Value("server_change_ip_wait", 60),
+			"server_change_ip_cooldown":        cfg.int64Value("server_change_ip_cooldown", 1800),
 		},
 		"email": map[string]any{
 			"email_template":      cfg.stringValue("email_template", "default"),
@@ -589,6 +601,15 @@ func validateConfigValue(key string, value phpConfigValue) error {
 	case "server_token":
 		if raw := strings.TrimSpace(valueToString(value)); raw != "" && len(raw) < 16 {
 			return errors.New("通讯密钥长度必须大于16位")
+		}
+	case "server_cf_record_type":
+		raw := strings.ToUpper(strings.TrimSpace(valueToString(value)))
+		if raw != "" && raw != "A" && raw != "AAAA" {
+			return errors.New("Cloudflare记录类型只支持A或AAAA")
+		}
+	case "server_block_check_url":
+		if err := validateOptionalURL(value, "墙检测URL格式不正确，必须携带http(s)://"); err != nil {
+			return err
 		}
 	case "secure_path":
 		raw := strings.TrimSpace(valueToString(value))

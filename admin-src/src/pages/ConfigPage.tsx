@@ -60,7 +60,10 @@ const fieldOrders: Record<string, string[]> = {
   frontend: ['frontend_theme_sidebar', 'frontend_theme_header', 'frontend_theme_color', 'frontend_background_url'],
   server: [
     'server_api_url', 'server_token', 'server_pull_interval', 'server_push_interval',
-    'server_node_report_min_traffic', 'server_device_online_min_traffic', 'device_limit_mode'
+    'server_node_report_min_traffic', 'server_device_online_min_traffic', 'device_limit_mode',
+    'server_cf_api_token', 'server_cf_zone_id', 'server_cf_record_type', 'server_cf_ttl', 'server_cf_proxied',
+    'server_ddns_interval', 'server_block_check_url', 'server_block_check_keyword',
+    'server_block_check_timeout', 'server_block_check_threshold', 'server_change_ip_wait', 'server_change_ip_cooldown'
   ],
   email: [
     'email_host', 'email_port', 'email_encryption', 'email_username', 'email_password',
@@ -203,6 +206,18 @@ const configLabels: Record<string, ConfigMeta> = {
 
   server_api_url: { title: '节点对接API地址', description: 'v2node节点一键对接专用地址。' },
   server_token: { title: '通讯密钥', description: 'Forest与节点通讯的密钥，以便数据不会被他人获取。', password: true },
+  server_cf_api_token: { title: 'Cloudflare API Token', description: 'v2node DDNS/墙检测自动换IP使用，建议使用仅DNS编辑权限Token。', password: true },
+  server_cf_zone_id: { title: 'Cloudflare Zone ID', description: 'Cloudflare 域名 Zone ID。', password: true },
+  server_cf_record_type: { title: 'Cloudflare记录类型', description: '默认记录类型。', options: [{ label: 'A', value: 'A' }, { label: 'AAAA', value: 'AAAA' }] },
+  server_cf_ttl: { title: 'Cloudflare TTL', description: '1表示自动。' },
+  server_cf_proxied: { title: 'Cloudflare橙云', description: '默认是否开启Cloudflare代理。', switch: true },
+  server_ddns_interval: { title: 'DDNS检测间隔(分钟)', description: 'v2node DDNS/墙检测定时任务间隔。', addonAfter: '分钟' },
+  server_block_check_url: { title: '默认墙检测URL', description: '留空由v2node脚本使用默认值。' },
+  server_block_check_keyword: { title: '默认被墙关键词', description: '返回内容包含该关键词时判定异常；留空则curl失败才算异常。' },
+  server_block_check_timeout: { title: '墙检测超时(秒)', addonAfter: '秒' },
+  server_block_check_threshold: { title: '墙检测失败阈值', description: '连续失败达到该次数后触发换IP。' },
+  server_change_ip_wait: { title: '换IP后等待(秒)', addonAfter: '秒' },
+  server_change_ip_cooldown: { title: '换IP冷却(秒)', addonAfter: '秒' },
   server_pull_interval: { title: '节点拉取动作轮询间隔', description: '节点从面板获取数据的间隔频率。', addonAfter: '秒' },
   server_push_interval: { title: '节点推送动作轮询间隔', description: '节点推送数据到面板的间隔频率。', addonAfter: '秒' },
   server_node_report_min_traffic: { title: '节点用户流量上报最低阈值', description: '每次推送动作仅累计使用流量高于阈值的用户信息会被上报。', addonAfter: 'Kb' },

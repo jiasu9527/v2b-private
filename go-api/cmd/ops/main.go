@@ -277,6 +277,15 @@ func applyUpdateCompatFixes(ctx context.Context, db *sql.DB) error {
 	); err != nil {
 		return err
 	}
+	if err := bestEffortEnsureUpdateColumn(
+		ctx,
+		db,
+		"v2_server_v2node",
+		"ddns_settings",
+		`ALTER TABLE v2_server_v2node ADD COLUMN ddns_settings text DEFAULT NULL`,
+	); err != nil {
+		return err
+	}
 
 	repairs := []struct {
 		table  string

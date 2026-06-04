@@ -96,7 +96,7 @@ var managedServerDefinitions = map[string]managedServerDefinition{
 			"tls_settings", "flow", "network", "network_settings", "encryption",
 			"encryption_settings", "disable_sni", "udp_relay_mode", "zero_rtt_handshake",
 			"congestion_control", "cipher", "up_mbps", "down_mbps", "obfs", "obfs_password",
-			"padding_scheme", "created_at", "updated_at",
+			"padding_scheme", "ddns_settings", "created_at", "updated_at",
 		},
 	},
 }
@@ -894,6 +894,14 @@ func normalizeV2nodeServer(values, payload map[string]any, seed string, hasID bo
 		return errors.New("保存失败")
 	} else if present {
 		values["padding_scheme"] = paddingScheme
+	}
+
+	ddnsSettings, err := mapField(payload, "ddns_settings")
+	if err != nil {
+		return errors.New("DDNS配置有误")
+	}
+	if ddnsSettings != nil || hasPayloadKey(payload, "ddns_settings") {
+		values["ddns_settings"] = marshalJSONOrNil(ddnsSettings)
 	}
 
 	values["protocol"] = protocol

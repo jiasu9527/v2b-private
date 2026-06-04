@@ -185,6 +185,7 @@ ORDER BY sort ASC NULLS LAST, id ASC`)
 
 func (s *DBService) normalizeServerFetchRow(ctx context.Context, table serverFetchTable, row map[string]any, byID map[int64]map[string]any) (map[string]any, error) {
 	item := copyStringAnyMap(row)
+	delete(item, "ddns_settings")
 	item["type"] = table.serverType
 	item["group_id"] = parseIDString(fmt.Sprint(item["group_id"]))
 	item["route_id"] = parseIDString(fmt.Sprint(item["route_id"]))

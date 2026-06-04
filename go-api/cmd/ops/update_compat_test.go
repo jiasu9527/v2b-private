@@ -26,6 +26,11 @@ func TestApplyUpdateCompatFixesIgnoresOwnerOnlyIndexErrors(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectExec(`ALTER TABLE v2_server_v2node ADD COLUMN send_through varchar\(255\) DEFAULT NULL`).
 		WillReturnError(errors.New("ERROR: must be owner of table v2_server_v2node (SQLSTATE 42501)"))
+	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+		WithArgs("v2_server_v2node", "ddns_settings").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectExec(`ALTER TABLE v2_server_v2node ADD COLUMN ddns_settings text DEFAULT NULL`).
+		WillReturnError(errors.New("ERROR: must be owner of table v2_server_v2node (SQLSTATE 42501)"))
 
 	for _, item := range []struct {
 		table  string
@@ -65,6 +70,9 @@ func TestApplyUpdateCompatFixesTrimsExistingInviteColumns(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
 		WithArgs("v2_server_v2node", "send_through").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+		WithArgs("v2_server_v2node", "ddns_settings").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 
 	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
@@ -117,6 +125,11 @@ func TestApplyUpdateCompatFixesAddsV2nodeSendThroughColumnWhenMissing(t *testing
 		WithArgs("v2_server_v2node", "send_through").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectExec(`ALTER TABLE v2_server_v2node ADD COLUMN send_through varchar\(255\) DEFAULT NULL`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+		WithArgs("v2_server_v2node", "ddns_settings").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectExec(`ALTER TABLE v2_server_v2node ADD COLUMN ddns_settings text DEFAULT NULL`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	for _, item := range []struct {

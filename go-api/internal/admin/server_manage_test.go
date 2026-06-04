@@ -143,6 +143,68 @@ func TestV2nodeInstallCommandSupportsConfiguredScriptURL(t *testing.T) {
 	}
 }
 
+func TestV2nodeInstallCommandIncludesDDNSArgs(t *testing.T) {
+	root := t.TempDir()
+	writeAdminJSONFixture(t, root, map[string]any{
+		"server_api_url":               "https://api.example.com",
+		"server_token":                 "forest-secret-token",
+		"server_cf_api_token":          "cf-token",
+		"server_cf_zone_id":            "zone-id",
+		"server_cf_record_type":        "A",
+		"server_cf_ttl":                1,
+		"server_cf_proxied":            0,
+		"server_ddns_interval":         1,
+		"server_block_check_url":       "https://www.baidu.com/",
+		"server_block_check_threshold": 3,
+		"server_change_ip_wait":        60,
+		"server_change_ip_cooldown":    1800,
+	})
+
+	oldRoot := adminProjectRoot
+	adminProjectRoot = root
+	defer func() { adminProjectRoot = oldRoot }()
+
+	service := &DBService{cfg: cfgpkg.Config{AppURL: "https://panel.example.com"}}
+	command := service.v2nodeInstallCommand(map[string]any{
+		"id":   int64(25),
+		"host": "hk.example.com",
+		"ddns_settings": map[string]any{
+			"enabled":             true,
+			"change_ip_curl":      "curl -fsS 'https://provider.example/change?node=hk'",
+			"block_check_url":     "https://www.baidu.com/",
+			"block_check_keyword": "百度",
+		},
+	})
+
+	for _, want := range []string{
+		"--enable-ddns",
+		"--cf-token cf-token",
+		"--cf-zone-id zone-id",
+		"--cf-record hk.example.com",
+		"--ddns-interval 1",
+		"--block-check-url https://www.baidu.com/",
+		"--block-check-keyword '百度'",
+		"--change-ip-curl",
+		"https://provider.example/change?node=hk",
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("expected command to contain %q, got %q", want, command)
+		}
+	}
+}
+
+func TestV2nodeInstallCommandSkipsDDNSWhenDisabled(t *testing.T) {
+	service := &DBService{cfg: cfgpkg.Config{AppURL: "https://panel.example.com"}}
+	command := service.v2nodeInstallCommand(map[string]any{
+		"id":            int64(25),
+		"host":          "hk.example.com",
+		"ddns_settings": map[string]any{"enabled": false},
+	})
+	if strings.Contains(command, "--enable-ddns") {
+		t.Fatalf("expected disabled DDNS to omit args, got %q", command)
+	}
+}
+
 func TestNormalizeManagedServerSavePayloadV2nodeKeepsSendThrough(t *testing.T) {
 	payload := map[string]any{
 		"group_id":           []any{float64(1)},

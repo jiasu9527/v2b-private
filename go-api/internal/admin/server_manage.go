@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -207,6 +208,7 @@ func normalizeManagedServerObjectFields(item map[string]any) {
 		"network_settings",
 		"tls_settings",
 		"encryption_settings",
+		"ddns_settings",
 		"networkSettings",
 		"tlsSettings",
 		"ruleSettings",
@@ -274,6 +276,7 @@ func (s *DBService) v2nodeInstallCommand(item map[string]any) string {
 	apiKey := ""
 	scriptURL := ""
 	commandTemplate := ""
+	defaults := v2nodeDDNSDefaults{}
 	if err == nil {
 		if value, ok := cfg.nullableStringValue("server_api_url").(string); ok {
 			apiHost = strings.TrimSpace(value)
@@ -287,32 +290,192 @@ func (s *DBService) v2nodeInstallCommand(item map[string]any) string {
 		if value, ok := cfg.nullableStringValue("server_node_install_command_template").(string); ok {
 			commandTemplate = strings.TrimSpace(value)
 		}
+		defaults = v2nodeDDNSDefaultsFromConfig(cfg)
 	}
 
 	nodeID := managedServerIDValue(item["id"])
-	return renderNodeInstallCommand(commandTemplate, scriptURL, apiHost, nodeID, apiKey)
+	ddnsArgs := renderV2nodeDDNSArgs(item, defaults)
+	return renderNodeInstallCommand(commandTemplate, scriptURL, apiHost, nodeID, apiKey, ddnsArgs)
 }
 
-func renderNodeInstallCommand(commandTemplate, scriptURL, apiHost string, nodeID int64, apiKey string) string {
+type v2nodeDDNSDefaults struct {
+	CFToken        string
+	CFZoneID       string
+	RecordType     string
+	TTL            string
+	Proxied        string
+	Interval       string
+	BlockURL       string
+	BlockKeyword   string
+	BlockTimeout   string
+	BlockThreshold string
+	ChangeWait     string
+	ChangeCooldown string
+}
+
+func v2nodeDDNSDefaultsFromConfig(cfg *phpConfigFile) v2nodeDDNSDefaults {
+	return v2nodeDDNSDefaults{
+		CFToken:        cfg.stringValue("server_cf_api_token", ""),
+		CFZoneID:       cfg.stringValue("server_cf_zone_id", ""),
+		RecordType:     cfg.stringValue("server_cf_record_type", "A"),
+		TTL:            strconv.FormatInt(cfg.int64Value("server_cf_ttl", 1), 10),
+		Proxied:        strconv.FormatInt(cfg.int64Value("server_cf_proxied", 0), 10),
+		Interval:       strconv.FormatInt(cfg.int64Value("server_ddns_interval", 1), 10),
+		BlockURL:       cfg.stringValue("server_block_check_url", "https://www.baidu.com/"),
+		BlockKeyword:   cfg.stringValue("server_block_check_keyword", ""),
+		BlockTimeout:   strconv.FormatInt(cfg.int64Value("server_block_check_timeout", 10), 10),
+		BlockThreshold: strconv.FormatInt(cfg.int64Value("server_block_check_threshold", 3), 10),
+		ChangeWait:     strconv.FormatInt(cfg.int64Value("server_change_ip_wait", 60), 10),
+		ChangeCooldown: strconv.FormatInt(cfg.int64Value("server_change_ip_cooldown", 1800), 10),
+	}
+}
+
+func renderV2nodeDDNSArgs(item map[string]any, defaults v2nodeDDNSDefaults) string {
+	settings := v2nodeDDNSSettings(item["ddns_settings"])
+	if !truthySetting(settings["enabled"]) {
+		return ""
+	}
+
+	cfToken := settingString(settings, "cf_token", defaults.CFToken)
+	cfZoneID := settingString(settings, "cf_zone_id", defaults.CFZoneID)
+	record := settingString(settings, "cf_record", strings.TrimSpace(fmt.Sprint(item["host"])))
+	if cfToken == "" || cfZoneID == "" || record == "" {
+		return ""
+	}
+
+	args := []string{
+		"--enable-ddns",
+		"--cf-token", cfToken,
+		"--cf-zone-id", cfZoneID,
+		"--cf-record", record,
+		"--cf-record-type", strings.ToUpper(settingString(settings, "cf_record_type", defaults.RecordType)),
+		"--cf-ttl", settingString(settings, "cf_ttl", defaults.TTL),
+		"--cf-proxied", normalizeInstallBool(settingString(settings, "cf_proxied", defaults.Proxied)),
+		"--ddns-interval", settingString(settings, "ddns_interval", defaults.Interval),
+	}
+
+	if value := settingString(settings, "block_check_url", defaults.BlockURL); value != "" {
+		args = append(args, "--block-check-url", value)
+	}
+	if value := settingString(settings, "block_check_keyword", defaults.BlockKeyword); value != "" {
+		args = append(args, "--block-check-keyword", value)
+	}
+	if value := settingString(settings, "block_check_timeout", defaults.BlockTimeout); value != "" {
+		args = append(args, "--block-check-timeout", value)
+	}
+	if value := settingString(settings, "block_check_threshold", defaults.BlockThreshold); value != "" {
+		args = append(args, "--block-check-threshold", value)
+	}
+	if value := settingString(settings, "change_ip_curl", ""); value != "" {
+		args = append(args, "--change-ip-curl", value)
+	}
+	if value := settingString(settings, "change_ip_wait", defaults.ChangeWait); value != "" {
+		args = append(args, "--change-ip-wait", value)
+	}
+	if value := settingString(settings, "change_ip_cooldown", defaults.ChangeCooldown); value != "" {
+		args = append(args, "--change-ip-cooldown", value)
+	}
+
+	parts := make([]string, 0, len(args))
+	for _, arg := range args {
+		parts = append(parts, shellQuote(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func v2nodeDDNSSettings(value any) map[string]any {
+	switch typed := value.(type) {
+	case nil:
+		return map[string]any{}
+	case map[string]any:
+		return cloneMap(typed)
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" || strings.EqualFold(trimmed, "null") {
+			return map[string]any{}
+		}
+		var next map[string]any
+		if err := json.Unmarshal([]byte(trimmed), &next); err == nil {
+			return next
+		}
+	}
+	return map[string]any{}
+}
+
+func settingString(settings map[string]any, key, fallback string) string {
+	if value, ok := settings[key]; ok {
+		trimmed := strings.TrimSpace(fmt.Sprint(value))
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func truthySetting(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case int:
+		return typed != 0
+	case int64:
+		return typed != 0
+	case float64:
+		return typed != 0
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "1", "true", "yes", "y", "on", "启用", "开启":
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeInstallBool(value string) string {
+	if truthySetting(value) {
+		return "true"
+	}
+	return "false"
+}
+
+func renderNodeInstallCommand(commandTemplate, scriptURL, apiHost string, nodeID int64, apiKey, extraArgs string) string {
 	if commandTemplate != "" {
 		replacer := strings.NewReplacer(
 			"{{script_url}}", scriptURL,
 			"{{api_host}}", apiHost,
 			"{{node_id}}", strconv.FormatInt(nodeID, 10),
 			"{{api_key}}", apiKey,
+			"{{ddns_args}}", extraArgs,
 		)
-		return replacer.Replace(commandTemplate)
+		return strings.TrimSpace(replacer.Replace(commandTemplate))
 	}
 
 	if scriptURL == "" {
 		scriptURL = "https://raw.githubusercontent.com/jiasu9527/v2node/main/script/install.sh"
 	}
 
-	return fmt.Sprintf(
+	command := fmt.Sprintf(
 		"wget -N %s && bash install.sh --api-host %s --node-id %d --api-key %s",
-		scriptURL,
-		apiHost,
+		shellQuote(scriptURL),
+		shellQuote(apiHost),
 		nodeID,
-		apiKey,
+		shellQuote(apiKey),
 	)
+	if strings.TrimSpace(extraArgs) != "" {
+		command += " " + strings.TrimSpace(extraArgs)
+	}
+	return command
+}
+
+var shellSafeArgPattern = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
+
+func shellQuote(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "''"
+	}
+	if shellSafeArgPattern.MatchString(value) {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }

@@ -93,6 +93,7 @@ function normalizeInitial(row: any) {
     tls_settings: formatTextJSON(row?.tls_settings ?? row?.tlsSettings),
     encryption_settings: formatTextJSON(row?.encryption_settings),
     padding_scheme: formatTextJSON(row?.padding_scheme),
+    ddns_settings: formatTextJSON(row?.ddns_settings),
   };
 }
 
@@ -112,7 +113,7 @@ function normalizePayload(values: any, edit: any) {
   payload.group_id = listValue(payload.group_id);
   payload.route_id = listValue(payload.route_id);
   payload.tags = listValue(payload.tags);
-  ['network_settings', 'tls_settings', 'encryption_settings', 'padding_scheme'].forEach((key) => {
+  ['network_settings', 'tls_settings', 'encryption_settings', 'padding_scheme', 'ddns_settings'].forEach((key) => {
     if (payload[key] !== undefined) payload[key] = maybeJSON(payload[key]);
   });
   if (payload.show === true) payload.show = 1;
@@ -126,7 +127,7 @@ function normalizePayload(values: any, edit: any) {
 
 function baseDefaults(type: string) {
   const common: any = { type, show: 1, rate: 1, port: '443', server_port: 443, group_id: [], route_id: [], tags: [] };
-  if (type === 'v2node') return { ...common, protocol: 'vless', network: 'tcp', tls: 0, disable_sni: 0, zero_rtt_handshake: 0, flow: null, install_command: '' };
+  if (type === 'v2node') return { ...common, protocol: 'vless', network: 'tcp', tls: 0, disable_sni: 0, zero_rtt_handshake: 0, flow: null, ddns_settings: '', install_command: '' };
   if (type === 'vless') return { ...common, network: 'tcp', tls: 0, flow: null };
   if (type === 'vmess') return { ...common, network: 'tcp', tls: 0 };
   if (type === 'trojan') return { ...common, network: 'tcp', allow_insecure: 0, server_name: '' };
@@ -162,6 +163,7 @@ function ProtocolFields({ type, protocol, tls, network, form, onEditChild }: { t
   addHiddenField(fields, 'tls_settings');
   addHiddenField(fields, 'encryption_settings');
   addHiddenField(fields, 'padding_scheme');
+  if (type === 'v2node') addHiddenField(fields, 'ddns_settings');
 
   if (type === 'v2node') {
     addField(fields, 'protocol', <Form.Item name="protocol" label="节点协议" rules={[{ required: true }]}><Select onChange={(value) => {
@@ -254,7 +256,7 @@ function jsonObjectFromField(value: any) {
   return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
 }
 
-function SettingsKV({ form, name, fieldKey, label, placeholder, type = 'input', options, show = true }: { form: any; name: string; fieldKey: string; label: string; placeholder?: string; type?: 'input' | 'select' | 'switch'; options?: { label: string; value: any }[]; show?: boolean }) {
+function SettingsKV({ form, name, fieldKey, label, placeholder, type = 'input', options, show = true }: { form: any; name: string; fieldKey: string; label: string; placeholder?: string; type?: 'input' | 'textarea' | 'select' | 'switch'; options?: { label: string; value: any }[]; show?: boolean }) {
   const raw = Form.useWatch(name, form);
   const obj = useMemo(() => jsonObjectFromField(raw), [raw]);
   if (!show) return null;
@@ -264,9 +266,47 @@ function SettingsKV({ form, name, fieldKey, label, placeholder, type = 'input', 
     form.setFieldsValue({ [name]: Object.keys(next).length ? JSON.stringify(next, null, 2) : '' });
   };
   let input: React.ReactNode = <Input value={obj[fieldKey] || ''} placeholder={placeholder} onChange={(e) => setValue(e.target.value)} />;
+  if (type === 'textarea') input = <Input.TextArea rows={3} value={obj[fieldKey] || ''} placeholder={placeholder} onChange={(e) => setValue(e.target.value)} />;
   if (type === 'select') input = <Select allowClear value={obj[fieldKey]} placeholder={placeholder} options={options || []} onChange={setValue} />;
-  if (type === 'switch') input = <Switch checked={!!Number(obj[fieldKey] || 0)} onChange={(checked) => setValue(checked ? '1' : '0')} />;
+  if (type === 'switch') input = <Switch checked={obj[fieldKey] === true || obj[fieldKey] === '1' || obj[fieldKey] === 1} onChange={(checked) => setValue(checked ? '1' : '0')} />;
   return <div className="form-group"><label>{label}</label>{input}</div>;
+}
+
+
+function DDNSFields({ form, host }: { form: any; host?: string }) {
+  const raw = Form.useWatch('ddns_settings', form);
+  const settings = useMemo(() => jsonObjectFromField(raw), [raw]);
+  const enabled = settings.enabled === true || settings.enabled === '1' || settings.enabled === 1;
+  return <div className="form-col-24">
+    <div className="legacy-inline-section">
+      <div className="legacy-inline-section-title">DDNS/墙检测</div>
+      <div className="row">
+        <div className="col-lg-6"><SettingsKV form={form} name="ddns_settings" fieldKey="enabled" label="启用DDNS/墙检测" type="switch" /></div>
+        <div className="col-lg-6"><SettingsKV form={form} name="ddns_settings" fieldKey="cf_record" label="Cloudflare记录名" placeholder={`留空使用连接地址 ${host || ''}`.trim()} show={enabled} /></div>
+      </div>
+      {enabled && <>
+        <div className="row">
+          <div className="col-lg-4"><SettingsKV form={form} name="ddns_settings" fieldKey="cf_record_type" label="记录类型" type="select" options={[{ label: 'A', value: 'A' }, { label: 'AAAA', value: 'AAAA' }]} /></div>
+          <div className="col-lg-4"><SettingsKV form={form} name="ddns_settings" fieldKey="cf_ttl" label="TTL" placeholder="留空使用系统默认" /></div>
+          <div className="col-lg-4"><SettingsKV form={form} name="ddns_settings" fieldKey="cf_proxied" label="Cloudflare橙云" type="switch" /></div>
+        </div>
+        <div className="row">
+          <div className="col-lg-6"><SettingsKV form={form} name="ddns_settings" fieldKey="ddns_interval" label="检测间隔(分钟)" placeholder="留空使用系统默认" /></div>
+          <div className="col-lg-6"><SettingsKV form={form} name="ddns_settings" fieldKey="block_check_url" label="墙检测URL" placeholder="留空使用系统默认" /></div>
+        </div>
+        <div className="row">
+          <div className="col-lg-4"><SettingsKV form={form} name="ddns_settings" fieldKey="block_check_keyword" label="被墙关键词" placeholder="留空=curl失败才算异常" /></div>
+          <div className="col-lg-4"><SettingsKV form={form} name="ddns_settings" fieldKey="block_check_timeout" label="检测超时(秒)" placeholder="留空使用系统默认" /></div>
+          <div className="col-lg-4"><SettingsKV form={form} name="ddns_settings" fieldKey="block_check_threshold" label="失败阈值" placeholder="留空使用系统默认" /></div>
+        </div>
+        <SettingsKV form={form} name="ddns_settings" fieldKey="change_ip_curl" label="换IP curl命令" type="textarea" placeholder="例如 curl -fsS 'https://api.xxx/change?token=xxx'" />
+        <div className="row">
+          <div className="col-lg-6"><SettingsKV form={form} name="ddns_settings" fieldKey="change_ip_wait" label="换IP后等待(秒)" placeholder="留空使用系统默认" /></div>
+          <div className="col-lg-6"><SettingsKV form={form} name="ddns_settings" fieldKey="change_ip_cooldown" label="换IP冷却(秒)" placeholder="留空使用系统默认" /></div>
+        </div>
+      </>}
+    </div>
+  </div>;
 }
 
 function ChildEditor({ type, form, tls, network }: { type: ChildEditorType; form: any; tls: any; network?: string }) {
@@ -351,6 +391,7 @@ export default function ServerManage() {
   const watchProtocol = Form.useWatch('protocol', form);
   const watchTLS = Form.useWatch('tls', form);
   const watchNetwork = Form.useWatch('network', form);
+  const watchHost = Form.useWatch('host', form);
   const currentType = watchType || edit?.type || 'v2node';
 
   const load = async () => {
@@ -557,6 +598,7 @@ export default function ServerManage() {
           <div className="form-col-12"><Form.Item name="parent_id" label="父节点"><Select allowClear placeholder="无" options={rows.filter((row) => row.type === currentType && row.id !== edit?.id).map((row) => ({ label: row.name, value: row.id }))} /></Form.Item></div>
           <div className="form-col-12"><Form.Item name="show" label="显示"><Select options={[{ label: '显示', value: 1 }, { label: '隐藏', value: 0 }]} /></Form.Item></div>
           <div className="form-col-24"><Form.Item name="route_id" label="路由组"><Select mode="multiple" placeholder="请选择路由组" options={routes.map((route) => ({ label: route.remarks || route.name || route.id, value: String(route.id) }))} /></Form.Item></div>
+          {currentType === 'v2node' && <DDNSFields form={form} host={watchHost} />}
           {currentType === 'v2node' && <div className="form-col-24"><Form.Item name="install_command" label="一键安装指令"><Input.TextArea rows={4} readOnly style={{ backgroundColor: '#f5f5f5', cursor: 'text' }} /></Form.Item></div>}
         </div>
       </Form></div>
