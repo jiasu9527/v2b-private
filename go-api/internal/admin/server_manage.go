@@ -332,48 +332,57 @@ func v2nodeDDNSDefaultsFromConfig(cfg *phpConfigFile) v2nodeDDNSDefaults {
 
 func renderV2nodeDDNSArgs(item map[string]any, defaults v2nodeDDNSDefaults) string {
 	settings := v2nodeDDNSSettings(item["ddns_settings"])
-	if !truthySetting(settings["enabled"]) {
+	ddnsEnabled := truthySetting(settings["ddns_enabled"]) || truthySetting(settings["enabled"])
+	blockEnabled := truthySetting(settings["block_check_enabled"])
+	if !ddnsEnabled && !blockEnabled {
 		return ""
 	}
 
 	cfToken := settingString(settings, "cf_token", defaults.CFToken)
 	cfZoneID := settingString(settings, "cf_zone_id", defaults.CFZoneID)
 	record := settingString(settings, "cf_record", strings.TrimSpace(fmt.Sprint(item["host"])))
-	if cfToken == "" || cfZoneID == "" || record == "" {
+	if ddnsEnabled && (cfToken == "" || cfZoneID == "" || record == "") {
 		return ""
 	}
 
-	args := []string{
-		"--enable-ddns",
-		"--cf-token", cfToken,
-		"--cf-zone-id", cfZoneID,
-		"--cf-record", record,
-		"--cf-record-type", strings.ToUpper(settingString(settings, "cf_record_type", defaults.RecordType)),
-		"--cf-ttl", settingString(settings, "cf_ttl", defaults.TTL),
-		"--cf-proxied", normalizeInstallBool(settingString(settings, "cf_proxied", defaults.Proxied)),
-		"--ddns-interval", settingString(settings, "ddns_interval", defaults.Interval),
+	args := []string{"--ddns-interval", settingString(settings, "ddns_interval", defaults.Interval)}
+	if ddnsEnabled {
+		args = append(args,
+			"--enable-ddns",
+			"--cf-token", cfToken,
+			"--cf-zone-id", cfZoneID,
+			"--cf-record", record,
+			"--cf-record-type", strings.ToUpper(settingString(settings, "cf_record_type", defaults.RecordType)),
+			"--cf-ttl", settingString(settings, "cf_ttl", defaults.TTL),
+			"--cf-proxied", normalizeInstallBool(settingString(settings, "cf_proxied", defaults.Proxied)),
+		)
+	}
+	if blockEnabled {
+		args = append(args, "--enable-block-check")
 	}
 
-	if value := settingString(settings, "block_check_url", defaults.BlockURL); value != "" {
-		args = append(args, "--block-check-url", value)
-	}
-	if value := settingString(settings, "block_check_keyword", defaults.BlockKeyword); value != "" {
-		args = append(args, "--block-check-keyword", value)
-	}
-	if value := settingString(settings, "block_check_timeout", defaults.BlockTimeout); value != "" {
-		args = append(args, "--block-check-timeout", value)
-	}
-	if value := settingString(settings, "block_check_threshold", defaults.BlockThreshold); value != "" {
-		args = append(args, "--block-check-threshold", value)
-	}
-	if value := settingString(settings, "change_ip_curl", ""); value != "" {
-		args = append(args, "--change-ip-curl", value)
-	}
-	if value := settingString(settings, "change_ip_wait", defaults.ChangeWait); value != "" {
-		args = append(args, "--change-ip-wait", value)
-	}
-	if value := settingString(settings, "change_ip_cooldown", defaults.ChangeCooldown); value != "" {
-		args = append(args, "--change-ip-cooldown", value)
+	if blockEnabled {
+		if value := settingString(settings, "block_check_url", defaults.BlockURL); value != "" {
+			args = append(args, "--block-check-url", value)
+		}
+		if value := settingString(settings, "block_check_keyword", defaults.BlockKeyword); value != "" {
+			args = append(args, "--block-check-keyword", value)
+		}
+		if value := settingString(settings, "block_check_timeout", defaults.BlockTimeout); value != "" {
+			args = append(args, "--block-check-timeout", value)
+		}
+		if value := settingString(settings, "block_check_threshold", defaults.BlockThreshold); value != "" {
+			args = append(args, "--block-check-threshold", value)
+		}
+		if value := settingString(settings, "change_ip_curl", ""); value != "" {
+			args = append(args, "--change-ip-curl", value)
+		}
+		if value := settingString(settings, "change_ip_wait", defaults.ChangeWait); value != "" {
+			args = append(args, "--change-ip-wait", value)
+		}
+		if value := settingString(settings, "change_ip_cooldown", defaults.ChangeCooldown); value != "" {
+			args = append(args, "--change-ip-cooldown", value)
+		}
 	}
 
 	parts := make([]string, 0, len(args))

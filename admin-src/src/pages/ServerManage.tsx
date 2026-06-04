@@ -276,22 +276,27 @@ function SettingsKV({ form, name, fieldKey, label, placeholder, type = 'input', 
 function DDNSFields({ form, host }: { form: any; host?: string }) {
   const raw = Form.useWatch('ddns_settings', form);
   const settings = useMemo(() => jsonObjectFromField(raw), [raw]);
-  const enabled = settings.enabled === true || settings.enabled === '1' || settings.enabled === 1;
+  const ddnsEnabled = settings.ddns_enabled === true || settings.ddns_enabled === '1' || settings.ddns_enabled === 1 || settings.enabled === true || settings.enabled === '1' || settings.enabled === 1;
+  const blockEnabled = settings.block_check_enabled === true || settings.block_check_enabled === '1' || settings.block_check_enabled === 1;
   return <div className="form-col-24">
     <div className="legacy-inline-section">
-      <div className="legacy-inline-section-title">DDNS/墙检测</div>
+      <div className="legacy-inline-section-title">DDNS / 被墙检测</div>
       <div className="row">
-        <div className="col-lg-6"><SettingsKV form={form} name="ddns_settings" fieldKey="enabled" label="启用DDNS/墙检测" type="switch" /></div>
-        <div className="col-lg-6"><SettingsKV form={form} name="ddns_settings" fieldKey="cf_record" label="Cloudflare记录名" placeholder={`留空使用连接地址 ${host || ''}`.trim()} show={enabled} /></div>
+        <div className="col-lg-6"><SettingsKV form={form} name="ddns_settings" fieldKey="ddns_enabled" label="启用DDNS解析更新" type="switch" /></div>
+        <div className="col-lg-6"><SettingsKV form={form} name="ddns_settings" fieldKey="block_check_enabled" label="启用被墙检测/换IP" type="switch" /></div>
       </div>
-      {enabled && <>
+      {ddnsEnabled && <>
+        <SettingsKV form={form} name="ddns_settings" fieldKey="cf_record" label="Cloudflare记录名" placeholder={`留空使用连接地址 ${host || ''}`.trim()} />
         <div className="row">
           <div className="col-lg-4"><SettingsKV form={form} name="ddns_settings" fieldKey="cf_record_type" label="记录类型" type="select" options={[{ label: 'A', value: 'A' }, { label: 'AAAA', value: 'AAAA' }]} /></div>
           <div className="col-lg-4"><SettingsKV form={form} name="ddns_settings" fieldKey="cf_ttl" label="TTL" placeholder="留空使用系统默认" /></div>
           <div className="col-lg-4"><SettingsKV form={form} name="ddns_settings" fieldKey="cf_proxied" label="Cloudflare橙云" type="switch" /></div>
         </div>
+        <SettingsKV form={form} name="ddns_settings" fieldKey="ddns_interval" label="DDNS检测间隔(分钟)" placeholder="留空使用系统默认" />
+      </>}
+      {blockEnabled && <>
         <div className="row">
-          <div className="col-lg-6"><SettingsKV form={form} name="ddns_settings" fieldKey="ddns_interval" label="检测间隔(分钟)" placeholder="留空使用系统默认" /></div>
+          <div className="col-lg-6"><SettingsKV form={form} name="ddns_settings" fieldKey="ddns_interval" label="被墙检测间隔(分钟)" placeholder="留空使用系统默认" /></div>
           <div className="col-lg-6"><SettingsKV form={form} name="ddns_settings" fieldKey="block_check_url" label="墙检测URL" placeholder="留空使用系统默认" /></div>
         </div>
         <div className="row">
