@@ -286,7 +286,7 @@ function DDNSFields({ form, host }: { form: any; host?: string }) {
         <div className="col-lg-6"><SettingsKV form={form} name="ddns_settings" fieldKey="block_check_enabled" label="启用被墙检测/换IP" type="switch" /></div>
       </div>
       {ddnsEnabled && <>
-        <SettingsKV form={form} name="ddns_settings" fieldKey="cf_record" label="Cloudflare记录名" placeholder={`留空使用连接地址 ${host || ''}`.trim()} />
+        <SettingsKV form={form} name="ddns_settings" fieldKey="cf_record" label="完整记录域名" placeholder={`留空使用连接地址 ${host || ''}`.trim()} />
         <div className="row">
           <div className="col-lg-4"><SettingsKV form={form} name="ddns_settings" fieldKey="cf_record_type" label="记录类型" type="select" options={[{ label: 'A', value: 'A' }, { label: 'AAAA', value: 'AAAA' }]} /></div>
           <div className="col-lg-4"><SettingsKV form={form} name="ddns_settings" fieldKey="cf_ttl" label="TTL" placeholder="留空使用系统默认" /></div>

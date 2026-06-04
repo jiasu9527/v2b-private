@@ -341,7 +341,7 @@ func renderV2nodeDDNSArgs(item map[string]any, defaults v2nodeDDNSDefaults) stri
 	cfToken := settingString(settings, "cf_token", defaults.CFToken)
 	cfZoneID := settingString(settings, "cf_zone_id", defaults.CFZoneID)
 	record := settingString(settings, "cf_record", strings.TrimSpace(fmt.Sprint(item["host"])))
-	if ddnsEnabled && (cfToken == "" || cfZoneID == "" || record == "") {
+	if ddnsEnabled && (cfToken == "" || record == "") {
 		return ""
 	}
 
@@ -350,12 +350,14 @@ func renderV2nodeDDNSArgs(item map[string]any, defaults v2nodeDDNSDefaults) stri
 		args = append(args,
 			"--enable-ddns",
 			"--cf-token", cfToken,
-			"--cf-zone-id", cfZoneID,
 			"--cf-record", record,
 			"--cf-record-type", strings.ToUpper(settingString(settings, "cf_record_type", defaults.RecordType)),
 			"--cf-ttl", settingString(settings, "cf_ttl", defaults.TTL),
 			"--cf-proxied", normalizeInstallBool(settingString(settings, "cf_proxied", defaults.Proxied)),
 		)
+		if cfZoneID != "" {
+			args = append(args, "--cf-zone-id", cfZoneID)
+		}
 	}
 	if blockEnabled {
 		args = append(args, "--enable-block-check")

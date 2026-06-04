@@ -236,6 +236,45 @@ func TestV2nodeInstallCommandAllowsBlockCheckWithoutDDNS(t *testing.T) {
 	}
 }
 
+func TestV2nodeInstallCommandAllowsDDNSWithoutZoneID(t *testing.T) {
+	root := t.TempDir()
+	writeAdminJSONFixture(t, root, map[string]any{
+		"server_api_url":        "https://api.example.com",
+		"server_token":          "forest-secret-token",
+		"server_cf_api_token":   "cf-token",
+		"server_cf_record_type": "A",
+		"server_cf_ttl":         1,
+		"server_cf_proxied":     0,
+		"server_ddns_interval":  1,
+	})
+
+	oldRoot := adminProjectRoot
+	adminProjectRoot = root
+	defer func() { adminProjectRoot = oldRoot }()
+
+	service := &DBService{cfg: cfgpkg.Config{AppURL: "https://panel.example.com"}}
+	command := service.v2nodeInstallCommand(map[string]any{
+		"id":   int64(25),
+		"host": "hk.example.com",
+		"ddns_settings": map[string]any{
+			"ddns_enabled": true,
+		},
+	})
+
+	for _, want := range []string{
+		"--enable-ddns",
+		"--cf-token cf-token",
+		"--cf-record hk.example.com",
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("expected command to contain %q, got %q", want, command)
+		}
+	}
+	if strings.Contains(command, "--cf-zone-id") {
+		t.Fatalf("expected command to omit empty zone id, got %q", command)
+	}
+}
+
 func TestV2nodeInstallCommandSkipsDDNSWhenDisabled(t *testing.T) {
 	service := &DBService{cfg: cfgpkg.Config{AppURL: "https://panel.example.com"}}
 	command := service.v2nodeInstallCommand(map[string]any{

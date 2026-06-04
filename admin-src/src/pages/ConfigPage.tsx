@@ -207,7 +207,7 @@ const configLabels: Record<string, ConfigMeta> = {
   server_api_url: { title: '节点对接API地址', description: 'v2node节点一键对接专用地址。' },
   server_token: { title: '通讯密钥', description: 'Forest与节点通讯的密钥，以便数据不会被他人获取。', password: true },
   server_cf_api_token: { title: 'Cloudflare API Token', description: 'v2node DDNS/墙检测自动换IP使用，建议使用仅DNS编辑权限Token。', password: true },
-  server_cf_zone_id: { title: 'Cloudflare Zone ID', description: 'Cloudflare 域名 Zone ID。', password: true },
+  server_cf_zone_id: { title: 'Cloudflare Zone ID（可选）', description: '可留空，v2node 会根据 API Token 和节点完整域名自动识别 Zone ID。', password: true },
   server_cf_record_type: { title: 'Cloudflare记录类型', description: '默认记录类型。', options: [{ label: 'A', value: 'A' }, { label: 'AAAA', value: 'AAAA' }] },
   server_cf_ttl: { title: 'Cloudflare TTL', description: '1表示自动。' },
   server_cf_proxied: { title: 'Cloudflare橙云', description: '默认是否开启Cloudflare代理。', switch: true },
