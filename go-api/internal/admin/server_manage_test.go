@@ -179,13 +179,15 @@ func TestV2nodeInstallCommandIncludesDDNSArgs(t *testing.T) {
 	for _, want := range []string{
 		"--enable-ddns",
 		"--cf-token cf-token",
-		"--cf-zone-id zone-id",
 		"--cf-record hk.example.com",
 		"--ddns-interval 1",
 	} {
 		if !strings.Contains(command, want) {
 			t.Fatalf("expected command to contain %q, got %q", want, command)
 		}
+	}
+	if strings.Contains(command, "--cf-zone-id") {
+		t.Fatalf("expected command to omit zone id because it is auto resolved, got %q", command)
 	}
 }
 

@@ -300,7 +300,6 @@ func (s *DBService) v2nodeInstallCommand(item map[string]any) string {
 
 type v2nodeDDNSDefaults struct {
 	CFToken        string
-	CFZoneID       string
 	RecordType     string
 	TTL            string
 	Proxied        string
@@ -316,7 +315,6 @@ type v2nodeDDNSDefaults struct {
 func v2nodeDDNSDefaultsFromConfig(cfg *phpConfigFile) v2nodeDDNSDefaults {
 	return v2nodeDDNSDefaults{
 		CFToken:        cfg.stringValue("server_cf_api_token", ""),
-		CFZoneID:       cfg.stringValue("server_cf_zone_id", ""),
 		RecordType:     cfg.stringValue("server_cf_record_type", "A"),
 		TTL:            strconv.FormatInt(cfg.int64Value("server_cf_ttl", 1), 10),
 		Proxied:        strconv.FormatInt(cfg.int64Value("server_cf_proxied", 0), 10),
@@ -339,7 +337,6 @@ func renderV2nodeDDNSArgs(item map[string]any, defaults v2nodeDDNSDefaults) stri
 	}
 
 	cfToken := settingString(settings, "cf_token", defaults.CFToken)
-	cfZoneID := settingString(settings, "cf_zone_id", defaults.CFZoneID)
 	record := settingString(settings, "cf_record", strings.TrimSpace(fmt.Sprint(item["host"])))
 	if ddnsEnabled && (cfToken == "" || record == "") {
 		return ""
@@ -355,9 +352,6 @@ func renderV2nodeDDNSArgs(item map[string]any, defaults v2nodeDDNSDefaults) stri
 			"--cf-ttl", settingString(settings, "cf_ttl", defaults.TTL),
 			"--cf-proxied", normalizeInstallBool(settingString(settings, "cf_proxied", defaults.Proxied)),
 		)
-		if cfZoneID != "" {
-			args = append(args, "--cf-zone-id", cfZoneID)
-		}
 	}
 	if blockEnabled {
 		args = append(args, "--enable-block-check")

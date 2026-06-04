@@ -61,7 +61,7 @@ const fieldOrders: Record<string, string[]> = {
   server: [
     'server_api_url', 'server_token', 'server_pull_interval', 'server_push_interval',
     'server_node_report_min_traffic', 'server_device_online_min_traffic', 'device_limit_mode',
-    'server_cf_api_token', 'server_cf_zone_id', 'server_cf_record_type', 'server_cf_ttl', 'server_cf_proxied',
+    'server_cf_api_token', 'server_cf_record_type', 'server_cf_ttl', 'server_cf_proxied',
     'server_ddns_interval', 'server_block_check_url', 'server_block_check_keyword',
     'server_block_check_timeout', 'server_block_check_threshold', 'server_change_ip_wait', 'server_change_ip_cooldown'
   ],
@@ -207,7 +207,6 @@ const configLabels: Record<string, ConfigMeta> = {
   server_api_url: { title: '节点对接API地址', description: 'v2node节点一键对接专用地址。' },
   server_token: { title: '通讯密钥', description: 'Forest与节点通讯的密钥，以便数据不会被他人获取。', password: true },
   server_cf_api_token: { title: 'Cloudflare API Token', description: 'v2node DDNS/墙检测自动换IP使用，建议使用仅DNS编辑权限Token。', password: true },
-  server_cf_zone_id: { title: 'Cloudflare Zone ID（可选）', description: '可留空，v2node 会根据 API Token 和节点完整域名自动识别 Zone ID。', password: true },
   server_cf_record_type: { title: 'Cloudflare记录类型', description: '默认记录类型。', options: [{ label: 'A', value: 'A' }, { label: 'AAAA', value: 'AAAA' }] },
   server_cf_ttl: { title: 'Cloudflare TTL', description: '1表示自动。' },
   server_cf_proxied: { title: 'Cloudflare橙云', description: '默认是否开启Cloudflare代理。', switch: true },
