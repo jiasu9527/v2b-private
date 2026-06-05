@@ -21,11 +21,15 @@ function renderCell(value: any, col: ColumnConfig) {
   return value ?? '-';
 }
 
-function Field({ field }: { field: FieldConfig }) {
-  const common = { placeholder: field.placeholder || field.label, style: { width: '100%' } };
+function Field({ field, ...controlProps }: { field: FieldConfig } & Record<string, any>) {
+  const common = {
+    ...controlProps,
+    placeholder: field.placeholder || field.label,
+    style: { width: '100%', ...(controlProps.style || {}) }
+  };
   if (field.type === 'textarea' || field.type === 'json') return <Input.TextArea rows={field.type === 'json' ? 8 : 5} {...common} />;
   if (field.type === 'number') return <InputNumber {...common} />;
-  if (field.type === 'switch') return <Switch />;
+  if (field.type === 'switch') return <Switch {...controlProps} />;
   if (field.type === 'select') return <Select allowClear options={field.options || []} {...common} />;
   if (field.type === 'tags') return <Select mode="tags" open={false} {...common} />;
   return <Input {...common} />;
@@ -125,11 +129,19 @@ export default function CrudPage({ config }: { config: ResourceConfig }) {
     <Modal width={900} title={editing ? `编辑${config.title}` : `新增${config.title}`} open={open} onCancel={() => setOpen(false)} onOk={submit} confirmLoading={saving} destroyOnHidden>
       <Form form={form} layout="vertical">
         <Row gutter={16}>
-          {config.fields.map((field) => <Col span={field.span || 12} key={field.name}>
-            <Form.Item name={field.name} label={field.label} valuePropName={field.type === 'switch' ? 'checked' : 'value'} rules={field.required ? [{ required: true, message: `请输入${field.label}` }] : undefined}>
+          {config.fields.map((field) => {
+            const itemProps: any = {
+              name: field.name,
+              label: field.label,
+              rules: field.required ? [{ required: true, message: `请输入${field.label}` }] : undefined,
+            };
+            if (field.type === 'switch') itemProps.valuePropName = 'checked';
+            return <Col span={field.span || 12} key={field.name}>
+            <Form.Item {...itemProps}>
               <Field field={field} />
             </Form.Item>
-          </Col>)}
+          </Col>;
+          })}
         </Row>
       </Form>
     </Modal>
