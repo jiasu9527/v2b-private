@@ -16,6 +16,10 @@ const subscribeMethodOptions = [
   { label: '永久有效', value: 0 }, { label: '一次性有效', value: 1 }, { label: '限时有效', value: 2 }
 ];
 
+const emailTemplateOptions = [
+  { label: 'default', value: 'default' }
+];
+
 type ConfigMeta = {
   title: string;
   description?: string;
@@ -229,7 +233,7 @@ const configLabels: Record<string, ConfigMeta> = {
   email_username: { title: 'SMTP账号', description: '由邮件服务商提供的账号。' },
   email_password: { title: 'SMTP密码', description: '由邮件服务商提供的密码。', password: true },
   email_from_address: { title: '发件地址', description: '由邮件服务商提供的发件地址。' },
-  email_template: { title: '邮件模板', description: '你可以在文档查看如何自定义邮件模板。' },
+  email_template: { title: '邮件模板', description: '你可以在文档查看如何自定义邮件模板。', options: emailTemplateOptions },
   email_bulk_interval: { title: '群发速率限制', description: '仅对群发邮件生效，单位为秒，0 为不限制。', addonAfter: '秒' },
 
   telegram_bot_token: { title: '机器人Token', description: '请输入由Botfather提供的token。', password: true },
