@@ -333,7 +333,8 @@ const paddingSample = JSON.stringify([
 ], null, 4);
 
 function SettingsKV({ form, name, fieldKey, label, placeholder, type = 'input', options, show = true, aliases = [] }: { form: any; name: string; fieldKey: string; label: string; placeholder?: string; type?: 'input' | 'textarea' | 'select' | 'switch'; options?: { label: string; value: any }[]; show?: boolean; aliases?: string[] }) {
-  const raw = Form.useWatch(name, form);
+  const watchedRaw = Form.useWatch(name, form);
+  const raw = watchedRaw !== undefined ? watchedRaw : form.getFieldValue(name);
   const obj = useMemo(() => jsonObjectFromField(raw), [raw]);
   if (!show) return null;
   const displayValue = settingDisplayValue(obj, fieldKey, aliases);
@@ -350,7 +351,8 @@ function SettingsKV({ form, name, fieldKey, label, placeholder, type = 'input', 
 }
 
 function DDNSFields({ form, host }: { form: any; host?: string }) {
-  const raw = Form.useWatch('ddns_settings', form);
+  const watchedRaw = Form.useWatch('ddns_settings', form);
+  const raw = watchedRaw !== undefined ? watchedRaw : form.getFieldValue('ddns_settings');
   const settings = useMemo(() => jsonObjectFromField(raw), [raw]);
   const ddnsEnabled = settings.ddns_enabled === true || settings.ddns_enabled === '1' || settings.ddns_enabled === 1 || settings.enabled === true || settings.enabled === '1' || settings.enabled === 1;
   const blockEnabled = settings.block_check_enabled === true || settings.block_check_enabled === '1' || settings.block_check_enabled === 1;
@@ -391,8 +393,10 @@ function DDNSFields({ form, host }: { form: any; host?: string }) {
 }
 
 function ChildEditor({ type, form, tls, network }: { type: ChildEditorType; form: any; tls: any; network?: string }) {
-  const tlsSettingsRaw = Form.useWatch('tls_settings', form);
-  const encryptionSettingsRaw = Form.useWatch('encryption_settings', form);
+  const watchedTLSSettingsRaw = Form.useWatch('tls_settings', form);
+  const watchedEncryptionSettingsRaw = Form.useWatch('encryption_settings', form);
+  const tlsSettingsRaw = watchedTLSSettingsRaw !== undefined ? watchedTLSSettingsRaw : form.getFieldValue('tls_settings');
+  const encryptionSettingsRaw = watchedEncryptionSettingsRaw !== undefined ? watchedEncryptionSettingsRaw : form.getFieldValue('encryption_settings');
   const tlsSettings = useMemo(() => jsonObjectFromField(tlsSettingsRaw), [tlsSettingsRaw]);
   const encryptionSettings = useMemo(() => jsonObjectFromField(encryptionSettingsRaw), [encryptionSettingsRaw]);
 
