@@ -70,6 +70,87 @@ function formatTextJSON(value: any) {
   return JSON.stringify(value, null, 2);
 }
 
+function parseJSONDeep(value: any, fallback: any = value) {
+  let current = value;
+  for (let i = 0; i < 3; i += 1) {
+    if (typeof current !== 'string') return current;
+    const trimmed = current.trim();
+    if (!trimmed) return fallback;
+    try {
+      current = JSON.parse(trimmed);
+    } catch {
+      return i === 0 ? safeJsonParse(current, fallback) : current;
+    }
+  }
+  return current;
+}
+
+function jsonObjectFromField(value: any) {
+  const parsed = parseJSONDeep(value, {});
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+}
+
+function readPath(obj: any, path: string) {
+  return path.split('.').reduce((current, key) => {
+    if (current === undefined || current === null) return undefined;
+    const match = key.match(/^(.+)\[(\d+)\]$/);
+    if (match) {
+      const value = current[match[1]];
+      const index = Number(match[2]);
+      return Array.isArray(value) ? value[index] : undefined;
+    }
+    return current[key];
+  }, obj);
+}
+
+function nonEmpty(value: any) {
+  return value !== undefined && value !== null && value !== '';
+}
+
+function settingDisplayValue(obj: Record<string, any>, fieldKey: string, aliases: string[] = []) {
+  for (const key of [fieldKey, ...aliases]) {
+    const value = key.includes('.') || key.includes('[') ? readPath(obj, key) : obj[key];
+    if (nonEmpty(value)) return value;
+  }
+  return undefined;
+}
+
+const realityAliases: Record<string, string[]> = {
+  server_name: ['serverName', 'sni', 'server_names[0]', 'serverNames[0]', 'reality.server_name', 'reality.serverName', 'reality.server_names[0]', 'reality.serverNames[0]', 'realitySettings.server_name', 'realitySettings.serverName', 'realitySettings.server_names[0]', 'realitySettings.serverNames[0]', 'settings.reality.server_name', 'settings.reality.serverName', 'settings.reality.serverNames[0]'],
+  dest: ['server_address', 'serverAddress', 'target', 'address', 'reality.dest', 'reality.server_address', 'reality.serverAddress', 'realitySettings.dest', 'realitySettings.serverAddress', 'settings.reality.dest'],
+  server_port: ['serverPort', 'target_port', 'targetPort', 'reality.server_port', 'reality.serverPort', 'reality.target_port', 'reality.targetPort', 'realitySettings.server_port', 'realitySettings.serverPort', 'settings.reality.serverPort'],
+  xver: ['proxy_protocol', 'proxyProtocol', 'reality.xver', 'realitySettings.xver', 'settings.reality.xver'],
+  private_key: ['privateKey', 'reality.private_key', 'reality.privateKey', 'realitySettings.private_key', 'realitySettings.privateKey', 'settings.reality.privateKey'],
+  public_key: ['publicKey', 'pbk', 'reality.public_key', 'reality.publicKey', 'reality.pbk', 'realitySettings.public_key', 'realitySettings.publicKey', 'realitySettings.pbk', 'settings.reality.publicKey'],
+  short_id: ['shortId', 'sid', 'short_ids[0]', 'shortIds[0]', 'reality.short_id', 'reality.shortId', 'reality.sid', 'reality.short_ids[0]', 'reality.shortIds[0]', 'realitySettings.short_id', 'realitySettings.shortId', 'realitySettings.short_ids[0]', 'realitySettings.shortIds[0]', 'settings.reality.shortIds[0]'],
+  fingerprint: ['fp', 'client_fingerprint', 'clientFingerprint', 'utls.fingerprint', 'reality.fingerprint', 'reality.fp', 'realitySettings.fingerprint', 'realitySettings.fp'],
+  allow_insecure: ['allowInsecure', 'insecure', 'reality.allow_insecure', 'reality.allowInsecure', 'realitySettings.allowInsecure'],
+};
+
+function mergeAliasField(target: Record<string, any>, sources: Record<string, any>[], fieldKey: string) {
+  if (nonEmpty(target[fieldKey])) return;
+  for (const source of sources) {
+    const value = settingDisplayValue(source, fieldKey, realityAliases[fieldKey] || []);
+    if (nonEmpty(value)) {
+      target[fieldKey] = value;
+      return;
+    }
+  }
+}
+
+function normalizeTLSSettings(row: any) {
+  const snake = jsonObjectFromField(row?.tls_settings);
+  const camel = jsonObjectFromField(row?.tlsSettings);
+  const reality = jsonObjectFromField(row?.reality);
+  const realitySnake = jsonObjectFromField(row?.reality_settings);
+  const realityCamel = jsonObjectFromField(row?.realitySettings);
+  const settings = jsonObjectFromField(row?.settings);
+  const merged: Record<string, any> = { ...camel, ...snake };
+  const sources = [merged, snake, camel, reality, realitySnake, realityCamel, settings, row || {}];
+  Object.keys(realityAliases).forEach((fieldKey) => mergeAliasField(merged, sources, fieldKey));
+  return Object.keys(merged).length ? merged : row?.tls_settings ?? row?.tlsSettings;
+}
+
 function typeTag(type: string, text?: React.ReactNode) {
   return <Tag color={typeColors[type] || undefined}>{text || type}</Tag>;
 }
@@ -90,7 +171,7 @@ function normalizeInitial(row: any) {
     route_id: listValue(row?.route_id),
     tags: listValue(row?.tags),
     network_settings: formatTextJSON(row?.network_settings ?? row?.networkSettings),
-    tls_settings: formatTextJSON(row?.tls_settings ?? row?.tlsSettings),
+    tls_settings: formatTextJSON(normalizeTLSSettings(row)),
     encryption_settings: formatTextJSON(row?.encryption_settings),
     padding_scheme: formatTextJSON(row?.padding_scheme),
     ddns_settings: formatTextJSON(row?.ddns_settings),
@@ -251,31 +332,6 @@ const paddingSample = JSON.stringify([
   '7=500-1000',
 ], null, 4);
 
-function jsonObjectFromField(value: any) {
-  const parsed = safeJsonParse(value, {});
-  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-}
-
-function readPath(obj: any, path: string) {
-  return path.split('.').reduce((current, key) => {
-    if (current === undefined || current === null) return undefined;
-    if (key.endsWith('[0]')) {
-      const arrayKey = key.slice(0, -3);
-      const value = current[arrayKey];
-      return Array.isArray(value) ? value[0] : undefined;
-    }
-    return current[key];
-  }, obj);
-}
-
-function settingDisplayValue(obj: Record<string, any>, fieldKey: string, aliases: string[] = []) {
-  for (const key of [fieldKey, ...aliases]) {
-    const value = key.includes('.') ? readPath(obj, key) : obj[key];
-    if (value !== undefined && value !== null && value !== '') return value;
-  }
-  return undefined;
-}
-
 function SettingsKV({ form, name, fieldKey, label, placeholder, type = 'input', options, show = true, aliases = [] }: { form: any; name: string; fieldKey: string; label: string; placeholder?: string; type?: 'input' | 'textarea' | 'select' | 'switch'; options?: { label: string; value: any }[]; show?: boolean; aliases?: string[] }) {
   const raw = Form.useWatch(name, form);
   const obj = useMemo(() => jsonObjectFromField(raw), [raw]);
@@ -292,19 +348,6 @@ function SettingsKV({ form, name, fieldKey, label, placeholder, type = 'input', 
   if (type === 'switch') input = <Switch checked={displayValue === true || displayValue === '1' || displayValue === 1} onChange={(checked) => setValue(checked ? '1' : '0')} />;
   return <div className="form-group"><label>{label}</label>{input}</div>;
 }
-
-const realityAliases: Record<string, string[]> = {
-  server_name: ['serverName', 'sni', 'server_names[0]', 'serverNames[0]', 'reality.server_name', 'reality.serverName', 'reality.server_names[0]', 'reality.serverNames[0]', 'realitySettings.serverNames[0]'],
-  dest: ['server_address', 'serverAddress', 'target', 'reality.dest', 'realitySettings.dest'],
-  server_port: ['serverPort', 'reality.server_port', 'reality.serverPort', 'realitySettings.serverPort'],
-  xver: ['reality.xver', 'realitySettings.xver'],
-  private_key: ['privateKey', 'reality.private_key', 'reality.privateKey', 'realitySettings.privateKey'],
-  public_key: ['publicKey', 'reality.public_key', 'reality.publicKey', 'realitySettings.publicKey'],
-  short_id: ['shortId', 'short_ids[0]', 'shortIds[0]', 'reality.short_id', 'reality.shortId', 'reality.short_ids[0]', 'reality.shortIds[0]', 'realitySettings.shortIds[0]'],
-  fingerprint: ['fp', 'client_fingerprint', 'clientFingerprint', 'utls.fingerprint', 'reality.fingerprint'],
-  allow_insecure: ['allowInsecure', 'insecure'],
-};
-
 
 function DDNSFields({ form, host }: { form: any; host?: string }) {
   const raw = Form.useWatch('ddns_settings', form);
