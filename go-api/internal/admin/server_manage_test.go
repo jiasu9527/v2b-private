@@ -154,7 +154,7 @@ func TestV2nodeInstallCommandIncludesDDNSArgs(t *testing.T) {
 		"server_cf_ttl":                1,
 		"server_cf_proxied":            0,
 		"server_ddns_interval":         1,
-		"server_block_check_url":       "https://www.baidu.com/",
+		"server_block_check_url":       "https://baidu.com/",
 		"server_block_check_threshold": 3,
 		"server_change_ip_wait":        60,
 		"server_change_ip_cooldown":    1800,
@@ -171,7 +171,7 @@ func TestV2nodeInstallCommandIncludesDDNSArgs(t *testing.T) {
 		"ddns_settings": map[string]any{
 			"enabled":             true,
 			"change_ip_curl":      "curl -fsS 'https://provider.example/change?node=hk'",
-			"block_check_url":     "https://www.baidu.com/",
+			"block_check_url":     "https://baidu.com/",
 			"block_check_keyword": "百度",
 		},
 	})
@@ -202,7 +202,7 @@ func TestV2nodeInstallCommandAllowsBlockCheckWithoutDDNS(t *testing.T) {
 		"server_cf_ttl":                1,
 		"server_cf_proxied":            0,
 		"server_ddns_interval":         1,
-		"server_block_check_url":       "https://www.baidu.com/",
+		"server_block_check_url":       "https://baidu.com/",
 		"server_block_check_threshold": 3,
 		"server_change_ip_wait":        60,
 		"server_change_ip_cooldown":    1800,
@@ -218,7 +218,7 @@ func TestV2nodeInstallCommandAllowsBlockCheckWithoutDDNS(t *testing.T) {
 		"host": "hk.example.com",
 		"ddns_settings": map[string]any{
 			"block_check_enabled": true,
-			"block_check_url":     "https://www.baidu.com/",
+			"block_check_url":     "https://baidu.com/",
 			"change_ip_curl":      "curl -fsS 'https://provider.example/change?node=hk'",
 		},
 	})
@@ -228,7 +228,7 @@ func TestV2nodeInstallCommandAllowsBlockCheckWithoutDDNS(t *testing.T) {
 	}
 	for _, want := range []string{
 		"--enable-block-check",
-		"--block-check-url https://www.baidu.com/",
+		"--block-check-url https://baidu.com/",
 		"--change-ip-curl",
 		"https://provider.example/change?node=hk",
 	} {

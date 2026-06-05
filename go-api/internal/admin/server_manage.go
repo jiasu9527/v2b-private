@@ -319,7 +319,7 @@ func v2nodeDDNSDefaultsFromConfig(cfg *phpConfigFile) v2nodeDDNSDefaults {
 		TTL:            strconv.FormatInt(cfg.int64Value("server_cf_ttl", 1), 10),
 		Proxied:        strconv.FormatInt(cfg.int64Value("server_cf_proxied", 0), 10),
 		Interval:       strconv.FormatInt(cfg.int64Value("server_ddns_interval", 1), 10),
-		BlockURL:       cfg.stringValue("server_block_check_url", "https://www.baidu.com/"),
+		BlockURL:       cfg.stringValue("server_block_check_url", "https://baidu.com/"),
 		BlockKeyword:   cfg.stringValue("server_block_check_keyword", ""),
 		BlockTimeout:   strconv.FormatInt(cfg.int64Value("server_block_check_timeout", 10), 10),
 		BlockThreshold: strconv.FormatInt(cfg.int64Value("server_block_check_threshold", 3), 10),
