@@ -256,21 +256,54 @@ function jsonObjectFromField(value: any) {
   return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
 }
 
-function SettingsKV({ form, name, fieldKey, label, placeholder, type = 'input', options, show = true }: { form: any; name: string; fieldKey: string; label: string; placeholder?: string; type?: 'input' | 'textarea' | 'select' | 'switch'; options?: { label: string; value: any }[]; show?: boolean }) {
+function readPath(obj: any, path: string) {
+  return path.split('.').reduce((current, key) => {
+    if (current === undefined || current === null) return undefined;
+    if (key.endsWith('[0]')) {
+      const arrayKey = key.slice(0, -3);
+      const value = current[arrayKey];
+      return Array.isArray(value) ? value[0] : undefined;
+    }
+    return current[key];
+  }, obj);
+}
+
+function settingDisplayValue(obj: Record<string, any>, fieldKey: string, aliases: string[] = []) {
+  for (const key of [fieldKey, ...aliases]) {
+    const value = key.includes('.') ? readPath(obj, key) : obj[key];
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return undefined;
+}
+
+function SettingsKV({ form, name, fieldKey, label, placeholder, type = 'input', options, show = true, aliases = [] }: { form: any; name: string; fieldKey: string; label: string; placeholder?: string; type?: 'input' | 'textarea' | 'select' | 'switch'; options?: { label: string; value: any }[]; show?: boolean; aliases?: string[] }) {
   const raw = Form.useWatch(name, form);
   const obj = useMemo(() => jsonObjectFromField(raw), [raw]);
   if (!show) return null;
+  const displayValue = settingDisplayValue(obj, fieldKey, aliases);
   const setValue = (value: any) => {
     const next = { ...obj, [fieldKey]: value };
     if (value === '' || value === null || value === undefined) delete next[fieldKey];
     form.setFieldsValue({ [name]: Object.keys(next).length ? JSON.stringify(next, null, 2) : '' });
   };
-  let input: React.ReactNode = <Input value={obj[fieldKey] || ''} placeholder={placeholder} onChange={(e) => setValue(e.target.value)} />;
-  if (type === 'textarea') input = <Input.TextArea rows={3} value={obj[fieldKey] || ''} placeholder={placeholder} onChange={(e) => setValue(e.target.value)} />;
-  if (type === 'select') input = <Select allowClear value={obj[fieldKey]} placeholder={placeholder} options={options || []} onChange={setValue} />;
-  if (type === 'switch') input = <Switch checked={obj[fieldKey] === true || obj[fieldKey] === '1' || obj[fieldKey] === 1} onChange={(checked) => setValue(checked ? '1' : '0')} />;
+  let input: React.ReactNode = <Input value={displayValue ?? ''} placeholder={placeholder} onChange={(e) => setValue(e.target.value)} />;
+  if (type === 'textarea') input = <Input.TextArea rows={3} value={displayValue ?? ''} placeholder={placeholder} onChange={(e) => setValue(e.target.value)} />;
+  if (type === 'select') input = <Select allowClear value={displayValue} placeholder={placeholder} options={options || []} onChange={setValue} />;
+  if (type === 'switch') input = <Switch checked={displayValue === true || displayValue === '1' || displayValue === 1} onChange={(checked) => setValue(checked ? '1' : '0')} />;
   return <div className="form-group"><label>{label}</label>{input}</div>;
 }
+
+const realityAliases: Record<string, string[]> = {
+  server_name: ['serverName', 'sni', 'server_names[0]', 'serverNames[0]', 'reality.server_name', 'reality.serverName', 'reality.server_names[0]', 'reality.serverNames[0]', 'realitySettings.serverNames[0]'],
+  dest: ['server_address', 'serverAddress', 'target', 'reality.dest', 'realitySettings.dest'],
+  server_port: ['serverPort', 'reality.server_port', 'reality.serverPort', 'realitySettings.serverPort'],
+  xver: ['reality.xver', 'realitySettings.xver'],
+  private_key: ['privateKey', 'reality.private_key', 'reality.privateKey', 'realitySettings.privateKey'],
+  public_key: ['publicKey', 'reality.public_key', 'reality.publicKey', 'realitySettings.publicKey'],
+  short_id: ['shortId', 'short_ids[0]', 'shortIds[0]', 'reality.short_id', 'reality.shortId', 'reality.short_ids[0]', 'reality.shortIds[0]', 'realitySettings.shortIds[0]'],
+  fingerprint: ['fp', 'client_fingerprint', 'clientFingerprint', 'utls.fingerprint', 'reality.fingerprint'],
+  allow_insecure: ['allowInsecure', 'insecure'],
+};
 
 
 function DDNSFields({ form, host }: { form: any; host?: string }) {
@@ -350,21 +383,21 @@ function ChildEditor({ type, form, tls, network }: { type: ChildEditorType; form
   }
   const tlsNumber = Number(tls || 0);
   return <div className="legacy-child-editor">
-    <SettingsKV form={form} name="tls_settings" fieldKey="server_name" label="Server Name(SNI)" placeholder={tlsNumber === 2 ? 'REALITY必填，与后端保持一致' : ''} />
+    <SettingsKV form={form} name="tls_settings" fieldKey="server_name" label="Server Name(SNI)" placeholder={tlsNumber === 2 ? 'REALITY必填，与后端保持一致' : ''} aliases={realityAliases.server_name} />
     <SettingsKV form={form} name="tls_settings" fieldKey="cert_mode" label="证书模式Cert Mode" type="select" show={tlsNumber === 1} options={[{ label: '自签名', value: 'self' }, { label: 'HTTP申请', value: 'http' }, { label: 'DNS申请', value: 'dns' }, { label: '无证书(关闭TLS)', value: 'none' }]} />
     <SettingsKV form={form} name="tls_settings" fieldKey="provider" label="DNS解析提供商Provider" placeholder="书写格式cloudflare" show={tlsNumber === 1 && tlsSettings.cert_mode === 'dns'} />
     <SettingsKV form={form} name="tls_settings" fieldKey="dns_env" label="DNS env" placeholder="书写格式CF_DNS_API_TOKEN=xxxxxxx如有多条使用逗号,分隔" show={tlsNumber === 1 && tlsSettings.cert_mode === 'dns'} />
     <SettingsKV form={form} name="tls_settings" fieldKey="cert_file" label="证书公钥文件地址Cert File Path" placeholder="留空在/etc/v2node/目录自动生成" show={tlsNumber === 1 && tlsSettings.cert_mode !== 'none'} />
     <SettingsKV form={form} name="tls_settings" fieldKey="key_file" label="证书私钥文件地址Key File Path" placeholder="留空在/etc/v2node/目录自动生成" show={tlsNumber === 1 && tlsSettings.cert_mode !== 'none'} />
-    <SettingsKV form={form} name="tls_settings" fieldKey="dest" label="Server Address" placeholder="REALITY目标地址,默认使用SNI" show={tlsNumber === 2} />
-    <SettingsKV form={form} name="tls_settings" fieldKey="server_port" label="Server Port" placeholder="REALITY目标端口,默认443" show={tlsNumber === 2} />
-    <SettingsKV form={form} name="tls_settings" fieldKey="xver" label="Proxy Protocol" type="select" show={tlsNumber === 2} options={[0, 1, 2].map((value) => ({ label: String(value), value }))} />
-    <SettingsKV form={form} name="tls_settings" fieldKey="private_key" label="Private Key" placeholder="留空自动生成" show={tlsNumber === 2} />
-    <SettingsKV form={form} name="tls_settings" fieldKey="public_key" label="Public Key" placeholder="留空自动生成" show={tlsNumber === 2} />
-    <SettingsKV form={form} name="tls_settings" fieldKey="short_id" label="ShortId" placeholder="留空自动生成" show={tlsNumber === 2} />
-    <SettingsKV form={form} name="tls_settings" fieldKey="fingerprint" label="FingerPrint" type="select" placeholder="TLS指纹默认Chrome" options={['chrome', 'firefox', 'safari', 'ios', 'android', 'edge', '360', 'qq'].map((value) => ({ label: value === 'ios' ? 'IOS' : value === 'qq' ? 'QQ' : value[0].toUpperCase() + value.slice(1), value }))} />
+    <SettingsKV form={form} name="tls_settings" fieldKey="dest" label="Server Address" placeholder="REALITY目标地址,默认使用SNI" show={tlsNumber === 2} aliases={realityAliases.dest} />
+    <SettingsKV form={form} name="tls_settings" fieldKey="server_port" label="Server Port" placeholder="REALITY目标端口,默认443" show={tlsNumber === 2} aliases={realityAliases.server_port} />
+    <SettingsKV form={form} name="tls_settings" fieldKey="xver" label="Proxy Protocol" type="select" show={tlsNumber === 2} aliases={realityAliases.xver} options={[0, 1, 2].map((value) => ({ label: String(value), value }))} />
+    <SettingsKV form={form} name="tls_settings" fieldKey="private_key" label="Private Key" placeholder="留空自动生成" show={tlsNumber === 2} aliases={realityAliases.private_key} />
+    <SettingsKV form={form} name="tls_settings" fieldKey="public_key" label="Public Key" placeholder="留空自动生成" show={tlsNumber === 2} aliases={realityAliases.public_key} />
+    <SettingsKV form={form} name="tls_settings" fieldKey="short_id" label="ShortId" placeholder="留空自动生成" show={tlsNumber === 2} aliases={realityAliases.short_id} />
+    <SettingsKV form={form} name="tls_settings" fieldKey="fingerprint" label="FingerPrint" type="select" placeholder="TLS指纹默认Chrome" aliases={realityAliases.fingerprint} options={['chrome', 'firefox', 'safari', 'ios', 'android', 'edge', '360', 'qq'].map((value) => ({ label: value === 'ios' ? 'IOS' : value === 'qq' ? 'QQ' : value[0].toUpperCase() + value.slice(1), value }))} />
     <SettingsKV form={form} name="tls_settings" fieldKey="reject_unknown_sni" label="Reject unknown sni" type="switch" show={tlsNumber === 1} />
-    <SettingsKV form={form} name="tls_settings" fieldKey="allow_insecure" label="Allow Insecure" type="switch" />
+    <SettingsKV form={form} name="tls_settings" fieldKey="allow_insecure" label="Allow Insecure" type="switch" aliases={realityAliases.allow_insecure} />
     <SettingsKV form={form} name="tls_settings" fieldKey="ech" label="ECH (Encrypted Client Hello)" type="select" placeholder="选择 ECH 模式" options={[{ label: '无', value: '' }, { label: 'Cloudflare', value: 'cloudflare' }, { label: '自定义 SNI', value: 'custom' }]} />
     {tlsSettings.ech === 'cloudflare' && <div className="legacy-success-note">Cloudflare 托管 ECH，密钥由 Cloudflare 自动管理，客户端从 DNS 自动获取配置，服务端无需额外填写</div>}
     {tlsSettings.ech === 'custom' && <>
