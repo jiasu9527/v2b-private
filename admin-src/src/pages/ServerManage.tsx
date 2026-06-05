@@ -391,6 +391,7 @@ export default function ServerManage() {
   const [detail, setDetail] = useState<any>(null);
   const [childEditor, setChildEditor] = useState<{ title: string; type: ChildEditorType } | null>(null);
   const [draggingKey, setDraggingKey] = useState<string | null>(null);
+  const [tablePage, setTablePage] = useState({ current: 1, pageSize: 10 });
   const [form] = Form.useForm();
   const watchType = Form.useWatch('type', form);
   const watchProtocol = Form.useWatch('protocol', form);
@@ -424,6 +425,10 @@ export default function ServerManage() {
     if (!key) return rows;
     return rows.filter((row) => JSON.stringify(row).includes(key));
   }, [rows, searchKey]);
+
+  useEffect(() => {
+    setTablePage((page) => ({ ...page, current: 1 }));
+  }, [searchKey, rows.length]);
 
   const sortRows = useMemo(() => rows.slice(), [rows]);
 
@@ -574,8 +579,20 @@ export default function ServerManage() {
         tableLayout="auto"
         columns={columns}
         dataSource={sortMode ? sortRows : filteredRows}
-        pagination={!sortMode && { pageSize: 10, pageSizeOptions: ['10', '50', '100', '500'], showSizeChanger: true }}
+        pagination={!sortMode && {
+          current: tablePage.current,
+          pageSize: tablePage.pageSize,
+          total: filteredRows.length,
+          pageSizeOptions: ['10', '50', '100', '500'],
+          showSizeChanger: true,
+        }}
         scroll={{ x: 1300 }}
+        onChange={(pagination: any) => {
+          setTablePage({
+            current: pagination.current || 1,
+            pageSize: pagination.pageSize || tablePage.pageSize,
+          });
+        }}
         rowClassName={(row) => `${row.parent_id ? 'child_node' : ''} ${sortMode ? 'sortable-row' : ''} ${draggingKey === `${row.type}-${row.id}` ? 'dragging-row' : ''}`}
         onRow={(row) => sortMode ? {
           draggable: true,
