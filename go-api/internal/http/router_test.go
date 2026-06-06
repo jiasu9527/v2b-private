@@ -5460,7 +5460,7 @@ func TestRouterAdminPlanSaveEndpoint(t *testing.T) {
 		WithAdminService(adminService),
 	)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/plan/save", strings.NewReader(`{"auth_data":"jwt-admin","id":7,"name":"Pro","content":"<p>fast</p>","group_id":2,"transfer_enable":100,"device_limit":3,"month_price":1299,"quarter_price":3599,"half_year_price":6999,"year_price":12999,"two_year_price":21999,"three_year_price":30999,"onetime_price":49999,"reset_price":999,"reset_traffic_method":1,"capacity_limit":200,"speed_limit":500,"force_update":true}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/plan/save", strings.NewReader(`{"auth_data":"jwt-admin","id":7,"name":"Pro","content":"<p>fast</p>","group_id":2,"transfer_enable":100,"device_limit":3,"month_price":1299,"quarter_price":3599,"half_year_price":6999,"year_price":12999,"two_year_price":21999,"three_year_price":30999,"onetime_price":49999,"reset_price":999,"reset_traffic_method":1,"capacity_limit":200,"speed_limit":500,"force_update":true,"show":1,"renew":0}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -5476,6 +5476,9 @@ func TestRouterAdminPlanSaveEndpoint(t *testing.T) {
 	}
 	if adminService.lastPlanSave.MonthPrice == nil || *adminService.lastPlanSave.MonthPrice != 1299 || !adminService.lastPlanSave.ForceUpdate {
 		t.Fatalf("unexpected save pricing request: %#v", adminService.lastPlanSave)
+	}
+	if adminService.lastPlanSave.Show == nil || *adminService.lastPlanSave.Show != 1 || adminService.lastPlanSave.Renew == nil || *adminService.lastPlanSave.Renew != 0 {
+		t.Fatalf("expected save to forward show/renew, got %#v", adminService.lastPlanSave)
 	}
 }
 

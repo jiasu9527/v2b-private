@@ -7,6 +7,13 @@ function price(v: any) { return v !== null && v !== undefined ? centsToYuan(v).t
 function gb(v: any) { return v !== null && v !== undefined ? planTrafficToGB(v).toString() : '-'; }
 
 const trafficGB = 1024 * 1024 * 1024;
+const resetOptions = [
+  { label: '每月1号', value: 0 },
+  { label: '按月重置', value: 1 },
+  { label: '不重置', value: 2 },
+  { label: '每年1月1日', value: 3 },
+  { label: '按年重置', value: 4 },
+];
 
 function planTrafficToGB(value: any) {
   if (value === undefined || value === null || value === '') return value;
@@ -121,8 +128,10 @@ export default function PlanPage() {
         <Form.Item name="three_year_price" label="三年付(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
         <Form.Item name="onetime_price" label="一次性(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
         <Form.Item name="reset_price" label="重置包(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
+        <Form.Item name="reset_traffic_method" label="流量重置方式"><Select allowClear placeholder="跟随系统配置" options={resetOptions} /></Form.Item>
         <Form.Item name="show" label="销售状态"><Select options={[{ label: '显示', value: 1 }, { label: '隐藏', value: 0 }]} /></Form.Item>
         <Form.Item name="renew" label="续费"><Select options={[{ label: '允许', value: 1 }, { label: '禁止', value: 0 }]} /></Form.Item>
+        <Form.Item name="force_update" label={<Tooltip title="开启后会把当前套餐的权限组、总流量、设备数限制、限速同步到已购买该套餐的用户">强制更新用户 <QuestionCircleOutlined /></Tooltip>} valuePropName="checked"><Switch /></Form.Item>
         <Form.Item name="content" label="说明"><Input.TextArea rows={4} /></Form.Item>
       </Form>
     </Modal>

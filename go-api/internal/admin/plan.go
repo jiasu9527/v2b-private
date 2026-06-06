@@ -54,6 +54,8 @@ type PlanSaveRequest struct {
 	GroupID            int64
 	TransferEnable     int64
 	DeviceLimit        *int64
+	Show               *int64
+	Renew              *int64
 	MonthPrice         *int64
 	QuarterPrice       *int64
 	HalfYearPrice      *int64
@@ -142,23 +144,34 @@ func (s *DBService) SavePlan(ctx context.Context, req PlanSaveRequest) (bool, er
 	if req.Name == "" {
 		return false, errors.New("套餐名称不能为空")
 	}
+	transferEnable := planTransferEnableBytes(req.TransferEnable)
+	show := int64(0)
+	if req.Show != nil {
+		show = *req.Show
+	}
+	renew := int64(1)
+	if req.Renew != nil {
+		renew = *req.Renew
+	}
 
 	now := time.Now().Unix()
 	if req.ID == nil {
 		if _, err := s.db.ExecContext(ctx, `INSERT INTO v2_plan (
-group_id, transfer_enable, device_limit, name, speed_limit, content,
+group_id, transfer_enable, device_limit, name, speed_limit, "show", renew, content,
 month_price, quarter_price, half_year_price, year_price, two_year_price, three_year_price,
 onetime_price, reset_price, reset_traffic_method, capacity_limit, created_at, updated_at
 ) VALUES (
-$1, $2, $3, $4, $5, $6,
-$7, $8, $9, $10, $11, $12,
-$13, $14, $15, $16, $17, $18
+$1, $2, $3, $4, $5, $6, $7, $8,
+$9, $10, $11, $12, $13, $14,
+$15, $16, $17, $18, $19, $20
 )`,
 			req.GroupID,
-			req.TransferEnable,
+			transferEnable,
 			nullableInt64(req.DeviceLimit),
 			req.Name,
 			nullableInt64(req.SpeedLimit),
+			show,
+			renew,
 			nullableString(req.Content),
 			nullableInt64(req.MonthPrice),
 			nullableInt64(req.QuarterPrice),
@@ -222,11 +235,13 @@ SET group_id = $2,
 	reset_price = $15,
 	reset_traffic_method = $16,
 	capacity_limit = $17,
-	updated_at = $18
+	"show" = COALESCE($18, "show"),
+	renew = COALESCE($19, renew),
+	updated_at = $20
 WHERE id = $1`,
 		*req.ID,
 		req.GroupID,
-		req.TransferEnable,
+		transferEnable,
 		nullableInt64(req.DeviceLimit),
 		req.Name,
 		nullableInt64(req.SpeedLimit),
@@ -241,6 +256,8 @@ WHERE id = $1`,
 		nullableInt64(req.ResetPrice),
 		nullableInt64(req.ResetTrafficMethod),
 		nullableInt64(req.CapacityLimit),
+		nullableInt64(req.Show),
+		nullableInt64(req.Renew),
 		now,
 	); err != nil {
 		return false, errors.New("保存失败")

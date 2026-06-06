@@ -4154,6 +4154,8 @@ func handleAdminPlanSave(w http.ResponseWriter, r *http.Request, sessionService 
 		GroupID            *json.Number `json:"group_id"`
 		TransferEnable     *json.Number `json:"transfer_enable"`
 		DeviceLimit        *json.Number `json:"device_limit"`
+		Show               *json.Number `json:"show"`
+		Renew              *json.Number `json:"renew"`
 		MonthPrice         *json.Number `json:"month_price"`
 		QuarterPrice       *json.Number `json:"quarter_price"`
 		HalfYearPrice      *json.Number `json:"half_year_price"`
@@ -4193,6 +4195,12 @@ func handleAdminPlanSave(w http.ResponseWriter, r *http.Request, sessionService 
 	}
 	if payload.DeviceLimit == nil {
 		payload.DeviceLimit = jsonNumberFromInput(inputs, "device_limit")
+	}
+	if payload.Show == nil {
+		payload.Show = jsonNumberFromInput(inputs, "show")
+	}
+	if payload.Renew == nil {
+		payload.Renew = jsonNumberFromInput(inputs, "renew")
 	}
 	if payload.MonthPrice == nil {
 		payload.MonthPrice = jsonNumberFromInput(inputs, "month_price")
@@ -4255,6 +4263,16 @@ func handleAdminPlanSave(w http.ResponseWriter, r *http.Request, sessionService 
 	deviceLimit, err := jsonNumberToInt64Pointer(payload.DeviceLimit)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "设备数限制格式有误"})
+		return true
+	}
+	show, err := jsonNumberToInt64Pointer(payload.Show)
+	if err != nil || (show != nil && !containsInt64([]int64{0, 1}, *show)) {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "销售状态格式有误"})
+		return true
+	}
+	renew, err := jsonNumberToInt64Pointer(payload.Renew)
+	if err != nil || (renew != nil && !containsInt64([]int64{0, 1}, *renew)) {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "续费状态格式有误"})
 		return true
 	}
 	monthPrice, err := jsonNumberToInt64Pointer(payload.MonthPrice)
@@ -4320,6 +4338,8 @@ func handleAdminPlanSave(w http.ResponseWriter, r *http.Request, sessionService 
 		GroupID:            *groupID,
 		TransferEnable:     *transferEnable,
 		DeviceLimit:        deviceLimit,
+		Show:               show,
+		Renew:              renew,
 		MonthPrice:         monthPrice,
 		QuarterPrice:       quarterPrice,
 		HalfYearPrice:      halfYearPrice,
