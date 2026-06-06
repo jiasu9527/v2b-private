@@ -124,6 +124,9 @@ func TestRouterGuestPlanFetchEndpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
+	if rec.Header().Get("Cache-Control") != "no-store, no-cache, must-revalidate, max-age=0" {
+		t.Fatalf("expected guest plan fetch to disable cache, got %q", rec.Header().Get("Cache-Control"))
+	}
 
 	var payload map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
@@ -2083,6 +2086,9 @@ func TestRouterUserPlanFetchEndpoint(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if rec.Header().Get("Cache-Control") != "no-store, no-cache, must-revalidate, max-age=0" {
+		t.Fatalf("expected user plan fetch to disable cache, got %q", rec.Header().Get("Cache-Control"))
 	}
 	if userService.lastPlanID == nil || *userService.lastPlanID != planID {
 		t.Fatalf("expected plan id 3, got %#v", userService.lastPlanID)
@@ -4511,6 +4517,9 @@ func TestRouterStaffPlanFetchEndpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
+	if rec.Header().Get("Cache-Control") != "no-store, no-cache, must-revalidate, max-age=0" {
+		t.Fatalf("expected staff plan fetch to disable cache, got %q", rec.Header().Get("Cache-Control"))
+	}
 	if sessionService.lastRequireAdmin {
 		t.Fatalf("staff route should not require admin auth")
 	}
@@ -5444,6 +5453,9 @@ func TestRouterAdminPlanFetchEndpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
+	if rec.Header().Get("Cache-Control") != "no-store, no-cache, must-revalidate, max-age=0" {
+		t.Fatalf("expected admin plan fetch to disable cache, got %q", rec.Header().Get("Cache-Control"))
+	}
 	if !strings.Contains(rec.Body.String(), `"Starter"`) {
 		t.Fatalf("expected plan payload in body, got %s", rec.Body.String())
 	}
@@ -5474,7 +5486,10 @@ func TestRouterAdminPlanSaveEndpoint(t *testing.T) {
 	if adminService.lastPlanSave.Name != "Pro" || adminService.lastPlanSave.GroupID != 2 || adminService.lastPlanSave.TransferEnable != 100 {
 		t.Fatalf("unexpected save request: %#v", adminService.lastPlanSave)
 	}
-	if adminService.lastPlanSave.MonthPrice == nil || *adminService.lastPlanSave.MonthPrice != 1299 || !adminService.lastPlanSave.ForceUpdate {
+	if adminService.lastPlanSave.MonthPrice == nil || *adminService.lastPlanSave.MonthPrice != 1299 ||
+		adminService.lastPlanSave.YearPrice == nil || *adminService.lastPlanSave.YearPrice != 12999 ||
+		adminService.lastPlanSave.TwoYearPrice == nil || *adminService.lastPlanSave.TwoYearPrice != 21999 ||
+		!adminService.lastPlanSave.ForceUpdate {
 		t.Fatalf("unexpected save pricing request: %#v", adminService.lastPlanSave)
 	}
 	if adminService.lastPlanSave.Show == nil || *adminService.lastPlanSave.Show != 1 || adminService.lastPlanSave.Renew == nil || *adminService.lastPlanSave.Renew != 0 {

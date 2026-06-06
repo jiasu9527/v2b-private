@@ -989,6 +989,7 @@ func handleGuestConfig(w http.ResponseWriter, r *http.Request, service guest.Ser
 }
 
 func handleGuestPlans(w http.ResponseWriter, r *http.Request, service guest.Service) bool {
+	disableResponseCache(w)
 	if service == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "guest service unavailable"})
 		return true
@@ -1930,6 +1931,7 @@ func serverFetchETag(data []map[string]any) string {
 }
 
 func handleUserPlanFetch(w http.ResponseWriter, r *http.Request, sessionService session.Service, userService usersvc.Service) bool {
+	disableResponseCache(w)
 	identity, ok := authenticateRequest(w, r, sessionService, false)
 	if !ok {
 		return true
@@ -2859,6 +2861,7 @@ func handleUserRemoveActiveSession(w http.ResponseWriter, r *http.Request, servi
 }
 
 func handleStaffPlanFetch(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	disableResponseCache(w)
 	if _, ok := authenticateStaffRequest(w, r, sessionService); !ok {
 		return true
 	}
@@ -4122,6 +4125,7 @@ func handleAdminConfigTestSendMail(w http.ResponseWriter, r *http.Request, sessi
 }
 
 func handleAdminPlanFetch(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	disableResponseCache(w)
 	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
 		return true
 	}
