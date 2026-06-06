@@ -57,6 +57,7 @@ export default function PlanPage() {
   const [groups, setGroups] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [edit, setEdit] = useState<any>(null);
+  const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
   const load = async () => {
@@ -76,9 +77,22 @@ export default function PlanPage() {
     form.setFieldsValue(planToFormValues(row));
   };
   const save = async () => {
-    const values = await form.validateFields();
-    await apiPost('/plan/save', { ...edit, ...planFormValuesToPayload(values) });
-    message.success('保存成功'); setEdit(null); load();
+    setSaving(true);
+    try {
+      const values = await form.validateFields();
+      await apiPost('/plan/save', { ...edit, ...planFormValuesToPayload(values) });
+      message.success('保存成功');
+      setEdit(null);
+      load();
+    } catch (e: any) {
+      if (e?.errorFields) {
+        message.error('请检查套餐必填项');
+      } else {
+        message.error(e?.message || '保存失败');
+      }
+    } finally {
+      setSaving(false);
+    }
   };
   const update = async (row: any, key: string, value: any) => { await apiPost('/plan/update', { id: row.id, [key]: value }, { form: true }); message.success('已更新'); load(); };
   const drop = async (row: any) => { await apiPost('/plan/drop', { id: row.id }, { form: true }); message.success('已删除'); load(); };
@@ -112,7 +126,7 @@ export default function PlanPage() {
       <div className="forest-table-action"><Button icon={<PlusOutlined />} onClick={() => openEdit({ show: 1, renew: 1 })}> 添加订阅</Button></div>
       <Table className="forest-table" rowKey="id" loading={loading} tableLayout="auto" dataSource={rows} columns={columns} pagination={false} scroll={{ x: 1500 }} />
     </Card>
-    <Modal title={edit?.id ? '编辑订阅' : '添加订阅'} open={!!edit} onCancel={() => setEdit(null)} onOk={save} width={860}>
+    <Modal title={edit?.id ? '编辑订阅' : '添加订阅'} open={!!edit} onCancel={() => setEdit(null)} onOk={save} confirmLoading={saving} width={860}>
       <Form form={form} layout="vertical" className="modal-grid-form">
         <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item>
         <Form.Item name="group_id" label="权限组" rules={[{ required: true }]}><Select options={groups.map((group) => ({ label: group.name, value: group.id }))} /></Form.Item>
