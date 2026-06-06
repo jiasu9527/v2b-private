@@ -29,6 +29,24 @@ func TestPostgresSQLFilesDoNotContainInlineMySQLIndexes(t *testing.T) {
 	}
 }
 
+func TestInstallPostgresPlanTransferEnableUsesBigint(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(repoRootFromTestFile(t), "database", "install.pgsql.sql")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	content := string(raw)
+
+	if !strings.Contains(content, `"transfer_enable" BIGINT NOT NULL`) {
+		t.Fatalf("%s should create v2_plan.transfer_enable as BIGINT", path)
+	}
+	if strings.Contains(content, `"transfer_enable" INTEGER NOT NULL`) {
+		t.Fatalf("%s should not create v2_plan.transfer_enable as INTEGER", path)
+	}
+}
+
 func TestUpdatePostgresSQLAvoidsLegacyMigrationChain(t *testing.T) {
 	t.Parallel()
 

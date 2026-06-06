@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -286,6 +287,16 @@ func applyUpdateCompatFixes(ctx context.Context, db *sql.DB) error {
 	); err != nil {
 		return err
 	}
+	if err := bestEffortEnsureUpdateColumnType(
+		ctx,
+		db,
+		"v2_plan",
+		"transfer_enable",
+		"bigint",
+		`ALTER TABLE v2_plan ALTER COLUMN transfer_enable TYPE BIGINT USING transfer_enable::BIGINT`,
+	); err != nil {
+		return err
+	}
 
 	repairs := []struct {
 		table  string
@@ -335,6 +346,23 @@ func applyUpdateCompatFixes(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+func bestEffortEnsureUpdateColumnType(ctx context.Context, db *sql.DB, tableName, columnName, wantDataType, stmt string) error {
+	dataType, err := postgresColumnDataType(ctx, db, tableName, columnName)
+	if err != nil {
+		return fmt.Errorf("check column type %s.%s: %w", tableName, columnName, err)
+	}
+	if dataType == "" || strings.EqualFold(dataType, wantDataType) {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, stmt); err != nil {
+		if isIgnorableOwnerError(err) {
+			return nil
+		}
+		return fmt.Errorf("ensure column type %s.%s: %w", tableName, columnName, err)
+	}
+	return nil
+}
+
 func bestEffortEnsureUpdateColumn(ctx context.Context, db *sql.DB, tableName, columnName, stmt string) error {
 	exists, err := postgresColumnExists(ctx, db, tableName, columnName)
 	if err != nil {
@@ -360,6 +388,19 @@ func bestEffortEnsureUpdateIndex(ctx context.Context, db *sql.DB, stmt string) e
 		return fmt.Errorf("ensure update index: %w", err)
 	}
 	return nil
+}
+
+func postgresColumnDataType(ctx context.Context, db *sql.DB, tableName, columnName string) (string, error) {
+	const query = `SELECT data_type FROM information_schema.columns
+WHERE table_schema = CURRENT_SCHEMA() AND table_name = $1 AND column_name = $2`
+	var dataType string
+	if err := db.QueryRowContext(ctx, query, tableName, columnName).Scan(&dataType); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return dataType, nil
 }
 
 func postgresColumnExists(ctx context.Context, db *sql.DB, tableName, columnName string) (bool, error) {

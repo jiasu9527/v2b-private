@@ -31,6 +31,9 @@ func TestApplyUpdateCompatFixesIgnoresOwnerOnlyIndexErrors(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectExec(`ALTER TABLE v2_server_v2node ADD COLUMN ddns_settings text DEFAULT NULL`).
 		WillReturnError(errors.New("ERROR: must be owner of table v2_server_v2node (SQLSTATE 42501)"))
+	expectColumnDataType(mock, "v2_plan", "transfer_enable", "integer")
+	mock.ExpectExec(`ALTER TABLE v2_plan ALTER COLUMN transfer_enable TYPE BIGINT USING transfer_enable::BIGINT`).
+		WillReturnError(errors.New("ERROR: must be owner of table v2_plan (SQLSTATE 42501)"))
 
 	for _, item := range []struct {
 		table  string
@@ -74,6 +77,7 @@ func TestApplyUpdateCompatFixesTrimsExistingInviteColumns(t *testing.T) {
 	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
 		WithArgs("v2_server_v2node", "ddns_settings").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	expectColumnDataType(mock, "v2_plan", "transfer_enable", "bigint")
 
 	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
 		WithArgs("v2_user", "expired_at").
@@ -131,6 +135,9 @@ func TestApplyUpdateCompatFixesAddsV2nodeSendThroughColumnWhenMissing(t *testing
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectExec(`ALTER TABLE v2_server_v2node ADD COLUMN ddns_settings text DEFAULT NULL`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectColumnDataType(mock, "v2_plan", "transfer_enable", "integer")
+	mock.ExpectExec(`ALTER TABLE v2_plan ALTER COLUMN transfer_enable TYPE BIGINT USING transfer_enable::BIGINT`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	for _, item := range []struct {
 		table  string
@@ -153,4 +160,56 @@ func TestApplyUpdateCompatFixesAddsV2nodeSendThroughColumnWhenMissing(t *testing
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
 	}
+}
+
+func TestApplyUpdateCompatFixesMigratesPlanTransferEnableToBigint(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_runtime_kv_expire_at ON v2_runtime_kv\(expire_at\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_auth_session_user_id ON v2_auth_session\(user_id\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+		WithArgs("v2_server_v2node", "send_through").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+		WithArgs("v2_server_v2node", "ddns_settings").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	expectColumnDataType(mock, "v2_plan", "transfer_enable", "integer")
+	mock.ExpectExec(`ALTER TABLE v2_plan ALTER COLUMN transfer_enable TYPE BIGINT USING transfer_enable::BIGINT`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	for _, item := range []struct {
+		table  string
+		column string
+	}{
+		{table: "v2_user", column: "expired_at"},
+		{table: "v2_invite_code", column: "code"},
+		{table: "v2_invite_campaign", column: "invite_code"},
+		{table: "v2_invite_campaign_record", column: "invite_code"},
+	} {
+		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+			WithArgs(item.table, item.column).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	}
+
+	if err := applyUpdateCompatFixes(context.Background(), db); err != nil {
+		t.Fatalf("applyUpdateCompatFixes: %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func expectColumnDataType(mock sqlmock.Sqlmock, table, column, dataType string) {
+	mock.ExpectQuery(`SELECT data_type FROM information_schema.columns`).
+		WithArgs(table, column).
+		WillReturnRows(sqlmock.NewRows([]string{"data_type"}).AddRow(dataType))
 }
