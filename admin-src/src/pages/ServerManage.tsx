@@ -248,7 +248,10 @@ function ProtocolFields({ type, protocol, tls, network, form, onEditChild }: { t
 
   if (type === 'v2node') {
     addField(fields, 'protocol', <Form.Item name="protocol" label="节点协议" rules={[{ required: true }]}><Select onChange={(value) => {
-      form.setFieldsValue({ protocol: value, ...(['anytls', 'hysteria2', 'trojan', 'tuic'].includes(value) ? { tls: 1 } : {}) });
+      form.setFieldsValue({
+        protocol: value,
+        ...(['anytls', 'hysteria2', 'trojan', 'tuic'].includes(value) ? { tls: 1 } : {}),
+      });
     }} options={v2nodeProtocols.map((value) => ({ label: value === 'hysteria2' ? 'Hysteria2' : value.toUpperCase(), value }))} /></Form.Item>);
   }
 
@@ -269,7 +272,7 @@ function ProtocolFields({ type, protocol, tls, network, form, onEditChild }: { t
     addField(fields, 'cipher', <Form.Item name="cipher" label="加密算法"><Select options={ciphers.map((value) => ({ label: value, value }))} /></Form.Item>, 24);
   }
 
-  if (actualProtocol && !['hysteria2', 'tuic', 'anytls'].includes(String(actualProtocol))) {
+  if (actualProtocol && (type === 'v2node' || !['hysteria2', 'tuic', 'anytls'].includes(String(actualProtocol)))) {
     const networks = actualProtocol === 'shadowsocks' ? ssNetworks : genericNetworks.filter((item) => actualProtocol !== 'trojan' || ['tcp', 'ws', 'grpc'].includes(item));
     addField(fields, 'network', <Form.Item name="network" label={editLink('传输协议', () => onEditChild('编辑协议配置', 'network_settings'))}><Select placeholder="选择传输协议" options={networks.map((value) => ({ label: value === 'ws' ? 'WebSocket' : value === 'http' ? 'HTTP伪装' : value === 'grpc' ? 'gRPC' : value === 'kcp' ? 'mKCP' : value === 'httpupgrade' ? 'HTTPUpgrade' : value.toUpperCase(), value }))} /></Form.Item>, 24);
   }
