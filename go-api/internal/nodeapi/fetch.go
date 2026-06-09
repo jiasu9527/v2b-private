@@ -241,6 +241,7 @@ func (s *DBService) ReportAlive(ctx context.Context, req AliveReportRequest) err
 	}
 
 	now := time.Now().Unix()
+	cfg := s.currentConfig()
 	nodeKey := req.NodeType + strconv.FormatInt(req.NodeID, 10)
 	for userID, ips := range req.Users {
 		if userID <= 0 {
@@ -273,7 +274,7 @@ func (s *DBService) ReportAlive(ctx context.Context, req AliveReportRequest) err
 				continue
 			}
 			currentIPs := stringSliceFromAny(entry["aliveips"])
-			if s.cfg.DeviceLimitMode == 1 {
+			if cfg.DeviceLimitMode == 1 {
 				for _, item := range currentIPs {
 					ip := strings.TrimSpace(item)
 					if index := strings.Index(ip, "_"); index >= 0 {
@@ -287,7 +288,7 @@ func (s *DBService) ReportAlive(ctx context.Context, req AliveReportRequest) err
 			}
 			count += int64(len(currentIPs))
 		}
-		if s.cfg.DeviceLimitMode == 1 {
+		if cfg.DeviceLimitMode == 1 {
 			count = int64(len(ipmap))
 		}
 		state["alive_ip"] = count

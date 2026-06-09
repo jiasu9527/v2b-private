@@ -2,7 +2,11 @@ package nodeapi
 
 import (
 	"context"
+	"database/sql/driver"
+	"encoding/json"
 	"testing"
+
+	"forest/go-api/internal/config"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -38,6 +42,65 @@ func TestDBServiceRoutesPreservesRequestedOrder(t *testing.T) {
 		}
 	}
 
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+type fakeRuntimeConfig struct {
+	cfg config.Config
+}
+
+func (f fakeRuntimeConfig) CurrentConfig() config.Config {
+	return f.cfg
+}
+
+type aliveStateMatcher struct {
+	wantAliveIP int64
+}
+
+func (m aliveStateMatcher) Match(value driver.Value) bool {
+	raw, ok := value.(string)
+	if !ok {
+		return false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return false
+	}
+	return mapAnyInt64(payload["alive_ip"]) == m.wantAliveIP
+}
+
+func TestReportAliveUsesRuntimeDeviceLimitMode(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := NewDBService(config.Config{DeviceLimitMode: 0}, db, nil).
+		WithRuntimeConfig(fakeRuntimeConfig{cfg: config.Config{DeviceLimitMode: 1}})
+
+	mock.ExpectQuery(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = \$1 LIMIT 1`).
+		WithArgs("ALIVE_IP_USER_9").
+		WillReturnRows(sqlmock.NewRows([]string{"v", "expire_at"}).AddRow(`{
+			"v2node1": {"aliveips": ["1.1.1.1_ios"], "lastupdateAt": 4102444800},
+			"alive_ip": 1
+		}`, int64(0)))
+	mock.ExpectExec(`INSERT INTO v2_runtime_kv \(k, v, expire_at, created_at, updated_at\)`).
+		WithArgs("ALIVE_IP_USER_9", aliveStateMatcher{wantAliveIP: 1}, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err = service.ReportAlive(context.Background(), AliveReportRequest{
+		NodeID:   2,
+		NodeType: "v2node",
+		Users: map[int64][]string{
+			9: []string{"1.1.1.1_android"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReportAlive() error = %v", err)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
 	}

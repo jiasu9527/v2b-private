@@ -116,6 +116,27 @@ func TestAdminAliveIPSummaryUsesNodeNames(t *testing.T) {
 	}
 }
 
+func TestAdminAliveIPSummaryMergesSameIPAcrossNodes(t *testing.T) {
+	count, ips := adminAliveIPSummaryWithNodeNames(`{
+		"alive_ip": 1,
+		"v2node1": {"aliveips": ["1.1.1.1_ios"]},
+		"v2node2": {"aliveips": ["1.1.1.1_android"]}
+	}`, map[string]string{
+		"v2node1": "香港-01",
+		"v2node2": "台湾-02",
+	})
+
+	if count != 1 {
+		t.Fatalf("expected alive count 1, got %d", count)
+	}
+	if strings.Count(ips, "1.1.1.1") != 1 {
+		t.Fatalf("expected same IP to appear once, got %q", ips)
+	}
+	if !strings.Contains(ips, "香港-01") || !strings.Contains(ips, "台湾-02") {
+		t.Fatalf("expected node names to be merged, got %q", ips)
+	}
+}
+
 func TestParseManagedServerNodeKey(t *testing.T) {
 	tests := []struct {
 		input      string

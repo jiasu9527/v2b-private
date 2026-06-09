@@ -64,10 +64,15 @@ type trafficReporter interface {
 	QueueTrafficReport(ctx context.Context, report user.TrafficReport) error
 }
 
+type runtimeConfigProvider interface {
+	CurrentConfig() config.Config
+}
+
 type DBService struct {
 	cfg      config.Config
 	db       *sql.DB
 	reporter trafficReporter
+	runtime  runtimeConfigProvider
 }
 
 var nodeServerTables = map[string]string{
@@ -83,6 +88,21 @@ var nodeServerTables = map[string]string{
 
 func NewDBService(cfg config.Config, db *sql.DB, reporter trafficReporter) *DBService {
 	return &DBService{cfg: cfg, db: db, reporter: reporter}
+}
+
+func (s *DBService) WithRuntimeConfig(runtime runtimeConfigProvider) *DBService {
+	s.runtime = runtime
+	return s
+}
+
+func (s *DBService) currentConfig() config.Config {
+	if s == nil {
+		return config.Config{}
+	}
+	if s.runtime == nil {
+		return s.cfg
+	}
+	return s.runtime.CurrentConfig()
 }
 
 func (s *DBService) PushTraffic(ctx context.Context, req TrafficPushRequest) error {

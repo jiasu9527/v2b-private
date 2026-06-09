@@ -65,8 +65,7 @@ func adminAliveIPSummaryWithNodeNames(raw string, nodeNames map[string]string) (
 	}
 
 	count := mapAnyInt64(state["alive_ip"])
-	ips := make([]string, 0)
-	seen := make(map[string]struct{})
+	ipNodes := make(map[string]map[string]struct{})
 	for nodeTypeID, payload := range state {
 		if nodeTypeID == "alive_ip" {
 			continue
@@ -85,17 +84,27 @@ func adminAliveIPSummaryWithNodeNames(raw string, nodeNames map[string]string) (
 			}
 			if ip != "" {
 				label := adminAliveIPNodeLabel(nodeTypeID, nodeNames)
-				value := ip
+				if _, ok := ipNodes[ip]; !ok {
+					ipNodes[ip] = make(map[string]struct{})
+				}
 				if label != "" {
-					value = fmt.Sprintf("%s | %s", ip, label)
+					ipNodes[ip][label] = struct{}{}
 				}
-				if _, ok := seen[value]; ok {
-					continue
-				}
-				seen[value] = struct{}{}
-				ips = append(ips, value)
 			}
 		}
+	}
+	ips := make([]string, 0, len(ipNodes))
+	for ip, nodes := range ipNodes {
+		labels := make([]string, 0, len(nodes))
+		for label := range nodes {
+			labels = append(labels, label)
+		}
+		sort.Strings(labels)
+		value := ip
+		if len(labels) > 0 {
+			value = fmt.Sprintf("%s | %s", ip, strings.Join(labels, "/"))
+		}
+		ips = append(ips, value)
 	}
 	sort.Strings(ips)
 	return count, strings.Join(ips, ", ")
