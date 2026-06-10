@@ -3,6 +3,7 @@ import { Button, Form, Input, Modal, Popconfirm, Select, Space, Spin, Switch, Ta
 import { MenuOutlined, PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { apiGet, apiPost } from '../lib/api';
+import { moveItem } from '../lib/drag';
 
 export default function KnowledgePage() {
   const [rows, setRows] = useState<any[]>([]);
@@ -10,6 +11,7 @@ export default function KnowledgePage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [edit, setEdit] = useState<any>(null);
+  const [draggingKey, setDraggingKey] = useState<string | null>(null);
   const [form] = Form.useForm();
 
   const load = async () => {
@@ -68,6 +70,36 @@ export default function KnowledgePage() {
     load();
   };
 
+  const saveSort = async (nextRows: any[]) => {
+    await apiPost('/knowledge/sort', { knowledge_ids: nextRows.map((row) => row.id) });
+    message.success('排序已保存');
+    load();
+  };
+
+  const handleDrop = async (targetRow: any) => {
+    if (!draggingKey) return;
+    const targetKey = String(targetRow.id);
+    if (draggingKey === targetKey) {
+      setDraggingKey(null);
+      return;
+    }
+    const fromIndex = rows.findIndex((row) => String(row.id) === draggingKey);
+    const toIndex = rows.findIndex((row) => String(row.id) === targetKey);
+    if (fromIndex < 0 || toIndex < 0) {
+      setDraggingKey(null);
+      return;
+    }
+    const nextRows = moveItem(rows, fromIndex, toIndex);
+    setRows(nextRows);
+    setDraggingKey(null);
+    try {
+      await saveSort(nextRows);
+    } catch (e: any) {
+      message.error(e.message || '排序保存失败');
+      load();
+    }
+  };
+
   const columns: any[] = [
     { title: '排序', dataIndex: 'sort', width: 80, render: () => <MenuOutlined className="drag-handle" /> },
     { title: '文章ID', dataIndex: 'id', width: 100 },
@@ -84,7 +116,22 @@ export default function KnowledgePage() {
       <div className="block border-bottom">
         <div className="bg-white">
           <div className="forest-table-action"><Button icon={<PlusOutlined />} onClick={() => openEdit({ language: 'zh-CN' })}>添加知识</Button></div>
-          <Table className="forest-table" tableLayout="auto" dataSource={rows} columns={columns} rowKey="id" pagination={false} />
+          <Table
+            className="forest-table"
+            tableLayout="auto"
+            dataSource={rows}
+            columns={columns}
+            rowKey="id"
+            pagination={false}
+            rowClassName={(row) => `sortable-row ${draggingKey === String(row.id) ? 'dragging-row' : ''}`}
+            onRow={(row) => ({
+              draggable: true,
+              onDragStart: () => setDraggingKey(String(row.id)),
+              onDragOver: (event) => event.preventDefault(),
+              onDrop: () => handleDrop(row),
+              onDragEnd: () => setDraggingKey(null),
+            })}
+          />
         </div>
       </div>
     </Spin>
