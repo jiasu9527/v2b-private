@@ -131,6 +131,7 @@ func (s *DBService) FetchConfig(_ context.Context, key string) (map[string]any, 
 			"subscribe_guard_block_empty_ua":        cfg.int64Value("subscribe_guard_block_empty_ua", 1),
 			"subscribe_guard_block_crawler_ua":      cfg.int64Value("subscribe_guard_block_crawler_ua", 1),
 			"subscribe_guard_rate_limit_per_minute": cfg.int64Value("subscribe_guard_rate_limit_per_minute", 20),
+			"subscribe_guard_log_keep_days":         cfg.int64Value("subscribe_guard_log_keep_days", 7),
 		},
 		"frontend": map[string]any{
 			"frontend_theme":          cfg.stringValue("frontend_theme", "forest"),

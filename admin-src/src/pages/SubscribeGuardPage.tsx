@@ -76,6 +76,12 @@ const fields = [
     description: '0 表示不限制。超过限制返回 429。',
     type: 'number',
   },
+  {
+    key: 'subscribe_guard_log_keep_days',
+    title: '日志保留天数',
+    description: '订阅防护日志会持久保存到本地文件，并自动清理超过该天数的记录。0 表示不自动清理。',
+    type: 'days',
+  },
 ];
 
 function arrayToText(value: any) {
@@ -171,10 +177,11 @@ export default function SubscribeGuardPage() {
   const renderControl = (field: any) => {
     if (field.type === 'switch') return <Switch />;
     if (field.type === 'number') return <InputNumber min={0} addonAfter="次/分钟" style={{ width: '100%', maxWidth: 360 }} />;
+    if (field.type === 'days') return <InputNumber min={0} addonAfter="天" style={{ width: '100%', maxWidth: 360 }} />;
     return <Input.TextArea rows={5} placeholder={field.placeholder || '请输入'} />;
   };
 
-  const appendToList = (fieldKey: string, value: any) => {
+  const appendToList = async (fieldKey: string, value: any) => {
     const raw = String(value || '').trim();
     if (!raw) return;
     const current = textToArray(form.getFieldValue(fieldKey));
@@ -182,8 +189,18 @@ export default function SubscribeGuardPage() {
       message.info('已经在列表中');
       return;
     }
-    form.setFieldValue(fieldKey, [...current, raw].join('\n'));
-    message.success('已追加到列表，记得保存配置');
+    const nextText = [...current, raw].join('\n');
+    form.setFieldValue(fieldKey, nextText);
+    try {
+      setSaving(true);
+      await apiPost('/config/save', normalizeValues({ ...form.getFieldsValue(), [fieldKey]: nextText }));
+      message.success('已追加并保存生效');
+      load();
+    } catch (e: any) {
+      message.error(e.message || '保存失败');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const compactColumns = (field: string, title: string) => [

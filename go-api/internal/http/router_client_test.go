@@ -7,8 +7,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/nodeapi"
@@ -702,10 +705,14 @@ func TestRouterClientSubscribeGuardRateLimitsByIP(t *testing.T) {
 
 func TestRouterAdminSubscribeGuardStatsEndpoint(t *testing.T) {
 	resetSubscribeGuardStateForTest()
+	publicDir := filepath.Join(t.TempDir(), "public")
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	userService := &fakeUserService{resolvedClientUserID: 10}
 	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1, Email: "admin@example.com"}}
 	router := NewRouter(config.Config{
-		PublicDir:                    "../public",
+		PublicDir:                    publicDir,
 		AdminPath:                    "localadmin",
 		SubscribeGuardEnable:         true,
 		SubscribeGuardTokenBlacklist: []string{"token-1"},
@@ -745,6 +752,53 @@ func TestRouterAdminSubscribeGuardStatsEndpoint(t *testing.T) {
 	first := recent[0].(map[string]any)
 	if first["reason"] != "token" || first["ip"] != "203.0.113.9" {
 		t.Fatalf("unexpected recent event: %#v", first)
+	}
+}
+
+func TestSubscribeGuardStatsSurvivesMemoryResetFromLogFile(t *testing.T) {
+	resetSubscribeGuardStateForTest()
+	publicDir := filepath.Join(t.TempDir(), "public")
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{PublicDir: publicDir, SubscribeGuardLogKeepDays: 7}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-persist", nil)
+	req.RemoteAddr = "203.0.113.10:12345"
+	req.Header.Set("User-Agent", "curl/8.0")
+
+	recordSubscribeGuardEvent(cfg, req, http.StatusForbidden, "ua", true)
+	resetSubscribeGuardStateForTest()
+
+	stats := subscribeGuardStatsSnapshot(cfg)
+	if stats["total"].(int64) != 1 || stats["blocked"].(int64) != 1 {
+		t.Fatalf("expected persisted stats after memory reset, got %#v", stats)
+	}
+	recent := stats["recent"].([]subscribeGuardEvent)
+	if len(recent) != 1 || recent[0].Token != "token-persist" || recent[0].Reason != "ua" {
+		t.Fatalf("unexpected persisted recent events: %#v", recent)
+	}
+}
+
+func TestSubscribeGuardLogCleanupUsesRetentionDays(t *testing.T) {
+	resetSubscribeGuardStateForTest()
+	publicDir := filepath.Join(t.TempDir(), "public")
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{PublicDir: publicDir, SubscribeGuardLogKeepDays: 1}
+	oldEvent := subscribeGuardEvent{Time: time.Now().Add(-48 * time.Hour).Unix(), IP: "203.0.113.1", Token: "old", UA: "curl", Status: 403, Reason: "ua", Blocked: true}
+	newEvent := subscribeGuardEvent{Time: time.Now().Unix(), IP: "203.0.113.2", Token: "new", UA: "clash", Status: 200, Reason: "pass", Blocked: false}
+	if err := writeSubscribeGuardEvents(cfg, []subscribeGuardEvent{oldEvent, newEvent}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cleanupSubscribeGuardLog(cfg, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	events := readSubscribeGuardLogEvents(cfg)
+	if len(events) != 1 || events[0].Token != "new" {
+		t.Fatalf("expected only new event after cleanup, got %#v", events)
 	}
 }
 

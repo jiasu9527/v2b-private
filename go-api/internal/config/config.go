@@ -57,6 +57,7 @@ type Config struct {
 	SubscribeGuardBlockEmptyUA       bool
 	SubscribeGuardBlockCrawlerUA     bool
 	SubscribeGuardRateLimitPerMinute int64
+	SubscribeGuardLogKeepDays        int64
 	ShowInfoToServerEnable           bool
 	AllowNewPeriod                   bool
 	ShowSubscribeMethod              int64
@@ -198,6 +199,7 @@ func Load() Config {
 		SubscribeGuardBlockEmptyUA:       managedBool("SUBSCRIBE_GUARD_BLOCK_EMPTY_UA", "subscribe_guard_block_empty_ua", true),
 		SubscribeGuardBlockCrawlerUA:     managedBool("SUBSCRIBE_GUARD_BLOCK_CRAWLER_UA", "subscribe_guard_block_crawler_ua", true),
 		SubscribeGuardRateLimitPerMinute: managedInt64("SUBSCRIBE_GUARD_RATE_LIMIT_PER_MINUTE", "subscribe_guard_rate_limit_per_minute", 20),
+		SubscribeGuardLogKeepDays:        managedInt64("SUBSCRIBE_GUARD_LOG_KEEP_DAYS", "subscribe_guard_log_keep_days", 7),
 		ShowInfoToServerEnable:           managedBool("SHOW_INFO_TO_SERVER_ENABLE", "show_info_to_server_enable", false),
 		AllowNewPeriod:                   managedBool("ALLOW_NEW_PERIOD", "allow_new_period", false),
 		ShowSubscribeMethod:              managedInt64("SHOW_SUBSCRIBE_METHOD", "show_subscribe_method", 0),

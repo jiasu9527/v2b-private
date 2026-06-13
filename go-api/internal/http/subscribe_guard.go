@@ -1,9 +1,14 @@
 package httpapi
 
 import (
+	"bufio"
+	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -50,6 +55,11 @@ var subscribeGuardEventState = struct {
 	events []subscribeGuardEvent
 }{events: []subscribeGuardEvent{}}
 
+var subscribeGuardCleanupState = struct {
+	sync.Mutex
+	lastRun time.Time
+}{}
+
 func handleSubscribeGuard(w http.ResponseWriter, r *http.Request, cfg config.Config) bool {
 	if !cfg.SubscribeGuardEnable {
 		return false
@@ -60,51 +70,51 @@ func handleSubscribeGuard(w http.ResponseWriter, r *http.Request, cfg config.Con
 	ua := strings.TrimSpace(r.UserAgent())
 
 	if listMatchesIP(cfg.SubscribeGuardIPWhitelist, clientIP) {
-		recordSubscribeGuardEvent(r, http.StatusOK, "whitelist", false)
+		recordSubscribeGuardEvent(cfg, r, http.StatusOK, "whitelist", false)
 		return false
 	}
 
 	if listMatchesIP(cfg.SubscribeGuardIPBlacklist, clientIP) {
-		writeSubscribeGuardBlock(w, r, http.StatusForbidden, "ip")
+		writeSubscribeGuardBlock(w, r, cfg, http.StatusForbidden, "ip")
 		return true
 	}
 
 	if stringInList(cfg.SubscribeGuardTokenBlacklist, token) {
-		writeSubscribeGuardBlock(w, r, http.StatusForbidden, "token")
+		writeSubscribeGuardBlock(w, r, cfg, http.StatusForbidden, "token")
 		return true
 	}
 
 	if !listContainsFold(cfg.SubscribeGuardUAWhitelist, ua) {
 		if cfg.SubscribeGuardBlockEmptyUA && ua == "" {
-			writeSubscribeGuardBlock(w, r, http.StatusForbidden, "ua")
+			writeSubscribeGuardBlock(w, r, cfg, http.StatusForbidden, "ua")
 			return true
 		}
 		if listContainsFold(cfg.SubscribeGuardUABlacklist, ua) {
-			writeSubscribeGuardBlock(w, r, http.StatusForbidden, "ua")
+			writeSubscribeGuardBlock(w, r, cfg, http.StatusForbidden, "ua")
 			return true
 		}
 		if cfg.SubscribeGuardBlockCrawlerUA && listContainsFold(defaultSubscribeCrawlerUA, ua) {
-			writeSubscribeGuardBlock(w, r, http.StatusForbidden, "ua")
+			writeSubscribeGuardBlock(w, r, cfg, http.StatusForbidden, "ua")
 			return true
 		}
 	}
 
 	if cfg.SubscribeGuardRateLimitPerMinute > 0 && !allowSubscribeGuardRate(clientIP, cfg.SubscribeGuardRateLimitPerMinute) {
-		writeSubscribeGuardBlock(w, r, http.StatusTooManyRequests, "rate_limit")
+		writeSubscribeGuardBlock(w, r, cfg, http.StatusTooManyRequests, "rate_limit")
 		return true
 	}
 
-	recordSubscribeGuardEvent(r, http.StatusOK, "pass", false)
+	recordSubscribeGuardEvent(cfg, r, http.StatusOK, "pass", false)
 	return false
 }
 
-func writeSubscribeGuardBlock(w http.ResponseWriter, r *http.Request, status int, reason string) {
-	recordSubscribeGuardEvent(r, status, reason, true)
+func writeSubscribeGuardBlock(w http.ResponseWriter, r *http.Request, cfg config.Config, status int, reason string) {
+	recordSubscribeGuardEvent(cfg, r, status, reason, true)
 	w.Header().Set("X-Subscribe-Guard", reason)
 	writePlainText(w, status, "Forbidden")
 }
 
-func recordSubscribeGuardEvent(r *http.Request, status int, reason string, blocked bool) {
+func recordSubscribeGuardEvent(cfg config.Config, r *http.Request, status int, reason string, blocked bool) {
 	event := subscribeGuardEvent{
 		Time:    time.Now().Unix(),
 		IP:      requestClientIP(r),
@@ -120,12 +130,18 @@ func recordSubscribeGuardEvent(r *http.Request, status int, reason string, block
 	if len(subscribeGuardEventState.events) > 1000 {
 		subscribeGuardEventState.events = append([]subscribeGuardEvent(nil), subscribeGuardEventState.events[len(subscribeGuardEventState.events)-1000:]...)
 	}
+	_ = appendSubscribeGuardLogEvent(cfg, event)
+	maybeCleanupSubscribeGuardLog(cfg, time.Now())
 }
 
-func subscribeGuardStatsSnapshot() map[string]any {
+func subscribeGuardStatsSnapshot(cfg config.Config) map[string]any {
+	maybeCleanupSubscribeGuardLog(cfg, time.Now())
 	subscribeGuardEventState.Lock()
 	events := append([]subscribeGuardEvent(nil), subscribeGuardEventState.events...)
 	subscribeGuardEventState.Unlock()
+	if persisted := readSubscribeGuardLogEvents(cfg); len(persisted) > 0 {
+		events = persisted
+	}
 
 	total := int64(len(events))
 	blocked := int64(0)
@@ -168,6 +184,120 @@ func subscribeGuardStatsSnapshot() map[string]any {
 	}
 }
 
+func subscribeGuardLogPath(cfg config.Config) string {
+	publicDir := strings.TrimSpace(cfg.PublicDir)
+	if publicDir == "" {
+		return filepath.Join("storage", "logs", "subscribe_guard.jsonl")
+	}
+	return filepath.Join(publicDir, "..", "storage", "logs", "subscribe_guard.jsonl")
+}
+
+func appendSubscribeGuardLogEvent(cfg config.Config, event subscribeGuardEvent) error {
+	path := subscribeGuardLogPath(cfg)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	raw, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(append(raw, '\n')); err != nil {
+		return err
+	}
+	return nil
+}
+
+func readSubscribeGuardLogEvents(cfg config.Config) []subscribeGuardEvent {
+	path := subscribeGuardLogPath(cfg)
+	file, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer file.Close()
+
+	events := make([]subscribeGuardEvent, 0)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var event subscribeGuardEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			continue
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func writeSubscribeGuardEvents(cfg config.Config, events []subscribeGuardEvent) error {
+	path := subscribeGuardLogPath(cfg)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	writer := bufio.NewWriter(file)
+	for _, event := range events {
+		raw, err := json.Marshal(event)
+		if err != nil {
+			return err
+		}
+		if _, err := writer.Write(append(raw, '\n')); err != nil {
+			return err
+		}
+	}
+	return writer.Flush()
+}
+
+func cleanupSubscribeGuardLog(cfg config.Config, now time.Time) error {
+	if cfg.SubscribeGuardLogKeepDays <= 0 {
+		return nil
+	}
+	path := subscribeGuardLogPath(cfg)
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	cutoff := now.Add(-time.Duration(cfg.SubscribeGuardLogKeepDays) * 24 * time.Hour).Unix()
+	events := readSubscribeGuardLogEvents(cfg)
+	filtered := events[:0]
+	for _, event := range events {
+		if event.Time == 0 || event.Time >= cutoff {
+			filtered = append(filtered, event)
+		}
+	}
+	if len(filtered) == len(events) {
+		return nil
+	}
+	return writeSubscribeGuardEvents(cfg, filtered)
+}
+
+func maybeCleanupSubscribeGuardLog(cfg config.Config, now time.Time) {
+	if cfg.SubscribeGuardLogKeepDays <= 0 {
+		return
+	}
+	subscribeGuardCleanupState.Lock()
+	if !subscribeGuardCleanupState.lastRun.IsZero() && now.Sub(subscribeGuardCleanupState.lastRun) < time.Hour {
+		subscribeGuardCleanupState.Unlock()
+		return
+	}
+	subscribeGuardCleanupState.lastRun = now
+	subscribeGuardCleanupState.Unlock()
+	_ = cleanupSubscribeGuardLog(cfg, now)
+}
+
 func resetSubscribeGuardStateForTest() {
 	subscribeGuardRateState.Lock()
 	subscribeGuardRateState.buckets = map[string]subscribeGuardBucket{}
@@ -175,6 +305,9 @@ func resetSubscribeGuardStateForTest() {
 	subscribeGuardEventState.Lock()
 	subscribeGuardEventState.events = nil
 	subscribeGuardEventState.Unlock()
+	subscribeGuardCleanupState.Lock()
+	subscribeGuardCleanupState.lastRun = time.Time{}
+	subscribeGuardCleanupState.Unlock()
 }
 
 func topSubscribeGuardItems(counts map[string]int64, key string, limit int) []map[string]any {
