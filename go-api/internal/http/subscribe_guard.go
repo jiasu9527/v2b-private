@@ -210,7 +210,7 @@ func minInt(a, b int) int {
 }
 
 func requestClientIP(r *http.Request) string {
-	for _, header := range []string{"CF-Connecting-IP", "X-Real-IP"} {
+	for _, header := range []string{"CF-Connecting-IP", "True-Client-IP", "X-Client-IP"} {
 		if ip := strings.TrimSpace(r.Header.Get(header)); ip != "" {
 			return ip
 		}
@@ -219,6 +219,9 @@ func requestClientIP(r *http.Request) string {
 		if first := strings.TrimSpace(strings.Split(xff, ",")[0]); first != "" {
 			return first
 		}
+	}
+	if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" {
+		return ip
 	}
 	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
 	if err == nil && host != "" {

@@ -620,6 +620,28 @@ func TestRouterClientSubscribeGuardBlocksTokenBlacklistBeforeUserLookup(t *testi
 	}
 }
 
+func TestSubscribeGuardRequestClientIPPrefersForwardedForOverProxyRealIP(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
+	req.RemoteAddr = "10.0.0.10:12345"
+	req.Header.Set("X-Real-IP", "198.51.100.10")
+	req.Header.Set("X-Forwarded-For", "203.0.113.9, 198.51.100.10")
+
+	if ip := requestClientIP(req); ip != "203.0.113.9" {
+		t.Fatalf("expected real client ip from X-Forwarded-For, got %q", ip)
+	}
+}
+
+func TestSubscribeGuardRequestClientIPPrefersCloudflareHeader(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
+	req.RemoteAddr = "10.0.0.10:12345"
+	req.Header.Set("CF-Connecting-IP", "203.0.113.8")
+	req.Header.Set("X-Forwarded-For", "203.0.113.9, 198.51.100.10")
+
+	if ip := requestClientIP(req); ip != "203.0.113.8" {
+		t.Fatalf("expected Cloudflare connecting ip, got %q", ip)
+	}
+}
+
 func TestRouterClientSubscribeGuardBlocksBadUserAgent(t *testing.T) {
 	userService := &fakeUserService{resolvedClientUserID: 10}
 	router := NewRouter(config.Config{
