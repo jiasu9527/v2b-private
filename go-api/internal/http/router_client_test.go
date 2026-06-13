@@ -594,6 +594,90 @@ func TestRouterClientSubscribeEndpoint(t *testing.T) {
 	}
 }
 
+func TestRouterClientSubscribeGuardBlocksTokenBlacklistBeforeUserLookup(t *testing.T) {
+	userService := &fakeUserService{resolvedClientUserID: 10}
+	router := NewRouter(config.Config{
+		PublicDir:                        "../public",
+		SubscribeGuardEnable:             true,
+		SubscribeGuardTokenBlacklist:     []string{"token-1"},
+		SubscribeGuardRateLimitPerMinute: 0,
+	}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
+	req.Header.Set("User-Agent", "ClashMeta/1.0")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if userService.lastClientToken != "" {
+		t.Fatalf("expected blocked request to skip user lookup, got token %q", userService.lastClientToken)
+	}
+	if reason := rec.Header().Get("X-Subscribe-Guard"); reason != "token" {
+		t.Fatalf("expected token block reason header, got %q", reason)
+	}
+}
+
+func TestRouterClientSubscribeGuardBlocksBadUserAgent(t *testing.T) {
+	userService := &fakeUserService{resolvedClientUserID: 10}
+	router := NewRouter(config.Config{
+		PublicDir:                        "../public",
+		SubscribeGuardEnable:             true,
+		SubscribeGuardUABlacklist:        []string{"curl", "python"},
+		SubscribeGuardRateLimitPerMinute: 0,
+	}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
+	req.Header.Set("User-Agent", "curl/8.0")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if reason := rec.Header().Get("X-Subscribe-Guard"); reason != "ua" {
+		t.Fatalf("expected ua block reason header, got %q", reason)
+	}
+}
+
+func TestRouterClientSubscribeGuardRateLimitsByIP(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		subscribe: user.Subscribe{
+			UUID:           "11111111-1111-1111-1111-111111111111",
+			Token:          "token-1",
+			TransferEnable: 1024,
+		},
+	}
+	router := NewRouter(config.Config{
+		PublicDir:                        "../public",
+		SubscribeGuardEnable:             true,
+		SubscribeGuardRateLimitPerMinute: 1,
+	}, WithUserService(userService))
+
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
+		req.RemoteAddr = "203.0.113.9:12345"
+		req.Header.Set("User-Agent", "ClashMeta/1.0")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if i == 0 && rec.Code != http.StatusOK {
+			t.Fatalf("expected first request 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if i == 1 {
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("expected second request 429, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if reason := rec.Header().Get("X-Subscribe-Guard"); reason != "rate_limit" {
+				t.Fatalf("expected rate_limit reason header, got %q", reason)
+			}
+		}
+	}
+}
+
 func TestRouterClientSubscribeClashEndpointUsesAttachmentHeader(t *testing.T) {
 	userService := &fakeUserService{
 		resolvedClientUserID: 10,

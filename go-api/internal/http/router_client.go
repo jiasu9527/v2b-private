@@ -74,6 +74,9 @@ func handleClientAppGetConfig(w http.ResponseWriter, r *http.Request, cfg config
 
 func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Config, service usersvc.Service) bool {
 	r = withClientSubscribePathToken(cfg, r)
+	if handleSubscribeGuard(w, r, cfg) {
+		return true
+	}
 	userID, ok := authenticateClientUser(w, r, service)
 	if !ok {
 		return true
