@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, Card, Form, Input, InputNumber, Space, Spin, Switch, message } from 'antd';
+import { Alert, Button, Card, Col, Form, Input, InputNumber, Row, Space, Spin, Statistic, Switch, Table, Tag, Typography, message } from 'antd';
 import { apiGet, apiPost, unwrapData } from '../lib/api';
 
 const textListFields = [
@@ -100,15 +100,46 @@ function normalizeValues(values: any) {
   return next;
 }
 
+function dateText(ts: any) {
+  const n = Number(ts || 0);
+  if (!n) return '-';
+  return new Date(n * 1000).toLocaleString();
+}
+
+function reasonText(reason: any) {
+  const map: Record<string, string> = {
+    pass: '放行',
+    whitelist: '白名单',
+    ip: 'IP拦截',
+    token: 'Token拦截',
+    ua: 'UA拦截',
+    rate_limit: '频率限制',
+  };
+  return map[String(reason)] || String(reason || '-');
+}
+
 export default function SubscribeGuardPage() {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [stats, setStats] = useState<any>({});
+
+  const loadStats = async () => {
+    try {
+      const res = await apiGet('/subscribe-guard/stats');
+      setStats(unwrapData(res) || {});
+    } catch {
+      setStats({});
+    }
+  };
 
   const load = async () => {
     setLoading(true);
     try {
-      const res = await apiGet('/config/fetch', { key: 'subscribe_guard' });
+      const [res] = await Promise.all([
+        apiGet('/config/fetch', { key: 'subscribe_guard' }),
+        loadStats(),
+      ]);
       const data = unwrapData(res)?.subscribe_guard || {};
       const values: any = {};
       Object.entries(data).forEach(([key, value]) => {
@@ -143,6 +174,36 @@ export default function SubscribeGuardPage() {
     return <Input.TextArea rows={5} placeholder={field.placeholder || '请输入'} />;
   };
 
+  const appendToList = (fieldKey: string, value: any) => {
+    const raw = String(value || '').trim();
+    if (!raw) return;
+    const current = textToArray(form.getFieldValue(fieldKey));
+    if (current.includes(raw)) {
+      message.info('已经在列表中');
+      return;
+    }
+    form.setFieldValue(fieldKey, [...current, raw].join('\n'));
+    message.success('已追加到列表，记得保存配置');
+  };
+
+  const compactColumns = (field: string, title: string) => [
+    { title, dataIndex: field, ellipsis: true, render: (value: any) => <Typography.Text copyable={{ text: String(value || '') }} ellipsis>{value || '-'}</Typography.Text> },
+    { title: '次数', dataIndex: 'count', width: 80 },
+  ];
+
+  const recentColumns: any[] = [
+    { title: '时间', dataIndex: 'time', width: 170, render: dateText },
+    { title: '状态', dataIndex: 'blocked', width: 90, render: (blocked: any, row: any) => <Tag color={blocked ? 'red' : 'green'}>{reasonText(row.reason)}</Tag> },
+    { title: 'IP', dataIndex: 'ip', width: 150, render: (value: any) => <Typography.Text copyable={{ text: value }}>{value || '-'}</Typography.Text> },
+    { title: 'Token', dataIndex: 'token', ellipsis: true, render: (value: any) => <Typography.Text copyable={{ text: value }} ellipsis>{value || '-'}</Typography.Text> },
+    { title: 'UA', dataIndex: 'ua', ellipsis: true, render: (value: any) => <Typography.Text copyable={{ text: value }} ellipsis>{value || '-'}</Typography.Text> },
+    { title: '操作', width: 210, render: (_: any, row: any) => <Space size="small">
+      <a onClick={() => appendToList('subscribe_guard_ip_blacklist', row.ip)}>封IP</a>
+      <a onClick={() => appendToList('subscribe_guard_token_blacklist', row.token)}>封Token</a>
+      <a onClick={() => appendToList('subscribe_guard_ua_blacklist', row.ua)}>封UA</a>
+    </Space> },
+  ];
+
   return <div className="legacy-page config-page subscribe-guard-page">
     <div className="content-heading">订阅防护</div>
     <Card className="block-card">
@@ -155,6 +216,20 @@ export default function SubscribeGuardPage() {
             message="用于防止订阅链接被扫描、脚本批量拉取或泄露滥用。"
             description="规则只作用于订阅接口，不影响用户登录、后台管理和节点上报。白名单优先级最高。"
           />
+          <Row gutter={[16, 16]}>
+            <Col xs={12} md={6}><Card size="small"><Statistic title="总请求" value={stats.total || 0} /></Card></Col>
+            <Col xs={12} md={6}><Card size="small"><Statistic title="已放行" value={stats.allowed || 0} valueStyle={{ color: '#389e0d' }} /></Card></Col>
+            <Col xs={12} md={6}><Card size="small"><Statistic title="已拦截" value={stats.blocked || 0} valueStyle={{ color: '#cf1322' }} /></Card></Col>
+            <Col xs={12} md={6}><Card size="small"><Statistic title="频率限制" value={stats.reason_counts?.rate_limit || 0} valueStyle={{ color: '#d48806' }} /></Card></Col>
+          </Row>
+          <Row gutter={[16, 16]} className="mt-4">
+            <Col xs={24} lg={8}><Card size="small" title="Top IP"><Table size="small" rowKey="ip" pagination={false} columns={compactColumns('ip', 'IP')} dataSource={stats.top_ips || []} /></Card></Col>
+            <Col xs={24} lg={8}><Card size="small" title="Top Token"><Table size="small" rowKey="token" pagination={false} columns={compactColumns('token', 'Token')} dataSource={stats.top_tokens || []} /></Card></Col>
+            <Col xs={24} lg={8}><Card size="small" title="Top UA"><Table size="small" rowKey="ua" pagination={false} columns={compactColumns('ua', 'UA')} dataSource={stats.top_uas || []} /></Card></Col>
+          </Row>
+          <Card className="mt-4" size="small" title="最近订阅防护记录" extra={<Button size="small" onClick={loadStats}>刷新统计</Button>}>
+            <Table size="small" rowKey={(_, index) => String(index)} pagination={{ pageSize: 10, size: 'small' }} columns={recentColumns} dataSource={stats.recent || []} scroll={{ x: 1100 }} />
+          </Card>
         </div>
         <Form form={form} layout="vertical">
           <div className="config-tab-content">

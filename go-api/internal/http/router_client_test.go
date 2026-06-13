@@ -678,6 +678,54 @@ func TestRouterClientSubscribeGuardRateLimitsByIP(t *testing.T) {
 	}
 }
 
+func TestRouterAdminSubscribeGuardStatsEndpoint(t *testing.T) {
+	resetSubscribeGuardStateForTest()
+	userService := &fakeUserService{resolvedClientUserID: 10}
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1, Email: "admin@example.com"}}
+	router := NewRouter(config.Config{
+		PublicDir:                    "../public",
+		AdminPath:                    "localadmin",
+		SubscribeGuardEnable:         true,
+		SubscribeGuardTokenBlacklist: []string{"token-1"},
+	}, WithUserService(userService), WithSessionService(sessionService))
+
+	blockedReq := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
+	blockedReq.RemoteAddr = "203.0.113.9:12345"
+	blockedReq.Header.Set("User-Agent", "ClashMeta/1.0")
+	blockedRec := httptest.NewRecorder()
+	router.ServeHTTP(blockedRec, blockedReq)
+	if blockedRec.Code != http.StatusForbidden {
+		t.Fatalf("expected guard request 403, got %d: %s", blockedRec.Code, blockedRec.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/subscribe-guard/stats?auth_data=jwt-admin", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("expected json body: %v", err)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object, got %#v", payload["data"])
+	}
+	if data["blocked"].(float64) != 1 || data["total"].(float64) != 1 {
+		t.Fatalf("unexpected guard counters: %#v", data)
+	}
+	recent, ok := data["recent"].([]any)
+	if !ok || len(recent) != 1 {
+		t.Fatalf("expected one recent event, got %#v", data["recent"])
+	}
+	first := recent[0].(map[string]any)
+	if first["reason"] != "token" || first["ip"] != "203.0.113.9" {
+		t.Fatalf("unexpected recent event: %#v", first)
+	}
+}
+
 func TestRouterClientSubscribeClashEndpointUsesAttachmentHeader(t *testing.T) {
 	userService := &fakeUserService{
 		resolvedClientUserID: 10,

@@ -713,6 +713,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminConfigTestSendMail(w, r, state.session, state.admin) {
 				return
 			}
+		case r.URL.Path == adminPrefix+"/subscribe-guard/stats":
+			if handleAdminSubscribeGuardStats(w, r, state.session) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/plan/fetch":
 			if handleAdminPlanFetch(w, r, state.session, state.admin) {
 				return
