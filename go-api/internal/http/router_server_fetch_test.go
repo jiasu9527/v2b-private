@@ -149,9 +149,62 @@ func TestRouterServerUniProxyConfigEndpoint(t *testing.T) {
 	if !ok || baseConfig["push_interval"] != float64(60) || baseConfig["pull_interval"] != float64(60) {
 		t.Fatalf("unexpected base config: %#v", payload["base_config"])
 	}
+	sensitiveAudit, ok := payload["sensitive_audit"].(map[string]any)
+	if !ok || sensitiveAudit["enable"] != false {
+		t.Fatalf("unexpected default sensitive audit config: %#v", payload["sensitive_audit"])
+	}
 	routes, ok := payload["routes"].([]any)
 	if !ok || len(routes) != 1 {
 		t.Fatalf("unexpected routes: %#v", payload["routes"])
+	}
+}
+
+func TestRouterServerUniProxyConfigIncludesSensitiveAuditRules(t *testing.T) {
+	nodeService := &fakeNodeService{
+		server: nodeapi.ServerRecord{
+			ID:       7,
+			NodeType: "v2node",
+			Fields: map[string]any{
+				"server_port": int64(8443),
+				"protocol":    "vless",
+			},
+		},
+	}
+	router := NewRouter(
+		config.Config{
+			AppName:                         "forest-go",
+			ServerToken:                     "secret",
+			SubscribeGuardSensitiveEnable:   true,
+			SubscribeGuardSensitiveRules:    []string{"suffix:example.com", "keyword:test"},
+			SubscribeGuardSensitiveInterval: 45,
+			SubscribeGuardSensitiveLogIP:    true,
+		},
+		WithNodeService(nodeService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/server/UniProxy/config?token=secret&node_type=v2node&node_id=7", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("expected json body: %v", err)
+	}
+	sensitiveAudit, ok := payload["sensitive_audit"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected sensitive_audit object, got %#v", payload["sensitive_audit"])
+	}
+	if sensitiveAudit["enable"] != true || sensitiveAudit["report_interval"] != float64(45) || sensitiveAudit["log_client_ip"] != true {
+		t.Fatalf("unexpected sensitive_audit config: %#v", sensitiveAudit)
+	}
+	rules, ok := sensitiveAudit["rules"].([]any)
+	if !ok || len(rules) != 2 || rules[0] != "suffix:example.com" || rules[1] != "keyword:test" {
+		t.Fatalf("unexpected sensitive rules: %#v", sensitiveAudit["rules"])
 	}
 }
 
@@ -270,14 +323,14 @@ func TestRouterServerUniProxyConfigEndpointAdditionalProtocols(t *testing.T) {
 			name:     "hysteria",
 			nodeType: "hysteria",
 			fields: map[string]any{
-				"version":         int64(2),
-				"host":            "156.229.160.135(Ureq)",
-				"server_port":     int64(443),
-				"server_name":     "download.example.com",
-				"up_mbps":         int64(0),
-				"down_mbps":       int64(0),
-				"obfs":            "",
-				"obfs_password":   "",
+				"version":       int64(2),
+				"host":          "156.229.160.135(Ureq)",
+				"server_port":   int64(443),
+				"server_name":   "download.example.com",
+				"up_mbps":       int64(0),
+				"down_mbps":     int64(0),
+				"obfs":          "",
+				"obfs_password": "",
 			},
 			check: func(t *testing.T, payload map[string]any) {
 				t.Helper()
@@ -290,8 +343,8 @@ func TestRouterServerUniProxyConfigEndpointAdditionalProtocols(t *testing.T) {
 			name:     "anytls",
 			nodeType: "anytls",
 			fields: map[string]any{
-				"server_port":  int64(443),
-				"server_name":  "m.ctrip.com",
+				"server_port":    int64(443),
+				"server_name":    "m.ctrip.com",
 				"padding_scheme": []any{"stop=8"},
 			},
 			check: func(t *testing.T, payload map[string]any) {
@@ -578,13 +631,13 @@ func TestRouterServerDeepbworkConfigEndpointUsesSnakeCaseFields(t *testing.T) {
 			ID:       8,
 			NodeType: "vmess",
 			Fields: map[string]any{
-				"server_port":   int64(8443),
-				"network":       "ws",
+				"server_port":      int64(8443),
+				"network":          "ws",
 				"network_settings": map[string]any{"path": "/ws-snake"},
-				"tls":           int64(1),
-				"tls_settings":  map[string]any{"serverName": "edge.example.com", "allowInsecure": int64(1)},
-				"dns_settings":  map[string]any{"servers": []any{"8.8.8.8"}},
-				"rule_settings": map[string]any{"domain": []any{"geosite:google"}},
+				"tls":              int64(1),
+				"tls_settings":     map[string]any{"serverName": "edge.example.com", "allowInsecure": int64(1)},
+				"dns_settings":     map[string]any{"servers": []any{"8.8.8.8"}},
+				"rule_settings":    map[string]any{"domain": []any{"geosite:google"}},
 			},
 		},
 	}

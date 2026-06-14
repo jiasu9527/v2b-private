@@ -711,12 +711,15 @@ func TestRouterAdminSubscribeGuardStatsEndpoint(t *testing.T) {
 	}
 	userService := &fakeUserService{resolvedClientUserID: 10}
 	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1, Email: "admin@example.com"}}
+	nodeService := &fakeNodeService{sensitiveStats: map[string]any{
+		"top_users": []map[string]any{{"user_id": int64(10), "email": "user@example.com", "count": int64(3)}},
+	}}
 	router := NewRouter(config.Config{
 		PublicDir:                    publicDir,
 		AdminPath:                    "localadmin",
 		SubscribeGuardEnable:         true,
 		SubscribeGuardTokenBlacklist: []string{"token-1"},
-	}, WithUserService(userService), WithSessionService(sessionService))
+	}, WithUserService(userService), WithSessionService(sessionService), WithNodeService(nodeService))
 
 	blockedReq := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1", nil)
 	blockedReq.RemoteAddr = "203.0.113.9:12345"
@@ -752,6 +755,14 @@ func TestRouterAdminSubscribeGuardStatsEndpoint(t *testing.T) {
 	first := recent[0].(map[string]any)
 	if first["reason"] != "token" || first["ip"] != "203.0.113.9" {
 		t.Fatalf("unexpected recent event: %#v", first)
+	}
+	sensitive, ok := data["sensitive"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected sensitive stats, got %#v", data["sensitive"])
+	}
+	topUsers, ok := sensitive["top_users"].([]any)
+	if !ok || len(topUsers) != 1 {
+		t.Fatalf("expected sensitive top users, got %#v", sensitive["top_users"])
 	}
 }
 
@@ -1392,6 +1403,10 @@ func TestRouterServerV2ConfigEndpoint(t *testing.T) {
 	t.Setenv("SERVER_PULL_INTERVAL", "45")
 	t.Setenv("SERVER_NODE_REPORT_MIN_TRAFFIC", "2048")
 	t.Setenv("SERVER_DEVICE_ONLINE_MIN_TRAFFIC", "4096")
+	t.Setenv("SUBSCRIBE_GUARD_SENSITIVE_ENABLE", "1")
+	t.Setenv("SUBSCRIBE_GUARD_SENSITIVE_RULES", "suffix:example.com")
+	t.Setenv("SUBSCRIBE_GUARD_SENSITIVE_INTERVAL", "30")
+	t.Setenv("SUBSCRIBE_GUARD_SENSITIVE_LOG_IP", "1")
 
 	nodeService := &fakeNodeService{
 		server: nodeapi.ServerRecord{
@@ -1462,6 +1477,17 @@ func TestRouterServerV2ConfigEndpoint(t *testing.T) {
 	}
 	if baseConfig["push_interval"] != float64(90) || baseConfig["node_report_min_traffic"] != float64(2048) || baseConfig["device_online_min_traffic"] != float64(4096) {
 		t.Fatalf("unexpected base config: %#v", baseConfig)
+	}
+	sensitiveAudit, ok := payload["sensitive_audit"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected sensitive_audit object, got %#v", payload["sensitive_audit"])
+	}
+	if sensitiveAudit["enable"] != true || sensitiveAudit["report_interval"] != float64(30) || sensitiveAudit["log_client_ip"] != true {
+		t.Fatalf("unexpected sensitive audit: %#v", sensitiveAudit)
+	}
+	rules, ok := sensitiveAudit["rules"].([]any)
+	if !ok || len(rules) != 1 || rules[0] != "suffix:example.com" {
+		t.Fatalf("unexpected sensitive audit rules: %#v", sensitiveAudit["rules"])
 	}
 }
 

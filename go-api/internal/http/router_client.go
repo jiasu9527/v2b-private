@@ -542,6 +542,7 @@ func buildV2ServerConfig(cfg config.Config, server nodeapi.ServerRecord, routes 
 			"node_report_min_traffic":   cfg.ServerNodeReportMinTraffic,
 			"device_online_min_traffic": cfg.ServerDeviceOnlineMinTraffic,
 		},
+		"sensitive_audit": buildSensitiveAuditConfig(cfg),
 	}
 	if sendThrough := fieldString(server, "send_through"); sendThrough != "" {
 		payload["send_through"] = sendThrough

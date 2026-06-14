@@ -8,12 +8,15 @@ const textListFields = [
   'subscribe_guard_ua_whitelist',
   'subscribe_guard_ua_blacklist',
   'subscribe_guard_token_blacklist',
+  'subscribe_guard_sensitive_rules',
 ];
 
 const switchFields = [
   'subscribe_guard_enable',
   'subscribe_guard_block_empty_ua',
   'subscribe_guard_block_crawler_ua',
+  'subscribe_guard_sensitive_enable',
+  'subscribe_guard_sensitive_log_ip',
 ];
 
 const fields = [
@@ -82,6 +85,37 @@ const fields = [
     description: '订阅防护日志会持久保存到本地文件，并自动清理超过该天数的记录。0 表示不自动清理。',
     type: 'days',
   },
+  {
+    key: 'subscribe_guard_sensitive_enable',
+    title: '启用敏感访问监控',
+    description: '开启后 v2node 会识别用户通过节点访问的敏感域名，并批量上报到面板。',
+    type: 'switch',
+  },
+  {
+    key: 'subscribe_guard_sensitive_rules',
+    title: '敏感访问规则',
+    description: '每行一条规则，支持 domain:example.com、suffix:example.com、keyword:xxx。命中后只记录和统计，不主动拦截。',
+    type: 'textarea',
+    placeholder: 'suffix:example.com\nkeyword:test\ndomain:example.org',
+  },
+  {
+    key: 'subscribe_guard_sensitive_interval',
+    title: '敏感访问上报间隔',
+    description: 'v2node 聚合命中记录后按该间隔批量上报，建议 30-120 秒。',
+    type: 'seconds',
+  },
+  {
+    key: 'subscribe_guard_sensitive_log_ip',
+    title: '记录客户端 IP',
+    description: '开启后敏感访问日志会记录用户连接节点时的客户端 IP。',
+    type: 'switch',
+  },
+  {
+    key: 'subscribe_guard_sensitive_log_keep_days',
+    title: '敏感日志保留天数',
+    description: '超过该天数的敏感访问日志会在节点上报时自动清理。0 表示不自动清理。',
+    type: 'days',
+  },
 ];
 
 function arrayToText(value: any) {
@@ -122,6 +156,11 @@ function reasonText(reason: any) {
     rate_limit: '频率限制',
   };
   return map[String(reason)] || String(reason || '-');
+}
+
+function sensitiveTimeText(row: any) {
+  const last = Number(row?.last_at || row?.time || 0);
+  return dateText(last);
 }
 
 export default function SubscribeGuardPage() {
@@ -178,6 +217,7 @@ export default function SubscribeGuardPage() {
     if (field.type === 'switch') return <Switch />;
     if (field.type === 'number') return <InputNumber min={0} addonAfter="次/分钟" style={{ width: '100%', maxWidth: 360 }} />;
     if (field.type === 'days') return <InputNumber min={0} addonAfter="天" style={{ width: '100%', maxWidth: 360 }} />;
+    if (field.type === 'seconds') return <InputNumber min={0} addonAfter="秒" style={{ width: '100%', maxWidth: 360 }} />;
     return <Input.TextArea rows={5} placeholder={field.placeholder || '请输入'} />;
   };
 
@@ -221,6 +261,27 @@ export default function SubscribeGuardPage() {
     </Space> },
   ];
 
+  const sensitiveUserColumns: any[] = [
+    { title: '账号', dataIndex: 'email', ellipsis: true, render: (value: any, row: any) => <Typography.Text copyable={{ text: String(value || row.user_id || '') }} ellipsis>{value || `用户 #${row.user_id}`}</Typography.Text> },
+    { title: '次数', dataIndex: 'count', width: 90 },
+  ];
+
+  const sensitiveDomainColumns: any[] = [
+    { title: '域名', dataIndex: 'domain', ellipsis: true, render: (value: any) => <Typography.Text copyable={{ text: String(value || '') }} ellipsis>{value || '-'}</Typography.Text> },
+    { title: '次数', dataIndex: 'count', width: 90 },
+  ];
+
+  const sensitiveRecentColumns: any[] = [
+    { title: '时间', dataIndex: 'last_at', width: 170, render: (_: any, row: any) => sensitiveTimeText(row) },
+    { title: '账号', dataIndex: 'email', width: 210, ellipsis: true, render: (value: any, row: any) => <Typography.Text copyable={{ text: String(value || row.user_id || '') }} ellipsis>{value || `用户 #${row.user_id}`}</Typography.Text> },
+    { title: '域名', dataIndex: 'domain', ellipsis: true, render: (value: any) => <Typography.Text copyable={{ text: String(value || '') }} ellipsis>{value || '-'}</Typography.Text> },
+    { title: '规则', dataIndex: 'rule', width: 190, ellipsis: true },
+    { title: '客户端 IP', dataIndex: 'client_ip', width: 150, render: (value: any) => value || '-' },
+    { title: '次数', dataIndex: 'count', width: 80 },
+  ];
+
+  const sensitiveStats = stats.sensitive || {};
+
   return <div className="legacy-page config-page subscribe-guard-page">
     <div className="content-heading">订阅防护</div>
     <Card className="block-card">
@@ -246,6 +307,13 @@ export default function SubscribeGuardPage() {
           </Row>
           <Card className="mt-4" size="small" title="最近订阅防护记录" extra={<Button size="small" onClick={loadStats}>刷新统计</Button>}>
             <Table size="small" rowKey={(_, index) => String(index)} pagination={{ pageSize: 10, size: 'small' }} columns={recentColumns} dataSource={stats.recent || []} scroll={{ x: 1100 }} />
+          </Card>
+          <Row gutter={[16, 16]} className="mt-4">
+            <Col xs={24} lg={12}><Card size="small" title="敏感访问账号排行"><Table size="small" rowKey={(row) => String(row.user_id || row.email)} pagination={false} columns={sensitiveUserColumns} dataSource={sensitiveStats.top_users || []} /></Card></Col>
+            <Col xs={24} lg={12}><Card size="small" title="敏感访问域名排行"><Table size="small" rowKey="domain" pagination={false} columns={sensitiveDomainColumns} dataSource={sensitiveStats.top_domains || []} /></Card></Col>
+          </Row>
+          <Card className="mt-4" size="small" title="最近敏感访问记录" extra={<Button size="small" onClick={loadStats}>刷新统计</Button>}>
+            <Table size="small" rowKey={(row, index) => String(row.id || index)} pagination={{ pageSize: 10, size: 'small' }} columns={sensitiveRecentColumns} dataSource={sensitiveStats.recent || []} scroll={{ x: 1150 }} />
           </Card>
         </div>
         <Form form={form} layout="vertical">

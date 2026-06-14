@@ -96,6 +96,68 @@ func handleServerUniProxyAlive(w http.ResponseWriter, r *http.Request, cfg confi
 	return true
 }
 
+func handleServerUniProxySensitive(w http.ResponseWriter, r *http.Request, cfg config.Config, service nodeapi.Service) bool {
+	server, ok := lookupNodeServerQuery(w, r, cfg, service, "")
+	if !ok {
+		return true
+	}
+
+	events, err := decodeSensitiveAccessPayload(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+
+	if err := service.ReportSensitiveAccess(r.Context(), nodeapi.SensitiveAccessReportRequest{
+		NodeID:   server.ID,
+		NodeType: server.NodeType,
+		Events:   events,
+	}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
+		return true
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"data": true})
+	return true
+}
+
+func lookupNodeServerQuery(w http.ResponseWriter, r *http.Request, cfg config.Config, service nodeapi.Service, defaultType string) (nodeapi.ServerRecord, bool) {
+	if service == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "node service unavailable"})
+		return nodeapi.ServerRecord{}, false
+	}
+	inputs := map[string]string{}
+	for key, entries := range r.URL.Query() {
+		if len(entries) > 0 {
+			inputs[key] = strings.TrimSpace(entries[0])
+		}
+	}
+	if err := validateServerPushToken(cfg, inputs); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
+		return nodeapi.ServerRecord{}, false
+	}
+	nodeType := strings.TrimSpace(defaultType)
+	if nodeType == "" {
+		nodeType = strings.TrimSpace(inputs["node_type"])
+	}
+	nodeType = nodeapi.NormalizeNodeType(nodeType)
+	if nodeType == "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "node_type is invalid"})
+		return nodeapi.ServerRecord{}, false
+	}
+	nodeID, err := strconv.ParseInt(strings.TrimSpace(inputs["node_id"]), 10, 64)
+	if err != nil || nodeID <= 0 {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "node_id is invalid"})
+		return nodeapi.ServerRecord{}, false
+	}
+	server, err := service.LookupServer(r.Context(), nodeapi.ServerLookupRequest{NodeID: nodeID, NodeType: nodeType})
+	if err != nil || server.ID <= 0 {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "server is not exist"})
+		return nodeapi.ServerRecord{}, false
+	}
+	return server, true
+}
+
 func handleServerDeepbworkUser(w http.ResponseWriter, r *http.Request, cfg config.Config, service nodeapi.Service) bool {
 	server, ok := lookupNodeServer(w, r, cfg, service, "vmess")
 	if !ok {
@@ -318,10 +380,24 @@ func buildUniProxyConfig(cfg config.Config, server nodeapi.ServerRecord, routes 
 		"push_interval": pushInterval,
 		"pull_interval": pullInterval,
 	}
+	payload["sensitive_audit"] = buildSensitiveAuditConfig(cfg)
 	if len(routes) > 0 {
 		payload["routes"] = routes
 	}
 	return payload
+}
+
+func buildSensitiveAuditConfig(cfg config.Config) map[string]any {
+	interval := cfg.SubscribeGuardSensitiveInterval
+	if interval <= 0 {
+		interval = 60
+	}
+	return map[string]any{
+		"enable":          cfg.SubscribeGuardSensitiveEnable,
+		"rules":           cfg.SubscribeGuardSensitiveRules,
+		"report_interval": interval,
+		"log_client_ip":   cfg.SubscribeGuardSensitiveLogIP,
+	}
 }
 
 func buildDeepbworkUsers(users []nodeapi.AvailableUser) []map[string]any {
@@ -579,6 +655,47 @@ func decodeAlivePayload(r *http.Request) (map[int64][]string, error) {
 		result[userID] = stringList(value)
 	}
 	return result, nil
+}
+
+func decodeSensitiveAccessPayload(r *http.Request) ([]nodeapi.SensitiveAccessEvent, error) {
+	rawBody, err := readRequestBody(r)
+	if err != nil {
+		return nil, err
+	}
+	rawBody = []byte(strings.TrimSpace(string(rawBody)))
+	if len(rawBody) == 0 {
+		return nil, nil
+	}
+
+	var events []nodeapi.SensitiveAccessEvent
+	if err := json.Unmarshal(rawBody, &events); err == nil {
+		return normalizeSensitiveAccessEvents(events), nil
+	}
+
+	var wrapped struct {
+		Events []nodeapi.SensitiveAccessEvent `json:"events"`
+	}
+	if err := json.Unmarshal(rawBody, &wrapped); err != nil {
+		return nil, fmt.Errorf("decode sensitive access payload: %w", err)
+	}
+	return normalizeSensitiveAccessEvents(wrapped.Events), nil
+}
+
+func normalizeSensitiveAccessEvents(events []nodeapi.SensitiveAccessEvent) []nodeapi.SensitiveAccessEvent {
+	result := make([]nodeapi.SensitiveAccessEvent, 0, len(events))
+	for _, event := range events {
+		event.Domain = strings.TrimSpace(event.Domain)
+		event.Rule = strings.TrimSpace(event.Rule)
+		event.ClientIP = strings.TrimSpace(event.ClientIP)
+		if event.UserID <= 0 || event.Domain == "" {
+			continue
+		}
+		if event.Count <= 0 {
+			event.Count = 1
+		}
+		result = append(result, event)
+	}
+	return result
 }
 
 func wantsMsgpack(r *http.Request) bool {

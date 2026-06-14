@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"forest/go-api/internal/config"
@@ -50,6 +51,22 @@ type AliveReportRequest struct {
 	Users    map[int64][]string
 }
 
+type SensitiveAccessEvent struct {
+	UserID   int64  `json:"user_id"`
+	Domain   string `json:"domain"`
+	Rule     string `json:"rule"`
+	ClientIP string `json:"client_ip"`
+	Count    int64  `json:"count"`
+	FirstAt  int64  `json:"first_at"`
+	LastAt   int64  `json:"last_at"`
+}
+
+type SensitiveAccessReportRequest struct {
+	NodeID   int64
+	NodeType string
+	Events   []SensitiveAccessEvent
+}
+
 type Service interface {
 	PushTraffic(ctx context.Context, req TrafficPushRequest) error
 	LookupServer(ctx context.Context, req ServerLookupRequest) (ServerRecord, error)
@@ -58,6 +75,8 @@ type Service interface {
 	Routes(ctx context.Context, routeIDs []int64) ([]map[string]any, error)
 	AliveList(ctx context.Context) (map[int64]int64, error)
 	ReportAlive(ctx context.Context, req AliveReportRequest) error
+	ReportSensitiveAccess(ctx context.Context, req SensitiveAccessReportRequest) error
+	SensitiveAccessStats(ctx context.Context, limit int64) (map[string]any, error)
 }
 
 type trafficReporter interface {
@@ -69,10 +88,12 @@ type runtimeConfigProvider interface {
 }
 
 type DBService struct {
-	cfg      config.Config
-	db       *sql.DB
-	reporter trafficReporter
-	runtime  runtimeConfigProvider
+	cfg                 config.Config
+	db                  *sql.DB
+	reporter            trafficReporter
+	runtime             runtimeConfigProvider
+	sensitiveSchemaOnce sync.Once
+	sensitiveSchemaErr  error
 }
 
 var nodeServerTables = map[string]string{
