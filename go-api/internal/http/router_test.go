@@ -762,6 +762,8 @@ type fakeAdminService struct {
 	lastUserMail        admin.UserMailRequest
 	lastUserDump        []admin.UserFilter
 	lastUserBan         []admin.UserFilter
+	lastUserBannedID    int64
+	lastUserBannedValue int64
 	lastUserResetID     int64
 	lastUserDeleteID    int64
 	lastUserDeleteAll   []admin.UserFilter
@@ -988,6 +990,12 @@ func (f *fakeAdminService) SendUserMail(_ context.Context, req admin.UserMailReq
 
 func (f *fakeAdminService) BanUsers(_ context.Context, filters []admin.UserFilter) (bool, error) {
 	f.lastUserBan = filters
+	return true, f.err
+}
+
+func (f *fakeAdminService) SetUserBanned(_ context.Context, id int64, banned int64) (bool, error) {
+	f.lastUserBannedID = id
+	f.lastUserBannedValue = banned
 	return true, f.err
 }
 
@@ -4430,6 +4438,23 @@ func TestRouterAdminUserBanEndpoint(t *testing.T) {
 	}
 	if len(adminService.lastUserBan) != 1 || adminService.lastUserBan[0].Key != "email" {
 		t.Fatalf("unexpected ban filters: %#v", adminService.lastUserBan)
+	}
+}
+
+func TestRouterAdminSubscribeGuardSetUserBannedEndpoint(t *testing.T) {
+	adminService := &fakeAdminService{}
+	router := NewRouter(config.Config{AdminPath: "localadmin"}, WithSessionService(&fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1, Email: "admin@example.com"}}), WithAdminService(adminService))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/subscribe-guard/set-user-banned", strings.NewReader("auth_data=jwt-admin&id=10&banned=1"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if adminService.lastUserBannedID != 10 || adminService.lastUserBannedValue != 1 {
+		t.Fatalf("unexpected set banned request: id=%d banned=%d", adminService.lastUserBannedID, adminService.lastUserBannedValue)
 	}
 }
 

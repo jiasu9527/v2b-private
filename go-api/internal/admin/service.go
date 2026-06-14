@@ -305,6 +305,7 @@ type Service interface {
 	ListUsers(ctx context.Context, req UserFetchRequest) (UserListResult, error)
 	GetUserInfoByID(ctx context.Context, id int64) (map[string]any, error)
 	UpdateUser(ctx context.Context, req UserUpdateRequest) (bool, error)
+	SetUserBanned(ctx context.Context, id int64, banned int64) (bool, error)
 	GenerateUsers(ctx context.Context, req UserGenerateRequest) (string, bool, error)
 	DumpUserCSV(ctx context.Context, filters []UserFilter) (string, error)
 	SendUserMail(ctx context.Context, req UserMailRequest) (bool, error)

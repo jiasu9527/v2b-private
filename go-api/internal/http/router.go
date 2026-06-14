@@ -718,7 +718,11 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/subscribe-guard/stats":
-			if handleAdminSubscribeGuardStats(w, r, cfg, state.session, state.node, state.user) {
+			if handleAdminSubscribeGuardStats(w, r, cfg, state.session, state.node, state.user, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/subscribe-guard/set-user-banned":
+			if handleAdminSubscribeGuardSetUserBanned(w, r, state.session, state.admin) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/plan/fetch":

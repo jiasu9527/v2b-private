@@ -449,6 +449,46 @@ func (s *DBService) UpdateUser(ctx context.Context, req UserUpdateRequest) (bool
 	return true, nil
 }
 
+func (s *DBService) SetUserBanned(ctx context.Context, id int64, banned int64) (bool, error) {
+	if s.db == nil {
+		return false, ErrUnavailable
+	}
+	if id <= 0 {
+		return false, errors.New("用户不存在")
+	}
+	if banned != 0 && banned != 1 {
+		return false, errors.New("账号状态格式不正确")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin admin user status transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	now := time.Now().Unix()
+	result, err := tx.ExecContext(ctx, `UPDATE v2_user SET banned = $2, updated_at = $3 WHERE id = $1`, id, banned, now)
+	if err != nil {
+		return false, errors.New("保存失败")
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected == 0 {
+		return false, errors.New("用户不存在")
+	}
+	if banned == 1 {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_auth_session WHERE user_id = $1`, id); err != nil {
+			return false, fmt.Errorf("clear user sessions: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit admin user status transaction: %w", err)
+	}
+	if s.authCache != nil {
+		s.authCache.InvalidateUser(id)
+	}
+	return true, nil
+}
+
 func (s *DBService) updateInviteUserBinding(ctx context.Context, userID int64, inviteEmail string) (bool, error) {
 	var currentEmail string
 	if err := s.db.QueryRowContext(ctx, `SELECT email FROM v2_user WHERE id = $1 LIMIT 1`, userID).Scan(&currentEmail); err != nil {

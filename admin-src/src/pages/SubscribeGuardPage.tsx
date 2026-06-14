@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, Card, Col, Form, Input, InputNumber, Modal, Row, Space, Spin, Statistic, Switch, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, Form, Input, InputNumber, Modal, Popconfirm, Row, Space, Spin, Statistic, Switch, Table, Tag, Typography, message } from 'antd';
 import { apiGet, apiPost, unwrapData } from '../lib/api';
 
 const textListFields = [
@@ -218,6 +218,20 @@ export default function SubscribeGuardPage() {
     }
   };
 
+  const setUserBanned = async (row: any, banned: number) => {
+    if (!row?.user_id) return message.warning('用户ID不存在');
+    setSaving(true);
+    try {
+      await apiPost('/subscribe-guard/set-user-banned', { id: row.user_id, banned }, { form: true });
+      message.success(banned ? '已封禁用户' : '已恢复正常');
+      await loadStats();
+    } catch (e: any) {
+      message.error(e.message || '操作失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const renderControl = (field: any) => {
     if (field.type === 'switch') return <Switch />;
     if (field.type === 'number') return <InputNumber min={0} addonAfter="次/分钟" style={{ width: '100%', maxWidth: 360 }} />;
@@ -301,6 +315,7 @@ export default function SubscribeGuardPage() {
 
   const subscribeUserColumns: any[] = [
     { title: '用户邮箱', dataIndex: 'email', ellipsis: true, render: (value: any, row: any) => <Typography.Text copyable={{ text: String(value || row.token || '') }} ellipsis>{value || '-'}</Typography.Text> },
+    { title: '状态', dataIndex: 'banned', width: 90, render: (value: any) => Number(value) ? <Tag color="red">封禁</Tag> : <Tag color="green">正常</Tag> },
     { title: '请求数', dataIndex: 'count', width: 90 },
     { title: 'IP数', dataIndex: 'ip_count', width: 80, render: (value: any) => value || 0 },
     { title: 'UA数量', dataIndex: 'ua_count', width: 90 },
@@ -318,6 +333,7 @@ export default function SubscribeGuardPage() {
         ],
       })}>查看明细</Button> : '-';
     } },
+    { title: '操作', width: 110, render: (_: any, row: any) => Number(row.banned) ? <Popconfirm title={`恢复 ${row.email || row.user_id} 为正常？`} onConfirm={() => setUserBanned(row, 0)}><a>恢复正常</a></Popconfirm> : <Popconfirm title={`封禁 ${row.email || row.user_id}？`} onConfirm={() => setUserBanned(row, 1)}><a className="text-danger">封禁</a></Popconfirm> },
   ];
 
   const sensitiveDomainColumns: any[] = [
@@ -390,7 +406,7 @@ export default function SubscribeGuardPage() {
             <Col xs={24} lg={8}><Card size="small" title="Top UA"><Table size="small" rowKey="ua" pagination={false} columns={compactColumns('ua', 'UA')} dataSource={stats.top_uas || []} /></Card></Col>
           </Row>
           <Card className="mt-4" size="small" title="订阅防控用户排行">
-            <Table size="small" rowKey={(row) => String(row.user_id || row.token)} pagination={false} columns={subscribeUserColumns} dataSource={stats.top_subscribe_users || []} scroll={{ x: 760 }} />
+            <Table size="small" rowKey={(row) => String(row.user_id || row.token)} pagination={{ pageSize: 10, size: 'small', showSizeChanger: true }} columns={subscribeUserColumns} dataSource={stats.top_subscribe_users || []} scroll={{ x: 900 }} />
           </Card>
           <Card className="mt-4" size="small" title="最近订阅防护记录" extra={<Button size="small" onClick={loadStats}>刷新统计</Button>}>
             <Table size="small" rowKey={(_, index) => String(index)} pagination={{ pageSize: 10, size: 'small' }} columns={recentColumns} dataSource={stats.recent || []} scroll={{ x: 1100 }} />

@@ -47,6 +47,67 @@ func TestUpdateUserAllowsInviteUserOnlyUpdate(t *testing.T) {
 	}
 }
 
+func TestSetUserBannedUpdatesStatusAndClearsSessions(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	cache := session.NewAuthCache(time.Minute)
+	cache.Store("token-1", "sess-1", &session.Identity{ID: 9, Email: "demo@example.com"})
+	svc := &DBService{db: db, authCache: cache}
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE v2_user SET banned = \$2, updated_at = \$3 WHERE id = \$1`).
+		WithArgs(int64(9), int64(1), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_auth_session WHERE user_id = \$1`).
+		WithArgs(int64(9)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	ok, err := svc.SetUserBanned(context.Background(), 9, 1)
+	if err != nil {
+		t.Fatalf("set user banned: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected status update success")
+	}
+	if _, ok := cache.Get("token-1"); ok {
+		t.Fatal("expected auth cache to be invalidated")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestSetUserBannedCanRestoreWithoutClearingSessions(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	svc := &DBService{db: db}
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE v2_user SET banned = \$2, updated_at = \$3 WHERE id = \$1`).
+		WithArgs(int64(9), int64(0), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	ok, err := svc.SetUserBanned(context.Background(), 9, 0)
+	if err != nil {
+		t.Fatalf("restore user status: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected status restore success")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func TestUpdateUserBannedInvalidatesAuthCache(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
