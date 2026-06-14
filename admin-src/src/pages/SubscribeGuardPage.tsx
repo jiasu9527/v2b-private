@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, Card, Col, Form, Input, InputNumber, Row, Space, Spin, Statistic, Switch, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, Form, Input, InputNumber, Modal, Row, Space, Spin, Statistic, Switch, Table, Tag, Typography, message } from 'antd';
 import { apiGet, apiPost, unwrapData } from '../lib/api';
 
 const textListFields = [
@@ -163,11 +163,16 @@ function sensitiveTimeText(row: any) {
   return dateText(last);
 }
 
+function safeList(value: any) {
+  return Array.isArray(value) ? value.map((item) => String(item || '').trim()).filter(Boolean) : [];
+}
+
 export default function SubscribeGuardPage() {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [stats, setStats] = useState<any>({});
+  const [detailModal, setDetailModal] = useState<any>(null);
 
   const loadStats = async () => {
     try {
@@ -261,13 +266,24 @@ export default function SubscribeGuardPage() {
     </Space> },
   ];
 
+  const showListDetail = (payload: any) => setDetailModal(payload);
+
   const sensitiveUserColumns: any[] = [
     { title: '账号', dataIndex: 'email', ellipsis: true, render: (value: any, row: any) => <Typography.Text copyable={{ text: String(value || row.user_id || '') }} ellipsis>{value || `用户 #${row.user_id}`}</Typography.Text> },
     { title: '命中数', dataIndex: 'count', width: 90 },
     { title: '域名数', dataIndex: 'domain_count', width: 90 },
-    { title: '命中的域名', dataIndex: 'domains', ellipsis: true, render: (value: any) => {
-      const domains = Array.isArray(value) ? value : [];
-      return domains.length ? <Typography.Text copyable={{ text: domains.join('\n') }} ellipsis>{domains.join('、')}</Typography.Text> : '-';
+    { title: '明细', dataIndex: 'domains', width: 110, render: (value: any, row: any) => {
+      const domains = safeList(value);
+      return domains.length ? <Button size="small" onClick={() => showListDetail({
+        title: '敏感域名明细',
+        owner: row.email || `用户 #${row.user_id}`,
+        summary: `命中 ${row.count || 0} 次，共 ${domains.length} 个域名`,
+        copyText: domains.join('\n'),
+        columns: [
+          { title: '域名', dataIndex: 'value', ellipsis: true, render: (item: any) => <Typography.Text copyable={{ text: String(item || '') }} ellipsis>{item || '-'}</Typography.Text> },
+        ],
+        items: domains.map((domain: string, index: number) => ({ key: `${domain}-${index}`, value: domain })),
+      })}>查看域名</Button> : '-';
     } },
   ];
 
@@ -275,9 +291,18 @@ export default function SubscribeGuardPage() {
     { title: '用户邮箱', dataIndex: 'email', ellipsis: true, render: (value: any, row: any) => <Typography.Text copyable={{ text: String(value || row.token || '') }} ellipsis>{value || '-'}</Typography.Text> },
     { title: '请求数', dataIndex: 'count', width: 90 },
     { title: 'UA数量', dataIndex: 'ua_count', width: 90 },
-    { title: '用户UA明细', dataIndex: 'uas', ellipsis: true, render: (value: any) => {
-      const uas = Array.isArray(value) ? value : [];
-      return uas.length ? <Typography.Text copyable={{ text: uas.join('\n') }} ellipsis>{uas.join('、')}</Typography.Text> : '-';
+    { title: '明细', dataIndex: 'uas', width: 110, render: (value: any, row: any) => {
+      const uas = safeList(value);
+      return uas.length ? <Button size="small" onClick={() => showListDetail({
+        title: '用户 UA 明细',
+        owner: row.email || row.token || '-',
+        summary: `请求 ${row.count || 0} 次，共 ${uas.length} 个 UA`,
+        copyText: uas.join('\n'),
+        columns: [
+          { title: 'User-Agent', dataIndex: 'value', ellipsis: true, render: (item: any) => <Typography.Text copyable={{ text: String(item || '') }} ellipsis>{item || '-'}</Typography.Text> },
+        ],
+        items: uas.map((ua: string, index: number) => ({ key: `${index}-${ua}`, value: ua })),
+      })}>查看UA</Button> : '-';
     } },
   ];
 
@@ -298,6 +323,33 @@ export default function SubscribeGuardPage() {
   const sensitiveStats = stats.sensitive || {};
 
   return <div className="legacy-page config-page subscribe-guard-page">
+    <Modal
+      open={!!detailModal}
+      title={detailModal?.title || '明细'}
+      width={760}
+      footer={<Space><Button onClick={() => setDetailModal(null)}>关闭</Button></Space>}
+      onCancel={() => setDetailModal(null)}
+      destroyOnClose
+    >
+      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <div>
+          <Typography.Text type="secondary">用户</Typography.Text>
+          <div><Typography.Text copyable={{ text: String(detailModal?.owner || '') }} strong>{detailModal?.owner || '-'}</Typography.Text></div>
+        </div>
+        <Alert type="info" showIcon message={detailModal?.summary || '暂无统计'} />
+        <div style={{ textAlign: 'right' }}>
+          <Button size="small" onClick={() => { navigator.clipboard?.writeText(detailModal?.copyText || ''); message.success('已复制明细'); }}>复制全部</Button>
+        </div>
+        <Table
+          size="small"
+          rowKey="key"
+          pagination={{ pageSize: 8, size: 'small' }}
+          columns={detailModal?.columns || []}
+          dataSource={detailModal?.items || []}
+          scroll={{ x: 620 }}
+        />
+      </Space>
+    </Modal>
     <div className="content-heading">订阅防护</div>
     <Card className="block-card">
       <Spin spinning={loading}>
@@ -321,7 +373,7 @@ export default function SubscribeGuardPage() {
             <Col xs={24} lg={8}><Card size="small" title="Top UA"><Table size="small" rowKey="ua" pagination={false} columns={compactColumns('ua', 'UA')} dataSource={stats.top_uas || []} /></Card></Col>
           </Row>
           <Card className="mt-4" size="small" title="订阅防控用户排行">
-            <Table size="small" rowKey={(row) => String(row.user_id || row.token)} pagination={false} columns={subscribeUserColumns} dataSource={stats.top_subscribe_users || []} scroll={{ x: 850 }} />
+            <Table size="small" rowKey={(row) => String(row.user_id || row.token)} pagination={false} columns={subscribeUserColumns} dataSource={stats.top_subscribe_users || []} scroll={{ x: 680 }} />
           </Card>
           <Card className="mt-4" size="small" title="最近订阅防护记录" extra={<Button size="small" onClick={loadStats}>刷新统计</Button>}>
             <Table size="small" rowKey={(_, index) => String(index)} pagination={{ pageSize: 10, size: 'small' }} columns={recentColumns} dataSource={stats.recent || []} scroll={{ x: 1100 }} />
