@@ -598,7 +598,7 @@ func TestRouterClientSubscribeEndpoint(t *testing.T) {
 }
 
 func TestRouterClientSubscribeGuardBlocksTokenBlacklistBeforeUserLookup(t *testing.T) {
-	userService := &fakeUserService{resolvedClientUserID: 10}
+	userService := &fakeUserService{resolvedClientUserID: 10, subscribe: user.Subscribe{Email: "guard-user@example.com"}}
 	router := NewRouter(config.Config{
 		PublicDir:                        "../public",
 		SubscribeGuardEnable:             true,
@@ -646,7 +646,7 @@ func TestSubscribeGuardRequestClientIPPrefersCloudflareHeader(t *testing.T) {
 }
 
 func TestRouterClientSubscribeGuardBlocksBadUserAgent(t *testing.T) {
-	userService := &fakeUserService{resolvedClientUserID: 10}
+	userService := &fakeUserService{resolvedClientUserID: 10, subscribe: user.Subscribe{Email: "guard-user@example.com"}}
 	router := NewRouter(config.Config{
 		PublicDir:                        "../public",
 		SubscribeGuardEnable:             true,
@@ -709,7 +709,7 @@ func TestRouterAdminSubscribeGuardStatsEndpoint(t *testing.T) {
 	if err := os.MkdirAll(publicDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	userService := &fakeUserService{resolvedClientUserID: 10}
+	userService := &fakeUserService{resolvedClientUserID: 10, subscribe: user.Subscribe{Email: "guard-user@example.com"}}
 	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1, Email: "admin@example.com"}}
 	nodeService := &fakeNodeService{sensitiveStats: map[string]any{
 		"top_users": []map[string]any{{"user_id": int64(10), "email": "user@example.com", "count": int64(3)}},
@@ -763,6 +763,14 @@ func TestRouterAdminSubscribeGuardStatsEndpoint(t *testing.T) {
 	topUsers, ok := sensitive["top_users"].([]any)
 	if !ok || len(topUsers) != 1 {
 		t.Fatalf("expected sensitive top users, got %#v", sensitive["top_users"])
+	}
+	subscribeUsers, ok := data["top_subscribe_users"].([]any)
+	if !ok || len(subscribeUsers) != 1 {
+		t.Fatalf("expected subscribe guard user rank, got %#v", data["top_subscribe_users"])
+	}
+	subscribeUser, ok := subscribeUsers[0].(map[string]any)
+	if !ok || subscribeUser["email"] != "guard-user@example.com" || subscribeUser["ua_count"] != float64(1) {
+		t.Fatalf("unexpected subscribe guard user rank: %#v", subscribeUsers[0])
 	}
 }
 

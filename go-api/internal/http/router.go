@@ -718,7 +718,7 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/subscribe-guard/stats":
-			if handleAdminSubscribeGuardStats(w, r, cfg, state.session, state.node) {
+			if handleAdminSubscribeGuardStats(w, r, cfg, state.session, state.node, state.user) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/plan/fetch":

@@ -149,6 +149,7 @@ func subscribeGuardStatsSnapshot(cfg config.Config) map[string]any {
 	ipCounts := map[string]int64{}
 	tokenCounts := map[string]int64{}
 	uaCounts := map[string]int64{}
+	tokenUAs := map[string]map[string]struct{}{}
 	for _, event := range events {
 		if event.Blocked {
 			blocked++
@@ -161,6 +162,12 @@ func subscribeGuardStatsSnapshot(cfg config.Config) map[string]any {
 		}
 		if event.Token != "" {
 			tokenCounts[event.Token]++
+			if _, ok := tokenUAs[event.Token]; !ok {
+				tokenUAs[event.Token] = map[string]struct{}{}
+			}
+			if event.UA != "" {
+				tokenUAs[event.Token][event.UA] = struct{}{}
+			}
 		}
 		if event.UA != "" {
 			uaCounts[event.UA]++
@@ -173,15 +180,31 @@ func subscribeGuardStatsSnapshot(cfg config.Config) map[string]any {
 	}
 
 	return map[string]any{
-		"total":         total,
-		"allowed":       total - blocked,
-		"blocked":       blocked,
-		"reason_counts": reasonCounts,
-		"top_ips":       topSubscribeGuardItems(ipCounts, "ip", 20),
-		"top_tokens":    topSubscribeGuardItems(tokenCounts, "token", 20),
-		"top_uas":       topSubscribeGuardItems(uaCounts, "ua", 20),
-		"recent":        recent,
+		"total":                total,
+		"allowed":              total - blocked,
+		"blocked":              blocked,
+		"reason_counts":        reasonCounts,
+		"top_ips":              topSubscribeGuardItems(ipCounts, "ip", 20),
+		"top_tokens":           topSubscribeGuardItems(tokenCounts, "token", 20),
+		"top_subscribe_tokens": topSubscribeGuardTokenItems(tokenCounts, tokenUAs, 20),
+		"top_uas":              topSubscribeGuardItems(uaCounts, "ua", 20),
+		"recent":               recent,
 	}
+}
+
+func topSubscribeGuardTokenItems(counts map[string]int64, uas map[string]map[string]struct{}, limit int) []map[string]any {
+	items := topSubscribeGuardItems(counts, "token", limit)
+	for _, item := range items {
+		token, _ := item["token"].(string)
+		values := make([]string, 0, len(uas[token]))
+		for ua := range uas[token] {
+			values = append(values, ua)
+		}
+		sort.Strings(values)
+		item["ua_count"] = int64(len(values))
+		item["uas"] = values
+	}
+	return items
 }
 
 func subscribeGuardLogPath(cfg config.Config) string {
