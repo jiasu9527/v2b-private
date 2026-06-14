@@ -55,6 +55,8 @@ func enrichSubscribeGuardUserRank(ctx context.Context, stats map[string]any, use
 			"count":    item["count"],
 			"ua_count": item["ua_count"],
 			"uas":      item["uas"],
+			"ip_count": item["ip_count"],
+			"ips":      item["ips"],
 		}
 		result = append(result, next)
 	}

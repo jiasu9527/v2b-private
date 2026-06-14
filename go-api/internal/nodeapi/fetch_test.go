@@ -103,8 +103,8 @@ func TestSensitiveAccessStatsReturnsEmailRank(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "email", "server_id", "server_type", "domain", "rule", "client_ip", "count", "first_at", "last_at"}).
 			AddRow(int64(1), int64(9), "user@example.com", int64(7), "v2node", "example.com", "suffix:example.com", "203.0.113.9", int64(3), int64(1700000000), int64(1700000060)))
 	mock.ExpectQuery(`SELECT l\.user_id, COALESCE\(u\.email, ''\) AS email, SUM\(l\.count\) AS count, COUNT\(DISTINCT l\.domain\) AS domain_count`).
-		WillReturnRows(sqlmock.NewRows([]string{"user_id", "email", "count", "domain_count", "domains"}).
-			AddRow(int64(9), "user@example.com", int64(3), int64(1), "example.com"))
+		WillReturnRows(sqlmock.NewRows([]string{"user_id", "email", "count", "domain_count", "domains", "ip_count", "ips"}).
+			AddRow(int64(9), "user@example.com", int64(3), int64(1), "example.com", int64(1), "203.0.113.9"))
 	mock.ExpectQuery(`SELECT l\.domain, SUM\(l\.count\) AS count`).
 		WillReturnRows(sqlmock.NewRows([]string{"domain", "count"}).
 			AddRow("example.com", int64(3)))
@@ -119,6 +119,12 @@ func TestSensitiveAccessStatsReturnsEmailRank(t *testing.T) {
 	}
 	if domains, ok := topUsers[0]["domains"].([]string); !ok || len(domains) != 1 || domains[0] != "example.com" {
 		t.Fatalf("unexpected top user domains: %#v", topUsers[0]["domains"])
+	}
+	if topUsers[0]["ip_count"] != int64(1) {
+		t.Fatalf("unexpected top user ip count: %#v", topUsers[0])
+	}
+	if ips, ok := topUsers[0]["ips"].([]string); !ok || len(ips) != 1 || ips[0] != "203.0.113.9" {
+		t.Fatalf("unexpected top user ips: %#v", topUsers[0]["ips"])
 	}
 	recent := stats["recent"].([]map[string]any)
 	if len(recent) != 1 || recent[0]["email"] != "user@example.com" {

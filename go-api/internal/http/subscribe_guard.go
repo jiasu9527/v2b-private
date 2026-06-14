@@ -150,6 +150,7 @@ func subscribeGuardStatsSnapshot(cfg config.Config) map[string]any {
 	tokenCounts := map[string]int64{}
 	uaCounts := map[string]int64{}
 	tokenUAs := map[string]map[string]struct{}{}
+	tokenIPs := map[string]map[string]struct{}{}
 	for _, event := range events {
 		if event.Blocked {
 			blocked++
@@ -165,8 +166,14 @@ func subscribeGuardStatsSnapshot(cfg config.Config) map[string]any {
 			if _, ok := tokenUAs[event.Token]; !ok {
 				tokenUAs[event.Token] = map[string]struct{}{}
 			}
+			if _, ok := tokenIPs[event.Token]; !ok {
+				tokenIPs[event.Token] = map[string]struct{}{}
+			}
 			if event.UA != "" {
 				tokenUAs[event.Token][event.UA] = struct{}{}
+			}
+			if event.IP != "" {
+				tokenIPs[event.Token][event.IP] = struct{}{}
 			}
 		}
 		if event.UA != "" {
@@ -186,23 +193,32 @@ func subscribeGuardStatsSnapshot(cfg config.Config) map[string]any {
 		"reason_counts":        reasonCounts,
 		"top_ips":              topSubscribeGuardItems(ipCounts, "ip", 20),
 		"top_tokens":           topSubscribeGuardItems(tokenCounts, "token", 20),
-		"top_subscribe_tokens": topSubscribeGuardTokenItems(tokenCounts, tokenUAs, 20),
+		"top_subscribe_tokens": topSubscribeGuardTokenItems(tokenCounts, tokenUAs, tokenIPs, 20),
 		"top_uas":              topSubscribeGuardItems(uaCounts, "ua", 20),
 		"recent":               recent,
 	}
 }
 
-func topSubscribeGuardTokenItems(counts map[string]int64, uas map[string]map[string]struct{}, limit int) []map[string]any {
+func topSubscribeGuardTokenItems(counts map[string]int64, uas map[string]map[string]struct{}, ips map[string]map[string]struct{}, limit int) []map[string]any {
 	items := topSubscribeGuardItems(counts, "token", limit)
 	for _, item := range items {
 		token, _ := item["token"].(string)
-		values := make([]string, 0, len(uas[token]))
+		uaValues := make([]string, 0, len(uas[token]))
 		for ua := range uas[token] {
-			values = append(values, ua)
+			uaValues = append(uaValues, ua)
 		}
-		sort.Strings(values)
-		item["ua_count"] = int64(len(values))
-		item["uas"] = values
+		sort.Strings(uaValues)
+
+		ipValues := make([]string, 0, len(ips[token]))
+		for ip := range ips[token] {
+			ipValues = append(ipValues, ip)
+		}
+		sort.Strings(ipValues)
+
+		item["ua_count"] = int64(len(uaValues))
+		item["uas"] = uaValues
+		item["ip_count"] = int64(len(ipValues))
+		item["ips"] = ipValues
 	}
 	return items
 }

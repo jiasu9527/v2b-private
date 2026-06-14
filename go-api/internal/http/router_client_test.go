@@ -769,8 +769,11 @@ func TestRouterAdminSubscribeGuardStatsEndpoint(t *testing.T) {
 		t.Fatalf("expected subscribe guard user rank, got %#v", data["top_subscribe_users"])
 	}
 	subscribeUser, ok := subscribeUsers[0].(map[string]any)
-	if !ok || subscribeUser["email"] != "guard-user@example.com" || subscribeUser["ua_count"] != float64(1) {
+	if !ok || subscribeUser["email"] != "guard-user@example.com" || subscribeUser["ua_count"] != float64(1) || subscribeUser["ip_count"] != float64(1) {
 		t.Fatalf("unexpected subscribe guard user rank: %#v", subscribeUsers[0])
+	}
+	if ips, ok := subscribeUser["ips"].([]any); !ok || len(ips) != 1 || ips[0] != "203.0.113.9" {
+		t.Fatalf("unexpected subscribe guard user ips: %#v", subscribeUser["ips"])
 	}
 }
 

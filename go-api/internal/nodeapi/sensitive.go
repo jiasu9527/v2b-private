@@ -165,7 +165,7 @@ LIMIT $1`, limit)
 }
 
 func (s *DBService) querySensitiveTopUsers(ctx context.Context, limit int64) ([]map[string]any, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT l.user_id, COALESCE(u.email, '') AS email, SUM(l.count) AS count, COUNT(DISTINCT l.domain) AS domain_count, COALESCE(string_agg(DISTINCT l.domain, ','), '') AS domains
+	rows, err := s.db.QueryContext(ctx, `SELECT l.user_id, COALESCE(u.email, '') AS email, SUM(l.count) AS count, COUNT(DISTINCT l.domain) AS domain_count, COALESCE(string_agg(DISTINCT l.domain, ','), '') AS domains, COUNT(DISTINCT NULLIF(l.client_ip, '')) AS ip_count, COALESCE(string_agg(DISTINCT NULLIF(l.client_ip, ''), ','), '') AS ips
 FROM v2_sensitive_access_log l
 LEFT JOIN v2_user u ON u.id = l.user_id
 GROUP BY l.user_id, u.email
@@ -178,10 +178,10 @@ LIMIT $1`, limit)
 
 	result := make([]map[string]any, 0)
 	for rows.Next() {
-		var userID, count, domainCount int64
+		var userID, count, domainCount, ipCount int64
 		var email sql.NullString
-		var domains string
-		if err := rows.Scan(&userID, &email, &count, &domainCount, &domains); err != nil {
+		var domains, ips string
+		if err := rows.Scan(&userID, &email, &count, &domainCount, &domains, &ipCount, &ips); err != nil {
 			return nil, fmt.Errorf("scan sensitive top users: %w", err)
 		}
 		result = append(result, map[string]any{
@@ -190,6 +190,8 @@ LIMIT $1`, limit)
 			"count":        count,
 			"domain_count": domainCount,
 			"domains":      splitNonEmptyCSV(domains),
+			"ip_count":     ipCount,
+			"ips":          splitNonEmptyCSV(ips),
 		})
 	}
 	if err := rows.Err(); err != nil {
