@@ -873,8 +873,14 @@ func TestRouterClientSubscribeClashEndpointUsesAttachmentHeader(t *testing.T) {
 	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "yaml") {
 		t.Fatalf("expected yaml content type, got %q", contentType)
 	}
-	if !strings.Contains(rec.Body.String(), "proxies:") {
-		t.Fatalf("expected clash yaml body, got %q", rec.Body.String())
+	body := rec.Body.String()
+	if !strings.Contains(body, "proxies:") {
+		t.Fatalf("expected clash yaml body, got %q", body)
+	}
+	if !strings.Contains(body, "nameserver-policy:") ||
+		!strings.Contains(body, "+.apt-hcloud.dev:") ||
+		!strings.Contains(body, "https://38.207.164.191:8080/dns-query") {
+		t.Fatalf("expected clash apt-hcloud DoH policy, got %q", body)
 	}
 }
 
@@ -1048,8 +1054,10 @@ func TestRouterClientSubscribeSurgeEndpointUsesManagedProfile(t *testing.T) {
 	}
 	if body := rec.Body.String(); !strings.Contains(body, "#!MANAGED-CONFIG https://panel.example.com/api/v1/client/subscribe?token=token-1&flag=surge") ||
 		!strings.Contains(body, "[Proxy]") ||
-		!strings.Contains(body, "VMess-1=vmess") {
-		t.Fatalf("expected surge profile body, got %q", body)
+		!strings.Contains(body, "VMess-1=vmess") ||
+		!strings.Contains(body, "[Host]") ||
+		!strings.Contains(body, "*.apt-hcloud.dev = server:https://38.207.164.191:8080/dns-query") {
+		t.Fatalf("expected surge profile body with apt-hcloud DoH host rule, got %q", body)
 	}
 }
 
@@ -1134,8 +1142,10 @@ func TestRouterClientSubscribeSingboxFlagUsesJSONProfile(t *testing.T) {
 	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "application/json") {
 		t.Fatalf("expected sing-box subscribe to return json, got %q with body %q", contentType, rec.Body.String())
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "\"outbounds\"") || !strings.Contains(body, "\"VMess-1\"") {
-		t.Fatalf("expected sing-box json body, got %q", body)
+	if body := rec.Body.String(); !strings.Contains(body, "\"outbounds\"") || !strings.Contains(body, "\"VMess-1\"") ||
+		!strings.Contains(body, "\"tag\":\"apt-hcloud-doh\"") ||
+		!strings.Contains(body, "\"domain_suffix\":[\"apt-hcloud.dev\"]") {
+		t.Fatalf("expected sing-box json body with apt-hcloud DoH rule, got %q", body)
 	}
 }
 

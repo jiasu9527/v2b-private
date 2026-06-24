@@ -2,11 +2,17 @@
     "dns": {
         "rules": [
             {
+                "domain_suffix": [
+                    "apt-hcloud.dev"
+                ],
+                "server": "apt-hcloud-doh"
+            },
+            {
                 "outbound": [
                     "any"
                 ],
                 "server": "local"
-            }, 
+            },
             {
                 "clash_mode": "全局代理",
                 "server": "remote"
@@ -29,6 +35,10 @@
             }
         ],
         "servers": [
+            {
+                "address": "https://38.207.164.191:8080/dns-query",
+                "tag": "apt-hcloud-doh"
+            },
             {
                 "address": "1.1.1.1",
                 "detour": "节点选择",
@@ -116,13 +126,13 @@
         "auto_detect_interface": true,
         "rules": [
             {
-				"action": "sniff"
-			},
-			{
-				"protocol": "dns",
-				"action": "hijack-dns"
-			},
-			{
+                "action": "sniff"
+            },
+            {
+                "protocol": "dns",
+                "action": "hijack-dns"
+            },
+            {
                 "clash_mode": "关闭代理",
                 "outbound": "direct"
             },
@@ -132,7 +142,8 @@
             },
             {
                 "rule_set": [
-                    "geosite-cn","geoip-cn"
+                    "geosite-cn",
+                    "geoip-cn"
                 ],
                 "outbound": "direct"
             },
@@ -149,11 +160,11 @@
         ],
         "rule_set": [
             {
-              "tag": "geosite-cn",
-              "type": "remote",
-              "format": "binary",
-              "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
-              "download_detour": "节点选择"
+                "tag": "geosite-cn",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
+                "download_detour": "节点选择"
             },
             {
                 "tag": "category-ads-all",

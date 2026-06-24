@@ -14,9 +14,23 @@
                 "type": "udp",
                 "tag": "cn",
                 "server": "223.5.5.5"
+            },
+            {
+                "type": "https",
+                "tag": "apt-hcloud-doh",
+                "server": "38.207.164.191",
+                "server_port": 8080,
+                "path": "/dns-query"
             }
         ],
         "rules": [
+            {
+                "domain_suffix": [
+                    "apt-hcloud.dev"
+                ],
+                "action": "route",
+                "server": "apt-hcloud-doh"
+            },
             {
                 "rule_set": [
                     "geosite-cn"
@@ -39,7 +53,9 @@
             "mtu": 9000,
             "stack": "system",
             "strict_route": true,
-            "route_exclude_address_set": ["geoip-cn"]
+            "route_exclude_address_set": [
+                "geoip-cn"
+            ]
         },
         {
             "tag": "socks-in",
@@ -117,7 +133,8 @@
             },
             {
                 "rule_set": [
-                    "geosite-cn","geoip-cn"
+                    "geosite-cn",
+                    "geoip-cn"
                 ],
                 "action": "route",
                 "outbound": "DIRECT"
