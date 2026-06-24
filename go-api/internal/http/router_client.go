@@ -74,6 +74,7 @@ func handleClientAppGetConfig(w http.ResponseWriter, r *http.Request, cfg config
 
 func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Config, service usersvc.Service) bool {
 	r = withClientSubscribePathToken(cfg, r)
+	r = withRecoveredClientSubscribeQuery(r)
 	if handleSubscribeGuard(w, r, cfg) {
 		return true
 	}
@@ -170,6 +171,40 @@ func withClientSubscribePathToken(cfg config.Config, r *http.Request) *http.Requ
 	urlCopy := *r.URL
 	query := urlCopy.Query()
 	query.Set("token", token)
+	urlCopy.RawQuery = query.Encode()
+	next.URL = &urlCopy
+	return next
+}
+
+func withRecoveredClientSubscribeQuery(r *http.Request) *http.Request {
+	query := r.URL.Query()
+	token := strings.TrimSpace(query.Get("token"))
+	index := strings.Index(token, "?")
+	if index < 0 {
+		return r
+	}
+
+	recoveredToken := strings.TrimSpace(token[:index])
+	if recoveredToken == "" {
+		return r
+	}
+
+	extraQuery, err := url.ParseQuery(token[index+1:])
+	if err != nil || len(extraQuery) == 0 {
+		return r
+	}
+
+	next := r.Clone(r.Context())
+	urlCopy := *r.URL
+	query.Set("token", recoveredToken)
+	for key, values := range extraQuery {
+		if strings.TrimSpace(key) == "" || query.Get(key) != "" {
+			continue
+		}
+		for _, value := range values {
+			query.Add(key, value)
+		}
+	}
 	urlCopy.RawQuery = query.Encode()
 	next.URL = &urlCopy
 	return next

@@ -1267,6 +1267,30 @@ func TestRouterClientSubscribeShadowrocketModuleEndpointReturnsDoHHostModule(t *
 	}
 }
 
+func TestRouterClientSubscribeShadowrocketModuleToleratesFlagAppendedAfterQueryToken(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		subscribe:            user.Subscribe{UUID: "user-uuid"},
+	}
+	router := NewRouter(config.Config{AppName: "Forest"}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1?flag=shadowrocket-module", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected malformed module URL to still authenticate, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if userService.lastClientToken != "token-1" {
+		t.Fatalf("expected token to be recovered before stray flag, got %q", userService.lastClientToken)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "#!name=Forest DoH Module") || !strings.Contains(body, "*.apt-hcloud.dev = server:https://38.207.164.191:8080/dns-query") {
+		t.Fatalf("expected shadowrocket module body, got %q", body)
+	}
+}
+
 func TestRouterClientSubscribeShadowrocketEndpointUsesLegacyStatusLine(t *testing.T) {
 	userService := &fakeUserService{
 		resolvedClientUserID: 10,
@@ -1447,6 +1471,32 @@ func TestRouterClientSubscribeCustomPathTokenSegment(t *testing.T) {
 	}
 	if userService.lastClientToken != "token-1" {
 		t.Fatalf("expected token from path segment, got %q", userService.lastClientToken)
+	}
+}
+
+func TestRouterClientSubscribeCustomPathTokenSegmentShadowrocketModule(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		subscribe: user.Subscribe{
+			UUID: "user-uuid",
+		},
+		servers: []map[string]any{},
+	}
+	router := NewRouter(config.Config{AppName: "Forest", SubscribePath: "/forest", SubscribeTokenInPath: true}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/forest/token-1?flag=shadowrocket-module", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected custom path shadowrocket module to work, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if userService.lastClientToken != "token-1" {
+		t.Fatalf("expected token from path segment, got %q", userService.lastClientToken)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "#!name=Forest DoH Module") || !strings.Contains(body, "apt-hcloud.dev = server:https://38.207.164.191:8080/dns-query") {
+		t.Fatalf("expected shadowrocket module body, got %q", body)
 	}
 }
 
