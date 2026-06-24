@@ -2,12 +2,6 @@
     "dns": {
         "rules": [
             {
-                "domain_suffix": [
-                    "apt-hcloud.dev"
-                ],
-                "server": "apt-hcloud-doh"
-            },
-            {
                 "outbound": [
                     "any"
                 ],

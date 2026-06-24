@@ -25,13 +25,6 @@
         ],
         "rules": [
             {
-                "domain_suffix": [
-                    "apt-hcloud.dev"
-                ],
-                "action": "route",
-                "server": "apt-hcloud-doh"
-            },
-            {
                 "rule_set": [
                     "geosite-cn"
                 ],

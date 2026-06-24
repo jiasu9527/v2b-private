@@ -34,14 +34,12 @@ func buildShadowrocketDoHModule(cfg config.Config) string {
 	if appName == "" {
 		appName = "Forest"
 	}
-	const dohServer = "https://38.207.164.191:8080/dns-query"
 	return strings.Join([]string{
-		"#!name=" + appName + " DoH Module",
-		"#!desc=Only apt-hcloud.dev and *.apt-hcloud.dev use custom DoH",
+		"#!name=" + appName + " Node DNS Module",
+		"#!desc=Shadowrocket module host overrides are global, so node-only DoH is not injected.",
 		"",
-		"[Host]",
-		"apt-hcloud.dev = server:" + dohServer,
-		"*.apt-hcloud.dev = server:" + dohServer,
+		"# Shadowrocket currently has no safe node-server-only DNS override in this module format.",
+		"# The custom node domain is intentionally not added to Host to avoid affecting normal browsing.",
 		"",
 	}, "\n")
 }
@@ -515,26 +513,37 @@ func shouldInjectSingBoxProxyTags(outbound map[string]any) bool {
 
 func buildSingBoxOutbound(userUUID string, server map[string]any) (map[string]any, bool) {
 	serverType, normalized := normalizeSubscribeServer(server)
+	resolver := singBoxNodeDomainResolver(normalized)
+	var proxy map[string]any
 	switch serverType {
 	case "shadowsocks":
-		return buildSingBoxShadowsocksOutbound(userUUID, normalized), true
+		proxy = buildSingBoxShadowsocksOutbound(userUUID, normalized)
 	case "vmess":
-		return buildSingBoxVmessOutbound(userUUID, normalized), true
+		proxy = buildSingBoxVmessOutbound(userUUID, normalized)
 	case "vless":
-		return buildSingBoxVlessOutbound(userUUID, normalized), true
+		proxy = buildSingBoxVlessOutbound(userUUID, normalized)
 	case "trojan":
-		return buildSingBoxTrojanOutbound(userUUID, normalized), true
+		proxy = buildSingBoxTrojanOutbound(userUUID, normalized)
 	case "tuic":
-		return buildSingBoxTUICOutbound(userUUID, normalized), true
+		proxy = buildSingBoxTUICOutbound(userUUID, normalized)
 	case "hysteria":
-		return buildSingBoxHysteriaOutbound(userUUID, normalized), true
+		proxy = buildSingBoxHysteriaOutbound(userUUID, normalized)
 	case "hysteria2":
-		return buildSingBoxHysteria2Outbound(userUUID, normalized), true
+		proxy = buildSingBoxHysteria2Outbound(userUUID, normalized)
 	case "anytls":
-		return buildSingBoxAnyTLSOutbound(userUUID, normalized), true
+		proxy = buildSingBoxAnyTLSOutbound(userUUID, normalized)
 	default:
 		return nil, false
 	}
+	proxy["domain_resolver"] = resolver
+	return proxy, true
+}
+
+func singBoxNodeDomainResolver(server map[string]any) string {
+	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(serverString(server, "host"))), ".apt-hcloud.dev") || strings.EqualFold(strings.TrimSpace(serverString(server, "host")), "apt-hcloud.dev") {
+		return "apt-hcloud-doh"
+	}
+	return "local"
 }
 
 func buildSingBoxShadowsocksOutbound(userUUID string, server map[string]any) map[string]any {
