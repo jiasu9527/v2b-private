@@ -34,12 +34,14 @@ func buildShadowrocketDoHModule(cfg config.Config) string {
 	if appName == "" {
 		appName = "Forest"
 	}
+	const dohServer = "https://38.207.164.191:8080/dns-query"
 	return strings.Join([]string{
-		"#!name=" + appName + " Node DNS Module",
-		"#!desc=Shadowrocket module host overrides are global, so node-only DoH is not injected.",
+		"#!name=" + appName + " DoH Module",
+		"#!desc=Shadowrocket has no node-only DNS override, so apt-hcloud.dev uses global Host DoH.",
 		"",
-		"# Shadowrocket currently has no safe node-server-only DNS override in this module format.",
-		"# The custom node domain is intentionally not added to Host to avoid affecting normal browsing.",
+		"[Host]",
+		"apt-hcloud.dev = server:" + dohServer,
+		"*.apt-hcloud.dev = server:" + dohServer,
 		"",
 	}, "\n")
 }

@@ -1057,10 +1057,10 @@ func TestRouterClientSubscribeSurgeEndpointUsesManagedProfile(t *testing.T) {
 	}
 	if body := rec.Body.String(); !strings.Contains(body, "#!MANAGED-CONFIG https://panel.example.com/api/v1/client/subscribe?token=token-1&flag=surge") ||
 		!strings.Contains(body, "[Proxy]") ||
-		!strings.Contains(body, "VMess-1=vmess") {
-		t.Fatalf("expected surge profile body, got %q", body)
-	} else if strings.Contains(body, "apt-hcloud.dev = server:https://38.207.164.191:8080/dns-query") {
-		t.Fatalf("surge profile should not globally override apt-hcloud DNS, got %q", body)
+		!strings.Contains(body, "VMess-1=vmess") ||
+		!strings.Contains(body, "[Host]") ||
+		!strings.Contains(body, "*.apt-hcloud.dev = server:https://38.207.164.191:8080/dns-query") {
+		t.Fatalf("expected surge profile body with apt-hcloud DoH host rule, got %q", body)
 	}
 }
 
@@ -1293,11 +1293,15 @@ func TestRouterClientSubscribeShadowrocketModuleEndpointReturnsDoHHostModule(t *
 		t.Fatalf("expected text/plain module response, got %q", contentType)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "#!name=Forest Node DNS Module") {
+	if !strings.Contains(body, "#!name=Forest DoH Module") || !strings.Contains(body, "[Host]") {
 		t.Fatalf("expected shadowrocket module header, got %q", body)
 	}
-	if strings.Contains(body, "[Host]") || strings.Contains(body, "apt-hcloud.dev = server:") || strings.Contains(body, "dns-server") {
-		t.Fatalf("module should not globally override DNS, got %q", body)
+	if !strings.Contains(body, "apt-hcloud.dev = server:https://38.207.164.191:8080/dns-query") ||
+		!strings.Contains(body, "*.apt-hcloud.dev = server:https://38.207.164.191:8080/dns-query") {
+		t.Fatalf("expected apt-hcloud DoH host rules, got %q", body)
+	}
+	if strings.Contains(body, "dns-server") {
+		t.Fatalf("module should not override global DNS server, got %q", body)
 	}
 }
 
@@ -1320,7 +1324,7 @@ func TestRouterClientSubscribeShadowrocketModuleToleratesFlagAppendedAfterQueryT
 		t.Fatalf("expected token to be recovered before stray flag, got %q", userService.lastClientToken)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "#!name=Forest Node DNS Module") || strings.Contains(body, "apt-hcloud.dev = server:") {
+	if !strings.Contains(body, "#!name=Forest DoH Module") || !strings.Contains(body, "*.apt-hcloud.dev = server:https://38.207.164.191:8080/dns-query") {
 		t.Fatalf("expected shadowrocket module body, got %q", body)
 	}
 }
@@ -1529,7 +1533,7 @@ func TestRouterClientSubscribeCustomPathTokenSegmentShadowrocketModule(t *testin
 		t.Fatalf("expected token from path segment, got %q", userService.lastClientToken)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "#!name=Forest Node DNS Module") || strings.Contains(body, "apt-hcloud.dev = server:") {
+	if !strings.Contains(body, "#!name=Forest DoH Module") || !strings.Contains(body, "apt-hcloud.dev = server:https://38.207.164.191:8080/dns-query") {
 		t.Fatalf("expected shadowrocket module body, got %q", body)
 	}
 }
