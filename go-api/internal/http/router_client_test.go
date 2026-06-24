@@ -1226,6 +1226,37 @@ func TestRouterClientSubscribeLegacySingboxUserAgentUsesLegacyTemplate(t *testin
 	}
 }
 
+func TestRouterClientSubscribeShadowrocketModuleEndpointReturnsDoHHostModule(t *testing.T) {
+	userService := &fakeUserService{
+		resolvedClientUserID: 10,
+		subscribe:            user.Subscribe{UUID: "user-uuid"},
+	}
+	router := NewRouter(config.Config{AppName: "Forest"}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=token-1&flag=shadowrocket-module", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "text/plain") {
+		t.Fatalf("expected text/plain module response, got %q", contentType)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "#!name=Forest DoH Module") || !strings.Contains(body, "[Host]") {
+		t.Fatalf("expected shadowrocket module header, got %q", body)
+	}
+	if !strings.Contains(body, "apt-hcloud.dev = server:https://38.207.164.191:8080/dns-query") ||
+		!strings.Contains(body, "*.apt-hcloud.dev = server:https://38.207.164.191:8080/dns-query") {
+		t.Fatalf("expected apt-hcloud DoH host rules, got %q", body)
+	}
+	if strings.Contains(body, "dns-server") {
+		t.Fatalf("module should not override global DNS, got %q", body)
+	}
+}
+
 func TestRouterClientSubscribeShadowrocketEndpointUsesLegacyStatusLine(t *testing.T) {
 	userService := &fakeUserService{
 		resolvedClientUserID: 10,

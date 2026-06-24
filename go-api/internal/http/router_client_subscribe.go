@@ -29,6 +29,23 @@ func buildGeneralSubscribePayload(userUUID string, servers []map[string]any) str
 	return base64.StdEncoding.EncodeToString([]byte(builder.String()))
 }
 
+func buildShadowrocketDoHModule(cfg config.Config) string {
+	appName := strings.TrimSpace(cfg.AppName)
+	if appName == "" {
+		appName = "Forest"
+	}
+	const dohServer = "https://38.207.164.191:8080/dns-query"
+	return strings.Join([]string{
+		"#!name=" + appName + " DoH Module",
+		"#!desc=Only apt-hcloud.dev and *.apt-hcloud.dev use custom DoH",
+		"",
+		"[Host]",
+		"apt-hcloud.dev = server:" + dohServer,
+		"*.apt-hcloud.dev = server:" + dohServer,
+		"",
+	}, "\n")
+}
+
 func buildShadowrocketPayload(subscribe usersvc.Subscribe, servers []map[string]any) string {
 	var builder strings.Builder
 	builder.WriteString(buildShadowrocketStatusLine(subscribe))

@@ -145,6 +145,13 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 		return true
 	}
 
+	if isShadowrocketModuleSubscribeFlag(flag) {
+		writeSubscribeDownloadHeadersWithExtension(w, cfg, ".module")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		writePlainText(w, http.StatusOK, buildShadowrocketDoHModule(cfg))
+		return true
+	}
+
 	if isShadowrocketSubscribeFlag(flag) {
 		writePlainText(w, http.StatusOK, buildShadowrocketPayload(subscribe, servers))
 		return true
@@ -311,6 +318,10 @@ func isClashLikeSubscribeFlag(flag string) bool {
 		strings.Contains(flag, "req-ios") ||
 		strings.Contains(flag, "verge") ||
 		strings.Contains(flag, "nyanpasu")
+}
+
+func isShadowrocketModuleSubscribeFlag(flag string) bool {
+	return strings.Contains(flag, "shadowrocket-module") || strings.Contains(flag, "shadowrocket_module") || strings.Contains(flag, "sr-module")
 }
 
 func isShadowrocketSubscribeFlag(flag string) bool {
