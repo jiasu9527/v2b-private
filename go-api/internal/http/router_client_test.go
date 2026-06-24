@@ -877,10 +877,13 @@ func TestRouterClientSubscribeClashEndpointUsesAttachmentHeader(t *testing.T) {
 	if !strings.Contains(body, "proxies:") {
 		t.Fatalf("expected clash yaml body, got %q", body)
 	}
-	if !strings.Contains(body, "nameserver-policy:") ||
+	if !strings.Contains(body, "proxy-server-nameserver-policy:") ||
 		!strings.Contains(body, "+.apt-hcloud.dev:") ||
 		!strings.Contains(body, "https://38.207.164.191:8080/dns-query") {
-		t.Fatalf("expected clash apt-hcloud DoH policy, got %q", body)
+		t.Fatalf("expected clash apt-hcloud node-domain DoH policy, got %q", body)
+	}
+	if strings.Contains(body, "\n    nameserver-policy:") || strings.HasPrefix(body, "nameserver-policy:") {
+		t.Fatalf("clash apt-hcloud DoH should only affect proxy node domains, got %q", body)
 	}
 }
 

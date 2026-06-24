@@ -28,7 +28,7 @@ dns:
     - 223.5.5.5
     - 119.29.29.29
     - 114.114.114.114
-  nameserver-policy:
+  proxy-server-nameserver-policy:
     '+.apt-hcloud.dev':
       - https://38.207.164.191:8080/dns-query
 
