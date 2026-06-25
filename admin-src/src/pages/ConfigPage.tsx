@@ -354,7 +354,7 @@ export default function ConfigPage() {
     }
   };
 
-  const runTelegramAction = async (action: 'botInfo' | 'webhook' | 'test') => {
+  const runTelegramAction = async (action: 'botInfo' | 'webhook' | 'test' | 'unbind') => {
     setTelegramAction(action);
     try {
       const token = form.getFieldValue('telegram_bot_token');
@@ -366,9 +366,14 @@ export default function ConfigPage() {
       } else if (action === 'webhook') {
         await apiPost('/config/setTelegramWebhook', { telegram_bot_token: token }, { form: true, keepEmpty: true });
         message.success('Webhook 设置成功');
-      } else {
+      } else if (action === 'test') {
         await apiPost('/config/testTelegram', {}, { form: true });
         message.success('测试消息已发送');
+      } else {
+        const res = await fetch(`/api/v1/user/unbindTelegram?auth_data=${encodeURIComponent(localStorage.getItem('forest_admin_auth_data') || '')}`, { credentials: 'same-origin' });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(payload?.message || '解绑失败');
+        message.success('已解绑当前管理员Telegram');
       }
       loadTelegramStatus();
     } catch (e: any) {
@@ -399,6 +404,7 @@ export default function ConfigPage() {
         <Button loading={telegramAction === 'botInfo'} onClick={() => runTelegramAction('botInfo')}>检测Token</Button>
         <Button loading={telegramAction === 'webhook'} onClick={() => runTelegramAction('webhook')}>设置Webhook</Button>
         <Button type="primary" loading={telegramAction === 'test'} onClick={() => runTelegramAction('test')}>发送测试消息</Button>
+        <Button danger loading={telegramAction === 'unbind'} disabled={!status.admin_bound} onClick={() => runTelegramAction('unbind')}>解绑当前管理员</Button>
         <Button onClick={loadTelegramStatus}>刷新状态</Button>
       </Space>
     </div>;
