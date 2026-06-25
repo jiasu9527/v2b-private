@@ -78,6 +78,8 @@ func (s *DBService) MarkOrderPaid(ctx context.Context, tradeNo, callbackNo strin
 	_ = s.notifyOrderPaidAdmins(ctx, adminPaymentNotification{
 		TradeNo:     order.TradeNo,
 		TotalAmount: order.TotalAmount,
+		PaymentID:   order.PaymentID,
+		PaidAt:      order.PaidAt,
 	})
 	return nil
 }
