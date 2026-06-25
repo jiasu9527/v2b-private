@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Card, Form, Input, InputNumber, Select, Spin, Switch, Tabs, message } from 'antd';
+import { Alert, Button, Card, Form, Input, InputNumber, Select, Space, Spin, Switch, Tabs, Tag, Typography, message } from 'antd';
 import { apiGet, apiPost, unwrapData } from '../lib/api';
 
 const groups = [
@@ -307,7 +307,18 @@ export default function ConfigPage() {
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState<any>({});
   const [plans, setPlans] = useState<any[]>([]);
+  const [telegramStatus, setTelegramStatus] = useState<any>(null);
+  const [telegramAction, setTelegramAction] = useState('');
   const watchedValues = Form.useWatch([], form) || {};
+
+  const loadTelegramStatus = async () => {
+    try {
+      const res = await apiGet('/config/telegramStatus');
+      setTelegramStatus(unwrapData(res) || {});
+    } catch {
+      setTelegramStatus(null);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -321,6 +332,7 @@ export default function ConfigPage() {
       setData(d);
       setPlans(Array.isArray(planData) ? planData : []);
       form.setFieldsValue(flattenConfig(d));
+      loadTelegramStatus();
     } catch (e: any) {
       message.error(e.message || '配置加载失败');
     } finally {
@@ -340,6 +352,56 @@ export default function ConfigPage() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const runTelegramAction = async (action: 'botInfo' | 'webhook' | 'test') => {
+    setTelegramAction(action);
+    try {
+      const token = form.getFieldValue('telegram_bot_token');
+      if (action === 'botInfo') {
+        const res = await fetch(`/api/v1/user/telegram/getBotInfo?auth_data=${encodeURIComponent(localStorage.getItem('forest_admin_auth_data') || '')}`, { credentials: 'same-origin' });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(payload?.message || '检测失败');
+        message.success(`机器人正常：@${payload?.data?.username || payload?.username || 'unknown'}`);
+      } else if (action === 'webhook') {
+        await apiPost('/config/setTelegramWebhook', { telegram_bot_token: token }, { form: true, keepEmpty: true });
+        message.success('Webhook 设置成功');
+      } else {
+        await apiPost('/config/testTelegram', {}, { form: true });
+        message.success('测试消息已发送');
+      }
+      loadTelegramStatus();
+    } catch (e: any) {
+      message.error(e.message || '操作失败');
+    } finally {
+      setTelegramAction('');
+    }
+  };
+
+  const renderTelegramTools = () => {
+    const status = telegramStatus || {};
+    return <div className="telegram-tools">
+      <Alert
+        type={status.token_configured && status.bot_enabled && status.admin_bound ? 'success' : 'warning'}
+        showIcon
+        message="Telegram 通知状态"
+        description={<div>
+          <Space wrap size={[8, 8]}>
+            <Tag color={status.token_configured ? 'green' : 'red'}>Token {status.token_configured ? '已配置' : '未配置'}</Tag>
+            <Tag color={status.bot_enabled ? 'green' : 'orange'}>通知 {status.bot_enabled ? '已开启' : '未开启'}</Tag>
+            <Tag color={status.admin_bound ? 'green' : 'red'}>当前管理员 {status.admin_bound ? `已绑定 ${status.telegram_id || ''}` : '未绑定'}</Tag>
+          </Space>
+          {!status.admin_bound && <div className="telegram-tools-hint">绑定方式：先设置 Webhook，然后私聊机器人发送 <Typography.Text code>/bind 你的订阅链接</Typography.Text></div>}
+          {status.webhook_url && <div className="telegram-tools-webhook">Webhook：<Typography.Text copyable>{status.webhook_url}</Typography.Text></div>}
+        </div>}
+      />
+      <Space wrap className="telegram-tools-actions">
+        <Button loading={telegramAction === 'botInfo'} onClick={() => runTelegramAction('botInfo')}>检测Token</Button>
+        <Button loading={telegramAction === 'webhook'} onClick={() => runTelegramAction('webhook')}>设置Webhook</Button>
+        <Button type="primary" loading={telegramAction === 'test'} onClick={() => runTelegramAction('test')}>发送测试消息</Button>
+        <Button onClick={loadTelegramStatus}>刷新状态</Button>
+      </Space>
+    </div>;
   };
 
   const renderInput = (fieldKey: string, value: any) => {
@@ -364,7 +426,7 @@ export default function ConfigPage() {
   const tabItems = useMemo(() => groups.filter(([key]) => data[key]).map(([key, label]) => ({
     key,
     label,
-    children: <div className="config-tab-content">{orderedEntries(key, data[key] || {}).filter(([fieldKey]) => shouldShowField(fieldKey)).map(([fieldKey, value]) => {
+    children: <div className="config-tab-content">{key === 'telegram' && renderTelegramTools()}{orderedEntries(key, data[key] || {}).filter(([fieldKey]) => shouldShowField(fieldKey)).map(([fieldKey, value]) => {
       const meta = fieldMeta(fieldKey);
       return <div className={`config-row ${meta.child ? 'config-row-child' : ''}`} key={fieldKey}>
         <div className="config-row-copy">
@@ -376,7 +438,7 @@ export default function ConfigPage() {
         </div>
       </div>;
     })}</div>
-  })), [data, plans, watchedValues]);
+  })), [data, plans, watchedValues, telegramStatus, telegramAction]);
 
   return <div className="legacy-page config-page">
     <div className="content-heading">系统配置</div>

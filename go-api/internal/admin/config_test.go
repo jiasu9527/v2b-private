@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	cfgpkg "forest/go-api/internal/config"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
 func TestDBServiceFetchConfigAndTemplates(t *testing.T) {
@@ -98,6 +100,74 @@ func TestDBServiceFetchConfigAndTemplates(t *testing.T) {
 	}
 	if len(emailTemplates) != 2 || emailTemplates[0] != "classic" || emailTemplates[1] != "default" {
 		t.Fatalf("unexpected email templates: %#v", emailTemplates)
+	}
+}
+
+func TestDBServiceTelegramAdminStatusShowsBindingAndWebhookURL(t *testing.T) {
+	root := t.TempDir()
+	writeAdminJSONFixture(t, root, map[string]any{
+		"app_url":             "https://site.example",
+		"telegram_bot_token":  "bot-token",
+		"telegram_bot_enable": 1,
+	})
+
+	oldRoot := adminProjectRoot
+	adminProjectRoot = root
+	defer func() { adminProjectRoot = oldRoot }()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT telegram_id FROM v2_user WHERE id = \$1 LIMIT 1`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"telegram_id"}).AddRow(int64(12345)))
+
+	service := &DBService{cfg: cfgpkg.Config{AppURL: "https://fallback.example"}, db: db}
+	status, err := service.GetTelegramAdminStatus(context.Background(), 9)
+	if err != nil {
+		t.Fatalf("telegram status: %v", err)
+	}
+	if status.BotEnabled != true || status.TokenConfigured != true || status.AdminBound != true || status.TelegramID == nil || *status.TelegramID != 12345 {
+		t.Fatalf("unexpected telegram status: %#v", status)
+	}
+	if status.WebhookURL != "https://site.example/api/v1/guest/telegram/webhook?access_token=30f9218d8b0b9633f4ed541cfa7089b5" {
+		t.Fatalf("unexpected webhook url: %q", status.WebhookURL)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestDBServiceSendTelegramTestMessageRequiresBoundAdmin(t *testing.T) {
+	root := t.TempDir()
+	writeAdminJSONFixture(t, root, map[string]any{
+		"telegram_bot_token":  "bot-token",
+		"telegram_bot_enable": 1,
+	})
+
+	oldRoot := adminProjectRoot
+	adminProjectRoot = root
+	defer func() { adminProjectRoot = oldRoot }()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT telegram_id FROM v2_user WHERE id = \$1 LIMIT 1`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"telegram_id"}).AddRow(nil))
+
+	service := &DBService{cfg: cfgpkg.Config{}, db: db}
+	if _, err := service.SendTelegramTestMessage(context.Background(), 9); err == nil || err.Error() != "当前管理员未绑定Telegram，请先私聊机器人发送 /bind 订阅链接" {
+		t.Fatalf("expected unbound telegram error, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }
 

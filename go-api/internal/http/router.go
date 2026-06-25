@@ -713,6 +713,14 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminConfigSetTelegramWebhook(w, r, state.session, state.admin) {
 				return
 			}
+		case r.URL.Path == adminPrefix+"/config/telegramStatus":
+			if handleAdminConfigTelegramStatus(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/config/testTelegram":
+			if handleAdminConfigTestTelegram(w, r, state.session, state.admin) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/config/testSendMail":
 			if handleAdminConfigTestSendMail(w, r, state.session, state.admin) {
 				return
@@ -4112,6 +4120,42 @@ func handleAdminConfigSetTelegramWebhook(w http.ResponseWriter, r *http.Request,
 		return handleAdminError(w, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": updated})
+	return true
+}
+
+func handleAdminConfigTelegramStatus(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	identity, ok := authenticateRequest(w, r, sessionService, true)
+	if !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+
+	status, err := adminService.GetTelegramAdminStatus(r.Context(), identity.ID)
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": status})
+	return true
+}
+
+func handleAdminConfigTestTelegram(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	identity, ok := authenticateRequest(w, r, sessionService, true)
+	if !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+
+	sent, err := adminService.SendTelegramTestMessage(r.Context(), identity.ID)
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": sent})
 	return true
 }
 

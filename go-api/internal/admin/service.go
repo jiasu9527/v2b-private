@@ -340,6 +340,8 @@ type Service interface {
 	ListEmailTemplates(ctx context.Context) ([]string, error)
 	ListThemeTemplates(ctx context.Context) ([]string, error)
 	SetTelegramWebhook(ctx context.Context, token string) (bool, error)
+	GetTelegramAdminStatus(ctx context.Context, adminID int64) (TelegramAdminStatus, error)
+	SendTelegramTestMessage(ctx context.Context, adminID int64) (bool, error)
 	TestSendMail(ctx context.Context, email string) (ConfigMailTestLog, error)
 	ListPlans(ctx context.Context) ([]PlanRecord, error)
 	SavePlan(ctx context.Context, req PlanSaveRequest) (bool, error)

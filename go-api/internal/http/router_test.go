@@ -658,6 +658,9 @@ type fakeAdminService struct {
 	emailTemplates      []string
 	themeTemplates      []string
 	mailTestLog         admin.ConfigMailTestLog
+	telegramStatus      admin.TelegramAdminStatus
+	telegramTestOK      bool
+	lastTelegramAdminID int64
 	plans               []admin.PlanRecord
 	notices             []admin.NoticeRecord
 	couponList          admin.CouponListResult
@@ -1072,6 +1075,16 @@ func (f *fakeAdminService) ListThemeTemplates(_ context.Context) ([]string, erro
 func (f *fakeAdminService) SetTelegramWebhook(_ context.Context, token string) (bool, error) {
 	f.lastWebhookToken = token
 	return true, f.err
+}
+
+func (f *fakeAdminService) GetTelegramAdminStatus(_ context.Context, adminID int64) (admin.TelegramAdminStatus, error) {
+	f.lastTelegramAdminID = adminID
+	return f.telegramStatus, f.err
+}
+
+func (f *fakeAdminService) SendTelegramTestMessage(_ context.Context, adminID int64) (bool, error) {
+	f.lastTelegramAdminID = adminID
+	return f.telegramTestOK, f.err
 }
 
 func (f *fakeAdminService) TestSendMail(_ context.Context, email string) (admin.ConfigMailTestLog, error) {
@@ -4920,6 +4933,66 @@ func TestRouterAdminConfigSetTelegramWebhookEndpoint(t *testing.T) {
 	}
 	if adminService.lastWebhookToken != "abc123" {
 		t.Fatalf("expected telegram token abc123, got %q", adminService.lastWebhookToken)
+	}
+}
+
+func TestRouterAdminConfigTelegramStatusEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{
+		user: &session.Identity{ID: 9, IsAdmin: 1},
+	}
+	telegramID := int64(12345)
+	adminService := &fakeAdminService{
+		telegramStatus: admin.TelegramAdminStatus{
+			BotEnabled: true, TokenConfigured: true, AdminBound: true, TelegramID: &telegramID, WebhookURL: "https://site.example/api/v1/guest/telegram/webhook?access_token=abc",
+		},
+	}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/config/telegramStatus?auth_data=jwt-admin", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if adminService.lastTelegramAdminID != 9 {
+		t.Fatalf("expected admin id 9, got %d", adminService.lastTelegramAdminID)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok || data["bot_enabled"] != true || data["admin_bound"] != true {
+		t.Fatalf("unexpected telegram status payload: %#v", payload)
+	}
+}
+
+func TestRouterAdminConfigTestTelegramEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{
+		user: &session.Identity{ID: 9, IsAdmin: 1},
+	}
+	adminService := &fakeAdminService{telegramTestOK: true}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/config/testTelegram", strings.NewReader("auth_data=jwt-admin"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if adminService.lastTelegramAdminID != 9 {
+		t.Fatalf("expected admin id 9, got %d", adminService.lastTelegramAdminID)
 	}
 }
 

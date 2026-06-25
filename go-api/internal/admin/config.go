@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/tls"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,6 +47,14 @@ type phpConfigValue struct {
 type phpConfigFile struct {
 	order  []string
 	values map[string]phpConfigValue
+}
+
+type TelegramAdminStatus struct {
+	BotEnabled      bool   `json:"bot_enabled"`
+	TokenConfigured bool   `json:"token_configured"`
+	AdminBound      bool   `json:"admin_bound"`
+	TelegramID      *int64 `json:"telegram_id"`
+	WebhookURL      string `json:"webhook_url"`
 }
 
 var adminProjectRoot = detectAdminProjectRoot()
@@ -274,6 +283,115 @@ func (s *DBService) ListThemeTemplates(_ context.Context) ([]string, error) {
 	return []string{}, nil
 }
 
+func (s *DBService) GetTelegramAdminStatus(ctx context.Context, adminID int64) (TelegramAdminStatus, error) {
+	if adminID <= 0 {
+		return TelegramAdminStatus{}, errors.New("参数错误")
+	}
+
+	cfg, err := loadAdminConfigStore(adminConfigPath())
+	if err != nil {
+		return TelegramAdminStatus{}, err
+	}
+
+	token := strings.TrimSpace(cfg.stringValue("telegram_bot_token", ""))
+	if token == "" {
+		token = strings.TrimSpace(s.currentConfig().TelegramBotToken)
+	}
+	status := TelegramAdminStatus{
+		BotEnabled:      cfg.int64Value("telegram_bot_enable", boolToInt64(s.currentConfig().TelegramBotEnable)) != 0,
+		TokenConfigured: token != "",
+	}
+	if token != "" {
+		status.WebhookURL = s.telegramWebhookURL(cfg, token)
+	}
+
+	telegramID, err := s.loadUserTelegramID(ctx, adminID)
+	if err != nil {
+		return TelegramAdminStatus{}, err
+	}
+	if telegramID.Valid && telegramID.Int64 != 0 {
+		id := telegramID.Int64
+		status.AdminBound = true
+		status.TelegramID = &id
+	}
+	return status, nil
+}
+
+func (s *DBService) SendTelegramTestMessage(ctx context.Context, adminID int64) (bool, error) {
+	if adminID <= 0 {
+		return false, errors.New("参数错误")
+	}
+
+	cfg, err := loadAdminConfigStore(adminConfigPath())
+	if err != nil {
+		return false, err
+	}
+	if cfg.int64Value("telegram_bot_enable", boolToInt64(s.currentConfig().TelegramBotEnable)) == 0 {
+		return false, errors.New("请先开启机器人通知")
+	}
+
+	token := strings.TrimSpace(cfg.stringValue("telegram_bot_token", ""))
+	if token == "" {
+		token = strings.TrimSpace(s.currentConfig().TelegramBotToken)
+	}
+	if token == "" {
+		return false, errors.New("请先填写机器人Token")
+	}
+
+	telegramID, err := s.loadUserTelegramID(ctx, adminID)
+	if err != nil {
+		return false, err
+	}
+	if !telegramID.Valid || telegramID.Int64 == 0 {
+		return false, errors.New("当前管理员未绑定Telegram，请先私聊机器人发送 /bind 订阅链接")
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	appName := strings.TrimSpace(cfg.stringValue("app_name", s.currentConfig().AppName))
+	if appName == "" {
+		appName = "Forest"
+	}
+	text := fmt.Sprintf("%s Telegram 测试消息发送成功", appName)
+	if err := telegramAPICall(client, token, "sendMessage", map[string]string{"chat_id": strconv.FormatInt(telegramID.Int64, 10), "text": text}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *DBService) loadUserTelegramID(ctx context.Context, userID int64) (sql.NullInt64, error) {
+	if s.db == nil {
+		return sql.NullInt64{}, ErrUnavailable
+	}
+	var telegramID sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT telegram_id FROM v2_user WHERE id = $1 LIMIT 1`, userID).Scan(&telegramID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return sql.NullInt64{}, nil
+		}
+		return sql.NullInt64{}, fmt.Errorf("query telegram binding: %w", err)
+	}
+	return telegramID, nil
+}
+
+func (s *DBService) telegramWebhookURL(cfg *phpConfigFile, token string) string {
+	appURL := ""
+	if cfg != nil {
+		appURL = strings.TrimSpace(valueToString(cfg.values["app_url"]))
+	}
+	if appURL == "" {
+		appURL = strings.TrimSpace(s.currentConfig().AppURL)
+	}
+	parsedURL, err := url.Parse(appURL)
+	if err != nil || parsedURL.Host == "" || strings.TrimSpace(token) == "" {
+		return ""
+	}
+	parsedURL.Scheme = "https"
+	return strings.TrimRight(parsedURL.String(), "/") + "/api/v1/guest/telegram/webhook?access_token=" + telegramWebhookAccessToken(token)
+}
+
+func telegramWebhookAccessToken(token string) string {
+	return fmt.Sprintf("%x", md5.Sum([]byte(strings.TrimSpace(token))))
+}
+
 func (s *DBService) SetTelegramWebhook(_ context.Context, token string) (bool, error) {
 	token = strings.TrimSpace(token)
 	cfg, err := loadAdminConfigStore(adminConfigPath())
@@ -300,7 +418,7 @@ func (s *DBService) SetTelegramWebhook(_ context.Context, token string) (bool, e
 	}
 	parsedURL.Scheme = "https"
 	baseURL := strings.TrimRight(parsedURL.String(), "/")
-	hookURL := baseURL + "/api/v1/guest/telegram/webhook?access_token=" + fmt.Sprintf("%x", md5.Sum([]byte(token)))
+	hookURL := baseURL + "/api/v1/guest/telegram/webhook?access_token=" + telegramWebhookAccessToken(token)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	if err := telegramAPICall(client, token, "getMe", nil); err != nil {
