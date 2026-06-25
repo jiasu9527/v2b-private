@@ -150,3 +150,5 @@ html,body,#root{height:100%;margin:0}body{background:#f0f3f8;font-family:Inter,-
 }
 
 .telegram-tools{padding:16px 20px;border-bottom:1px solid var(--forest-line,#e5e5e5);background:#fff}.telegram-tools-actions{margin-top:12px}.telegram-tools-hint{margin-top:10px;color:#666}.telegram-tools-webhook{margin-top:8px;word-break:break-all;color:#666}.telegram-tools .ant-alert{border-radius:4px}
+
+.telegram-tools-error{margin-top:8px;color:#cf1322;word-break:break-all}

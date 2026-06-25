@@ -69,6 +69,20 @@ func TestHandleWebhookBindCommandBindsTelegramUser(t *testing.T) {
 	}
 }
 
+func TestExtractSubscribeTokenSupportsQueryAndPathTokens(t *testing.T) {
+	cases := map[string]string{
+		"https://site.example/api/v1/client/subscribe?token=query-token": "query-token",
+		"https://site.example/forest/path-token":                         "path-token",
+		"https://site.example/forest/path-token?flag=clash":              "path-token",
+		"path-token": "path-token",
+	}
+	for raw, want := range cases {
+		if got := extractSubscribeToken(raw); got != want {
+			t.Fatalf("extractSubscribeToken(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
 func TestHandleWebhookTrafficCommandSendsUsageSummary(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

@@ -343,7 +343,26 @@ func extractSubscribeToken(raw string) string {
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(parsed.Query().Get("token"))
+	if token := strings.TrimSpace(parsed.Query().Get("token")); token != "" {
+		return token
+	}
+
+	path := strings.Trim(strings.TrimSpace(parsed.EscapedPath()), "/")
+	if path != "" {
+		parts := strings.Split(path, "/")
+		last := strings.TrimSpace(parts[len(parts)-1])
+		if last != "" && !strings.EqualFold(last, "subscribe") {
+			if unescaped, err := url.PathUnescape(last); err == nil {
+				last = strings.TrimSpace(unescaped)
+			}
+			return last
+		}
+	}
+
+	if !strings.Contains(raw, "://") && !strings.Contains(raw, "/") && !strings.Contains(raw, "?") {
+		return raw
+	}
+	return ""
 }
 
 func formatTrafficBytes(value int64) string {

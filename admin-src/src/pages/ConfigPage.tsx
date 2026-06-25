@@ -398,7 +398,10 @@ export default function ConfigPage() {
             <Tag color={status.admin_bound ? 'green' : 'red'}>当前管理员 {status.admin_bound ? `已绑定 ${status.telegram_id || ''}` : '未绑定'}</Tag>
           </Space>
           {!status.admin_bound && <div className="telegram-tools-hint">绑定方式：先设置 Webhook，然后私聊机器人发送 <Typography.Text code>/bind 你的订阅链接</Typography.Text></div>}
-          {status.webhook_url && <div className="telegram-tools-webhook">Webhook：<Typography.Text copyable>{status.webhook_url}</Typography.Text></div>}
+          {status.webhook_url && <div className="telegram-tools-webhook">面板应设置Webhook：<Typography.Text copyable>{status.webhook_url}</Typography.Text></div>}
+          {status.telegram_webhook_info?.url && <div className="telegram-tools-webhook">Telegram当前Webhook：<Typography.Text copyable>{status.telegram_webhook_info.url}</Typography.Text></div>}
+          {status.telegram_webhook_info?.last_error_message && <div className="telegram-tools-error">Telegram错误：{status.telegram_webhook_info.last_error_message}</div>}
+          {status.telegram_webhook_info_error && <div className="telegram-tools-error">Webhook诊断失败：{status.telegram_webhook_info_error}</div>}
         </div>}
       />
       <Space wrap className="telegram-tools-actions">

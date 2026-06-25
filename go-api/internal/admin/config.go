@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/smtp"
 	"net/url"
@@ -50,11 +51,13 @@ type phpConfigFile struct {
 }
 
 type TelegramAdminStatus struct {
-	BotEnabled      bool   `json:"bot_enabled"`
-	TokenConfigured bool   `json:"token_configured"`
-	AdminBound      bool   `json:"admin_bound"`
-	TelegramID      *int64 `json:"telegram_id"`
-	WebhookURL      string `json:"webhook_url"`
+	BotEnabled             bool           `json:"bot_enabled"`
+	TokenConfigured        bool           `json:"token_configured"`
+	AdminBound             bool           `json:"admin_bound"`
+	TelegramID             *int64         `json:"telegram_id"`
+	WebhookURL             string         `json:"webhook_url"`
+	TelegramWebhookInfo    map[string]any `json:"telegram_webhook_info,omitempty"`
+	TelegramWebhookInfoErr string         `json:"telegram_webhook_info_error,omitempty"`
 }
 
 var adminProjectRoot = detectAdminProjectRoot()
@@ -304,6 +307,12 @@ func (s *DBService) GetTelegramAdminStatus(ctx context.Context, adminID int64) (
 	}
 	if token != "" {
 		status.WebhookURL = s.telegramWebhookURL(cfg, token)
+		info, err := telegramAPIResultMap(&http.Client{Timeout: 10 * time.Second}, token, "getWebhookInfo", nil)
+		if err != nil {
+			status.TelegramWebhookInfoErr = err.Error()
+		} else {
+			status.TelegramWebhookInfo = info
+		}
 	}
 
 	telegramID, err := s.loadUserTelegramID(ctx, adminID)
@@ -981,6 +990,11 @@ func listTemplateEntries(path string) ([]string, error) {
 }
 
 func telegramAPICall(client *http.Client, token, method string, params map[string]string) error {
+	_, err := telegramAPIResultMap(client, token, method, params)
+	return err
+}
+
+func telegramAPIResultMap(client *http.Client, token, method string, params map[string]string) (map[string]any, error) {
 	endpoint := "https://api.telegram.org/bot" + token + "/" + method
 	if len(params) > 0 {
 		query := url.Values{}
@@ -991,24 +1005,32 @@ func telegramAPICall(client *http.Client, token, method string, params map[strin
 	}
 	resp, err := client.Get(endpoint)
 	if err != nil {
-		return errors.New("请求失败")
+		return nil, errors.New("请求失败")
 	}
 	defer resp.Body.Close()
 
-	var payload struct {
-		OK          bool   `json:"ok"`
-		Description string `json:"description"`
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, errors.New("请求失败")
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return errors.New("请求失败")
+	var payload struct {
+		OK          bool           `json:"ok"`
+		Description string         `json:"description"`
+		Result      map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, errors.New("请求失败")
 	}
 	if !payload.OK {
 		if strings.TrimSpace(payload.Description) == "" {
-			return errors.New("请求失败")
+			return nil, errors.New("请求失败")
 		}
-		return errors.New("来自TG的错误：" + payload.Description)
+		return nil, errors.New("来自TG的错误：" + payload.Description)
 	}
-	return nil
+	if payload.Result == nil {
+		payload.Result = map[string]any{}
+	}
+	return payload.Result, nil
 }
 
 func sendMail(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error {
