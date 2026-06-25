@@ -176,6 +176,30 @@ func TestRouterGuestInvitePreviewEndpoint(t *testing.T) {
 	}
 }
 
+func TestRouterGuestTelegramWebhookUsesRuntimeTokenAfterConfigReload(t *testing.T) {
+	telegramService := &fakeTelegramService{}
+	runtimeState := config.NewRuntimeState(config.Config{TelegramBotToken: "old-token"})
+	runtimeState.SetForTest(config.Config{TelegramBotToken: "new-token"})
+	router := NewRouter(
+		config.Config{AppName: "forest-go", TelegramBotToken: "old-token"},
+		WithRuntimeConfig(runtimeState),
+		WithTelegramService(telegramService),
+	)
+
+	accessToken := fmt.Sprintf("%x", md5.Sum([]byte("new-token")))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/guest/telegram/webhook?access_token="+accessToken, strings.NewReader(`{"message":{"text":"/traffic","chat":{"id":123,"type":"private"}}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if telegramService.lastPayload == nil {
+		t.Fatalf("expected webhook service called")
+	}
+}
+
 func TestRouterGuestTelegramWebhookRejectsInvalidAccessToken(t *testing.T) {
 	telegramService := &fakeTelegramService{}
 	router := NewRouter(

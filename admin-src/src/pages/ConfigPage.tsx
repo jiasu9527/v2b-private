@@ -73,7 +73,7 @@ const fieldOrders: Record<string, string[]> = {
     'email_host', 'email_port', 'email_encryption', 'email_username', 'email_password',
     'email_from_address', 'email_template', 'email_bulk_interval'
   ],
-  telegram: ['telegram_bot_token', 'telegram_bot_enable', 'telegram_discuss_link'],
+  telegram: ['telegram_bot_token', 'telegram_bot_enable', 'telegram_webhook_url', 'telegram_discuss_link'],
   app: ['windows_version', 'windows_download_url', 'macos_version', 'macos_download_url', 'android_version', 'android_download_url']
 };
 
@@ -238,6 +238,7 @@ const configLabels: Record<string, ConfigMeta> = {
 
   telegram_bot_token: { title: '机器人Token', description: '请输入由Botfather提供的token。', password: true },
   telegram_bot_enable: { title: '开启机器人通知', description: '开启后bot将会对绑定了telegram的管理员和用户进行基础通知。' },
+  telegram_webhook_url: { title: 'Webhook API地址', description: 'Telegram回调访问的API域名。官网和API不同域名时必须填写，例如 https://api.example.com。' },
   telegram_discuss_link: { title: '群组地址', description: '填写后将会在用户端展示，或者被用于需要的地方。' },
 
   ticket_status: { title: '工单设置', description: '关闭后用户将无法提交工单。' },

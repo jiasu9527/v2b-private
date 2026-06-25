@@ -106,9 +106,10 @@ func TestDBServiceFetchConfigAndTemplates(t *testing.T) {
 func TestDBServiceTelegramAdminStatusShowsBindingAndWebhookURL(t *testing.T) {
 	root := t.TempDir()
 	writeAdminJSONFixture(t, root, map[string]any{
-		"app_url":             "https://site.example",
-		"telegram_bot_token":  "bot-token",
-		"telegram_bot_enable": 1,
+		"app_url":              "https://site.example",
+		"telegram_webhook_url": "https://api.example",
+		"telegram_bot_token":   "bot-token",
+		"telegram_bot_enable":  1,
 	})
 
 	oldRoot := adminProjectRoot
@@ -133,7 +134,7 @@ func TestDBServiceTelegramAdminStatusShowsBindingAndWebhookURL(t *testing.T) {
 	if status.BotEnabled != true || status.TokenConfigured != true || status.AdminBound != true || status.TelegramID == nil || *status.TelegramID != 12345 {
 		t.Fatalf("unexpected telegram status: %#v", status)
 	}
-	if status.WebhookURL != "https://site.example/api/v1/guest/telegram/webhook?access_token=30f9218d8b0b9633f4ed541cfa7089b5" {
+	if status.WebhookURL != "https://api.example/api/v1/guest/telegram/webhook?access_token=30f9218d8b0b9633f4ed541cfa7089b5" {
 		t.Fatalf("unexpected webhook url: %q", status.WebhookURL)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

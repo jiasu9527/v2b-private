@@ -114,6 +114,7 @@ type Config struct {
 	PasswordLimitExpireMin             int64
 	TelegramBotEnable                  bool
 	TelegramBotToken                   string
+	TelegramWebhookURL                 string
 	TelegramDiscussLink                string
 	StripePKLive                       string
 	Currency                           string
@@ -261,6 +262,7 @@ func Load() Config {
 		PasswordLimitExpireMin:             managedInt64("PASSWORD_LIMIT_EXPIRE", "password_limit_expire", 60),
 		TelegramBotEnable:                  managedBool("TELEGRAM_BOT_ENABLE", "telegram_bot_enable", false),
 		TelegramBotToken:                   managedString("TELEGRAM_BOT_TOKEN", "telegram_bot_token", ""),
+		TelegramWebhookURL:                 managedString("TELEGRAM_WEBHOOK_URL", "telegram_webhook_url", ""),
 		TelegramDiscussLink:                managedString("TELEGRAM_DISCUSS_LINK", "telegram_discuss_link", ""),
 		StripePKLive:                       managedString("STRIPE_PK_LIVE", "stripe_pk_live", ""),
 		Currency:                           managedString("CURRENCY", "currency", "CNY"),

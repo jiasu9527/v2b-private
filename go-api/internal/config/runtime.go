@@ -55,6 +55,16 @@ func (s *RuntimeState) Current() RuntimeValues {
 	return values
 }
 
+func (s *RuntimeState) SetForTest(cfg Config) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.cfg = cfg
+	s.values = loadRuntimeValues(cfg)
+	s.mu.Unlock()
+}
+
 func (s *RuntimeState) CurrentConfig() Config {
 	if s == nil {
 		return Config{}

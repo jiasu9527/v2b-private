@@ -187,6 +187,7 @@ func (s *DBService) FetchConfig(_ context.Context, key string) (map[string]any, 
 		"telegram": map[string]any{
 			"telegram_bot_enable":   cfg.int64Value("telegram_bot_enable", 0),
 			"telegram_bot_token":    cfg.nullableStringValue("telegram_bot_token"),
+			"telegram_webhook_url":  cfg.nullableStringValue("telegram_webhook_url"),
 			"telegram_discuss_link": cfg.nullableStringValue("telegram_discuss_link"),
 		},
 		"app": map[string]any{
@@ -375,10 +376,17 @@ func (s *DBService) loadUserTelegramID(ctx context.Context, userID int64) (sql.N
 func (s *DBService) telegramWebhookURL(cfg *phpConfigFile, token string) string {
 	appURL := ""
 	if cfg != nil {
-		appURL = strings.TrimSpace(valueToString(cfg.values["app_url"]))
+		appURL = strings.TrimSpace(valueToString(cfg.values["telegram_webhook_url"]))
+		if appURL == "" {
+			appURL = strings.TrimSpace(valueToString(cfg.values["app_url"]))
+		}
 	}
 	if appURL == "" {
-		appURL = strings.TrimSpace(s.currentConfig().AppURL)
+		current := s.currentConfig()
+		appURL = strings.TrimSpace(current.TelegramWebhookURL)
+		if appURL == "" {
+			appURL = strings.TrimSpace(current.AppURL)
+		}
 	}
 	parsedURL, err := url.Parse(appURL)
 	if err != nil || parsedURL.Host == "" || strings.TrimSpace(token) == "" {
@@ -405,20 +413,10 @@ func (s *DBService) SetTelegramWebhook(_ context.Context, token string) (bool, e
 		return false, errors.New("参数错误")
 	}
 
-	appURL := strings.TrimSpace(valueToString(cfg.values["app_url"]))
-	if appURL == "" {
-		appURL = strings.TrimSpace(s.currentConfig().AppURL)
+	hookURL := s.telegramWebhookURL(cfg, token)
+	if hookURL == "" {
+		return false, errors.New("Webhook URL格式不正确，必须携带http(s)://")
 	}
-	if appURL == "" {
-		return false, errors.New("站点URL格式不正确，必须携带http(s)://")
-	}
-	parsedURL, err := url.Parse(appURL)
-	if err != nil || parsedURL.Host == "" {
-		return false, errors.New("站点URL格式不正确，必须携带http(s)://")
-	}
-	parsedURL.Scheme = "https"
-	baseURL := strings.TrimRight(parsedURL.String(), "/")
-	hookURL := baseURL + "/api/v1/guest/telegram/webhook?access_token=" + telegramWebhookAccessToken(token)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	if err := telegramAPICall(client, token, "getMe", nil); err != nil {
@@ -722,6 +720,10 @@ func validateConfigValue(key string, value phpConfigValue) error {
 		}
 	case "tos_url":
 		if err := validateOptionalURL(value, "服务条款URL格式不正确，必须携带http(s)://"); err != nil {
+			return err
+		}
+	case "telegram_webhook_url":
+		if err := validateOptionalURL(value, "Telegram Webhook URL格式不正确，必须携带http(s)://"); err != nil {
 			return err
 		}
 	case "telegram_discuss_link":
