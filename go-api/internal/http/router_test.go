@@ -5056,6 +5056,40 @@ func TestRouterAdminConfigSetTelegramWebhookEndpoint(t *testing.T) {
 	}
 }
 
+func TestRouterAdminConfigSetTelegramWebhookPersistsSubmittedWebhookURL(t *testing.T) {
+	sessionService := &fakeSessionService{
+		user: &session.Identity{ID: 1, IsAdmin: 1},
+	}
+	adminService := &fakeAdminService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	body := "auth_data=jwt-admin&telegram_bot_token=abc123&telegram_webhook_url=https%3A%2F%2Fforest666api.com"
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/config/setTelegramWebhook", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if adminService.lastWebhookToken != "abc123" {
+		t.Fatalf("expected telegram token abc123, got %q", adminService.lastWebhookToken)
+	}
+	if adminService.lastConfigSave == nil {
+		t.Fatalf("expected webhook config to be saved before setting webhook")
+	}
+	if adminService.lastConfigSave["telegram_webhook_url"] != "https://forest666api.com" {
+		t.Fatalf("expected submitted webhook url saved, got %#v", adminService.lastConfigSave)
+	}
+	if _, ok := adminService.lastConfigSave["telegram_bot_token"]; ok {
+		t.Fatalf("set webhook should not overwrite bot token through config save: %#v", adminService.lastConfigSave)
+	}
+}
+
 func TestRouterAdminConfigTelegramStatusEndpoint(t *testing.T) {
 	sessionService := &fakeSessionService{
 		user: &session.Identity{ID: 9, IsAdmin: 1},

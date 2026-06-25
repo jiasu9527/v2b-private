@@ -4132,6 +4132,18 @@ func handleAdminConfigSetTelegramWebhook(w http.ResponseWriter, r *http.Request,
 		return true
 	}
 
+	webhookConfig := map[string]any{}
+	for _, key := range []string{"telegram_webhook_url", "app_url"} {
+		if value, ok := inputs[key]; ok {
+			webhookConfig[key] = strings.TrimSpace(value)
+		}
+	}
+	if len(webhookConfig) > 0 {
+		if _, err := adminService.SaveConfig(r.Context(), webhookConfig); err != nil {
+			return handleAdminError(w, err)
+		}
+	}
+
 	updated, err := adminService.SetTelegramWebhook(r.Context(), strings.TrimSpace(inputs["telegram_bot_token"]))
 	if err != nil {
 		return handleAdminError(w, err)

@@ -434,6 +434,14 @@ func (s *DBService) SetTelegramWebhook(_ context.Context, token string) (bool, e
 	if err := telegramAPICall(client, token, "setWebhook", map[string]string{"url": hookURL}); err != nil {
 		return false, err
 	}
+	info, err := telegramAPIResultMap(client, token, "getWebhookInfo", nil)
+	if err != nil {
+		return false, err
+	}
+	actualURL := strings.TrimSpace(fmt.Sprint(info["url"]))
+	if actualURL != "" && actualURL != hookURL {
+		return false, fmt.Errorf("Webhook设置未生效，Telegram当前地址：%s，目标地址：%s", actualURL, hookURL)
+	}
 	return true, nil
 }
 
