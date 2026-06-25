@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -197,6 +199,100 @@ func TestRouterGuestTelegramWebhookUsesRuntimeTokenAfterConfigReload(t *testing.
 	}
 	if telegramService.lastPayload == nil {
 		t.Fatalf("expected webhook service called")
+	}
+}
+
+func TestRouterGuestTelegramWebhookUsesAdminJSONTokenWhenRuntimeIsStale(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	raw, err := json.Marshal(map[string]any{"telegram_bot_token": "fresh-token"})
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "admin.json"), raw, 0o644); err != nil {
+		t.Fatalf("write admin config: %v", err)
+	}
+
+	workDir := filepath.Join(root, "go-api")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir work dir: %v", err)
+	}
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() { _ = os.Chdir(prevWD) }()
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatalf("chdir work dir: %v", err)
+	}
+
+	telegramService := &fakeTelegramService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", TelegramBotToken: "stale-token"},
+		WithTelegramService(telegramService),
+	)
+
+	accessToken := fmt.Sprintf("%x", md5.Sum([]byte("fresh-token")))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/guest/telegram/webhook?access_token="+accessToken, strings.NewReader(`{"message":{"text":"/traffic","chat":{"id":123,"type":"private"}}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if telegramService.lastPayload == nil {
+		t.Fatalf("expected webhook service called")
+	}
+}
+
+func TestRouterGuestTelegramWebhookRejectsStaleRuntimeTokenWhenAdminJSONTokenExists(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	raw, err := json.Marshal(map[string]any{"telegram_bot_token": "fresh-token"})
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "admin.json"), raw, 0o644); err != nil {
+		t.Fatalf("write admin config: %v", err)
+	}
+
+	workDir := filepath.Join(root, "go-api")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir work dir: %v", err)
+	}
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() { _ = os.Chdir(prevWD) }()
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatalf("chdir work dir: %v", err)
+	}
+
+	telegramService := &fakeTelegramService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", TelegramBotToken: "stale-token"},
+		WithTelegramService(telegramService),
+	)
+
+	accessToken := fmt.Sprintf("%x", md5.Sum([]byte("stale-token")))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/guest/telegram/webhook?access_token="+accessToken, strings.NewReader(`{"message":{"text":"/traffic","chat":{"id":123,"type":"private"}}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if telegramService.lastPayload != nil {
+		t.Fatalf("expected webhook service not called, got %#v", telegramService.lastPayload)
 	}
 }
 

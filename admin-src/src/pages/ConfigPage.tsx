@@ -365,8 +365,10 @@ export default function ConfigPage() {
         if (!res.ok) throw new Error(payload?.message || '检测失败');
         message.success(`机器人正常：@${payload?.data?.username || payload?.username || 'unknown'}`);
       } else if (action === 'webhook') {
+        await apiPost('/config/save', normalizeConfig(form.getFieldsValue()), { keepEmpty: true });
         await apiPost('/config/setTelegramWebhook', { telegram_bot_token: token }, { form: true, keepEmpty: true });
-        message.success('Webhook 设置成功');
+        message.success('Telegram 配置已保存，Webhook 设置成功');
+        await load();
       } else if (action === 'test') {
         await apiPost('/config/testTelegram', {}, { form: true });
         message.success('测试消息已发送');

@@ -1056,8 +1056,7 @@ func handleGuestTelegramWebhook(w http.ResponseWriter, r *http.Request, cfg conf
 	}
 
 	accessToken := strings.TrimSpace(r.URL.Query().Get("access_token"))
-	expectedToken := fmt.Sprintf("%x", md5.Sum([]byte(strings.TrimSpace(cfg.TelegramBotToken))))
-	if accessToken == "" || !strings.EqualFold(accessToken, expectedToken) {
+	if !validTelegramWebhookAccessToken(accessToken, cfg) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"message": "unauthorized"})
 		return true
 	}
@@ -1078,6 +1077,24 @@ func handleGuestTelegramWebhook(w http.ResponseWriter, r *http.Request, cfg conf
 
 	writeJSON(w, http.StatusOK, map[string]any{"data": true})
 	return true
+}
+
+func validTelegramWebhookAccessToken(accessToken string, cfg config.Config) bool {
+	accessToken = strings.TrimSpace(accessToken)
+	if accessToken == "" {
+		return false
+	}
+
+	currentToken := strings.TrimSpace(config.Load().TelegramBotToken)
+	if currentToken == "" {
+		currentToken = strings.TrimSpace(cfg.TelegramBotToken)
+	}
+	if currentToken == "" {
+		return false
+	}
+
+	expected := fmt.Sprintf("%x", md5.Sum([]byte(currentToken)))
+	return strings.EqualFold(accessToken, expected)
 }
 
 func handleGuestPaymentNotify(w http.ResponseWriter, r *http.Request, service payment.Service) bool {
