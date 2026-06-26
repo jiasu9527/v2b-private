@@ -66,24 +66,25 @@ var (
 )
 
 type Info struct {
-	Email             string `json:"email"`
-	TransferEnable    int64  `json:"transfer_enable"`
-	DeviceLimit       *int64 `json:"device_limit"`
-	LastLoginAt       *int64 `json:"last_login_at"`
-	CreatedAt         int64  `json:"created_at"`
-	Banned            int64  `json:"banned"`
-	AutoRenewal       int64  `json:"auto_renewal"`
-	RemindExpire      int64  `json:"remind_expire"`
-	RemindTraffic     int64  `json:"remind_traffic"`
-	ExpiredAt         *int64 `json:"expired_at"`
-	Balance           int64  `json:"balance"`
-	CommissionBalance int64  `json:"commission_balance"`
-	PlanID            *int64 `json:"plan_id"`
-	Discount          *int64 `json:"discount"`
-	CommissionRate    *int64 `json:"commission_rate"`
-	TelegramID        *int64 `json:"telegram_id"`
-	UUID              string `json:"uuid"`
-	AvatarURL         string `json:"avatar_url"`
+	Email             string         `json:"email"`
+	TransferEnable    int64          `json:"transfer_enable"`
+	DeviceLimit       *int64         `json:"device_limit"`
+	LastLoginAt       *int64         `json:"last_login_at"`
+	CreatedAt         int64          `json:"created_at"`
+	Banned            int64          `json:"banned"`
+	AutoRenewal       int64          `json:"auto_renewal"`
+	RemindExpire      int64          `json:"remind_expire"`
+	RemindTraffic     int64          `json:"remind_traffic"`
+	ExpiredAt         *int64         `json:"expired_at"`
+	Balance           int64          `json:"balance"`
+	CommissionBalance int64          `json:"commission_balance"`
+	PlanID            *int64         `json:"plan_id"`
+	Discount          *int64         `json:"discount"`
+	CommissionRate    *int64         `json:"commission_rate"`
+	TelegramID        *int64         `json:"telegram_id"`
+	UUID              string         `json:"uuid"`
+	AvatarURL         string         `json:"avatar_url"`
+	Plan              map[string]any `json:"plan,omitempty"`
 }
 
 type Subscribe struct {
@@ -358,6 +359,17 @@ LIMIT 1`, userID).Scan(
 	info.CommissionRate = nullInt64Ptr(commissionRate)
 	info.TelegramID = nullInt64Ptr(telegramID)
 	info.AvatarURL = avatarURL(info.Email)
+
+	if info.PlanID != nil {
+		plan, err := s.findPlanMap(ctx, *info.PlanID)
+		if err != nil {
+			return Info{}, err
+		}
+		if plan != nil {
+			normalizePlanTransferEnableForFrontend(plan)
+			info.Plan = plan
+		}
+	}
 
 	return info, nil
 }
