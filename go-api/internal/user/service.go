@@ -483,6 +483,14 @@ LIMIT 1`, userID).Scan(
 	runtimeValues := s.runtimeValues()
 	subscribe.AllowNewPeriod = strconv.FormatInt(boolToInt64(runtimeValues.AllowNewPeriod), 10)
 
+	if subscribe.PlanID == nil {
+		fallbackPlanID, err := s.latestPaidPlanID(ctx, userID)
+		if err != nil {
+			return Subscribe{}, err
+		}
+		subscribe.PlanID = nullInt64Ptr(fallbackPlanID)
+	}
+
 	if subscribe.PlanID != nil {
 		plan, err := s.findPlanMap(ctx, *subscribe.PlanID)
 		if err != nil {
@@ -491,6 +499,7 @@ LIMIT 1`, userID).Scan(
 		if plan == nil {
 			return Subscribe{}, ErrPlanNotFound
 		}
+		normalizePlanTransferEnableForFrontend(plan)
 		subscribe.Plan = plan
 
 		resetDay := s.calculateResetDay(plan, subscribe.ExpiredAt)
@@ -504,6 +513,22 @@ LIMIT 1`, userID).Scan(
 	subscribe.SubscribeURL = urlValue
 
 	return subscribe, nil
+}
+
+func (s *DBService) latestPaidPlanID(ctx context.Context, userID int64) (sql.NullInt64, error) {
+	var planID sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT plan_id
+FROM v2_order
+WHERE user_id = $1 AND status = 3 AND plan_id > 0
+ORDER BY COALESCE(paid_at, created_at) DESC, id DESC
+LIMIT 1`, userID).Scan(&planID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return sql.NullInt64{}, nil
+		}
+		return sql.NullInt64{}, fmt.Errorf("query latest paid plan id: %w", err)
+	}
+	return planID, nil
 }
 
 func (s *DBService) Plans(ctx context.Context, userID int64, planID *int64) (any, error) {

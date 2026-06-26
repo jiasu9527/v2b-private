@@ -82,6 +82,53 @@ func TestPlanDetailExposesTransferEnableAsGBForFrontend(t *testing.T) {
 		t.Fatalf("sql expectations: %v", err)
 	}
 }
+func TestSubscribeFallsBackToLatestPaidPlanWhenUserPlanIDMissing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	userRows := sqlmock.NewRows([]string{
+		"plan_id", "token", "expired_at", "u", "d", "transfer_enable", "device_limit", "email", "uuid",
+	}).AddRow(nil, "token-1", int64(0), int64(0), int64(0), int64(214748364800), nil, "life@example.com", "uuid-1")
+	mock.ExpectQuery(`SELECT plan_id, token, expired_at, u, d, transfer_enable, device_limit, email, uuid`).
+		WithArgs(int64(8)).
+		WillReturnRows(userRows)
+	mock.ExpectQuery(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = \$1 LIMIT 1`).
+		WithArgs("ALIVE_IP_USER_8").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`SELECT plan_id FROM v2_order WHERE user_id = \$1 AND status = 3 AND plan_id > 0 ORDER BY COALESCE\(paid_at, created_at\) DESC, id DESC LIMIT 1`).
+		WithArgs(int64(8)).
+		WillReturnRows(sqlmock.NewRows([]string{"plan_id"}).AddRow(int64(5)))
+	mock.ExpectQuery(`SELECT \* FROM v2_plan WHERE id = \$1 LIMIT 1`).
+		WithArgs(int64(5)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "transfer_enable", "show", "renew", "reset_traffic_method"}).
+			AddRow(int64(5), "不限时 200G", int64(214748364800), int64(1), int64(1), nil))
+
+	svc := NewDBService(config.Config{}, db)
+	subscribe, err := svc.Subscribe(context.Background(), 8)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	if subscribe.PlanID == nil || *subscribe.PlanID != 5 {
+		t.Fatalf("expected fallback plan id 5, got %#v", subscribe.PlanID)
+	}
+	if subscribe.Plan == nil || subscribe.Plan["name"] != "不限时 200G" {
+		t.Fatalf("expected fallback plan payload, got %#v", subscribe.Plan)
+	}
+	if subscribe.Plan["transfer_enable"] != int64(200) {
+		t.Fatalf("expected frontend traffic 200GB, got %#v", subscribe.Plan["transfer_enable"])
+	}
+	if subscribe.ExpiredAt != nil {
+		t.Fatalf("expected unlimited expired_at nil, got %#v", subscribe.ExpiredAt)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestSubscribeUsesRuntimeAllowNewPeriod(t *testing.T) {
 	root, restoreWD := prepareRuntimeConfigFixture(t, map[string]any{
 		"allow_new_period": 0,
@@ -108,6 +155,9 @@ func TestSubscribeUsesRuntimeAllowNewPeriod(t *testing.T) {
 	mock.ExpectQuery(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = \$1 LIMIT 1`).
 		WithArgs("ALIVE_IP_USER_1").
 		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`SELECT plan_id\s+FROM v2_order`).
+		WithArgs(int64(1)).
+		WillReturnError(sql.ErrNoRows)
 
 	subscribe, err := service.Subscribe(context.Background(), 1)
 	if err != nil {
@@ -131,6 +181,9 @@ func TestSubscribeUsesRuntimeAllowNewPeriod(t *testing.T) {
 		WillReturnRows(userRows)
 	mock.ExpectQuery(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = \$1 LIMIT 1`).
 		WithArgs("ALIVE_IP_USER_1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`SELECT plan_id\s+FROM v2_order`).
+		WithArgs(int64(1)).
 		WillReturnError(sql.ErrNoRows)
 
 	subscribe, err = service.Subscribe(context.Background(), 1)
@@ -171,6 +224,9 @@ func TestSubscribeTreatsZeroExpiredAtAsUnlimited(t *testing.T) {
 		WillReturnRows(userRows)
 	mock.ExpectQuery(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = \$1 LIMIT 1`).
 		WithArgs("ALIVE_IP_USER_2").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`SELECT plan_id\s+FROM v2_order`).
+		WithArgs(int64(2)).
 		WillReturnError(sql.ErrNoRows)
 
 	subscribe, err := service.Subscribe(context.Background(), 2)
