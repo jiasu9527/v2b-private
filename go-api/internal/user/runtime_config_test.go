@@ -14,6 +14,74 @@ import (
 	"forest/go-api/internal/config"
 )
 
+func TestPlansExposeTransferEnableAsGBForFrontend(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT \* FROM v2_plan WHERE "show" = 1 ORDER BY sort ASC NULLS LAST, id ASC`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "transfer_enable", "show"}).
+			AddRow(int64(1), "轻量", int64(214748364800), int64(1)).
+			AddRow(int64(2), "Legacy", int64(50), int64(1)))
+	mock.ExpectQuery(`SELECT plan_id, COUNT\(\*\) AS count`).
+		WillReturnRows(sqlmock.NewRows([]string{"plan_id", "count"}))
+
+	service := NewDBService(config.Config{}, db)
+	payload, err := service.Plans(context.Background(), 9, nil)
+	if err != nil {
+		t.Fatalf("plans: %v", err)
+	}
+	plans, ok := payload.([]map[string]any)
+	if !ok {
+		t.Fatalf("expected plan slice, got %#v", payload)
+	}
+	if plans[0]["transfer_enable"] != int64(200) {
+		t.Fatalf("expected byte value converted to 200GB, got %#v", plans[0]["transfer_enable"])
+	}
+	if plans[1]["transfer_enable"] != int64(50) {
+		t.Fatalf("expected legacy GB value preserved, got %#v", plans[1]["transfer_enable"])
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestPlanDetailExposesTransferEnableAsGBForFrontend(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT \* FROM v2_plan WHERE id = \$1 LIMIT 1`).
+		WithArgs(int64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "transfer_enable", "show", "renew"}).
+			AddRow(int64(1), "轻量", int64(214748364800), int64(1), int64(1)))
+	mock.ExpectQuery(`SELECT plan_id FROM v2_user WHERE id = \$1 LIMIT 1`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"plan_id"}).AddRow(nil))
+
+	service := NewDBService(config.Config{}, db)
+	planID := int64(1)
+	payload, err := service.Plans(context.Background(), 9, &planID)
+	if err != nil {
+		t.Fatalf("plan detail: %v", err)
+	}
+	plan, ok := payload.(map[string]any)
+	if !ok {
+		t.Fatalf("expected plan map, got %#v", payload)
+	}
+	if plan["transfer_enable"] != int64(200) {
+		t.Fatalf("expected byte value converted to 200GB, got %#v", plan["transfer_enable"])
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
 func TestSubscribeUsesRuntimeAllowNewPeriod(t *testing.T) {
 	root, restoreWD := prepareRuntimeConfigFixture(t, map[string]any{
 		"allow_new_period": 0,

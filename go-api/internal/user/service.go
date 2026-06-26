@@ -531,6 +531,7 @@ func (s *DBService) Plans(ctx context.Context, userID int64, planID *int64) (any
 		if (!show && !renew) || (!show && (!userPlanID.Valid || userPlanID.Int64 != id)) {
 			return nil, ErrPlanNotFound
 		}
+		normalizePlanTransferEnableForFrontend(plan)
 		return plan, nil
 	}
 
@@ -545,6 +546,7 @@ func (s *DBService) Plans(ctx context.Context, userID int64, planID *int64) (any
 	}
 
 	for _, plan := range plans {
+		normalizePlanTransferEnableForFrontend(plan)
 		if raw, ok := plan["capacity_limit"]; ok && raw != nil {
 			planID := mapInt64(plan["id"])
 			if count, ok := counts[planID]; ok {
@@ -622,6 +624,7 @@ func (s *DBService) OrderDetail(ctx context.Context, userID int64, tradeNo strin
 	if plan == nil {
 		return nil, ErrPlanNotFound
 	}
+	normalizePlanTransferEnableForFrontend(plan)
 	order["plan"] = plan
 	order["try_out_plan_id"] = s.currentConfig().TryOutPlanID
 
@@ -761,6 +764,7 @@ func (s *DBService) planMapForOrders(ctx context.Context, orders []map[string]an
 
 	result := make(map[int64]map[string]any, len(plans))
 	for _, plan := range plans {
+		normalizePlanTransferEnableForFrontend(plan)
 		result[mapInt64(plan["id"])] = plan
 	}
 	return result, nil
@@ -1007,6 +1011,27 @@ func normalizeDBValue(value any) any {
 	default:
 		return value
 	}
+}
+
+const frontendTransferGiB = int64(1073741824)
+
+func normalizePlanTransferEnableForFrontend(plan map[string]any) {
+	if plan == nil {
+		return
+	}
+	value, ok := plan["transfer_enable"]
+	if !ok {
+		return
+	}
+	n := mapInt64(value)
+	if n <= 0 || n < frontendTransferGiB {
+		return
+	}
+	if n%frontendTransferGiB == 0 {
+		plan["transfer_enable"] = n / frontendTransferGiB
+		return
+	}
+	plan["transfer_enable"] = float64(n) / float64(frontendTransferGiB)
 }
 
 func mapInt64(value any) int64 {

@@ -112,6 +112,9 @@ func (s *DBService) Plans(ctx context.Context) ([]map[string]any, error) {
 		for i, column := range columns {
 			row[column] = normalizeValue(values[i])
 		}
+		if value, ok := row["transfer_enable"]; ok {
+			row["transfer_enable"] = normalizeTransferEnableGB(value)
+		}
 		plans = append(plans, row)
 	}
 
@@ -235,7 +238,56 @@ func (s *DBService) lookupPlanTransferGB(ctx context.Context, planID int64) floa
 	if !transferEnable.Valid {
 		return 0
 	}
-	return transferEnable.Float64
+	return transferEnableGB(transferEnable.Float64)
+}
+
+const transferGiB = 1073741824
+
+func normalizeTransferEnableGB(value any) any {
+	switch v := value.(type) {
+	case int64:
+		converted := transferEnableGB(float64(v))
+		if converted == float64(int64(converted)) {
+			return int64(converted)
+		}
+		return converted
+	case int:
+		converted := transferEnableGB(float64(v))
+		if converted == float64(int64(converted)) {
+			return int64(converted)
+		}
+		return converted
+	case int32:
+		converted := transferEnableGB(float64(v))
+		if converted == float64(int64(converted)) {
+			return int64(converted)
+		}
+		return converted
+	case float64:
+		converted := transferEnableGB(v)
+		if converted == float64(int64(converted)) {
+			return int64(converted)
+		}
+		return converted
+	case float32:
+		converted := transferEnableGB(float64(v))
+		if converted == float64(int64(converted)) {
+			return int64(converted)
+		}
+		return converted
+	default:
+		return value
+	}
+}
+
+func transferEnableGB(value float64) float64 {
+	if value <= 0 {
+		return 0
+	}
+	if value >= transferGiB {
+		return value / transferGiB
+	}
+	return value
 }
 
 func normalizeValue(value any) any {
