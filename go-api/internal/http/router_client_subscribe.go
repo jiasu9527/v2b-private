@@ -1391,6 +1391,10 @@ func buildSubscribeURI(userUUID string, server map[string]any) string {
 		return buildHysteriaURI(userUUID, normalized)
 	case "anytls":
 		return buildAnyTLSURI(userUUID, normalized)
+	case "juicity":
+		return buildJuicityURI(userUUID, normalized)
+	case "mieru":
+		return buildMieruURI(userUUID, normalized)
 	default:
 		return ""
 	}
@@ -1990,6 +1994,42 @@ func buildAnyTLSURI(userUUID string, server map[string]any) string {
 	}
 	return fmt.Sprintf(
 		"anytls://%s@%s:%d/?%s#%s\r\n",
+		userUUID,
+		formatHost(serverString(server, "host")),
+		serverInt64(server, "port"),
+		encodeQuery(params),
+		encodeURIComponent(serverString(server, "name")),
+	)
+}
+
+func buildJuicityURI(userUUID string, server map[string]any) string {
+	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	params := map[string]string{
+		"congestion_control": firstNonEmptyString(serverString(server, "congestion_control"), "bbr"),
+		"sni":                firstNonEmptyString(serverString(server, "server_name"), stringValue(tlsSettings["server_name"]), stringValue(tlsSettings["serverName"])),
+		"allow_insecure":     strconv.Itoa(boolToInt(serverBoolValue(server["insecure"]) || serverMapBool(tlsSettings, "allow_insecure", "allowInsecure"))),
+	}
+	return fmt.Sprintf(
+		"juicity://%s:%s@%s:%d?%s#%s\r\n",
+		userUUID,
+		userUUID,
+		formatHost(serverString(server, "host")),
+		serverInt64(server, "port"),
+		encodeQuery(params),
+		encodeURIComponent(serverString(server, "name")),
+	)
+}
+
+func buildMieruURI(userUUID string, server map[string]any) string {
+	settings := firstNonEmptyMap(serverMap(server, "network_settings"), serverMap(server, "networkSettings"))
+	params := map[string]string{
+		"transport":    firstNonEmptyString(stringValue(settings["transport"]), "TCP"),
+		"mtu":          strconv.FormatInt(defaultInt64(mapValueInt64(settings["mtu"]), 1400), 10),
+		"multiplexing": stringValue(settings["multiplexing"]),
+	}
+	return fmt.Sprintf(
+		"mieru://%s:%s@%s:%d?%s#%s\r\n",
+		userUUID,
 		userUUID,
 		formatHost(serverString(server, "host")),
 		serverInt64(server, "port"),

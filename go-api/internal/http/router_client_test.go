@@ -887,6 +887,43 @@ func TestRouterClientSubscribeClashEndpointUsesAttachmentHeader(t *testing.T) {
 	}
 }
 
+func TestBuildSubscribeURIJuicityV2node(t *testing.T) {
+	uri := buildSubscribeURI("user-uuid", map[string]any{
+		"type":               "v2node",
+		"protocol":           "juicity",
+		"name":               "Juicity 1",
+		"host":               "j.example.com",
+		"port":               int64(443),
+		"congestion_control": "bbr",
+		"tls_settings":       map[string]any{"server_name": "j.example.com", "allow_insecure": true},
+	})
+
+	if !strings.HasPrefix(uri, "juicity://user-uuid:user-uuid@j.example.com:443?") {
+		t.Fatalf("expected juicity uri with uuid auth, got %q", uri)
+	}
+	if !strings.Contains(uri, "congestion_control=bbr") || !strings.Contains(uri, "sni=j.example.com") || !strings.Contains(uri, "allow_insecure=1") || !strings.Contains(uri, "#Juicity%201") {
+		t.Fatalf("expected juicity query/name fields, got %q", uri)
+	}
+}
+
+func TestBuildSubscribeURIMieruV2node(t *testing.T) {
+	uri := buildSubscribeURI("user-uuid", map[string]any{
+		"type":             "v2node",
+		"protocol":         "mieru",
+		"name":             "Mieru 1",
+		"host":             "m.example.com",
+		"port":             int64(2999),
+		"network_settings": map[string]any{"transport": "UDP", "mtu": int64(1280), "multiplexing": "MULTIPLEXING_LOW"},
+	})
+
+	if !strings.HasPrefix(uri, "mieru://user-uuid:user-uuid@m.example.com:2999?") {
+		t.Fatalf("expected mieru uri with uuid auth, got %q", uri)
+	}
+	if !strings.Contains(uri, "transport=UDP") || !strings.Contains(uri, "mtu=1280") || !strings.Contains(uri, "multiplexing=MULTIPLEXING_LOW") || !strings.Contains(uri, "#Mieru%201") {
+		t.Fatalf("expected mieru query/name fields, got %q", uri)
+	}
+}
+
 func TestRouterClientSubscribeClashEndpointIncludesMetaProtocols(t *testing.T) {
 	userService := &fakeUserService{
 		resolvedClientUserID: 10,
