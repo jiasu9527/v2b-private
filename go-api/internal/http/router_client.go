@@ -562,12 +562,13 @@ func cloneSubscribeInfoServer(template map[string]any, name string) map[string]a
 }
 
 func buildV2ServerConfig(cfg config.Config, server nodeapi.ServerRecord, routes []map[string]any) map[string]any {
+	protocol := strings.ToLower(strings.TrimSpace(fieldString(server, "protocol")))
 	payload := map[string]any{
 		"listen_ip":               fieldString(server, "listen_ip"),
 		"server_port":             fieldInt64(server, "server_port"),
 		"network":                 fieldString(server, "network"),
 		"network_settings":        fieldMap(server, "network_settings"),
-		"protocol":                fieldString(server, "protocol"),
+		"protocol":                protocol,
 		"tls":                     fieldInt64(server, "tls"),
 		"tls_settings":            fieldMap(server, "tls_settings"),
 		"encryption":              fieldString(server, "encryption"),
@@ -592,6 +593,20 @@ func buildV2ServerConfig(cfg config.Config, server nodeapi.ServerRecord, routes 
 	}
 	if sendThrough := fieldString(server, "send_through"); sendThrough != "" {
 		payload["send_through"] = sendThrough
+	}
+
+	switch protocol {
+	case "juicity", "mieru":
+		payload["external_protocol"] = true
+		payload["traffic_mode"] = firstNonEmptyString(fieldString(server, "traffic_mode"), "unsupported")
+		payload["password_mode"] = firstNonEmptyString(fieldString(server, "password_mode"), "uuid")
+	}
+
+	if protocol == "mieru" {
+		settings := fieldMap(server, "network_settings")
+		payload["transport"] = firstNonEmptyString(stringValue(settings["transport"]), "TCP")
+		payload["mtu"] = defaultInt64(mapValueInt64(settings["mtu"]), 1400)
+		payload["multiplexing"] = stringValue(settings["multiplexing"])
 	}
 
 	switch fieldString(server, "cipher") {

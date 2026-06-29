@@ -1538,6 +1538,85 @@ func TestRouterClientSubscribeCustomPathTokenSegmentShadowrocketModule(t *testin
 	}
 }
 
+func TestBuildV2ServerConfigJuicityExternalProtocol(t *testing.T) {
+	server := nodeapi.ServerRecord{
+		ID:       11,
+		NodeType: "v2node",
+		Fields: map[string]any{
+			"listen_ip":          "0.0.0.0",
+			"server_port":        int64(443),
+			"protocol":           "juicity",
+			"tls":                int64(1),
+			"tls_settings":       map[string]any{"server_name": "j.example.com", "certificate_file": "/etc/ssl/j.crt"},
+			"congestion_control": "bbr",
+		},
+	}
+
+	payload := buildV2ServerConfig(config.Config{}, server, nil)
+
+	if payload["protocol"] != "juicity" || payload["server_port"] != int64(443) {
+		t.Fatalf("expected common juicity fields, got %#v", payload)
+	}
+	if payload["external_protocol"] != true {
+		t.Fatalf("expected external_protocol=true, got %#v", payload["external_protocol"])
+	}
+	if payload["traffic_mode"] != "unsupported" || payload["password_mode"] != "uuid" {
+		t.Fatalf("unexpected external modes: traffic=%#v password=%#v", payload["traffic_mode"], payload["password_mode"])
+	}
+	if payload["congestion_control"] != "bbr" {
+		t.Fatalf("expected congestion_control preserved, got %#v", payload["congestion_control"])
+	}
+	tlsSettings, ok := payload["tls_settings"].(map[string]any)
+	if !ok || tlsSettings["server_name"] != "j.example.com" {
+		t.Fatalf("expected tls settings preserved, got %#v", payload["tls_settings"])
+	}
+}
+
+func TestBuildV2ServerConfigMieruExternalProtocol(t *testing.T) {
+	server := nodeapi.ServerRecord{
+		ID:       12,
+		NodeType: "v2node",
+		Fields: map[string]any{
+			"listen_ip":        "0.0.0.0",
+			"server_port":      int64(2999),
+			"protocol":         "mieru",
+			"network_settings": map[string]any{"transport": "UDP", "mtu": int64(1280), "multiplexing": "MULTIPLEXING_LOW"},
+		},
+	}
+
+	payload := buildV2ServerConfig(config.Config{}, server, nil)
+
+	if payload["protocol"] != "mieru" || payload["server_port"] != int64(2999) {
+		t.Fatalf("expected common mieru fields, got %#v", payload)
+	}
+	if payload["external_protocol"] != true {
+		t.Fatalf("expected external_protocol=true, got %#v", payload["external_protocol"])
+	}
+	if payload["traffic_mode"] != "unsupported" || payload["password_mode"] != "uuid" {
+		t.Fatalf("unexpected external modes: traffic=%#v password=%#v", payload["traffic_mode"], payload["password_mode"])
+	}
+	if payload["transport"] != "UDP" || payload["mtu"] != int64(1280) || payload["multiplexing"] != "MULTIPLEXING_LOW" {
+		t.Fatalf("unexpected mieru settings: transport=%#v mtu=%#v multiplexing=%#v", payload["transport"], payload["mtu"], payload["multiplexing"])
+	}
+}
+
+func TestBuildV2ServerConfigMieruExternalProtocolDefaults(t *testing.T) {
+	server := nodeapi.ServerRecord{
+		ID:       13,
+		NodeType: "v2node",
+		Fields: map[string]any{
+			"server_port": int64(2999),
+			"protocol":    "mieru",
+		},
+	}
+
+	payload := buildV2ServerConfig(config.Config{}, server, nil)
+
+	if payload["transport"] != "TCP" || payload["mtu"] != int64(1400) {
+		t.Fatalf("expected mieru defaults, got transport=%#v mtu=%#v", payload["transport"], payload["mtu"])
+	}
+}
+
 func TestRouterServerV2ConfigEndpoint(t *testing.T) {
 	t.Setenv("SERVER_PUSH_INTERVAL", "90")
 	t.Setenv("SERVER_PULL_INTERVAL", "45")
