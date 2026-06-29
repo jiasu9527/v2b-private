@@ -32,11 +32,13 @@ import { moveItem } from '../lib/drag';
 import JsonModal from '../components/JsonModal';
 
 const serverTypes = ['v2node', 'shadowsocks', 'vmess', 'trojan', 'hysteria', 'tuic', 'vless', 'anytls'];
-const v2nodeProtocols = ['anytls', 'hysteria2', 'shadowsocks', 'trojan', 'tuic', 'vless', 'vmess'];
+const v2nodeProtocols = ['anytls', 'hysteria2', 'juicity', 'mieru', 'shadowsocks', 'trojan', 'tuic', 'vless', 'vmess'];
 const genericNetworks = ['tcp', 'ws', 'grpc', 'kcp', 'httpupgrade', 'xhttp'];
 const ssNetworks = ['tcp', 'http'];
 const ciphers = ['aes-128-gcm', 'aes-192-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305', '2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm'];
 const congestionOptions = ['cubic', 'new_reno', 'bbr'];
+const mieruTransportOptions = ['TCP', 'UDP'];
+const externalV2nodeProtocols = ['juicity', 'mieru'];
 const udpRelayOptions = ['native', 'quic'];
 
 const typeColors: Record<string, string> = {
@@ -240,6 +242,7 @@ function ProtocolFields({ type, protocol, tls, network, form, onEditChild }: { t
   const actualProtocol = type === 'v2node' ? protocol : type;
   const obfs = Form.useWatch('obfs', form);
   const encryption = Form.useWatch('encryption', form);
+  const mieruNetworkSettingsRaw = Form.useWatch('network_settings', form);
   addHiddenField(fields, 'network_settings');
   addHiddenField(fields, 'tls_settings');
   addHiddenField(fields, 'encryption_settings');
@@ -248,10 +251,18 @@ function ProtocolFields({ type, protocol, tls, network, form, onEditChild }: { t
 
   if (type === 'v2node') {
     addField(fields, 'protocol', <Form.Item name="protocol" label="节点协议" rules={[{ required: true }]}><Select onChange={(value) => {
-      form.setFieldsValue({
-        protocol: value,
-        ...(['anytls', 'hysteria2', 'trojan', 'tuic'].includes(value) ? { tls: 1 } : {}),
-      });
+      const nextValues: Record<string, any> = { protocol: value };
+      if (['anytls', 'hysteria2', 'trojan', 'tuic', 'juicity'].includes(value)) nextValues.tls = 1;
+      if (value === 'juicity') {
+        nextValues.network = undefined;
+        nextValues.congestion_control = form.getFieldValue('congestion_control') || 'bbr';
+      }
+      if (value === 'mieru') {
+        nextValues.tls = 0;
+        nextValues.network = undefined;
+        nextValues.network_settings = JSON.stringify({ transport: 'TCP', mtu: 1400 }, null, 2);
+      }
+      form.setFieldsValue(nextValues);
     }} options={v2nodeProtocols.map((value) => ({ label: value === 'hysteria2' ? 'Hysteria2' : value.toUpperCase(), value }))} /></Form.Item>);
   }
 
@@ -272,9 +283,28 @@ function ProtocolFields({ type, protocol, tls, network, form, onEditChild }: { t
     addField(fields, 'cipher', <Form.Item name="cipher" label="加密算法"><Select options={ciphers.map((value) => ({ label: value, value }))} /></Form.Item>, 24);
   }
 
-  if (actualProtocol && (type === 'v2node' || !['hysteria2', 'tuic', 'anytls'].includes(String(actualProtocol)))) {
+  if (actualProtocol && !externalV2nodeProtocols.includes(String(actualProtocol)) && (type === 'v2node' || !['hysteria2', 'tuic', 'anytls'].includes(String(actualProtocol)))) {
     const networks = actualProtocol === 'shadowsocks' ? ssNetworks : genericNetworks.filter((item) => actualProtocol !== 'trojan' || ['tcp', 'ws', 'grpc'].includes(item));
     addField(fields, 'network', <Form.Item name="network" label={editLink('传输协议', () => onEditChild('编辑协议配置', 'network_settings'))}><Select placeholder="选择传输协议" options={networks.map((value) => ({ label: value === 'ws' ? 'WebSocket' : value === 'http' ? 'HTTP伪装' : value === 'grpc' ? 'gRPC' : value === 'kcp' ? 'mKCP' : value === 'httpupgrade' ? 'HTTPUpgrade' : value.toUpperCase(), value }))} /></Form.Item>, 24);
+  }
+
+  if (actualProtocol === 'juicity') {
+    addField(fields, 'juicity_notice', <div className="legacy-info-note">Juicity 由 v2node 外部进程托管，当前阶段节点端流量统计暂不支持。</div>, 24);
+    addField(fields, 'congestion_control', <Form.Item name="congestion_control" label="拥塞控制算法"><Select options={congestionOptions.map((value) => ({ label: value, value }))} /></Form.Item>);
+    addField(fields, 'juicity_tls_link', <div className="form-only-link"><a onClick={() => onEditChild('编辑 Juicity TLS 配置', 'tls_settings')}>编辑 TLS 证书配置</a></div>, 24);
+  }
+
+  if (actualProtocol === 'mieru') {
+    const networkSettings = jsonObjectFromField(mieruNetworkSettingsRaw !== undefined ? mieruNetworkSettingsRaw : form.getFieldValue('network_settings'));
+    const updateMieruSetting = (key: string, value: any) => {
+      const next = { ...networkSettings, [key]: value };
+      if (value === '' || value === null || value === undefined) delete next[key];
+      form.setFieldsValue({ network_settings: JSON.stringify(next, null, 2) });
+    };
+    addField(fields, 'mieru_notice', <div className="legacy-info-note">Mieru 由 v2node 外部进程托管，当前阶段节点端流量统计暂不支持。</div>, 24);
+    addField(fields, 'mieru_transport', <Form.Item label="传输协议"><Select value={networkSettings.transport || 'TCP'} options={mieruTransportOptions.map((value) => ({ label: value, value }))} onChange={(value) => updateMieruSetting('transport', value)} /></Form.Item>);
+    addField(fields, 'mieru_mtu', <Form.Item label="MTU"><InputNumber value={Number(networkSettings.mtu || 1400)} min={576} max={9000} style={{ width: '100%' }} onChange={(value) => updateMieruSetting('mtu', value || 1400)} /></Form.Item>);
+    addField(fields, 'mieru_multiplexing', <Form.Item label="Multiplexing"><Input value={networkSettings.multiplexing || ''} placeholder="留空使用 Mieru 默认" onChange={(event) => updateMieruSetting('multiplexing', event.target.value)} /></Form.Item>, 24);
   }
 
   if (actualProtocol === 'hysteria2' || type === 'hysteria') {
