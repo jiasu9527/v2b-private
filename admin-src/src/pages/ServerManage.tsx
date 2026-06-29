@@ -289,7 +289,7 @@ function ProtocolFields({ type, protocol, tls, network, form, onEditChild }: { t
   }
 
   if (actualProtocol === 'juicity') {
-    addField(fields, 'juicity_notice', <div className="legacy-info-note">Juicity 由 v2node 外部进程托管；官方 juicity-server 当前未提供用户级流量统计接口，节点端会跳过流量上报。</div>, 24);
+    addField(fields, 'juicity_notice', <div className="legacy-info-note">Juicity 由 v2node 外部进程托管；v2node 已预留观测日志接口，支持 patched juicity-server 上报用户流量、在线与敏感域名。</div>, 24);
     addField(fields, 'congestion_control', <Form.Item name="congestion_control" label="拥塞控制算法"><Select options={congestionOptions.map((value) => ({ label: value, value }))} /></Form.Item>);
     addField(fields, 'juicity_tls_link', <div className="form-only-link"><a onClick={() => onEditChild('编辑 Juicity TLS 配置', 'tls_settings')}>编辑 TLS 证书配置</a></div>, 24);
   }

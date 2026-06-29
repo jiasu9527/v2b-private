@@ -598,7 +598,7 @@ func buildV2ServerConfig(cfg config.Config, server nodeapi.ServerRecord, routes 
 	switch protocol {
 	case "juicity", "mieru":
 		payload["external_protocol"] = true
-		defaultTrafficMode := "unsupported"
+		defaultTrafficMode := "observer"
 		if protocol == "mieru" {
 			defaultTrafficMode = "metrics"
 		}
