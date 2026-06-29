@@ -1629,7 +1629,7 @@ func TestBuildV2ServerConfigMieruExternalProtocol(t *testing.T) {
 	if payload["external_protocol"] != true {
 		t.Fatalf("expected external_protocol=true, got %#v", payload["external_protocol"])
 	}
-	if payload["traffic_mode"] != "unsupported" || payload["password_mode"] != "uuid" {
+	if payload["traffic_mode"] != "metrics" || payload["password_mode"] != "uuid" {
 		t.Fatalf("unexpected external modes: traffic=%#v password=%#v", payload["traffic_mode"], payload["password_mode"])
 	}
 	if payload["transport"] != "UDP" || payload["mtu"] != int64(1280) || payload["multiplexing"] != "MULTIPLEXING_LOW" {

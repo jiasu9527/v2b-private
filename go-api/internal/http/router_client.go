@@ -598,7 +598,11 @@ func buildV2ServerConfig(cfg config.Config, server nodeapi.ServerRecord, routes 
 	switch protocol {
 	case "juicity", "mieru":
 		payload["external_protocol"] = true
-		payload["traffic_mode"] = firstNonEmptyString(fieldString(server, "traffic_mode"), "unsupported")
+		defaultTrafficMode := "unsupported"
+		if protocol == "mieru" {
+			defaultTrafficMode = "metrics"
+		}
+		payload["traffic_mode"] = firstNonEmptyString(fieldString(server, "traffic_mode"), defaultTrafficMode)
 		payload["password_mode"] = firstNonEmptyString(fieldString(server, "password_mode"), "uuid")
 	}
 
