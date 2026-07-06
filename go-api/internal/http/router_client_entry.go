@@ -1038,6 +1038,7 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 	var payload struct {
 		ID           *json.Number `json:"id"`
 		Email        string       `json:"email"`
+		Emails       []string     `json:"emails"`
 		EntryGroupID *json.Number `json:"entry_group_id"`
 		ServerType   string       `json:"server_type"`
 		ServerID     *json.Number `json:"server_id"`

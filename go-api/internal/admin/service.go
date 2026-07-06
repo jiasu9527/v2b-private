@@ -324,6 +324,7 @@ type Service interface {
 	DeleteClientEntryGroup(ctx context.Context, id int64) (bool, error)
 	ListClientEntryUserPolicies(ctx context.Context) ([]ClientEntryUserPolicyRecord, error)
 	SaveClientEntryUserPolicy(ctx context.Context, req ClientEntryUserPolicySaveRequest) (bool, error)
+	SaveClientEntryUserPolicies(ctx context.Context, req ClientEntryUserPolicyBulkSaveRequest) (int64, error)
 	DeleteClientEntryUserPolicy(ctx context.Context, id int64) (bool, error)
 	ListServerRoutes(ctx context.Context) ([]ServerRouteRecord, error)
 	SaveServerRoute(ctx context.Context, req ServerRouteSaveRequest) (bool, error)
@@ -1187,6 +1188,15 @@ type ClientEntryUserPolicyRecord struct {
 type ClientEntryUserPolicySaveRequest struct {
 	ID           *int64
 	Email        string
+	EntryGroupID int64
+	ServerType   string
+	ServerID     int64
+	Enabled      *int64
+	Remarks      string
+}
+
+type ClientEntryUserPolicyBulkSaveRequest struct {
+	Emails       []string
 	EntryGroupID int64
 	ServerType   string
 	ServerID     int64

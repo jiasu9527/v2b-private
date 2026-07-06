@@ -6,6 +6,13 @@ import { buildVisibleServerOptions, type ClientEntryServerOption } from './clien
 
 type EntryGroupOption = { value: number; label: string };
 
+function splitEmails(value: any) {
+  return String(value || '')
+    .split(/[\n,;\s]+/)
+    .map((item) => item.trim())
+    .filter((item, index, arr) => !!item && arr.indexOf(item) === index);
+}
+
 function splitNodeValue(value: any) {
   const raw = String(value || '').trim();
   const index = raw.indexOf(':');
@@ -27,6 +34,7 @@ function PolicyEditor({ row, children, onDone, entryGroups, serverOptions }: { r
     form.setFieldsValue({
       id: row?.id,
       email: row?.email || '',
+      emails_text: row?.email || '',
       entry_group_id: row?.entry_group_id,
       server: nodeValue(row),
       enabled: row?.enabled === undefined ? true : Number(row.enabled) !== 0,
@@ -43,13 +51,14 @@ function PolicyEditor({ row, children, onDone, entryGroups, serverOptions }: { r
       await apiPost('/server/client-entry-user-policy/save', {
         id: values.id,
         email: values.email,
+        emails: row?.id ? undefined : splitEmails(values.emails_text || values.email),
         entry_group_id: Number(values.entry_group_id),
         server_type: node.server_type,
         server_id: node.server_id,
         enabled: values.enabled ? 1 : 0,
         remarks: values.remarks || '',
       });
-      message.success('保存成功');
+      message.success(row?.id ? '保存成功' : `保存成功，已处理 ${splitEmails(values.emails_text || values.email).length} 个邮箱`);
       setOpen(false);
       onDone();
     } catch (e: any) {
@@ -64,9 +73,11 @@ function PolicyEditor({ row, children, onDone, entryGroups, serverOptions }: { r
     <Modal title={row?.id ? '编辑用户入口分配' : '新增用户入口分配'} open={open} onCancel={() => setOpen(false)} onOk={save} okText={saving ? <LoadingOutlined /> : '保存'} cancelText="取消" confirmLoading={saving} width={680} destroyOnHidden>
       <Form form={form} layout="vertical">
         <Form.Item name="id" hidden><Input /></Form.Item>
-        <Form.Item name="email" label="用户邮箱" rules={[{ required: true, message: '请输入用户邮箱' }, { type: 'email', message: '邮箱格式不正确' }]}>
+        {row?.id ? <Form.Item name="email" label="用户邮箱" rules={[{ required: true, message: '请输入用户邮箱' }, { type: 'email', message: '邮箱格式不正确' }]}>
           <Input placeholder="user@example.com" />
-        </Form.Item>
+        </Form.Item> : <Form.Item name="emails_text" label="用户邮箱" rules={[{ required: true, message: '请输入用户邮箱' }]} tooltip="支持一行一个、逗号、空格或分号分隔；系统会自动去重。">
+          <Input.TextArea rows={5} placeholder={'a@example.com\nb@example.com'} />
+        </Form.Item>}
         <Form.Item name="entry_group_id" label="入口组" rules={[{ required: true, message: '请选择入口组' }]}>
           <Select showSearch placeholder="选择已有客户端入口组" options={entryGroups} optionFilterProp="label" />
         </Form.Item>

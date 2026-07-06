@@ -116,3 +116,35 @@ func (s *DBService) DeleteClientEntryUserPolicy(ctx context.Context, id int64) (
 	}
 	return true, nil
 }
+
+func (s *DBService) SaveClientEntryUserPolicies(ctx context.Context, req ClientEntryUserPolicyBulkSaveRequest) (int64, error) {
+	seen := make(map[string]struct{}, len(req.Emails))
+	emails := make([]string, 0, len(req.Emails))
+	for _, email := range req.Emails {
+		email = strings.ToLower(strings.TrimSpace(email))
+		if email == "" {
+			continue
+		}
+		if _, ok := seen[email]; ok {
+			continue
+		}
+		seen[email] = struct{}{}
+		emails = append(emails, email)
+	}
+	if len(emails) == 0 {
+		return 0, errors.New("用户邮箱不能为空")
+	}
+	var count int64
+	for _, email := range emails {
+		ok, err := s.SaveClientEntryUserPolicy(ctx, ClientEntryUserPolicySaveRequest{
+			Email: email, EntryGroupID: req.EntryGroupID, ServerType: req.ServerType, ServerID: req.ServerID, Enabled: req.Enabled, Remarks: req.Remarks,
+		})
+		if err != nil {
+			return count, err
+		}
+		if ok {
+			count++
+		}
+	}
+	return count, nil
+}

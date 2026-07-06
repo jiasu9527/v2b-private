@@ -58,3 +58,30 @@ func TestDBServiceSaveClientEntryUserPolicyCreatesRecord(t *testing.T) {
 }
 
 func ptrInt64ForClientEntryPolicyTest(value int64) *int64 { return &value }
+
+func TestDBServiceSaveClientEntryUserPoliciesCreatesMultipleRecords(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := &DBService{db: db}
+	expectEnsureClientEntrySchema(mock)
+	mock.ExpectExec(`INSERT INTO v2_client_entry_user_policy`).
+		WithArgs("a@example.com", int64(7), "vmess", int64(11), int64(1), "VIP", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`INSERT INTO v2_client_entry_user_policy`).
+		WithArgs("b@example.com", int64(7), "vmess", int64(11), int64(1), "VIP", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	count, err := service.SaveClientEntryUserPolicies(context.Background(), ClientEntryUserPolicyBulkSaveRequest{
+		Emails: []string{" A@Example.com ", "b@example.com", "a@example.com"}, EntryGroupID: 7, ServerType: "vmess", ServerID: 11, Enabled: ptrInt64ForClientEntryPolicyTest(1), Remarks: "VIP",
+	})
+	if err != nil || count != 2 {
+		t.Fatalf("save policies: count=%d err=%v", count, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
