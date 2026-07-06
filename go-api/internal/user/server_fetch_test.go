@@ -156,9 +156,9 @@ func TestLoadServerFetchUserAllowsNullGroupID(t *testing.T) {
 	defer db.Close()
 
 	service := NewDBService(config.Config{}, db)
-	rows := sqlmock.NewRows([]string{"id", "group_id", "plan_id", "transfer_enable", "banned", "created_at", "expired_at"}).
-		AddRow(int64(1), nil, nil, int64(100), int64(0), int64(1700000000), sql.NullInt64{})
-	mock.ExpectQuery(`SELECT id, group_id, plan_id, transfer_enable, banned, created_at, expired_at`).
+	rows := sqlmock.NewRows([]string{"id", "email", "group_id", "plan_id", "transfer_enable", "banned", "created_at", "expired_at"}).
+		AddRow(int64(1), "user@example.com", nil, nil, int64(100), int64(0), int64(1700000000), sql.NullInt64{})
+	mock.ExpectQuery(`SELECT id, email, group_id, plan_id, transfer_enable, banned, created_at, expired_at`).
 		WithArgs(int64(1)).
 		WillReturnRows(rows)
 
@@ -182,9 +182,9 @@ func TestLoadServerFetchUserTreatsZeroExpiredAtAsUnlimited(t *testing.T) {
 	defer db.Close()
 
 	service := NewDBService(config.Config{}, db)
-	rows := sqlmock.NewRows([]string{"id", "group_id", "plan_id", "transfer_enable", "banned", "created_at", "expired_at"}).
-		AddRow(int64(2), int64(1), int64(1), int64(100), int64(0), int64(1700000000), int64(0))
-	mock.ExpectQuery(`SELECT id, group_id, plan_id, transfer_enable, banned, created_at, expired_at`).
+	rows := sqlmock.NewRows([]string{"id", "email", "group_id", "plan_id", "transfer_enable", "banned", "created_at", "expired_at"}).
+		AddRow(int64(2), "user@example.com", int64(1), int64(1), int64(100), int64(0), int64(1700000000), int64(0))
+	mock.ExpectQuery(`SELECT id, email, group_id, plan_id, transfer_enable, banned, created_at, expired_at`).
 		WithArgs(int64(2)).
 		WillReturnRows(rows)
 
@@ -229,5 +229,41 @@ func TestNormalizeServerFetchRowOmitsEmptyTags(t *testing.T) {
 	}
 	if _, ok := item["tags"]; ok {
 		t.Fatalf("expected empty tags to be omitted, got %#v", item["tags"])
+	}
+}
+
+func TestApplyClientEntryUserPolicyOverridesConditionalHost(t *testing.T) {
+	servers := []map[string]any{
+		{"id": int64(11), "type": "vmess", "host": "manual.example.com(UShadowrocket),default.example.com"},
+		{"id": int64(12), "type": "trojan", "host": "other.example.com"},
+	}
+	policies := []clientEntryUserPolicy{
+		{
+			Email:        "User@Example.com",
+			EntryGroupID: int64(7),
+			ServerType:   "vmess",
+			ServerID:     int64(11),
+			Entries:      []string{"entry-a.example.com", "entry-b.example.com"},
+		},
+	}
+
+	applyClientEntryUserPolicies(servers, "user@example.com", policies)
+
+	if got := servers[0]["host"]; got != "entry-a.example.com" {
+		t.Fatalf("expected policy entry to override conditional host, got %#v", got)
+	}
+	if got := servers[1]["host"]; got != "other.example.com" {
+		t.Fatalf("expected unmatched server to keep host, got %#v", got)
+	}
+}
+
+func TestApplyClientEntryUserPolicyKeepsOriginalHostWhenEntryGroupEmpty(t *testing.T) {
+	servers := []map[string]any{{"id": int64(11), "type": "vmess", "host": "default.example.com"}}
+	policies := []clientEntryUserPolicy{{Email: "user@example.com", EntryGroupID: int64(7), ServerType: "vmess", ServerID: int64(11)}}
+
+	applyClientEntryUserPolicies(servers, "user@example.com", policies)
+
+	if got := servers[0]["host"]; got != "default.example.com" {
+		t.Fatalf("expected empty policy to fall back to original host, got %#v", got)
 	}
 }

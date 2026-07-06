@@ -21,6 +21,7 @@ import (
 
 type serverFetchUser struct {
 	ID             int64
+	Email          string
 	GroupID        int64
 	PlanID         int64
 	TransferEnable int64
@@ -68,6 +69,10 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 	if err != nil {
 		return nil, err
 	}
+	userPolicies, err := s.loadClientEntryUserPolicies(ctx, userRow.Email)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().Unix()
 	if !knowledgeUserAvailable(userRow.Banned, userRow.TransferEnable, userRow.ExpiredAt, now) {
 		return []map[string]any{}, nil
@@ -109,6 +114,8 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 		return mapInt64(servers[i]["id"]) < mapInt64(servers[j]["id"])
 	})
 
+	applyClientEntryUserPolicies(servers, userRow.Email, userPolicies)
+
 	filtered := make([]map[string]any, 0, len(servers))
 	for _, item := range servers {
 		if hostValue, ok := item["host"].(string); ok {
@@ -144,11 +151,12 @@ func (s *DBService) loadServerFetchUser(ctx context.Context, userID int64) (serv
 		groupID sql.NullInt64
 		planID  sql.NullInt64
 	)
-	err := s.db.QueryRowContext(ctx, `SELECT id, group_id, plan_id, transfer_enable, banned, created_at, expired_at
+	err := s.db.QueryRowContext(ctx, `SELECT id, email, group_id, plan_id, transfer_enable, banned, created_at, expired_at
 FROM v2_user
 WHERE id = $1
 LIMIT 1`, userID).Scan(
 		&row.ID,
+		&row.Email,
 		&groupID,
 		&planID,
 		&row.TransferEnable,

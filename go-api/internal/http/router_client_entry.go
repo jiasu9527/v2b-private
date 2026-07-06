@@ -1010,3 +1010,123 @@ func splitClientEntryTextList(raw string) []string {
 	}
 	return result
 }
+
+func handleAdminClientEntryUserPolicyFetch(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+	data, err := adminService.ListClientEntryUserPolicies(r.Context())
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": data})
+	return true
+}
+
+func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+	var payload struct {
+		ID           *json.Number `json:"id"`
+		Email        string       `json:"email"`
+		EntryGroupID *json.Number `json:"entry_group_id"`
+		ServerType   string       `json:"server_type"`
+		ServerID     *json.Number `json:"server_id"`
+		Enabled      *json.Number `json:"enabled"`
+		Remarks      string       `json:"remarks"`
+	}
+	if strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
+		if err := readJSONBody(r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+			return true
+		}
+	} else {
+		inputs, err := readInputs(r)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+			return true
+		}
+		if raw := strings.TrimSpace(inputs["id"]); raw != "" {
+			v := json.Number(raw)
+			payload.ID = &v
+		}
+		payload.Email = strings.TrimSpace(inputs["email"])
+		if raw := strings.TrimSpace(inputs["entry_group_id"]); raw != "" {
+			v := json.Number(raw)
+			payload.EntryGroupID = &v
+		}
+		payload.ServerType = strings.TrimSpace(inputs["server_type"])
+		if raw := strings.TrimSpace(inputs["server_id"]); raw != "" {
+			v := json.Number(raw)
+			payload.ServerID = &v
+		}
+		if raw := strings.TrimSpace(inputs["enabled"]); raw != "" {
+			v := json.Number(raw)
+			payload.Enabled = &v
+		}
+		payload.Remarks = strings.TrimSpace(inputs["remarks"])
+	}
+	id, err := jsonNumberToInt64Pointer(payload.ID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "保存失败"})
+		return true
+	}
+	entryGroupID, err := jsonNumberToInt64Pointer(payload.EntryGroupID)
+	if err != nil || entryGroupID == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "入口组不能为空"})
+		return true
+	}
+	serverID, err := jsonNumberToInt64Pointer(payload.ServerID)
+	if err != nil || serverID == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "生效节点不能为空"})
+		return true
+	}
+	enabled, err := jsonNumberToInt64Pointer(payload.Enabled)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "保存失败"})
+		return true
+	}
+	saved, err := adminService.SaveClientEntryUserPolicy(r.Context(), admin.ClientEntryUserPolicySaveRequest{
+		ID: id, Email: payload.Email, EntryGroupID: *entryGroupID, ServerType: payload.ServerType, ServerID: *serverID, Enabled: enabled, Remarks: payload.Remarks,
+	})
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": saved})
+	return true
+}
+
+func handleAdminClientEntryUserPolicyDrop(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+	inputs, err := readInputs(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+	id, err := strconv.ParseInt(strings.TrimSpace(inputs["id"]), 10, 64)
+	if err != nil || id <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "分配不存在"})
+		return true
+	}
+	deleted, err := adminService.DeleteClientEntryUserPolicy(r.Context(), id)
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": deleted})
+	return true
+}

@@ -322,6 +322,9 @@ type Service interface {
 	ListClientEntryGroups(ctx context.Context, id *int64) ([]ClientEntryGroupRecord, error)
 	SaveClientEntryGroup(ctx context.Context, req ClientEntryGroupSaveRequest) (bool, error)
 	DeleteClientEntryGroup(ctx context.Context, id int64) (bool, error)
+	ListClientEntryUserPolicies(ctx context.Context) ([]ClientEntryUserPolicyRecord, error)
+	SaveClientEntryUserPolicy(ctx context.Context, req ClientEntryUserPolicySaveRequest) (bool, error)
+	DeleteClientEntryUserPolicy(ctx context.Context, id int64) (bool, error)
 	ListServerRoutes(ctx context.Context) ([]ServerRouteRecord, error)
 	SaveServerRoute(ctx context.Context, req ServerRouteSaveRequest) (bool, error)
 	DeleteServerRoute(ctx context.Context, id int64) (bool, error)
@@ -1165,4 +1168,28 @@ func randomAlphaNumeric(length int) (string, error) {
 		builder.WriteByte(alphabet[next.Int64()])
 	}
 	return builder.String(), nil
+}
+
+type ClientEntryUserPolicyRecord struct {
+	ID             int64  `json:"id"`
+	Email          string `json:"email"`
+	EntryGroupID   int64  `json:"entry_group_id"`
+	EntryGroupName string `json:"entry_group_name"`
+	ServerType     string `json:"server_type"`
+	ServerID       int64  `json:"server_id"`
+	ServerName     string `json:"server_name"`
+	Enabled        int64  `json:"enabled"`
+	Remarks        string `json:"remarks"`
+	CreatedAt      int64  `json:"created_at,omitempty"`
+	UpdatedAt      int64  `json:"updated_at,omitempty"`
+}
+
+type ClientEntryUserPolicySaveRequest struct {
+	ID           *int64
+	Email        string
+	EntryGroupID int64
+	ServerType   string
+	ServerID     int64
+	Enabled      *int64
+	Remarks      string
 }

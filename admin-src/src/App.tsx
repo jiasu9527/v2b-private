@@ -25,6 +25,7 @@ import NoticePage from './pages/NoticePage';
 import KnowledgePage from './pages/KnowledgePage';
 import ServerRoutePage from './pages/ServerRoutePage';
 import ClientEntryPage from './pages/ClientEntryPage';
+import ClientEntryUserPolicyPage from './pages/ClientEntryUserPolicyPage';
 import SubscribeGuardPage from './pages/SubscribeGuardPage';
 import { checkLogin, clearAuth, getAdminUserInfo, getAuth, getCurrentUserInfo, getSettings, pathAdminSegment, setAdminUserInfo } from './lib/api';
 
@@ -47,6 +48,7 @@ const menu = [
   { type: 'item', key: '/server/group', icon: <DatabaseOutlined />, label: '权限组管理' },
   { type: 'item', key: '/server/route', icon: <ShareAltOutlined />, label: '路由管理' },
   { type: 'item', key: '/server/client-entry', icon: <ClusterOutlined />, label: '客户端入口' },
+  { type: 'item', key: '/server/client-entry-user-policy', icon: <ClusterOutlined />, label: '用户入口分配' },
   { type: 'heading', key: 'finance-heading', label: '财务' },
   { type: 'item', key: '/plan', icon: <AppstoreOutlined />, label: '订阅管理' },
   { type: 'item', key: '/order', icon: <ShoppingCartOutlined />, label: '订单管理' },
@@ -84,6 +86,7 @@ function Page({ path }: { path: string }) {
   if (route === '/server/group') return <GenericResourcePage name="serverGroups" />;
   if (route === '/server/route') return <ServerRoutePage />;
   if (route === '/server/client-entry') return <ClientEntryPage />;
+  if (route === '/server/client-entry-user-policy') return <ClientEntryUserPolicyPage />;
   if (route === '/config/system') return <ConfigPage />;
   if (route === '/config/payment') return <PaymentPage />;
   if (route === '/config/subscribe-guard') return <SubscribeGuardPage />;
