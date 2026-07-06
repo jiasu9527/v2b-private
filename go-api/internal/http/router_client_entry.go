@@ -1040,8 +1040,13 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		Email        string       `json:"email"`
 		Emails       []string     `json:"emails"`
 		EntryGroupID *json.Number `json:"entry_group_id"`
-		Enabled      *json.Number `json:"enabled"`
-		Remarks      string       `json:"remarks"`
+		Members      []struct {
+			ServerType string       `json:"server_type"`
+			ServerID   *json.Number `json:"server_id"`
+			Sort       *json.Number `json:"sort"`
+		} `json:"members"`
+		Enabled *json.Number `json:"enabled"`
+		Remarks string       `json:"remarks"`
 	}
 	if strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
 		if err := readJSONBody(r, &payload); err != nil {
@@ -1062,6 +1067,26 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		if raw := strings.TrimSpace(inputs["entry_group_id"]); raw != "" {
 			v := json.Number(raw)
 			payload.EntryGroupID = &v
+		}
+		if len(payload.Members) == 0 {
+			for _, entry := range indexedNestedFieldMap(inputs, "members") {
+				serverType := strings.TrimSpace(entry["server_type"])
+				serverIDRaw := strings.TrimSpace(entry["server_id"])
+				if serverType == "" || serverIDRaw == "" {
+					continue
+				}
+				serverID := json.Number(serverIDRaw)
+				var sortValue *json.Number
+				if raw := strings.TrimSpace(entry["sort"]); raw != "" {
+					value := json.Number(raw)
+					sortValue = &value
+				}
+				payload.Members = append(payload.Members, struct {
+					ServerType string       `json:"server_type"`
+					ServerID   *json.Number `json:"server_id"`
+					Sort       *json.Number `json:"sort"`
+				}{ServerType: serverType, ServerID: &serverID, Sort: sortValue})
+			}
 		}
 		if raw := strings.TrimSpace(inputs["enabled"]); raw != "" {
 			v := json.Number(raw)
@@ -1084,8 +1109,25 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "保存失败"})
 		return true
 	}
+	members := make([]admin.ClientEntryGroupMemberSaveRequest, 0, len(payload.Members))
+	for _, member := range payload.Members {
+		serverID, err := jsonNumberToInt64Pointer(member.ServerID)
+		if err != nil || serverID == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": "生效节点不能为空"})
+			return true
+		}
+		var sortValue *int64
+		if member.Sort != nil {
+			sortValue, err = jsonNumberToInt64Pointer(member.Sort)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"message": "保存失败"})
+				return true
+			}
+		}
+		members = append(members, admin.ClientEntryGroupMemberSaveRequest{ServerType: member.ServerType, ServerID: *serverID, Sort: sortValue})
+	}
 	saved, err := adminService.SaveClientEntryUserPolicy(r.Context(), admin.ClientEntryUserPolicySaveRequest{
-		ID: id, Email: payload.Email, Emails: payload.Emails, EntryGroupID: *entryGroupID, Enabled: enabled, Remarks: payload.Remarks,
+		ID: id, Email: payload.Email, Emails: payload.Emails, EntryGroupID: *entryGroupID, Members: members, Enabled: enabled, Remarks: payload.Remarks,
 	})
 	if err != nil {
 		return handleAdminError(w, err)

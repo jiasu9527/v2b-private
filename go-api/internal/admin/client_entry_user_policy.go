@@ -45,11 +45,63 @@ ORDER BY p.id DESC`)
 	if err != nil {
 		return nil, err
 	}
+	members, err := s.loadClientEntryUserPolicyMembers(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	for index := range result {
 		result[index].Emails = emails[result[index].ID]
+		result[index].Members = members[result[index].ID]
 		if len(result[index].Emails) > 0 {
 			result[index].Email = result[index].Emails[0]
 		}
+	}
+	return result, nil
+}
+
+func (s *DBService) loadClientEntryUserPolicyMembers(ctx context.Context, ids []int64) (map[int64][]ClientEntryGroupMemberRecord, error) {
+	result := make(map[int64][]ClientEntryGroupMemberRecord, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT m.policy_id, m.server_type, m.server_id, COALESCE(s.name, '') AS server_name
+FROM v2_client_entry_user_policy_member m
+LEFT JOIN LATERAL (
+	SELECT name FROM v2_server_vmess WHERE m.server_type = 'vmess' AND id = m.server_id
+	UNION ALL SELECT name FROM v2_server_trojan WHERE m.server_type = 'trojan' AND id = m.server_id
+	UNION ALL SELECT name FROM v2_server_shadowsocks WHERE m.server_type = 'shadowsocks' AND id = m.server_id
+	UNION ALL SELECT name FROM v2_server_vless WHERE m.server_type = 'vless' AND id = m.server_id
+	UNION ALL SELECT name FROM v2_server_tuic WHERE m.server_type = 'tuic' AND id = m.server_id
+	UNION ALL SELECT name FROM v2_server_hysteria WHERE m.server_type = 'hysteria' AND id = m.server_id
+	UNION ALL SELECT name FROM v2_server_anytls WHERE m.server_type = 'anytls' AND id = m.server_id
+	UNION ALL SELECT name FROM v2_server_v2node WHERE m.server_type = 'v2node' AND id = m.server_id
+	LIMIT 1
+) s ON true
+WHERE m.policy_id IN (`+strings.Join(placeholders, ",")+`)
+ORDER BY m.policy_id ASC, m.sort ASC NULLS LAST, m.id ASC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query client entry user policy members: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var policyID int64
+		var serverName string
+		record := ClientEntryGroupMemberRecord{}
+		if err := rows.Scan(&policyID, &record.ServerType, &record.ServerID, &serverName); err != nil {
+			return nil, fmt.Errorf("scan client entry user policy member: %w", err)
+		}
+		if strings.TrimSpace(record.ServerType) != "" && record.ServerID > 0 {
+			result[policyID] = append(result[policyID], record)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate client entry user policy members: %w", err)
 	}
 	return result, nil
 }
@@ -102,6 +154,10 @@ func (s *DBService) SaveClientEntryUserPolicy(ctx context.Context, req ClientEnt
 	if req.EntryGroupID <= 0 {
 		return false, errors.New("入口组不能为空")
 	}
+	members := normalizePolicyMembers(req.Members)
+	if len(members) == 0 {
+		return false, errors.New("生效节点不能为空")
+	}
 	enabled := int64(1)
 	if req.Enabled != nil {
 		enabled = *req.Enabled
@@ -141,10 +197,38 @@ VALUES ($1, $2, $3, $4)`, policyID, email, now, now); err != nil {
 			return false, errors.New("保存失败")
 		}
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy_member WHERE policy_id = $1`, policyID); err != nil {
+		return false, errors.New("保存失败")
+	}
+	for index, member := range members {
+		sort := int64(index + 1)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_user_policy_member (policy_id, server_type, server_id, sort, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6)`, policyID, member.ServerType, member.ServerID, sort, now, now); err != nil {
+			return false, errors.New("保存失败")
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return false, errors.New("保存失败")
 	}
 	return true, nil
+}
+
+func normalizePolicyMembers(values []ClientEntryGroupMemberSaveRequest) []ClientEntryGroupMemberSaveRequest {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]ClientEntryGroupMemberSaveRequest, 0, len(values))
+	for _, value := range values {
+		serverType := strings.TrimSpace(value.ServerType)
+		if serverType == "" || value.ServerID <= 0 {
+			continue
+		}
+		key := serverType + ":" + fmt.Sprint(value.ServerID)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, ClientEntryGroupMemberSaveRequest{ServerType: serverType, ServerID: value.ServerID, Sort: value.Sort})
+	}
+	return result
 }
 
 func normalizePolicyEmails(values []string) []string {
@@ -182,6 +266,9 @@ func (s *DBService) DeleteClientEntryUserPolicy(ctx context.Context, id int64) (
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy_user WHERE policy_id = $1`, id); err != nil {
+		return false, errors.New("删除失败")
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy_member WHERE policy_id = $1`, id); err != nil {
 		return false, errors.New("删除失败")
 	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy WHERE id = $1`, id)

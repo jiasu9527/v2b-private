@@ -27,7 +27,7 @@ func (s *DBService) loadClientEntryUserPolicies(ctx context.Context, email strin
 FROM v2_client_entry_user_policy p
 JOIN v2_client_entry_user_policy_user u ON u.policy_id = p.id
 JOIN v2_client_entry_group g ON g.id = p.entry_group_id AND g."show" = 1
-JOIN v2_client_entry_group_member m ON m.entry_group_id = p.entry_group_id
+JOIN v2_client_entry_user_policy_member m ON m.policy_id = p.id
 JOIN v2_client_entry_group_ip ip ON ip.entry_group_id = p.entry_group_id
 WHERE p.enabled = 1 AND lower(u.email) = lower($1)
 ORDER BY p.id ASC, m.sort ASC NULLS LAST, m.id ASC, ip.sort ASC NULLS LAST, ip.id ASC`, strings.TrimSpace(email))

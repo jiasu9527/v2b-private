@@ -1171,24 +1171,26 @@ func randomAlphaNumeric(length int) (string, error) {
 }
 
 type ClientEntryUserPolicyRecord struct {
-	ID             int64    `json:"id"`
-	Email          string   `json:"email,omitempty"`
-	Emails         []string `json:"emails,omitempty"`
-	EntryGroupID   int64    `json:"entry_group_id"`
-	EntryGroupName string   `json:"entry_group_name"`
-	ServerType     string   `json:"server_type"`
-	ServerID       int64    `json:"server_id"`
-	ServerName     string   `json:"server_name"`
-	Enabled        int64    `json:"enabled"`
-	Remarks        string   `json:"remarks"`
-	CreatedAt      int64    `json:"created_at,omitempty"`
-	UpdatedAt      int64    `json:"updated_at,omitempty"`
+	ID             int64                          `json:"id"`
+	Email          string                         `json:"email,omitempty"`
+	Emails         []string                       `json:"emails,omitempty"`
+	Members        []ClientEntryGroupMemberRecord `json:"members,omitempty"`
+	EntryGroupID   int64                          `json:"entry_group_id"`
+	EntryGroupName string                         `json:"entry_group_name"`
+	ServerType     string                         `json:"server_type"`
+	ServerID       int64                          `json:"server_id"`
+	ServerName     string                         `json:"server_name"`
+	Enabled        int64                          `json:"enabled"`
+	Remarks        string                         `json:"remarks"`
+	CreatedAt      int64                          `json:"created_at,omitempty"`
+	UpdatedAt      int64                          `json:"updated_at,omitempty"`
 }
 
 type ClientEntryUserPolicySaveRequest struct {
 	ID           *int64
 	Email        string
 	Emails       []string
+	Members      []ClientEntryGroupMemberSaveRequest
 	EntryGroupID int64
 	ServerType   string
 	ServerID     int64

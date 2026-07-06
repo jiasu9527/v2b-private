@@ -4047,7 +4047,7 @@ func TestRouterAdminClientEntryGroupSaveEndpointAcceptsLegacyFormPayload(t *test
 	}
 }
 
-func TestRouterAdminClientEntryUserPolicySaveEndpointDoesNotRequireNode(t *testing.T) {
+func TestRouterAdminClientEntryUserPolicySaveEndpointAcceptsMultipleNodes(t *testing.T) {
 	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
 	adminService := &fakeAdminService{}
 	router := NewRouter(
@@ -4056,7 +4056,7 @@ func TestRouterAdminClientEntryUserPolicySaveEndpointDoesNotRequireNode(t *testi
 		WithAdminService(adminService),
 	)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/save", strings.NewReader(`{"auth_data":"jwt-admin","emails":["a@example.com","b@example.com"],"entry_group_id":7,"enabled":1,"remarks":"VIP"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/save", strings.NewReader(`{"auth_data":"jwt-admin","emails":["a@example.com","b@example.com"],"entry_group_id":7,"members":[{"server_type":"vmess","server_id":11},{"server_type":"trojan","server_id":12}],"enabled":1,"remarks":"VIP"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -4070,8 +4070,8 @@ func TestRouterAdminClientEntryUserPolicySaveEndpointDoesNotRequireNode(t *testi
 	if len(adminService.lastClientEntryUserPolicySave.Emails) != 2 || adminService.lastClientEntryUserPolicySave.Emails[0] != "a@example.com" || adminService.lastClientEntryUserPolicySave.Emails[1] != "b@example.com" {
 		t.Fatalf("unexpected emails: %#v", adminService.lastClientEntryUserPolicySave.Emails)
 	}
-	if adminService.lastClientEntryUserPolicySave.ServerType != "" || adminService.lastClientEntryUserPolicySave.ServerID != 0 {
-		t.Fatalf("user entry policy should not require a standalone node: %#v", adminService.lastClientEntryUserPolicySave)
+	if len(adminService.lastClientEntryUserPolicySave.Members) != 2 || adminService.lastClientEntryUserPolicySave.Members[0].ServerType != "vmess" || adminService.lastClientEntryUserPolicySave.Members[0].ServerID != 11 || adminService.lastClientEntryUserPolicySave.Members[1].ServerType != "trojan" || adminService.lastClientEntryUserPolicySave.Members[1].ServerID != 12 {
+		t.Fatalf("unexpected selected nodes: %#v", adminService.lastClientEntryUserPolicySave.Members)
 	}
 }
 
