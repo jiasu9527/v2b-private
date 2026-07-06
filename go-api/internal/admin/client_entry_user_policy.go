@@ -16,9 +16,8 @@ func (s *DBService) ListClientEntryUserPolicies(ctx context.Context) ([]ClientEn
 		return nil, err
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.entry_group_id, g.display_name AS entry_group_name, p.server_type, p.server_id, COALESCE(s.name, '') AS server_name, p.enabled, p.remarks, p.created_at, p.updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.server_type, p.server_id, COALESCE(s.name, '') AS server_name, p.enabled, p.remarks, p.created_at, p.updated_at
 FROM v2_client_entry_user_policy p
-LEFT JOIN v2_client_entry_group g ON g.id = p.entry_group_id
 LEFT JOIN LATERAL (
 	SELECT name FROM v2_server_vmess WHERE p.server_type = 'vmess' AND id = p.server_id
 	UNION ALL SELECT name FROM v2_server_trojan WHERE p.server_type = 'trojan' AND id = p.server_id
@@ -40,7 +39,7 @@ ORDER BY p.id DESC`)
 	ids := make([]int64, 0)
 	for rows.Next() {
 		var record ClientEntryUserPolicyRecord
-		if err := rows.Scan(&record.ID, &record.EntryGroupID, &record.EntryGroupName, &record.ServerType, &record.ServerID, &record.ServerName, &record.Enabled, &record.Remarks, &record.CreatedAt, &record.UpdatedAt); err != nil {
+		if err := rows.Scan(&record.ID, &record.ServerType, &record.ServerID, &record.ServerName, &record.Enabled, &record.Remarks, &record.CreatedAt, &record.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan client entry user policy: %w", err)
 		}
 		result = append(result, record)
@@ -56,8 +55,13 @@ ORDER BY p.id DESC`)
 	if err != nil {
 		return nil, err
 	}
+	entries, err := s.loadClientEntryUserPolicyEntries(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	for index := range result {
 		result[index].Emails = emails[result[index].ID]
+		result[index].Entries = entries[result[index].ID]
 		if len(result[index].Emails) > 0 {
 			result[index].Email = result[index].Emails[0]
 		}
@@ -98,6 +102,42 @@ ORDER BY policy_id ASC, email ASC`, args...)
 	return result, nil
 }
 
+func (s *DBService) loadClientEntryUserPolicyEntries(ctx context.Context, ids []int64) (map[int64][]string, error) {
+	result := make(map[int64][]string, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT policy_id, entry
+FROM v2_client_entry_user_policy_entry
+WHERE policy_id IN (`+strings.Join(placeholders, ",")+`)
+ORDER BY policy_id ASC, sort ASC NULLS LAST, id ASC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query client entry user policy entries: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var policyID int64
+		var entry string
+		if err := rows.Scan(&policyID, &entry); err != nil {
+			return nil, fmt.Errorf("scan client entry user policy entry: %w", err)
+		}
+		entry = strings.TrimSpace(entry)
+		if entry != "" {
+			result[policyID] = append(result[policyID], entry)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate client entry user policy entries: %w", err)
+	}
+	return result, nil
+}
+
 func (s *DBService) SaveClientEntryUserPolicy(ctx context.Context, req ClientEntryUserPolicySaveRequest) (bool, error) {
 	if s.db == nil {
 		return false, ErrUnavailable
@@ -111,8 +151,9 @@ func (s *DBService) SaveClientEntryUserPolicy(ctx context.Context, req ClientEnt
 	if len(emails) == 0 {
 		return false, errors.New("用户邮箱不能为空")
 	}
-	if req.EntryGroupID <= 0 {
-		return false, errors.New("入口组不能为空")
+	entries := normalizePolicyEntries(req.Entries)
+	if len(entries) == 0 {
+		return false, errors.New("入口地址不能为空")
 	}
 	if req.ServerType == "" || req.ServerID <= 0 {
 		return false, errors.New("生效节点不能为空")
@@ -129,16 +170,16 @@ func (s *DBService) SaveClientEntryUserPolicy(ctx context.Context, req ClientEnt
 	defer tx.Rollback()
 	policyID := int64(0)
 	if req.ID == nil {
-		if err := tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_user_policy (entry_group_id, server_type, server_id, enabled, remarks, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id`, req.EntryGroupID, req.ServerType, req.ServerID, enabled, req.Remarks, now, now).Scan(&policyID); err != nil {
+		if err := tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_user_policy (server_type, server_id, enabled, remarks, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id`, req.ServerType, req.ServerID, enabled, req.Remarks, now, now).Scan(&policyID); err != nil {
 			return false, errors.New("保存失败")
 		}
 	} else {
 		policyID = *req.ID
 		result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
-SET entry_group_id = $2, server_type = $3, server_id = $4, enabled = $5, remarks = $6, updated_at = $7
-WHERE id = $1`, policyID, req.EntryGroupID, req.ServerType, req.ServerID, enabled, req.Remarks, now)
+SET server_type = $2, server_id = $3, enabled = $4, remarks = $5, updated_at = $6
+WHERE id = $1`, policyID, req.ServerType, req.ServerID, enabled, req.Remarks, now)
 		if err != nil {
 			return false, errors.New("保存失败")
 		}
@@ -156,10 +197,39 @@ VALUES ($1, $2, $3, $4)`, policyID, email, now, now); err != nil {
 			return false, errors.New("保存失败")
 		}
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy_entry WHERE policy_id = $1`, policyID); err != nil {
+		return false, errors.New("保存失败")
+	}
+	for index, entry := range entries {
+		sort := int64(index + 1)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_user_policy_entry (policy_id, entry, sort, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5)`, policyID, entry, sort, now, now); err != nil {
+			return false, errors.New("保存失败")
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return false, errors.New("保存失败")
 	}
 	return true, nil
+}
+
+func normalizePolicyEntries(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		for _, entry := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' ' }) {
+			entry = strings.TrimSpace(entry)
+			if entry == "" {
+				continue
+			}
+			if _, ok := seen[entry]; ok {
+				continue
+			}
+			seen[entry] = struct{}{}
+			result = append(result, entry)
+		}
+	}
+	return result
 }
 
 func normalizePolicyEmails(values []string) []string {
@@ -197,6 +267,9 @@ func (s *DBService) DeleteClientEntryUserPolicy(ctx context.Context, id int64) (
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy_user WHERE policy_id = $1`, id); err != nil {
+		return false, errors.New("删除失败")
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy_entry WHERE policy_id = $1`, id); err != nil {
 		return false, errors.New("删除失败")
 	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy WHERE id = $1`, id)

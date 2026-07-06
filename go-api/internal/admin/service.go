@@ -1174,6 +1174,7 @@ type ClientEntryUserPolicyRecord struct {
 	ID             int64    `json:"id"`
 	Email          string   `json:"email,omitempty"`
 	Emails         []string `json:"emails,omitempty"`
+	Entries        []string `json:"entries,omitempty"`
 	EntryGroupID   int64    `json:"entry_group_id"`
 	EntryGroupName string   `json:"entry_group_name"`
 	ServerType     string   `json:"server_type"`
@@ -1189,6 +1190,7 @@ type ClientEntryUserPolicySaveRequest struct {
 	ID           *int64
 	Email        string
 	Emails       []string
+	Entries      []string
 	EntryGroupID int64
 	ServerType   string
 	ServerID     int64

@@ -24,13 +24,12 @@ func (s *DBService) loadClientEntryUserPolicies(ctx context.Context, email strin
 		return nil, err
 	}
 
-	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.entry_group_id, p.server_type, p.server_id, p.enabled, p.remarks, ip.ip
+	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.entry_group_id, p.server_type, p.server_id, p.enabled, p.remarks, e.entry AS ip
 FROM v2_client_entry_user_policy p
 JOIN v2_client_entry_user_policy_user u ON u.policy_id = p.id
-JOIN v2_client_entry_group g ON g.id = p.entry_group_id AND g."show" = 1
-JOIN v2_client_entry_group_ip ip ON ip.entry_group_id = p.entry_group_id
+JOIN v2_client_entry_user_policy_entry e ON e.policy_id = p.id
 WHERE p.enabled = 1 AND lower(u.email) = lower($1)
-ORDER BY p.id ASC, ip.sort ASC NULLS LAST, ip.id ASC`, strings.TrimSpace(email))
+ORDER BY p.id ASC, e.sort ASC NULLS LAST, e.id ASC`, strings.TrimSpace(email))
 	if err != nil {
 		return nil, fmt.Errorf("query client entry user policies: %w", err)
 	}

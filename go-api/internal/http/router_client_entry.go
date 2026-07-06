@@ -224,6 +224,7 @@ func handleAdminClientEntryGroupSave(w http.ResponseWriter, r *http.Request, ses
 			Sort *json.Number `json:"sort"`
 		} `json:"ips"`
 	}
+	var inputs map[string]string
 	if strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
 		if err := readJSONBody(r, &payload); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
@@ -1036,22 +1037,24 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		return true
 	}
 	var payload struct {
-		ID           *json.Number `json:"id"`
-		Email        string       `json:"email"`
-		Emails       []string     `json:"emails"`
-		EntryGroupID *json.Number `json:"entry_group_id"`
-		ServerType   string       `json:"server_type"`
-		ServerID     *json.Number `json:"server_id"`
-		Enabled      *json.Number `json:"enabled"`
-		Remarks      string       `json:"remarks"`
+		ID         *json.Number `json:"id"`
+		Email      string       `json:"email"`
+		Emails     []string     `json:"emails"`
+		Entries    []string     `json:"entries"`
+		ServerType string       `json:"server_type"`
+		ServerID   *json.Number `json:"server_id"`
+		Enabled    *json.Number `json:"enabled"`
+		Remarks    string       `json:"remarks"`
 	}
+	var inputs map[string]string
 	if strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
 		if err := readJSONBody(r, &payload); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
 			return true
 		}
 	} else {
-		inputs, err := readInputs(r)
+		var err error
+		inputs, err = readInputs(r)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
 			return true
@@ -1061,10 +1064,6 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 			payload.ID = &v
 		}
 		payload.Email = strings.TrimSpace(inputs["email"])
-		if raw := strings.TrimSpace(inputs["entry_group_id"]); raw != "" {
-			v := json.Number(raw)
-			payload.EntryGroupID = &v
-		}
 		payload.ServerType = strings.TrimSpace(inputs["server_type"])
 		if raw := strings.TrimSpace(inputs["server_id"]); raw != "" {
 			v := json.Number(raw)
@@ -1081,10 +1080,8 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "保存失败"})
 		return true
 	}
-	entryGroupID, err := jsonNumberToInt64Pointer(payload.EntryGroupID)
-	if err != nil || entryGroupID == nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "入口组不能为空"})
-		return true
+	if len(payload.Entries) == 0 && inputs != nil {
+		payload.Entries = indexedStrings(inputs, "entries")
 	}
 	serverID, err := jsonNumberToInt64Pointer(payload.ServerID)
 	if err != nil || serverID == nil {
@@ -1097,7 +1094,7 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		return true
 	}
 	saved, err := adminService.SaveClientEntryUserPolicy(r.Context(), admin.ClientEntryUserPolicySaveRequest{
-		ID: id, Email: payload.Email, EntryGroupID: *entryGroupID, ServerType: payload.ServerType, ServerID: *serverID, Enabled: enabled, Remarks: payload.Remarks,
+		ID: id, Email: payload.Email, Emails: payload.Emails, Entries: payload.Entries, ServerType: payload.ServerType, ServerID: *serverID, Enabled: enabled, Remarks: payload.Remarks,
 	})
 	if err != nil {
 		return handleAdminError(w, err)

@@ -26,6 +26,8 @@ func TestEnsureClientEntrySchemaCreatesMissingTablesAndColumns(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy_user`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy_entry`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	for _, item := range []struct {
 		table  string
@@ -41,6 +43,7 @@ func TestEnsureClientEntrySchemaCreatesMissingTablesAndColumns(t *testing.T) {
 		{"v2_client_entry_group", "remote_exclude_names", `ALTER TABLE v2_client_entry_group ADD COLUMN remote_exclude_names text NOT NULL DEFAULT '\[\]'`},
 		{"v2_client_entry_group", "remote_refresh_sec", `ALTER TABLE v2_client_entry_group ADD COLUMN remote_refresh_sec INTEGER NOT NULL DEFAULT 300`},
 		{"v2_client_entry_user_policy", "email", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN email varchar\(255\) NOT NULL DEFAULT ''`},
+		{"v2_client_entry_user_policy", "entry_group_id", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN entry_group_id INTEGER NOT NULL DEFAULT 0`},
 	} {
 		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
 			WithArgs(item.table, item.column).
@@ -48,6 +51,9 @@ func TestEnsureClientEntrySchemaCreatesMissingTablesAndColumns(t *testing.T) {
 		mock.ExpectExec(item.stmt).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
+
+	mock.ExpectExec(`ALTER TABLE v2_client_entry_user_policy ALTER COLUMN entry_group_id SET DEFAULT 0`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_group_member_group ON v2_client_entry_group_member\(entry_group_id\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
@@ -59,7 +65,11 @@ func TestEnsureClientEntrySchemaCreatesMissingTablesAndColumns(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_user_policy ON v2_client_entry_user_policy_user\(policy_id\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_entry_policy ON v2_client_entry_user_policy_entry\(policy_id\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`INSERT INTO v2_client_entry_user_policy_user`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`INSERT INTO v2_client_entry_user_policy_entry`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	if err := EnsureClientEntrySchema(context.Background(), db); err != nil {
@@ -90,6 +100,8 @@ func TestEnsureClientEntrySchemaSkipsExistingColumns(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy_user`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy_entry`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	for _, item := range []struct {
 		table  string
@@ -104,11 +116,15 @@ func TestEnsureClientEntrySchemaSkipsExistingColumns(t *testing.T) {
 		{"v2_client_entry_group", "remote_exclude_names"},
 		{"v2_client_entry_group", "remote_refresh_sec"},
 		{"v2_client_entry_user_policy", "email"},
+		{"v2_client_entry_user_policy", "entry_group_id"},
 	} {
 		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
 			WithArgs(item.table, item.column).
 			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	}
+
+	mock.ExpectExec(`ALTER TABLE v2_client_entry_user_policy ALTER COLUMN entry_group_id SET DEFAULT 0`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_group_member_group ON v2_client_entry_group_member\(entry_group_id\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
@@ -120,7 +136,11 @@ func TestEnsureClientEntrySchemaSkipsExistingColumns(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_user_policy ON v2_client_entry_user_policy_user\(policy_id\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_entry_policy ON v2_client_entry_user_policy_entry\(policy_id\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`INSERT INTO v2_client_entry_user_policy_user`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`INSERT INTO v2_client_entry_user_policy_entry`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	if err := EnsureClientEntrySchema(context.Background(), db); err != nil {
