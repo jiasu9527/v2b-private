@@ -9,10 +9,9 @@ import (
 type clientEntryUserPolicy struct {
 	ID           int64
 	EntryGroupID int64
-	ServerType   string
-	ServerID     int64
 	Enabled      int64
 	Remarks      string
+	Members      []ClientEntryGroupMember
 	Entries      []string
 }
 
@@ -24,12 +23,14 @@ func (s *DBService) loadClientEntryUserPolicies(ctx context.Context, email strin
 		return nil, err
 	}
 
-	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.entry_group_id, p.server_type, p.server_id, p.enabled, p.remarks, e.entry AS ip
+	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.entry_group_id, p.enabled, p.remarks, m.server_type, m.server_id, ip.ip
 FROM v2_client_entry_user_policy p
 JOIN v2_client_entry_user_policy_user u ON u.policy_id = p.id
-JOIN v2_client_entry_user_policy_entry e ON e.policy_id = p.id
+JOIN v2_client_entry_group g ON g.id = p.entry_group_id AND g."show" = 1
+JOIN v2_client_entry_group_member m ON m.entry_group_id = p.entry_group_id
+JOIN v2_client_entry_group_ip ip ON ip.entry_group_id = p.entry_group_id
 WHERE p.enabled = 1 AND lower(u.email) = lower($1)
-ORDER BY p.id ASC, e.sort ASC NULLS LAST, e.id ASC`, strings.TrimSpace(email))
+ORDER BY p.id ASC, m.sort ASC NULLS LAST, m.id ASC, ip.sort ASC NULLS LAST, ip.id ASC`, strings.TrimSpace(email))
 	if err != nil {
 		return nil, fmt.Errorf("query client entry user policies: %w", err)
 	}
@@ -38,22 +39,24 @@ ORDER BY p.id ASC, e.sort ASC NULLS LAST, e.id ASC`, strings.TrimSpace(email))
 	order := make([]string, 0)
 	for _, row := range rows {
 		id := mapInt64(row["id"])
-		key := fmt.Sprintf("%d:%s:%d", id, strings.TrimSpace(fmt.Sprint(row["server_type"])), mapInt64(row["server_id"]))
+		key := fmt.Sprint(id)
 		policy := byKey[key]
 		if policy == nil {
 			policy = &clientEntryUserPolicy{
 				ID:           id,
 				EntryGroupID: mapInt64(row["entry_group_id"]),
-				ServerType:   strings.TrimSpace(fmt.Sprint(row["server_type"])),
-				ServerID:     mapInt64(row["server_id"]),
 				Enabled:      mapInt64(row["enabled"]),
 				Remarks:      strings.TrimSpace(fmt.Sprint(row["remarks"])),
 			}
 			byKey[key] = policy
 			order = append(order, key)
 		}
+		member := ClientEntryGroupMember{ServerType: strings.TrimSpace(fmt.Sprint(row["server_type"])), ServerID: mapInt64(row["server_id"])}
+		if member.ServerType != "" && member.ServerID > 0 && !clientEntryPolicyHasMember(policy.Members, member) {
+			policy.Members = append(policy.Members, member)
+		}
 		entry := strings.TrimSpace(fmt.Sprint(row["ip"]))
-		if entry != "" {
+		if entry != "" && !clientEntryPolicyHasEntry(policy.Entries, entry) {
 			policy.Entries = append(policy.Entries, entry)
 		}
 	}
@@ -65,6 +68,25 @@ ORDER BY p.id ASC, e.sort ASC NULLS LAST, e.id ASC`, strings.TrimSpace(email))
 	return result, nil
 }
 
+func clientEntryPolicyHasMember(values []ClientEntryGroupMember, target ClientEntryGroupMember) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value.ServerType) == strings.TrimSpace(target.ServerType) && value.ServerID == target.ServerID {
+			return true
+		}
+	}
+	return false
+}
+
+func clientEntryPolicyHasEntry(values []string, target string) bool {
+	target = strings.TrimSpace(target)
+	for _, value := range values {
+		if strings.TrimSpace(value) == target {
+			return true
+		}
+	}
+	return false
+}
+
 func applyClientEntryUserPolicies(servers []map[string]any, email string, policies []clientEntryUserPolicy) {
 	if len(servers) == 0 || len(policies) == 0 || strings.TrimSpace(email) == "" {
 		return
@@ -72,16 +94,18 @@ func applyClientEntryUserPolicies(servers []map[string]any, email string, polici
 	email = strings.ToLower(strings.TrimSpace(email))
 	byServer := make(map[string]clientEntryUserPolicy, len(policies))
 	for _, policy := range policies {
-		if len(policy.Entries) == 0 || policy.ServerID <= 0 {
+		if len(policy.Entries) == 0 || len(policy.Members) == 0 {
 			continue
 		}
-		serverType := strings.TrimSpace(policy.ServerType)
-		if serverType == "" {
-			continue
-		}
-		key := serverType + ":" + fmt.Sprint(policy.ServerID)
-		if _, exists := byServer[key]; !exists {
-			byServer[key] = policy
+		for _, member := range policy.Members {
+			serverType := strings.TrimSpace(member.ServerType)
+			if serverType == "" || member.ServerID <= 0 {
+				continue
+			}
+			key := serverType + ":" + fmt.Sprint(member.ServerID)
+			if _, exists := byServer[key]; !exists {
+				byServer[key] = policy
+			}
 		}
 	}
 	if len(byServer) == 0 {

@@ -4047,6 +4047,34 @@ func TestRouterAdminClientEntryGroupSaveEndpointAcceptsLegacyFormPayload(t *test
 	}
 }
 
+func TestRouterAdminClientEntryUserPolicySaveEndpointDoesNotRequireNode(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/save", strings.NewReader(`{"auth_data":"jwt-admin","emails":["a@example.com","b@example.com"],"entry_group_id":7,"enabled":1,"remarks":"VIP"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if adminService.lastClientEntryUserPolicySave.EntryGroupID != 7 {
+		t.Fatalf("unexpected entry group id: %#v", adminService.lastClientEntryUserPolicySave)
+	}
+	if len(adminService.lastClientEntryUserPolicySave.Emails) != 2 || adminService.lastClientEntryUserPolicySave.Emails[0] != "a@example.com" || adminService.lastClientEntryUserPolicySave.Emails[1] != "b@example.com" {
+		t.Fatalf("unexpected emails: %#v", adminService.lastClientEntryUserPolicySave.Emails)
+	}
+	if adminService.lastClientEntryUserPolicySave.ServerType != "" || adminService.lastClientEntryUserPolicySave.ServerID != 0 {
+		t.Fatalf("user entry policy should not require a standalone node: %#v", adminService.lastClientEntryUserPolicySave)
+	}
+}
+
 func TestRouterAdminClientEntryGroupDropEndpoint(t *testing.T) {
 	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
 	adminService := &fakeAdminService{}

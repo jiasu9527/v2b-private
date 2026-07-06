@@ -2,28 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { Button, Card, Form, Input, Modal, Select, Space, Spin, Switch, Table, Tag, message } from 'antd';
 import { LoadingOutlined, PlusOutlined } from '@ant-design/icons';
 import { apiGet, apiPost } from '../lib/api';
-import { buildVisibleServerOptions, type ClientEntryServerOption } from './clientEntryHelpers';
+type EntryGroupOption = { value: number; label: string };
 
-function splitNodeValue(value: any) {
-  const raw = String(value || '').trim();
-  const index = raw.indexOf(':');
-  if (index <= 0) return { server_type: '', server_id: 0 };
-  return { server_type: raw.slice(0, index), server_id: Number(raw.slice(index + 1)) };
-}
 
-function nodeValue(row: any) {
-  if (row?.server_type && row?.server_id) return `${row.server_type}:${row.server_id}`;
-  return undefined;
-}
-
-function splitEntries(value: any) {
-  return String(value || '')
-    .split(/[\n,;]+/)
-    .map((item) => item.trim())
-    .filter((item, index, arr) => !!item && arr.indexOf(item) === index);
-}
-
-function PolicyEditor({ row, children, onDone, serverOptions }: { row?: any; children: React.ReactElement; onDone: () => void; serverOptions: ClientEntryServerOption[] }) {
+function PolicyEditor({ row, children, onDone, entryGroups }: { row?: any; children: React.ReactElement; onDone: () => void; entryGroups: EntryGroupOption[] }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [userOptions, setUserOptions] = useState<{ value: string; label: string }[]>([]);
@@ -33,8 +15,7 @@ function PolicyEditor({ row, children, onDone, serverOptions }: { row?: any; chi
     form.setFieldsValue({
       id: row?.id,
       emails: Array.isArray(row?.emails) ? row.emails : (row?.email ? [row.email] : []),
-      entries_text: Array.isArray(row?.entries) ? row.entries.join('\n') : '',
-      server: nodeValue(row),
+      entry_group_id: row?.entry_group_id,
       enabled: row?.enabled === undefined ? true : Number(row.enabled) !== 0,
       remarks: row?.remarks || '',
     });
@@ -45,13 +26,10 @@ function PolicyEditor({ row, children, onDone, serverOptions }: { row?: any; chi
     setSaving(true);
     try {
       const values = await form.validateFields();
-      const node = splitNodeValue(values.server);
       await apiPost('/server/client-entry-user-policy/save', {
         id: values.id,
         emails: Array.isArray(values.emails) ? values.emails : [],
-        entries: splitEntries(values.entries_text),
-        server_type: node.server_type,
-        server_id: node.server_id,
+        entry_group_id: Number(values.entry_group_id),
         enabled: values.enabled ? 1 : 0,
         remarks: values.remarks || '',
       });
@@ -97,11 +75,8 @@ function PolicyEditor({ row, children, onDone, serverOptions }: { row?: any; chi
             }}
           />
         </Form.Item>
-        <Form.Item name="entries_text" label="入口地址" rules={[{ required: true, message: '请输入入口地址' }]} tooltip="一行一个入口地址，支持 IP 或域名；也可以用英文逗号或分号分隔。">
-          <Input.TextArea rows={5} placeholder={'1.1.1.1\nentry.example.com'} />
-        </Form.Item>
-        <Form.Item name="server" label="生效节点" rules={[{ required: true, message: '请选择生效节点' }]} tooltip="只覆盖这个邮箱在所选节点上的连接地址，其他节点照旧。">
-          <Select showSearch placeholder="选择需要覆盖入口的节点" options={serverOptions} optionFilterProp="label" />
+        <Form.Item name="entry_group_id" label="全局入口分组" rules={[{ required: true, message: '请选择全局入口分组' }]} tooltip="入口地址和生效节点在全局入口分组里统一维护；这里仅把这些用户绑定到该分组。">
+          <Select showSearch placeholder="选择全局入口分组" options={entryGroups} optionFilterProp="label" />
         </Form.Item>
         <Form.Item name="enabled" label="状态" valuePropName="checked">
           <Switch checkedChildren="启用" unCheckedChildren="禁用" />
@@ -116,18 +91,18 @@ function PolicyEditor({ row, children, onDone, serverOptions }: { row?: any; chi
 
 export default function ClientEntryUserPolicyPage() {
   const [rows, setRows] = useState<any[]>([]);
-  const [serverOptions, setServerOptions] = useState<ClientEntryServerOption[]>([]);
+  const [entryGroups, setEntryGroups] = useState<EntryGroupOption[]>([]);
   const [loading, setLoading] = useState(false);
 
   const load = async () => {
     setLoading(true);
     try {
-      const [policyRes, nodeRes] = await Promise.all([
+      const [policyRes, groupRes] = await Promise.all([
         apiGet('/server/client-entry-user-policy/fetch'),
-        apiGet('/server/manage/getNodes').catch(() => ({ data: [] })),
+        apiGet('/server/client-entry/fetch'),
       ]);
       setRows(Array.isArray(policyRes.data) ? policyRes.data : []);
-      setServerOptions(buildVisibleServerOptions(Array.isArray(nodeRes.data) ? nodeRes.data : []));
+      setEntryGroups((Array.isArray(groupRes.data) ? groupRes.data : []).filter((item: any) => Number(item.show ?? 1) !== 0).map((item: any) => ({ value: Number(item.id), label: item.display_name || item.name || item.remarks || `入口组 #${item.id}` })));
     } catch (e: any) {
       message.error(e.message || '加载失败');
     } finally {
@@ -150,16 +125,11 @@ export default function ClientEntryUserPolicyPage() {
       if (emails.length === 0) return '-';
       return <details className="client-entry-members"><summary>已选择 {emails.length} 个用户</summary><div className="client-entry-member-list">{emails.map((email: string) => <div key={email}>{email}</div>)}</div></details>;
     } },
-    { title: '入口地址', dataIndex: 'entries', width: 240, render: (value: any) => {
-      const entries = Array.isArray(value) ? value : [];
-      if (entries.length === 0) return '-';
-      return <details className="client-entry-members"><summary>共 {entries.length} 个入口</summary><div className="client-entry-member-list">{entries.map((entry: string) => <div key={entry}>{entry}</div>)}</div></details>;
-    } },
-    { title: '生效节点', dataIndex: 'server_name', width: 260, render: (value: any, row: any) => value ? `${value} / ${row.server_type} #${row.server_id}` : `${row.server_type} #${row.server_id}` },
+    { title: '全局入口分组', dataIndex: 'entry_group_name', width: 220, render: (value: any, row: any) => value || `#${row.entry_group_id}` },
     { title: '状态', dataIndex: 'enabled', width: 100, render: (value: any) => Number(value) === 0 ? <Tag>禁用</Tag> : <Tag color="green">启用</Tag> },
     { title: '备注', dataIndex: 'remarks', ellipsis: true },
     { title: '操作', key: 'action', align: 'right', width: 150, render: (_: any, row: any) => <Space>
-      <PolicyEditor row={row} onDone={load} serverOptions={serverOptions}><a href="javascript:void(0);">编辑</a></PolicyEditor>
+      <PolicyEditor row={row} onDone={load} entryGroups={entryGroups}><a href="javascript:void(0);">编辑</a></PolicyEditor>
       <a href="javascript:void(0);" onClick={() => drop(row.id)}>删除</a>
     </Space> },
   ];
@@ -169,7 +139,7 @@ export default function ClientEntryUserPolicyPage() {
     <Spin spinning={loading}>
       <Card className="block-card" styles={{ body: { padding: 0 } }}>
         <div className="forest-table-action">
-          <PolicyEditor onDone={load} serverOptions={serverOptions}><Button icon={<PlusOutlined />}>新增分配</Button></PolicyEditor>
+          <PolicyEditor onDone={load} entryGroups={entryGroups}><Button icon={<PlusOutlined />}>新增分配</Button></PolicyEditor>
         </div>
         <Table className="forest-table" rowKey="id" tableLayout="auto" columns={columns} dataSource={rows} pagination={false} scroll={{ x: 1100 }} />
       </Card>

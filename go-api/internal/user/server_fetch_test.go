@@ -232,33 +232,40 @@ func TestNormalizeServerFetchRowOmitsEmptyTags(t *testing.T) {
 	}
 }
 
-func TestApplyClientEntryUserPolicyOverridesConditionalHost(t *testing.T) {
+func TestApplyClientEntryUserPolicyOverridesAllGroupMemberHosts(t *testing.T) {
 	servers := []map[string]any{
 		{"id": int64(11), "type": "vmess", "host": "manual.example.com(UShadowrocket),default.example.com"},
 		{"id": int64(12), "type": "trojan", "host": "other.example.com"},
+		{"id": int64(13), "type": "vless", "host": "keep.example.com"},
 	}
 	policies := []clientEntryUserPolicy{
 		{
+			ID:           int64(3),
 			EntryGroupID: int64(7),
-			ServerType:   "vmess",
-			ServerID:     int64(11),
-			Entries:      []string{"entry-a.example.com", "entry-b.example.com"},
+			Members: []ClientEntryGroupMember{
+				{ServerType: "vmess", ServerID: int64(11)},
+				{ServerType: "trojan", ServerID: int64(12)},
+			},
+			Entries: []string{"entry-a.example.com", "entry-b.example.com"},
 		},
 	}
 
 	applyClientEntryUserPolicies(servers, "user@example.com", policies)
 
 	if got := servers[0]["host"]; got != "entry-a.example.com" {
-		t.Fatalf("expected policy entry to override conditional host, got %#v", got)
+		t.Fatalf("expected group entry to override first member host, got %#v", got)
 	}
-	if got := servers[1]["host"]; got != "other.example.com" {
-		t.Fatalf("expected unmatched server to keep host, got %#v", got)
+	if got := servers[1]["host"]; got != "entry-b.example.com" {
+		t.Fatalf("expected group entry to override second member host, got %#v", got)
+	}
+	if got := servers[2]["host"]; got != "keep.example.com" {
+		t.Fatalf("expected non-member server to keep host, got %#v", got)
 	}
 }
 
 func TestApplyClientEntryUserPolicyKeepsOriginalHostWhenEntryGroupEmpty(t *testing.T) {
 	servers := []map[string]any{{"id": int64(11), "type": "vmess", "host": "default.example.com"}}
-	policies := []clientEntryUserPolicy{{EntryGroupID: int64(7), ServerType: "vmess", ServerID: int64(11)}}
+	policies := []clientEntryUserPolicy{{EntryGroupID: int64(7), Members: []ClientEntryGroupMember{{ServerType: "vmess", ServerID: int64(11)}}}}
 
 	applyClientEntryUserPolicies(servers, "user@example.com", policies)
 
