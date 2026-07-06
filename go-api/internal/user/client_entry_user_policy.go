@@ -8,7 +8,6 @@ import (
 
 type clientEntryUserPolicy struct {
 	ID           int64
-	Email        string
 	EntryGroupID int64
 	ServerType   string
 	ServerID     int64
@@ -25,11 +24,12 @@ func (s *DBService) loadClientEntryUserPolicies(ctx context.Context, email strin
 		return nil, err
 	}
 
-	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.email, p.entry_group_id, p.server_type, p.server_id, p.enabled, p.remarks, ip.ip
+	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.entry_group_id, p.server_type, p.server_id, p.enabled, p.remarks, ip.ip
 FROM v2_client_entry_user_policy p
+JOIN v2_client_entry_user_policy_user u ON u.policy_id = p.id
 JOIN v2_client_entry_group g ON g.id = p.entry_group_id AND g."show" = 1
 JOIN v2_client_entry_group_ip ip ON ip.entry_group_id = p.entry_group_id
-WHERE p.enabled = 1 AND lower(p.email) = lower($1)
+WHERE p.enabled = 1 AND lower(u.email) = lower($1)
 ORDER BY p.id ASC, ip.sort ASC NULLS LAST, ip.id ASC`, strings.TrimSpace(email))
 	if err != nil {
 		return nil, fmt.Errorf("query client entry user policies: %w", err)
@@ -44,7 +44,6 @@ ORDER BY p.id ASC, ip.sort ASC NULLS LAST, ip.id ASC`, strings.TrimSpace(email))
 		if policy == nil {
 			policy = &clientEntryUserPolicy{
 				ID:           id,
-				Email:        strings.TrimSpace(fmt.Sprint(row["email"])),
 				EntryGroupID: mapInt64(row["entry_group_id"]),
 				ServerType:   strings.TrimSpace(fmt.Sprint(row["server_type"])),
 				ServerID:     mapInt64(row["server_id"]),
@@ -74,7 +73,7 @@ func applyClientEntryUserPolicies(servers []map[string]any, email string, polici
 	email = strings.ToLower(strings.TrimSpace(email))
 	byServer := make(map[string]clientEntryUserPolicy, len(policies))
 	for _, policy := range policies {
-		if strings.ToLower(strings.TrimSpace(policy.Email)) != email || len(policy.Entries) == 0 || policy.ServerID <= 0 {
+		if len(policy.Entries) == 0 || policy.ServerID <= 0 {
 			continue
 		}
 		serverType := strings.TrimSpace(policy.ServerType)

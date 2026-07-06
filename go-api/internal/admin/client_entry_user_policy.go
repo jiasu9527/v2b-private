@@ -16,7 +16,7 @@ func (s *DBService) ListClientEntryUserPolicies(ctx context.Context) ([]ClientEn
 		return nil, err
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.email, p.entry_group_id, g.display_name AS entry_group_name, p.server_type, p.server_id, COALESCE(s.name, '') AS server_name, p.enabled, p.remarks, p.created_at, p.updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.entry_group_id, g.display_name AS entry_group_name, p.server_type, p.server_id, COALESCE(s.name, '') AS server_name, p.enabled, p.remarks, p.created_at, p.updated_at
 FROM v2_client_entry_user_policy p
 LEFT JOIN v2_client_entry_group g ON g.id = p.entry_group_id
 LEFT JOIN LATERAL (
@@ -37,15 +37,63 @@ ORDER BY p.id DESC`)
 	defer rows.Close()
 
 	result := make([]ClientEntryUserPolicyRecord, 0)
+	ids := make([]int64, 0)
 	for rows.Next() {
 		var record ClientEntryUserPolicyRecord
-		if err := rows.Scan(&record.ID, &record.Email, &record.EntryGroupID, &record.EntryGroupName, &record.ServerType, &record.ServerID, &record.ServerName, &record.Enabled, &record.Remarks, &record.CreatedAt, &record.UpdatedAt); err != nil {
+		if err := rows.Scan(&record.ID, &record.EntryGroupID, &record.EntryGroupName, &record.ServerType, &record.ServerID, &record.ServerName, &record.Enabled, &record.Remarks, &record.CreatedAt, &record.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan client entry user policy: %w", err)
 		}
 		result = append(result, record)
+		ids = append(ids, record.ID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate client entry user policies: %w", err)
+	}
+	if len(ids) == 0 {
+		return result, nil
+	}
+	emails, err := s.loadClientEntryUserPolicyEmails(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for index := range result {
+		result[index].Emails = emails[result[index].ID]
+		if len(result[index].Emails) > 0 {
+			result[index].Email = result[index].Emails[0]
+		}
+	}
+	return result, nil
+}
+
+func (s *DBService) loadClientEntryUserPolicyEmails(ctx context.Context, ids []int64) (map[int64][]string, error) {
+	result := make(map[int64][]string, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT policy_id, email
+FROM v2_client_entry_user_policy_user
+WHERE policy_id IN (`+strings.Join(placeholders, ",")+`)
+ORDER BY policy_id ASC, email ASC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query client entry user policy emails: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var policyID int64
+		var email string
+		if err := rows.Scan(&policyID, &email); err != nil {
+			return nil, fmt.Errorf("scan client entry user policy email: %w", err)
+		}
+		result[policyID] = append(result[policyID], strings.TrimSpace(email))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate client entry user policy emails: %w", err)
 	}
 	return result, nil
 }
@@ -57,10 +105,10 @@ func (s *DBService) SaveClientEntryUserPolicy(ctx context.Context, req ClientEnt
 	if err := s.ensureClientEntrySchema(ctx); err != nil {
 		return false, err
 	}
-	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	emails := normalizePolicyEmails(append(req.Emails, req.Email))
 	req.ServerType = strings.TrimSpace(req.ServerType)
 	req.Remarks = strings.TrimSpace(req.Remarks)
-	if req.Email == "" {
+	if len(emails) == 0 {
 		return false, errors.New("用户邮箱不能为空")
 	}
 	if req.EntryGroupID <= 0 {
@@ -74,26 +122,63 @@ func (s *DBService) SaveClientEntryUserPolicy(ctx context.Context, req ClientEnt
 		enabled = *req.Enabled
 	}
 	now := time.Now().Unix()
-	if req.ID == nil {
-		_, err := s.db.ExecContext(ctx, `INSERT INTO v2_client_entry_user_policy (email, entry_group_id, server_type, server_id, enabled, remarks, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-ON CONFLICT (email, server_type, server_id) DO UPDATE SET entry_group_id = EXCLUDED.entry_group_id, enabled = EXCLUDED.enabled, remarks = EXCLUDED.remarks, updated_at = EXCLUDED.updated_at`, req.Email, req.EntryGroupID, req.ServerType, req.ServerID, enabled, req.Remarks, now, now)
-		if err != nil {
-			return false, errors.New("保存失败")
-		}
-		return true, nil
-	}
-	result, err := s.db.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
-SET email = $2, entry_group_id = $3, server_type = $4, server_id = $5, enabled = $6, remarks = $7, updated_at = $8
-WHERE id = $1`, *req.ID, req.Email, req.EntryGroupID, req.ServerType, req.ServerID, enabled, req.Remarks, now)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, errors.New("保存失败")
 	}
-	affected, err := result.RowsAffected()
-	if err != nil || affected == 0 {
+	defer tx.Rollback()
+	policyID := int64(0)
+	if req.ID == nil {
+		if err := tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_user_policy (entry_group_id, server_type, server_id, enabled, remarks, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id`, req.EntryGroupID, req.ServerType, req.ServerID, enabled, req.Remarks, now, now).Scan(&policyID); err != nil {
+			return false, errors.New("保存失败")
+		}
+	} else {
+		policyID = *req.ID
+		result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
+SET entry_group_id = $2, server_type = $3, server_id = $4, enabled = $5, remarks = $6, updated_at = $7
+WHERE id = $1`, policyID, req.EntryGroupID, req.ServerType, req.ServerID, enabled, req.Remarks, now)
+		if err != nil {
+			return false, errors.New("保存失败")
+		}
+		affected, err := result.RowsAffected()
+		if err != nil || affected == 0 {
+			return false, errors.New("保存失败")
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy_user WHERE policy_id = $1`, policyID); err != nil {
+		return false, errors.New("保存失败")
+	}
+	for _, email := range emails {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_user_policy_user (policy_id, email, created_at, updated_at)
+VALUES ($1, $2, $3, $4)`, policyID, email, now, now); err != nil {
+			return false, errors.New("保存失败")
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		return false, errors.New("保存失败")
 	}
 	return true, nil
+}
+
+func normalizePolicyEmails(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		for _, email := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' ' }) {
+			email = strings.ToLower(strings.TrimSpace(email))
+			if email == "" {
+				continue
+			}
+			if _, ok := seen[email]; ok {
+				continue
+			}
+			seen[email] = struct{}{}
+			result = append(result, email)
+		}
+	}
+	return result
 }
 
 func (s *DBService) DeleteClientEntryUserPolicy(ctx context.Context, id int64) (bool, error) {
@@ -106,7 +191,15 @@ func (s *DBService) DeleteClientEntryUserPolicy(ctx context.Context, id int64) (
 	if id <= 0 {
 		return false, errors.New("ID不能为空")
 	}
-	result, err := s.db.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy WHERE id = $1`, id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, errors.New("删除失败")
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy_user WHERE policy_id = $1`, id); err != nil {
+		return false, errors.New("删除失败")
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy WHERE id = $1`, id)
 	if err != nil {
 		return false, errors.New("删除失败")
 	}
@@ -114,37 +207,8 @@ func (s *DBService) DeleteClientEntryUserPolicy(ctx context.Context, id int64) (
 	if err != nil || affected == 0 {
 		return false, errors.New("删除失败")
 	}
+	if err := tx.Commit(); err != nil {
+		return false, errors.New("删除失败")
+	}
 	return true, nil
-}
-
-func (s *DBService) SaveClientEntryUserPolicies(ctx context.Context, req ClientEntryUserPolicyBulkSaveRequest) (int64, error) {
-	seen := make(map[string]struct{}, len(req.Emails))
-	emails := make([]string, 0, len(req.Emails))
-	for _, email := range req.Emails {
-		email = strings.ToLower(strings.TrimSpace(email))
-		if email == "" {
-			continue
-		}
-		if _, ok := seen[email]; ok {
-			continue
-		}
-		seen[email] = struct{}{}
-		emails = append(emails, email)
-	}
-	if len(emails) == 0 {
-		return 0, errors.New("用户邮箱不能为空")
-	}
-	var count int64
-	for _, email := range emails {
-		ok, err := s.SaveClientEntryUserPolicy(ctx, ClientEntryUserPolicySaveRequest{
-			Email: email, EntryGroupID: req.EntryGroupID, ServerType: req.ServerType, ServerID: req.ServerID, Enabled: req.Enabled, Remarks: req.Remarks,
-		})
-		if err != nil {
-			return count, err
-		}
-		if ok {
-			count++
-		}
-	}
-	return count, nil
 }

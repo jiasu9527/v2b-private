@@ -239,7 +239,6 @@ func TestApplyClientEntryUserPolicyOverridesConditionalHost(t *testing.T) {
 	}
 	policies := []clientEntryUserPolicy{
 		{
-			Email:        "User@Example.com",
 			EntryGroupID: int64(7),
 			ServerType:   "vmess",
 			ServerID:     int64(11),
@@ -259,7 +258,7 @@ func TestApplyClientEntryUserPolicyOverridesConditionalHost(t *testing.T) {
 
 func TestApplyClientEntryUserPolicyKeepsOriginalHostWhenEntryGroupEmpty(t *testing.T) {
 	servers := []map[string]any{{"id": int64(11), "type": "vmess", "host": "default.example.com"}}
-	policies := []clientEntryUserPolicy{{Email: "user@example.com", EntryGroupID: int64(7), ServerType: "vmess", ServerID: int64(11)}}
+	policies := []clientEntryUserPolicy{{EntryGroupID: int64(7), ServerType: "vmess", ServerID: int64(11)}}
 
 	applyClientEntryUserPolicies(servers, "user@example.com", policies)
 
