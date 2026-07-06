@@ -7,12 +7,10 @@ import (
 )
 
 type clientEntryUserPolicy struct {
-	ID           int64
-	EntryGroupID int64
-	Enabled      int64
-	Remarks      string
-	Members      []ClientEntryGroupMember
-	Entries      []string
+	ID      int64
+	Enabled int64
+	Remarks string
+	Members []ClientEntryGroupMember
 }
 
 func (s *DBService) loadClientEntryUserPolicies(ctx context.Context, email string) ([]clientEntryUserPolicy, error) {
@@ -23,14 +21,12 @@ func (s *DBService) loadClientEntryUserPolicies(ctx context.Context, email strin
 		return nil, err
 	}
 
-	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.entry_group_id, p.enabled, p.remarks, m.server_type, m.server_id, ip.ip
+	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.enabled, p.remarks, m.server_type, m.server_id
 FROM v2_client_entry_user_policy p
 JOIN v2_client_entry_user_policy_user u ON u.policy_id = p.id
-JOIN v2_client_entry_group g ON g.id = p.entry_group_id AND g."show" = 1
 JOIN v2_client_entry_user_policy_member m ON m.policy_id = p.id
-JOIN v2_client_entry_group_ip ip ON ip.entry_group_id = p.entry_group_id
 WHERE p.enabled = 1 AND lower(u.email) = lower($1)
-ORDER BY p.id ASC, m.sort ASC NULLS LAST, m.id ASC, ip.sort ASC NULLS LAST, ip.id ASC`, strings.TrimSpace(email))
+ORDER BY p.id ASC, m.sort ASC NULLS LAST, m.id ASC`, strings.TrimSpace(email))
 	if err != nil {
 		return nil, fmt.Errorf("query client entry user policies: %w", err)
 	}
@@ -43,10 +39,9 @@ ORDER BY p.id ASC, m.sort ASC NULLS LAST, m.id ASC, ip.sort ASC NULLS LAST, ip.i
 		policy := byKey[key]
 		if policy == nil {
 			policy = &clientEntryUserPolicy{
-				ID:           id,
-				EntryGroupID: mapInt64(row["entry_group_id"]),
-				Enabled:      mapInt64(row["enabled"]),
-				Remarks:      strings.TrimSpace(fmt.Sprint(row["remarks"])),
+				ID:      id,
+				Enabled: mapInt64(row["enabled"]),
+				Remarks: strings.TrimSpace(fmt.Sprint(row["remarks"])),
 			}
 			byKey[key] = policy
 			order = append(order, key)
@@ -54,10 +49,6 @@ ORDER BY p.id ASC, m.sort ASC NULLS LAST, m.id ASC, ip.sort ASC NULLS LAST, ip.i
 		member := ClientEntryGroupMember{ServerType: strings.TrimSpace(fmt.Sprint(row["server_type"])), ServerID: mapInt64(row["server_id"])}
 		if member.ServerType != "" && member.ServerID > 0 && !clientEntryPolicyHasMember(policy.Members, member) {
 			policy.Members = append(policy.Members, member)
-		}
-		entry := strings.TrimSpace(fmt.Sprint(row["ip"]))
-		if entry != "" && !clientEntryPolicyHasEntry(policy.Entries, entry) {
-			policy.Entries = append(policy.Entries, entry)
 		}
 	}
 
@@ -77,52 +68,34 @@ func clientEntryPolicyHasMember(values []ClientEntryGroupMember, target ClientEn
 	return false
 }
 
-func clientEntryPolicyHasEntry(values []string, target string) bool {
-	target = strings.TrimSpace(target)
-	for _, value := range values {
-		if strings.TrimSpace(value) == target {
-			return true
-		}
-	}
-	return false
-}
-
-func applyClientEntryUserPolicies(servers []map[string]any, email string, policies []clientEntryUserPolicy) {
+func applyClientEntryUserPolicies(servers []map[string]any, email string, policies []clientEntryUserPolicy) []map[string]any {
 	if len(servers) == 0 || len(policies) == 0 || strings.TrimSpace(email) == "" {
-		return
+		return servers
 	}
-	email = strings.ToLower(strings.TrimSpace(email))
-	byServer := make(map[string]clientEntryUserPolicy, len(policies))
+	allowed := make(map[string]struct{})
 	for _, policy := range policies {
-		if len(policy.Entries) == 0 || len(policy.Members) == 0 {
-			continue
-		}
 		for _, member := range policy.Members {
 			serverType := strings.TrimSpace(member.ServerType)
 			if serverType == "" || member.ServerID <= 0 {
 				continue
 			}
-			key := serverType + ":" + fmt.Sprint(member.ServerID)
-			if _, exists := byServer[key]; !exists {
-				byServer[key] = policy
-			}
+			allowed[serverType+":"+fmt.Sprint(member.ServerID)] = struct{}{}
 		}
 	}
-	if len(byServer) == 0 {
-		return
+	if len(allowed) == 0 {
+		return servers
 	}
-
+	result := make([]map[string]any, 0, len(servers))
 	for _, server := range servers {
 		serverType := strings.TrimSpace(fmt.Sprint(server["type"]))
 		serverID := mapInt64(server["id"])
-		policy, ok := byServer[serverType+":"+fmt.Sprint(serverID)]
-		if !ok || len(policy.Entries) == 0 {
+		if _, ok := allowed[serverType+":"+fmt.Sprint(serverID)]; !ok {
 			continue
 		}
-		server["host"] = policy.Entries[stableClientEntryIndex(email, serverType, serverID, len(policy.Entries))]
-		server["client_entry_user_policy_id"] = policy.ID
-		server["client_entry_group_id"] = policy.EntryGroupID
+		server["client_entry_user_policy"] = 1
+		result = append(result, server)
 	}
+	return result
 }
 
 func stableClientEntryIndex(email, serverType string, serverID int64, count int) int {

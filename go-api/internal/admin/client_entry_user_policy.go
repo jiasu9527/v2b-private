@@ -16,9 +16,8 @@ func (s *DBService) ListClientEntryUserPolicies(ctx context.Context) ([]ClientEn
 		return nil, err
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.entry_group_id, g.display_name AS entry_group_name, p.enabled, p.remarks, p.created_at, p.updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.enabled, p.remarks, p.created_at, p.updated_at
 FROM v2_client_entry_user_policy p
-LEFT JOIN v2_client_entry_group g ON g.id = p.entry_group_id
 ORDER BY p.id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("query client entry user policies: %w", err)
@@ -29,7 +28,7 @@ ORDER BY p.id DESC`)
 	ids := make([]int64, 0)
 	for rows.Next() {
 		var record ClientEntryUserPolicyRecord
-		if err := rows.Scan(&record.ID, &record.EntryGroupID, &record.EntryGroupName, &record.Enabled, &record.Remarks, &record.CreatedAt, &record.UpdatedAt); err != nil {
+		if err := rows.Scan(&record.ID, &record.Enabled, &record.Remarks, &record.CreatedAt, &record.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan client entry user policy: %w", err)
 		}
 		result = append(result, record)
@@ -151,9 +150,6 @@ func (s *DBService) SaveClientEntryUserPolicy(ctx context.Context, req ClientEnt
 	if len(emails) == 0 {
 		return false, errors.New("用户邮箱不能为空")
 	}
-	if req.EntryGroupID <= 0 {
-		return false, errors.New("入口组不能为空")
-	}
 	members := normalizePolicyMembers(req.Members)
 	if len(members) == 0 {
 		return false, errors.New("生效节点不能为空")
@@ -170,16 +166,16 @@ func (s *DBService) SaveClientEntryUserPolicy(ctx context.Context, req ClientEnt
 	defer tx.Rollback()
 	policyID := int64(0)
 	if req.ID == nil {
-		if err := tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_user_policy (entry_group_id, enabled, remarks, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id`, req.EntryGroupID, enabled, req.Remarks, now, now).Scan(&policyID); err != nil {
+		if err := tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_user_policy (enabled, remarks, created_at, updated_at)
+VALUES ($1, $2, $3, $4)
+RETURNING id`, enabled, req.Remarks, now, now).Scan(&policyID); err != nil {
 			return false, errors.New("保存失败")
 		}
 	} else {
 		policyID = *req.ID
 		result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
-SET entry_group_id = $2, enabled = $3, remarks = $4, updated_at = $5
-WHERE id = $1`, policyID, req.EntryGroupID, enabled, req.Remarks, now)
+SET enabled = $2, remarks = $3, updated_at = $4
+WHERE id = $1`, policyID, enabled, req.Remarks, now)
 		if err != nil {
 			return false, errors.New("保存失败")
 		}

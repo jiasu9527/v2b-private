@@ -40,6 +40,8 @@ func expectEnsureClientEntrySchema(mock sqlmock.Sqlmock) {
 			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	}
 
+	mock.ExpectExec(`ALTER TABLE v2_client_entry_user_policy ALTER COLUMN entry_group_id SET DEFAULT 0`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`ALTER TABLE v2_client_entry_user_policy ALTER COLUMN server_type SET DEFAULT ''`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`ALTER TABLE v2_client_entry_user_policy ALTER COLUMN server_id SET DEFAULT 0`).

@@ -1036,11 +1036,10 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		return true
 	}
 	var payload struct {
-		ID           *json.Number `json:"id"`
-		Email        string       `json:"email"`
-		Emails       []string     `json:"emails"`
-		EntryGroupID *json.Number `json:"entry_group_id"`
-		Members      []struct {
+		ID      *json.Number `json:"id"`
+		Email   string       `json:"email"`
+		Emails  []string     `json:"emails"`
+		Members []struct {
 			ServerType string       `json:"server_type"`
 			ServerID   *json.Number `json:"server_id"`
 			Sort       *json.Number `json:"sort"`
@@ -1064,10 +1063,6 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 			payload.ID = &v
 		}
 		payload.Email = strings.TrimSpace(inputs["email"])
-		if raw := strings.TrimSpace(inputs["entry_group_id"]); raw != "" {
-			v := json.Number(raw)
-			payload.EntryGroupID = &v
-		}
 		if len(payload.Members) == 0 {
 			for _, entry := range indexedNestedFieldMap(inputs, "members") {
 				serverType := strings.TrimSpace(entry["server_type"])
@@ -1099,11 +1094,6 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "保存失败"})
 		return true
 	}
-	entryGroupID, err := jsonNumberToInt64Pointer(payload.EntryGroupID)
-	if err != nil || entryGroupID == nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "入口组不能为空"})
-		return true
-	}
 	enabled, err := jsonNumberToInt64Pointer(payload.Enabled)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "保存失败"})
@@ -1127,7 +1117,7 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		members = append(members, admin.ClientEntryGroupMemberSaveRequest{ServerType: member.ServerType, ServerID: *serverID, Sort: sortValue})
 	}
 	saved, err := adminService.SaveClientEntryUserPolicy(r.Context(), admin.ClientEntryUserPolicySaveRequest{
-		ID: id, Email: payload.Email, Emails: payload.Emails, EntryGroupID: *entryGroupID, Members: members, Enabled: enabled, Remarks: payload.Remarks,
+		ID: id, Email: payload.Email, Emails: payload.Emails, Members: members, Enabled: enabled, Remarks: payload.Remarks,
 	})
 	if err != nil {
 		return handleAdminError(w, err)

@@ -114,7 +114,7 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 		return mapInt64(servers[i]["id"]) < mapInt64(servers[j]["id"])
 	})
 
-	applyClientEntryUserPolicies(servers, userRow.Email, userPolicies)
+	servers = applyClientEntryUserPolicies(servers, userRow.Email, userPolicies)
 
 	filtered := make([]map[string]any, 0, len(servers))
 	for _, item := range servers {
