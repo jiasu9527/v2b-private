@@ -16,9 +16,9 @@ func TestDBServiceListClientEntryUserPoliciesReturnsOneRuleWithEmails(t *testing
 
 	service := &DBService{db: db}
 	expectEnsureClientEntrySchema(mock)
-	rows := sqlmock.NewRows([]string{"id", "enabled", "remarks", "created_at", "updated_at"}).
-		AddRow(int64(3), int64(1), "VIP", int64(100), int64(200))
-	mock.ExpectQuery(`SELECT p.id, p.enabled, p.remarks, p.created_at, p.updated_at`).
+	rows := sqlmock.NewRows([]string{"id", "entry_host", "enabled", "remarks", "created_at", "updated_at"}).
+		AddRow(int64(3), "vip-entry.example.com", int64(1), "VIP", int64(100), int64(200))
+	mock.ExpectQuery(`SELECT p.id, p.entry_host, p.enabled, p.remarks, p.created_at, p.updated_at`).
 		WillReturnRows(rows)
 	emailRows := sqlmock.NewRows([]string{"policy_id", "email"}).
 		AddRow(int64(3), "a@example.com").
@@ -37,7 +37,7 @@ func TestDBServiceListClientEntryUserPoliciesReturnsOneRuleWithEmails(t *testing
 	if err != nil {
 		t.Fatalf("list policies: %v", err)
 	}
-	if len(policies) != 1 {
+	if len(policies) != 1 || policies[0].EntryHost != "vip-entry.example.com" {
 		t.Fatalf("unexpected policies: %#v", policies)
 	}
 	if len(policies[0].Emails) != 2 || policies[0].Emails[0] != "a@example.com" || policies[0].Emails[1] != "b@example.com" {
@@ -62,7 +62,7 @@ func TestDBServiceSaveClientEntryUserPolicyCreatesOneRuleWithMultipleEmails(t *t
 	expectEnsureClientEntrySchema(mock)
 	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy`).
-		WithArgs(int64(1), "VIP", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs("vip-entry.example.com", int64(1), "VIP", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
 	mock.ExpectExec(`DELETE FROM v2_client_entry_user_policy_user WHERE policy_id = \$1`).
 		WithArgs(int64(9)).
@@ -85,7 +85,7 @@ func TestDBServiceSaveClientEntryUserPolicyCreatesOneRuleWithMultipleEmails(t *t
 	mock.ExpectCommit()
 
 	ok, err := service.SaveClientEntryUserPolicy(context.Background(), ClientEntryUserPolicySaveRequest{
-		Emails: []string{" A@Example.com ", "b@example.com", "a@example.com"}, Members: []ClientEntryGroupMemberSaveRequest{{ServerType: "vmess", ServerID: 11}, {ServerType: "trojan", ServerID: 12}}, Enabled: ptrInt64ForClientEntryPolicyTest(1), Remarks: "VIP",
+		Emails: []string{" A@Example.com ", "b@example.com", "a@example.com"}, EntryHost: "vip-entry.example.com", Members: []ClientEntryGroupMemberSaveRequest{{ServerType: "vmess", ServerID: 11}, {ServerType: "trojan", ServerID: 12}}, Enabled: ptrInt64ForClientEntryPolicyTest(1), Remarks: "VIP",
 	})
 	if err != nil || !ok {
 		t.Fatalf("save policy: ok=%v err=%v", ok, err)

@@ -7,10 +7,11 @@ import (
 )
 
 type clientEntryUserPolicy struct {
-	ID      int64
-	Enabled int64
-	Remarks string
-	Members []ClientEntryGroupMember
+	ID        int64
+	EntryHost string
+	Enabled   int64
+	Remarks   string
+	Members   []ClientEntryGroupMember
 }
 
 func (s *DBService) loadClientEntryUserPolicies(ctx context.Context, email string) ([]clientEntryUserPolicy, error) {
@@ -21,7 +22,7 @@ func (s *DBService) loadClientEntryUserPolicies(ctx context.Context, email strin
 		return nil, err
 	}
 
-	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.enabled, p.remarks, m.server_type, m.server_id
+	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.entry_host, p.enabled, p.remarks, m.server_type, m.server_id
 FROM v2_client_entry_user_policy p
 JOIN v2_client_entry_user_policy_user u ON u.policy_id = p.id
 JOIN v2_client_entry_user_policy_member m ON m.policy_id = p.id
@@ -39,9 +40,10 @@ ORDER BY p.id ASC, m.sort ASC NULLS LAST, m.id ASC`, strings.TrimSpace(email))
 		policy := byKey[key]
 		if policy == nil {
 			policy = &clientEntryUserPolicy{
-				ID:      id,
-				Enabled: mapInt64(row["enabled"]),
-				Remarks: strings.TrimSpace(fmt.Sprint(row["remarks"])),
+				ID:        id,
+				EntryHost: strings.TrimSpace(fmt.Sprint(row["entry_host"])),
+				Enabled:   mapInt64(row["enabled"]),
+				Remarks:   strings.TrimSpace(fmt.Sprint(row["remarks"])),
 			}
 			byKey[key] = policy
 			order = append(order, key)
@@ -72,30 +74,37 @@ func applyClientEntryUserPolicies(servers []map[string]any, email string, polici
 	if len(servers) == 0 || len(policies) == 0 || strings.TrimSpace(email) == "" {
 		return servers
 	}
-	allowed := make(map[string]struct{})
+	overrides := make(map[string]clientEntryUserPolicy)
 	for _, policy := range policies {
+		if strings.TrimSpace(policy.EntryHost) == "" {
+			continue
+		}
 		for _, member := range policy.Members {
 			serverType := strings.TrimSpace(member.ServerType)
 			if serverType == "" || member.ServerID <= 0 {
 				continue
 			}
-			allowed[serverType+":"+fmt.Sprint(member.ServerID)] = struct{}{}
+			key := serverType + ":" + fmt.Sprint(member.ServerID)
+			if _, exists := overrides[key]; !exists {
+				overrides[key] = policy
+			}
 		}
 	}
-	if len(allowed) == 0 {
+	if len(overrides) == 0 {
 		return servers
 	}
-	result := make([]map[string]any, 0, len(servers))
 	for _, server := range servers {
 		serverType := strings.TrimSpace(fmt.Sprint(server["type"]))
 		serverID := mapInt64(server["id"])
-		if _, ok := allowed[serverType+":"+fmt.Sprint(serverID)]; !ok {
+		policy, ok := overrides[serverType+":"+fmt.Sprint(serverID)]
+		if !ok {
 			continue
 		}
+		server["host"] = policy.EntryHost
 		server["client_entry_user_policy"] = 1
-		result = append(result, server)
+		server["client_entry_user_policy_id"] = policy.ID
 	}
-	return result
+	return servers
 }
 
 func stableClientEntryIndex(email, serverType string, serverID int64, count int) int {

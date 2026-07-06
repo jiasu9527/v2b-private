@@ -4056,7 +4056,7 @@ func TestRouterAdminClientEntryUserPolicySaveEndpointAcceptsMultipleNodes(t *tes
 		WithAdminService(adminService),
 	)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/save", strings.NewReader(`{"auth_data":"jwt-admin","emails":["a@example.com","b@example.com"],"members":[{"server_type":"vmess","server_id":11},{"server_type":"trojan","server_id":12}],"enabled":1,"remarks":"VIP"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/save", strings.NewReader(`{"auth_data":"jwt-admin","emails":["a@example.com","b@example.com"],"entry_host":"vip-entry.example.com","members":[{"server_type":"vmess","server_id":11},{"server_type":"trojan","server_id":12}],"enabled":1,"remarks":"VIP"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -4066,6 +4066,9 @@ func TestRouterAdminClientEntryUserPolicySaveEndpointAcceptsMultipleNodes(t *tes
 	}
 	if len(adminService.lastClientEntryUserPolicySave.Emails) != 2 || adminService.lastClientEntryUserPolicySave.Emails[0] != "a@example.com" || adminService.lastClientEntryUserPolicySave.Emails[1] != "b@example.com" {
 		t.Fatalf("unexpected emails: %#v", adminService.lastClientEntryUserPolicySave.Emails)
+	}
+	if adminService.lastClientEntryUserPolicySave.EntryHost != "vip-entry.example.com" {
+		t.Fatalf("unexpected entry host: %#v", adminService.lastClientEntryUserPolicySave.EntryHost)
 	}
 	if len(adminService.lastClientEntryUserPolicySave.Members) != 2 || adminService.lastClientEntryUserPolicySave.Members[0].ServerType != "vmess" || adminService.lastClientEntryUserPolicySave.Members[0].ServerID != 11 || adminService.lastClientEntryUserPolicySave.Members[1].ServerType != "trojan" || adminService.lastClientEntryUserPolicySave.Members[1].ServerID != 12 {
 		t.Fatalf("unexpected selected nodes: %#v", adminService.lastClientEntryUserPolicySave.Members)

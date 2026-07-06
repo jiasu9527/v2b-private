@@ -232,15 +232,16 @@ func TestNormalizeServerFetchRowOmitsEmptyTags(t *testing.T) {
 	}
 }
 
-func TestApplyClientEntryUserPolicyKeepsOnlySelectedNodes(t *testing.T) {
+func TestApplyClientEntryUserPolicyOverridesSelectedNodeHosts(t *testing.T) {
 	servers := []map[string]any{
 		{"id": int64(11), "type": "vmess", "host": "manual.example.com(UShadowrocket),default.example.com"},
 		{"id": int64(12), "type": "trojan", "host": "other.example.com"},
-		{"id": int64(13), "type": "vless", "host": "drop.example.com"},
+		{"id": int64(13), "type": "vless", "host": "keep.example.com"},
 	}
 	policies := []clientEntryUserPolicy{
 		{
-			ID: int64(3),
+			ID:        int64(3),
+			EntryHost: "vip-entry.example.com",
 			Members: []ClientEntryGroupMember{
 				{ServerType: "vmess", ServerID: int64(11)},
 				{ServerType: "trojan", ServerID: int64(12)},
@@ -250,14 +251,17 @@ func TestApplyClientEntryUserPolicyKeepsOnlySelectedNodes(t *testing.T) {
 
 	servers = applyClientEntryUserPolicies(servers, "user@example.com", policies)
 
-	if len(servers) != 2 {
-		t.Fatalf("expected only selected nodes, got %#v", servers)
+	if len(servers) != 3 {
+		t.Fatalf("expected all nodes to remain, got %#v", servers)
 	}
-	if got := servers[0]["host"]; got != "manual.example.com(UShadowrocket),default.example.com" {
-		t.Fatalf("expected selected node to keep original host, got %#v", got)
+	if got := servers[0]["host"]; got != "vip-entry.example.com" {
+		t.Fatalf("expected selected vmess host override, got %#v", got)
 	}
-	if got := servers[1]["host"]; got != "other.example.com" {
-		t.Fatalf("expected selected node to keep original host, got %#v", got)
+	if got := servers[1]["host"]; got != "vip-entry.example.com" {
+		t.Fatalf("expected selected trojan host override, got %#v", got)
+	}
+	if got := servers[2]["host"]; got != "keep.example.com" {
+		t.Fatalf("expected non-selected node to keep original host, got %#v", got)
 	}
 }
 

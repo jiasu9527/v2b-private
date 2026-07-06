@@ -13,6 +13,7 @@ function PolicyEditor({ row, children, onDone, serverOptions }: { row?: any; chi
     form.setFieldsValue({
       id: row?.id,
       emails: Array.isArray(row?.emails) ? row.emails : (row?.email ? [row.email] : []),
+      entry_host: row?.entry_host || '',
       members: Array.isArray(row?.members) ? row.members.map(memberKey).filter(Boolean) : [],
       enabled: row?.enabled === undefined ? true : Number(row.enabled) !== 0,
       remarks: row?.remarks || '',
@@ -27,6 +28,7 @@ function PolicyEditor({ row, children, onDone, serverOptions }: { row?: any; chi
       await apiPost('/server/client-entry-user-policy/save', {
         id: values.id,
         emails: Array.isArray(values.emails) ? values.emails : [],
+        entry_host: values.entry_host || '',
         members: (Array.isArray(values.members) ? values.members : []).map(splitMemberKey).filter(Boolean),
         enabled: values.enabled ? 1 : 0,
         remarks: values.remarks || '',
@@ -73,7 +75,10 @@ function PolicyEditor({ row, children, onDone, serverOptions }: { row?: any; chi
             }}
           />
         </Form.Item>
-        <Form.Item name="members" label="生效节点" rules={[{ required: true, message: '请选择生效节点' }]} tooltip="可选择多个节点；命中这些用户时只下发所选节点。">
+        <Form.Item name="entry_host" label="节点地址" rules={[{ required: true, message: '请输入节点地址' }]} tooltip="命中这些用户时，所选生效节点会下发这个地址；其他用户仍使用节点原地址。">
+          <Input placeholder="例如 vip.example.com 或 1.2.3.4" />
+        </Form.Item>
+        <Form.Item name="members" label="生效节点" rules={[{ required: true, message: '请选择生效节点' }]} tooltip="可选择多个节点；命中这些用户时，所选节点会下发上面的节点地址。">
           <Select mode="multiple" showSearch allowClear placeholder="选择多个生效节点" options={serverOptions} optionFilterProp="label" />
         </Form.Item>
         <Form.Item name="enabled" label="状态" valuePropName="checked">
@@ -125,6 +130,7 @@ export default function ClientEntryUserPolicyPage() {
       if (emails.length === 0) return '-';
       return <details className="client-entry-members"><summary>已选择 {emails.length} 个用户</summary><div className="client-entry-member-list">{emails.map((email: string) => <div key={email}>{email}</div>)}</div></details>;
     } },
+    { title: '节点地址', dataIndex: 'entry_host', width: 220, render: (value: any) => value || '-' },
     { title: '生效节点', dataIndex: 'members', width: 220, render: (value: any) => {
       const members = Array.isArray(value) ? value : [];
       if (members.length === 0) return '-';
@@ -145,7 +151,7 @@ export default function ClientEntryUserPolicyPage() {
         <div className="forest-table-action">
           <PolicyEditor onDone={load} serverOptions={serverOptions}><Button icon={<PlusOutlined />}>新增分配</Button></PolicyEditor>
         </div>
-        <Table className="forest-table" rowKey="id" tableLayout="auto" columns={columns} dataSource={rows} pagination={false} scroll={{ x: 1100 }} />
+        <Table className="forest-table" rowKey="id" tableLayout="auto" columns={columns} dataSource={rows} pagination={false} scroll={{ x: 1250 }} />
       </Card>
     </Spin>
   </div>;

@@ -43,6 +43,7 @@ func TestEnsureClientEntrySchemaCreatesMissingTablesAndColumns(t *testing.T) {
 		{"v2_client_entry_group", "remote_exclude_names", `ALTER TABLE v2_client_entry_group ADD COLUMN remote_exclude_names text NOT NULL DEFAULT '\[\]'`},
 		{"v2_client_entry_group", "remote_refresh_sec", `ALTER TABLE v2_client_entry_group ADD COLUMN remote_refresh_sec INTEGER NOT NULL DEFAULT 300`},
 		{"v2_client_entry_user_policy", "email", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN email varchar\(255\) NOT NULL DEFAULT ''`},
+		{"v2_client_entry_user_policy", "entry_host", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN entry_host varchar\(255\) NOT NULL DEFAULT ''`},
 	} {
 		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
 			WithArgs(item.table, item.column).
@@ -119,6 +120,7 @@ func TestEnsureClientEntrySchemaSkipsExistingColumns(t *testing.T) {
 		{"v2_client_entry_group", "remote_exclude_names"},
 		{"v2_client_entry_group", "remote_refresh_sec"},
 		{"v2_client_entry_user_policy", "email"},
+		{"v2_client_entry_user_policy", "entry_host"},
 	} {
 		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
 			WithArgs(item.table, item.column).

@@ -1036,10 +1036,11 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		return true
 	}
 	var payload struct {
-		ID      *json.Number `json:"id"`
-		Email   string       `json:"email"`
-		Emails  []string     `json:"emails"`
-		Members []struct {
+		ID        *json.Number `json:"id"`
+		Email     string       `json:"email"`
+		Emails    []string     `json:"emails"`
+		EntryHost string       `json:"entry_host"`
+		Members   []struct {
 			ServerType string       `json:"server_type"`
 			ServerID   *json.Number `json:"server_id"`
 			Sort       *json.Number `json:"sort"`
@@ -1063,6 +1064,7 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 			payload.ID = &v
 		}
 		payload.Email = strings.TrimSpace(inputs["email"])
+		payload.EntryHost = strings.TrimSpace(inputs["entry_host"])
 		if len(payload.Members) == 0 {
 			for _, entry := range indexedNestedFieldMap(inputs, "members") {
 				serverType := strings.TrimSpace(entry["server_type"])
@@ -1117,7 +1119,7 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		members = append(members, admin.ClientEntryGroupMemberSaveRequest{ServerType: member.ServerType, ServerID: *serverID, Sort: sortValue})
 	}
 	saved, err := adminService.SaveClientEntryUserPolicy(r.Context(), admin.ClientEntryUserPolicySaveRequest{
-		ID: id, Email: payload.Email, Emails: payload.Emails, Members: members, Enabled: enabled, Remarks: payload.Remarks,
+		ID: id, Email: payload.Email, Emails: payload.Emails, EntryHost: payload.EntryHost, Members: members, Enabled: enabled, Remarks: payload.Remarks,
 	})
 	if err != nil {
 		return handleAdminError(w, err)

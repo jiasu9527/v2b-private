@@ -34,6 +34,7 @@ func expectEnsureClientEntrySchema(mock sqlmock.Sqlmock) {
 		{"v2_client_entry_group", "remote_exclude_names"},
 		{"v2_client_entry_group", "remote_refresh_sec"},
 		{"v2_client_entry_user_policy", "email"},
+		{"v2_client_entry_user_policy", "entry_host"},
 	} {
 		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
 			WithArgs(item.table, item.column).
