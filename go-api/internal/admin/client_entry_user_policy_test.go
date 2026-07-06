@@ -62,7 +62,7 @@ func TestDBServiceSaveClientEntryUserPolicyCreatesOneRuleWithMultipleEmails(t *t
 	expectEnsureClientEntrySchema(mock)
 	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy`).
-		WithArgs("vip-entry.example.com", int64(1), "VIP", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs("a@example.com", int64(0), "vip-entry.example.com", "vmess", int64(11), int64(1), "VIP", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
 	mock.ExpectExec(`DELETE FROM v2_client_entry_user_policy_user WHERE policy_id = \$1`).
 		WithArgs(int64(9)).

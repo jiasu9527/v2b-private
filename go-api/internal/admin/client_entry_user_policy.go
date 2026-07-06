@@ -169,17 +169,20 @@ func (s *DBService) SaveClientEntryUserPolicy(ctx context.Context, req ClientEnt
 	}
 	defer tx.Rollback()
 	policyID := int64(0)
+	legacyEmail := emails[0]
+	legacyServerType := members[0].ServerType
+	legacyServerID := members[0].ServerID
 	if req.ID == nil {
-		if err := tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_user_policy (entry_host, enabled, remarks, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id`, req.EntryHost, enabled, req.Remarks, now, now).Scan(&policyID); err != nil {
+		if err := tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_user_policy (email, entry_group_id, entry_host, server_type, server_id, enabled, remarks, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id`, legacyEmail, int64(0), req.EntryHost, legacyServerType, legacyServerID, enabled, req.Remarks, now, now).Scan(&policyID); err != nil {
 			return false, errors.New("保存失败")
 		}
 	} else {
 		policyID = *req.ID
 		result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
-SET entry_host = $2, enabled = $3, remarks = $4, updated_at = $5
-WHERE id = $1`, policyID, req.EntryHost, enabled, req.Remarks, now)
+SET email = $2, entry_group_id = $3, entry_host = $4, server_type = $5, server_id = $6, enabled = $7, remarks = $8, updated_at = $9
+WHERE id = $1`, policyID, legacyEmail, int64(0), req.EntryHost, legacyServerType, legacyServerID, enabled, req.Remarks, now)
 		if err != nil {
 			return false, errors.New("保存失败")
 		}
