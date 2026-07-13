@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Switch, Table, Tooltip, message } from 'antd';
 import { MenuOutlined, PlusOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import { apiGet, apiPost } from '../lib/api';
+import { moveItem } from '../lib/drag';
 
 type PaymentFormField = {
   label?: string;
@@ -17,6 +18,7 @@ export default function PaymentPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [edit, setEdit] = useState<any>(null);
+  const [draggingKey, setDraggingKey] = useState<string | null>(null);
   const [form] = Form.useForm();
   const selectedGateway = Form.useWatch('payment', form);
 
@@ -105,6 +107,36 @@ export default function PaymentPage() {
     load();
   };
 
+  const saveSort = async (nextRows: any[]) => {
+    await apiPost('/payment/sort', { ids: nextRows.map((row) => row.id) });
+    message.success('排序已保存');
+    load();
+  };
+
+  const handleDrop = async (targetRow: any) => {
+    if (!draggingKey) return;
+    const targetKey = String(targetRow.id);
+    if (draggingKey === targetKey) {
+      setDraggingKey(null);
+      return;
+    }
+    const fromIndex = rows.findIndex((row) => String(row.id) === draggingKey);
+    const toIndex = rows.findIndex((row) => String(row.id) === targetKey);
+    if (fromIndex < 0 || toIndex < 0) {
+      setDraggingKey(null);
+      return;
+    }
+    const nextRows = moveItem(rows, fromIndex, toIndex);
+    setRows(nextRows);
+    setDraggingKey(null);
+    try {
+      await saveSort(nextRows);
+    } catch (e: any) {
+      message.error(e.message || '排序保存失败');
+      load();
+    }
+  };
+
   const gatewayKeys = useMemo(() => Object.keys(gatewayForm), [gatewayForm]);
 
   const columns: any[] = [
@@ -125,7 +157,23 @@ export default function PaymentPage() {
       <div className="block block-rounded">
         <div className="bg-white">
           <div className="forest-table-action"><Button icon={<PlusOutlined />} onClick={() => openEdit({})}>添加支付方式</Button></div>
-          <Table className="forest-table" tableLayout="auto" rowKey="id" dataSource={rows} columns={columns} pagination={false} scroll={{ x: 1300 }} />
+          <Table
+            className="forest-table"
+            tableLayout="auto"
+            rowKey="id"
+            dataSource={rows}
+            columns={columns}
+            pagination={false}
+            scroll={{ x: 1300 }}
+            rowClassName={(row) => `sortable-row ${draggingKey === String(row.id) ? 'dragging-row' : ''}`}
+            onRow={(row) => ({
+              draggable: true,
+              onDragStart: () => setDraggingKey(String(row.id)),
+              onDragOver: (event) => event.preventDefault(),
+              onDrop: () => handleDrop(row),
+              onDragEnd: () => setDraggingKey(null),
+            })}
+          />
         </div>
       </div>
     </Spin>
