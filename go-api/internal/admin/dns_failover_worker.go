@@ -2,7 +2,9 @@ package admin
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,20 +19,22 @@ import (
 )
 
 const (
-	dnsFailoverQueueName          = "dns_failover"
-	dnsFailoverQueueJobName       = "dns-failover-drain"
-	dnsFailoverDefaultTick        = time.Second
-	dnsFailoverRetryBase          = 5 * time.Second
-	dnsFailoverRetryMaximum       = 5 * time.Minute
-	dnsFailoverDNSPodTimeout      = 10 * time.Second
-	dnsFailoverRecoveryTimeout    = 3 * time.Second
-	dnsFailoverRecoveryAttempts   = 3
-	dnsFailoverEvaluationBatch    = 16
-	dnsFailoverNotificationBatch  = 32
-	dnsFailoverMaxErrorLength     = 1024
-	dnsFailoverOperationEvaluate  = "evaluate"
-	dnsFailoverOperationManual    = "manual"
-	dnsFailoverOperationReconcile = "reconcile"
+	dnsFailoverQueueName                 = "dns_failover"
+	dnsFailoverQueueJobName              = "dns-failover-drain"
+	dnsFailoverDefaultTick               = time.Second
+	dnsFailoverRetryBase                 = 5 * time.Second
+	dnsFailoverRetryMaximum              = 5 * time.Minute
+	dnsFailoverDNSPodTimeout             = 10 * time.Second
+	dnsFailoverRecoveryTimeout           = 3 * time.Second
+	dnsFailoverRecoveryAttempts          = 3
+	dnsFailoverEvaluationBatch           = 16
+	dnsFailoverNotificationBatch         = 32
+	dnsFailoverMaxErrorLength            = 1024
+	dnsFailoverOperationEvaluate         = "evaluate"
+	dnsFailoverOperationManual           = "manual"
+	dnsFailoverOperationReconcile        = "reconcile"
+	dnsFailoverNotificationLockKey int64 = -7_642_309_017
+	dnsFailoverNotificationLease         = 30 * time.Second
 )
 
 type dnsFailoverOutboxRow struct {
@@ -210,6 +214,9 @@ func (s *DBService) runDNSFailoverCycle(ctx context.Context) error {
 	if err := s.ensureDNSFailoverSchema(ctx); err != nil {
 		return err
 	}
+	if err := s.drainDNSFailoverSagaOutbox(ctx, dnsFailoverEvaluationBatch); err != nil {
+		return err
+	}
 	now := time.Now().Unix()
 	if err := s.seedDueDNSFailoverEvaluations(ctx, now); err != nil {
 		return err
@@ -218,6 +225,22 @@ func (s *DBService) runDNSFailoverCycle(ctx context.Context) error {
 		return err
 	}
 	return s.drainPendingDNSFailoverNotifications(ctx, dnsFailoverNotificationBatch)
+}
+
+func (s *DBService) drainDNSFailoverSagaOutbox(ctx context.Context, limit int) error {
+	if s == nil || s.db == nil || limit <= 0 {
+		return nil
+	}
+	for range limit {
+		processed, err := s.processNextDNSFailoverSaga(ctx)
+		if err != nil {
+			return err
+		}
+		if !processed {
+			return nil
+		}
+	}
+	return nil
 }
 
 func (s *DBService) seedDueDNSFailoverEvaluations(ctx context.Context, now int64) error {
@@ -251,460 +274,6 @@ func (s *DBService) drainDNSFailoverEvaluationOutbox(ctx context.Context, limit 
 			return nil
 		}
 	}
-	return nil
-}
-
-func (s *DBService) processNextDNSFailoverEvaluation(ctx context.Context) (bool, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, fmt.Errorf("begin DNS failover evaluation: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-
-	now := time.Now().Unix()
-	var outbox dnsFailoverOutboxRow
-	err = tx.QueryRowContext(ctx, `SELECT id, group_id, operation, target_id, source_target_id, requested_at, attempts, last_error
-FROM v2_dns_failover_eval_outbox
-WHERE next_attempt_at <= $1
-ORDER BY next_attempt_at ASC, requested_at ASC
-LIMIT 1
-FOR UPDATE SKIP LOCKED`, now).Scan(
-		&outbox.ID, &outbox.GroupID, &outbox.Operation, &outbox.TargetID, &outbox.SourceTargetID, &outbox.RequestedAt, &outbox.Attempts, &outbox.LastError,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("select DNS failover evaluation candidate: %w", err)
-	}
-	var advisoryLocked bool
-	if err := tx.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock($1)`, outbox.GroupID).Scan(&advisoryLocked); err != nil {
-		return false, fmt.Errorf("lock DNS failover evaluation group: %w", err)
-	}
-	if !advisoryLocked {
-		if _, err := tx.ExecContext(ctx, `UPDATE v2_dns_failover_eval_outbox
-SET next_attempt_at = $2, updated_at = $3
-WHERE id = $1 AND requested_at = $4`, outbox.ID, saturatingUnixAdd(now, time.Second), now, outbox.RequestedAt); err != nil {
-			return false, fmt.Errorf("defer busy DNS failover group: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return false, fmt.Errorf("commit busy DNS failover defer: %w", err)
-		}
-		committed = true
-		return true, nil
-	}
-
-	snapshot, err := loadDNSFailoverWorkerSnapshot(ctx, tx, outbox.GroupID, now)
-	if err != nil {
-		return false, err
-	}
-	if !snapshot.Rule.Enabled && (outbox.Operation == "" || outbox.Operation == dnsFailoverOperationEvaluate) {
-		if err := ackDNSFailoverEvaluation(ctx, tx, outbox, now); err != nil {
-			return false, err
-		}
-		if err := tx.Commit(); err != nil {
-			return false, fmt.Errorf("commit disabled DNS failover evaluation: %w", err)
-		}
-		committed = true
-		return true, nil
-	}
-
-	currentTarget, currentValid := enabledDNSFailoverTarget(snapshot.Targets, snapshot.Rule.CurrentTargetID)
-	if !currentValid {
-		configErr := errors.New("current target is missing or disabled")
-		details := dnsFailoverEventDetails(snapshot, nil, nil, "config_error", configErr.Error(), "", now)
-		if err := recordDNSFailoverIncident(ctx, tx, snapshot, "config_error", nil,
-			formatDNSFailoverIncidentNotification(snapshot.Rule, "config_error", "当前目标不存在、已禁用或不属于该规则", snapshot.ProbeIDs, now), details, now); err != nil {
-			return false, err
-		}
-		if outbox.Operation == dnsFailoverOperationManual || outbox.Operation == dnsFailoverOperationReconcile {
-			return true, persistDNSFailoverRetryOnly(ctx, tx, outbox, configErr, now, &committed)
-		}
-		if err := ackDNSFailoverEvaluation(ctx, tx, outbox, now); err != nil {
-			return false, err
-		}
-		if err := tx.Commit(); err != nil {
-			return false, fmt.Errorf("commit DNS failover configuration event: %w", err)
-		}
-		committed = true
-		return true, nil
-	}
-	switch outbox.Operation {
-	case "", dnsFailoverOperationEvaluate:
-		// Continue into health-based evaluation below.
-	case dnsFailoverOperationManual:
-		return s.processForcedManualDNSFailover(ctx, tx, outbox, snapshot, currentTarget, now, &committed)
-	case dnsFailoverOperationReconcile:
-		return s.processForcedDNSReconciliation(ctx, tx, outbox, snapshot, currentTarget, now, &committed)
-	default:
-		return false, fmt.Errorf("unsupported DNS failover outbox operation %q", outbox.Operation)
-	}
-
-	decision := decideDNSFailover(buildDNSFailoverDecisionInput(snapshot, now))
-	if decision.Action == dnsFailoverActionNone {
-		desiredEvent := ""
-		if isDNSFailoverIncident(decision.Reason) {
-			desiredEvent = decision.Reason
-		}
-		details := dnsFailoverEventDetails(snapshot, &currentTarget, nil, decision.Reason, "", "", now)
-		if desiredEvent != "" {
-			message := formatDNSFailoverIncidentNotification(snapshot.Rule, desiredEvent, decision.Reason, snapshot.ProbeIDs, now)
-			if err := recordDNSFailoverIncident(ctx, tx, snapshot, desiredEvent, &currentTarget, message, details, now); err != nil {
-				return false, err
-			}
-		} else if decision.Reason == dnsFailoverReasonCurrentHealthy && dnsFailoverCurrentTargetHealthy(snapshot, currentTarget.ID) {
-			message := formatDNSFailoverIncidentNotification(snapshot.Rule, "recovered", "检测状态已恢复", snapshot.ProbeIDs, now)
-			if err := clearDNSFailoverIncident(ctx, tx, snapshot, &currentTarget, message, details, now); err != nil {
-				return false, err
-			}
-		}
-		if err := ackDNSFailoverEvaluation(ctx, tx, outbox, now); err != nil {
-			return false, err
-		}
-		if err := tx.Commit(); err != nil {
-			return false, fmt.Errorf("commit DNS failover evaluation: %w", err)
-		}
-		committed = true
-		return true, nil
-	}
-
-	newTarget, ok := enabledDNSFailoverTarget(snapshot.Targets, &decision.TargetID)
-	if !ok {
-		return false, fmt.Errorf("DNS failover target %d is missing or disabled", decision.TargetID)
-	}
-	request := buildDNSFailoverMutation(snapshot.Rule, newTarget)
-	client, err := s.dnsFailoverClient()
-	if err != nil {
-		return false, s.persistDNSFailoverMutationFailure(ctx, tx, outbox, snapshot, currentTarget, newTarget, dnspod.RecordMutationResult{}, err, now, &committed)
-	}
-	dnsCtx, cancel := context.WithTimeout(ctx, dnsFailoverDNSPodTimeout)
-	result, mutationErr := client.ModifyRecord(dnsCtx, request)
-	cancel()
-	if mutationErr != nil {
-		return true, s.persistDNSFailoverMutationFailure(ctx, tx, outbox, snapshot, currentTarget, newTarget, result, mutationErr, now, &committed)
-	}
-	recoverPersistenceFailure := func(persistenceErr error) (bool, error) {
-		_ = tx.Rollback()
-		return false, s.recoverDNSFailoverAfterPersistenceFailure(ctx, client, outbox, snapshot, currentTarget, newTarget, result, persistenceErr, now)
-	}
-	if snapshot.ActiveIncidentType != "" {
-		recoveredDetails := dnsFailoverEventDetails(snapshot, &currentTarget, &newTarget, "recovered", "", result.RequestID, now)
-		if err := clearDNSFailoverIncident(ctx, tx, snapshot, &currentTarget,
-			formatDNSFailoverIncidentNotification(snapshot.Rule, "recovered", "检测状态已恢复", snapshot.ProbeIDs, now), recoveredDetails, now); err != nil {
-			return recoverPersistenceFailure(err)
-		}
-	}
-
-	if _, err := tx.ExecContext(ctx, `UPDATE v2_dns_failover_group
-SET current_target_id = $2, last_switch_at = $3, last_switch_reason = $4, last_evaluated_at = $3, updated_at = $3
-WHERE id = $1`, snapshot.Rule.ID, newTarget.ID, now, decision.Reason); err != nil {
-		return recoverPersistenceFailure(fmt.Errorf("update DNS failover active target: %w", err))
-	}
-	eventType := "failover"
-	if decision.Action == dnsFailoverActionFailback {
-		eventType = "failback"
-	}
-	details := dnsFailoverEventDetails(snapshot, &currentTarget, &newTarget, decision.Reason, "", result.RequestID, now)
-	onlineProbeIDs := onlineDNSFailoverProbeIDs(snapshot.Probes)
-	message := formatDNSFailoverSwitchNotification(snapshot.Rule, currentTarget, newTarget, decision.Reason, onlineProbeIDs, len(onlineProbeIDs) == 1, time.Unix(now, 0))
-	if err := insertDNSFailoverEvent(ctx, tx, snapshot.Rule.ID, &newTarget.ID, eventType, message, details, now); err != nil {
-		return recoverPersistenceFailure(err)
-	}
-	if err := deleteDNSFailoverOutboxVersion(ctx, tx, outbox); err != nil {
-		return recoverPersistenceFailure(err)
-	}
-	if err := tx.Commit(); err != nil {
-		return false, s.recoverDNSFailoverAfterPersistenceFailure(ctx, client, outbox, snapshot, currentTarget, newTarget, result, fmt.Errorf("commit DNS failover switch: %w", err), now)
-	}
-	committed = true
-	return true, nil
-}
-
-func (s *DBService) processForcedManualDNSFailover(ctx context.Context, tx *sql.Tx, outbox dnsFailoverOutboxRow, snapshot dnsFailoverWorkerSnapshot, oldTarget DNSFailoverTargetRecord, now int64, committed *bool) (bool, error) {
-	if !outbox.TargetID.Valid {
-		return false, errors.New("manual DNS failover operation has no target")
-	}
-	newTarget, ok := enabledDNSFailoverTarget(snapshot.Targets, &outbox.TargetID.Int64)
-	if !ok {
-		retryErr := fmt.Errorf("manual DNS failover target %d is missing or disabled", outbox.TargetID.Int64)
-		return true, persistDNSFailoverForcedConfigurationFailure(ctx, tx, outbox, snapshot, outbox.TargetID.Int64, retryErr, now, committed)
-	}
-	client, err := s.dnsFailoverClient()
-	if err != nil {
-		return true, s.persistDNSFailoverMutationFailure(ctx, tx, outbox, snapshot, oldTarget, newTarget, dnspod.RecordMutationResult{}, err, now, committed)
-	}
-	dnsCtx, cancel := context.WithTimeout(ctx, dnsFailoverDNSPodTimeout)
-	result, mutationErr := client.ModifyRecord(dnsCtx, buildDNSFailoverMutation(snapshot.Rule, newTarget))
-	cancel()
-	if mutationErr != nil {
-		return true, s.persistDNSFailoverMutationFailure(ctx, tx, outbox, snapshot, oldTarget, newTarget, result, mutationErr, now, committed)
-	}
-	recoverPersistenceFailure := func(persistenceErr error) (bool, error) {
-		_ = tx.Rollback()
-		return false, s.recoverDNSFailoverAfterPersistenceFailure(ctx, client, outbox, snapshot, oldTarget, newTarget, result, persistenceErr, now)
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE v2_dns_failover_group
-SET current_target_id = $2, last_switch_at = $3, last_switch_reason = 'manual', last_evaluated_at = $3, updated_at = $3
-WHERE id = $1`, snapshot.Rule.ID, newTarget.ID, now); err != nil {
-		return recoverPersistenceFailure(fmt.Errorf("update forced manual DNS failover target: %w", err))
-	}
-	details := dnsFailoverEventDetails(snapshot, &oldTarget, &newTarget, "manual", "", result.RequestID, now)
-	details["operation"] = dnsFailoverOperationManual
-	message := formatDNSFailoverSwitchNotification(snapshot.Rule, oldTarget, newTarget, "manual", snapshot.ProbeIDs, false, time.Unix(now, 0))
-	if err := insertDNSFailoverEvent(ctx, tx, snapshot.Rule.ID, &newTarget.ID, "manual_switch", message, details, now); err != nil {
-		return recoverPersistenceFailure(err)
-	}
-	if err := deleteDNSFailoverOutboxVersion(ctx, tx, outbox); err != nil {
-		return recoverPersistenceFailure(err)
-	}
-	if err := tx.Commit(); err != nil {
-		return false, s.recoverDNSFailoverAfterPersistenceFailure(ctx, client, outbox, snapshot, oldTarget, newTarget, result, fmt.Errorf("commit forced manual DNS failover switch: %w", err), now)
-	}
-	*committed = true
-	return true, nil
-}
-
-func (s *DBService) processForcedDNSReconciliation(ctx context.Context, tx *sql.Tx, outbox dnsFailoverOutboxRow, snapshot dnsFailoverWorkerSnapshot, currentTarget DNSFailoverTargetRecord, now int64, committed *bool) (bool, error) {
-	if !outbox.TargetID.Valid {
-		return false, errors.New("DNS reconciliation operation has no target")
-	}
-	desiredTarget, ok := enabledDNSFailoverTarget(snapshot.Targets, &outbox.TargetID.Int64)
-	if !ok {
-		retryErr := fmt.Errorf("DNS reconciliation target %d is missing or disabled", outbox.TargetID.Int64)
-		return true, persistDNSFailoverForcedConfigurationFailure(ctx, tx, outbox, snapshot, outbox.TargetID.Int64, retryErr, now, committed)
-	}
-	if snapshot.ActiveIncidentType != "dns_state_diverged" {
-		var actualTarget *DNSFailoverTargetRecord
-		if outbox.SourceTargetID.Valid {
-			if target, found := dnsFailoverTargetByID(snapshot.Targets, outbox.SourceTargetID.Int64); found {
-				actualTarget = &target
-			}
-		}
-		details := dnsFailoverEventDetails(snapshot, &desiredTarget, actualTarget, "dns_state_diverged", outbox.LastError, "", now)
-		details["desired_target"] = dnsFailoverTargetDetails(desiredTarget)
-		if actualTarget != nil {
-			details["actual_target"] = dnsFailoverTargetDetails(*actualTarget)
-		} else if outbox.SourceTargetID.Valid {
-			details["actual_target"] = map[string]any{"id": outbox.SourceTargetID.Int64}
-		}
-		details["rollback_error"] = outbox.LastError
-		message := formatDNSFailoverIncidentNotification(snapshot.Rule, "dns_state_diverged", "DNS 实际状态与数据库状态不一致，正在强制收敛", snapshot.ProbeIDs, now)
-		if err := recordDNSFailoverIncident(ctx, tx, snapshot, "dns_state_diverged", actualTarget, message, details, now); err != nil {
-			return false, err
-		}
-		snapshot.ActiveIncidentType = "dns_state_diverged"
-	}
-	client, err := s.dnsFailoverClient()
-	var result dnspod.RecordMutationResult
-	if err == nil {
-		dnsCtx, cancel := context.WithTimeout(ctx, dnsFailoverDNSPodTimeout)
-		result, err = client.ModifyRecord(dnsCtx, buildDNSFailoverMutation(snapshot.Rule, desiredTarget))
-		cancel()
-	}
-	if err != nil {
-		return true, persistDNSFailoverRetryOnly(ctx, tx, outbox, err, now, committed)
-	}
-	details := dnsFailoverEventDetails(snapshot, &currentTarget, &desiredTarget, "dns_state_reconciled", "", result.RequestID, now)
-	details["operation"] = dnsFailoverOperationReconcile
-	if outbox.SourceTargetID.Valid {
-		details["source_target_id"] = outbox.SourceTargetID.Int64
-	}
-	message := formatDNSFailoverIncidentNotification(snapshot.Rule, "dns_state_reconciled", "DNS 已强制收敛到数据库目标", snapshot.ProbeIDs, now)
-	if snapshot.ActiveIncidentType == "dns_state_diverged" {
-		if _, err := tx.ExecContext(ctx, `UPDATE v2_dns_failover_group
-SET active_incident_type = '', active_incident_since = NULL
-WHERE id = $1 AND active_incident_type = 'dns_state_diverged'`, snapshot.Rule.ID); err != nil {
-			return false, fmt.Errorf("clear DNS state divergence: %w", err)
-		}
-	}
-	if err := insertDNSFailoverEvent(ctx, tx, snapshot.Rule.ID, &desiredTarget.ID, "dns_state_reconciled", message, details, now); err != nil {
-		return false, err
-	}
-	if err := deleteDNSFailoverOutboxVersion(ctx, tx, outbox); err != nil {
-		return false, err
-	}
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit DNS state reconciliation: %w", err)
-	}
-	*committed = true
-	return true, nil
-}
-
-func persistDNSFailoverRetryOnly(ctx context.Context, tx *sql.Tx, outbox dnsFailoverOutboxRow, retryErr error, now int64, committed *bool) error {
-	errorText := truncateDNSFailoverError(retryErr)
-	nextAttemptAt := saturatingUnixAdd(now, dnsFailoverRetryDelay(outbox.Attempts))
-	if _, err := tx.ExecContext(ctx, `UPDATE v2_dns_failover_eval_outbox
-SET attempts = $2, next_attempt_at = $3, last_error = $4, updated_at = $5
-WHERE id = $1 AND requested_at = $6`, outbox.ID, outbox.Attempts+1, nextAttemptAt, errorText, now, outbox.RequestedAt); err != nil {
-		return fmt.Errorf("schedule forced DNS operation retry: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit forced DNS operation retry: %w", err)
-	}
-	*committed = true
-	return nil
-}
-
-func persistDNSFailoverForcedConfigurationFailure(ctx context.Context, tx *sql.Tx, outbox dnsFailoverOutboxRow, snapshot dnsFailoverWorkerSnapshot, targetID int64, retryErr error, now int64, committed *bool) error {
-	var target *DNSFailoverTargetRecord
-	if found, ok := dnsFailoverTargetByID(snapshot.Targets, targetID); ok {
-		target = &found
-	}
-	details := dnsFailoverEventDetails(snapshot, nil, target, "config_error", retryErr.Error(), "", now)
-	message := formatDNSFailoverIncidentNotification(snapshot.Rule, "config_error", retryErr.Error(), snapshot.ProbeIDs, now)
-	if err := recordDNSFailoverIncident(ctx, tx, snapshot, "config_error", target, message, details, now); err != nil {
-		return err
-	}
-	return persistDNSFailoverRetryOnly(ctx, tx, outbox, retryErr, now, committed)
-}
-
-func (s *DBService) recoverDNSFailoverAfterPersistenceFailure(ctx context.Context, client dnspodAPI, outbox dnsFailoverOutboxRow, snapshot dnsFailoverWorkerSnapshot, oldTarget, newTarget DNSFailoverTargetRecord, switchResult dnspod.RecordMutationResult, persistenceErr error, now int64) error {
-	rollbackCtx, cancelRollback := context.WithTimeout(context.WithoutCancel(ctx), dnsFailoverDNSPodTimeout)
-	rollbackResult, compensationErr := client.ModifyRecord(rollbackCtx, buildDNSFailoverMutation(snapshot.Rule, oldTarget))
-	cancelRollback()
-
-	recoveryErr := persistenceErr
-	if compensationErr != nil {
-		recoveryErr = errors.Join(recoveryErr, fmt.Errorf("rollback DNS failed: %w", compensationErr))
-	}
-	errorText := truncateDNSFailoverError(recoveryErr)
-	nextAttemptAt := saturatingUnixAdd(now, dnsFailoverRetryDelay(outbox.Attempts))
-
-	if compensationErr != nil {
-		if err := s.persistDNSFailoverReconciliationIntent(ctx, snapshot.Rule.ID, oldTarget.ID, newTarget.ID, now, nextAttemptAt, errorText); err != nil {
-			return errors.Join(recoveryErr, fmt.Errorf("persist forced DNS reconciliation: %w", err))
-		}
-		if err := s.persistDNSFailoverRecoveryEvent(ctx, snapshot, oldTarget, newTarget, switchResult, rollbackResult, compensationErr, errorText, now); err != nil {
-			return errors.Join(recoveryErr, err)
-		}
-		return recoveryErr
-	}
-
-	persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), dnsFailoverDNSPodTimeout)
-	defer cancelPersist()
-	tx, err := s.db.BeginTx(persistCtx, nil)
-	if err != nil {
-		return errors.Join(recoveryErr, fmt.Errorf("begin DNS failover recovery transaction: %w", err))
-	}
-	defer tx.Rollback()
-	switch {
-	case outbox.Operation == dnsFailoverOperationManual:
-		_, err = tx.ExecContext(persistCtx, `INSERT INTO v2_dns_failover_eval_outbox (
-group_id, operation, target_id, source_target_id, requested_at, attempts, next_attempt_at, last_error, created_at, updated_at
-) VALUES ($1, 'manual', $2, $3, $4, 1, $5, $6, $4, $4)
-ON CONFLICT (group_id) DO UPDATE SET
-operation = 'manual', target_id = EXCLUDED.target_id, source_target_id = EXCLUDED.source_target_id,
-requested_at = EXCLUDED.requested_at, attempts = v2_dns_failover_eval_outbox.attempts + 1,
-next_attempt_at = EXCLUDED.next_attempt_at, last_error = EXCLUDED.last_error, updated_at = EXCLUDED.updated_at`,
-			snapshot.Rule.ID, newTarget.ID, oldTarget.ID, now, nextAttemptAt, errorText)
-	default:
-		_, err = tx.ExecContext(persistCtx, `INSERT INTO v2_dns_failover_eval_outbox (
-group_id, operation, target_id, source_target_id, requested_at, attempts, next_attempt_at, last_error, created_at, updated_at
-) VALUES ($1, 'evaluate', NULL, NULL, $2, 1, $3, $4, $2, $2)
-ON CONFLICT (group_id) DO UPDATE SET
-operation = 'evaluate', target_id = NULL, source_target_id = NULL,
-requested_at = EXCLUDED.requested_at, attempts = v2_dns_failover_eval_outbox.attempts + 1,
-next_attempt_at = EXCLUDED.next_attempt_at, last_error = EXCLUDED.last_error, updated_at = EXCLUDED.updated_at`,
-			snapshot.Rule.ID, now, nextAttemptAt, errorText)
-	}
-	if err != nil {
-		return errors.Join(recoveryErr, fmt.Errorf("persist DNS failover recovery outbox: %w", err))
-	}
-	if _, err := tx.ExecContext(persistCtx, `SELECT pg_advisory_xact_lock($1)`, snapshot.Rule.ID); err != nil {
-		return errors.Join(recoveryErr, fmt.Errorf("lock DNS failover recovery group: %w", err))
-	}
-	details := dnsFailoverEventDetails(snapshot, &oldTarget, &newTarget, "dnspod_error", errorText, switchResult.RequestID, now)
-	details["switch_request_id"] = switchResult.RequestID
-	details["rollback_request_id"] = rollbackResult.RequestID
-	details["rollback"] = "succeeded"
-	message := formatDNSFailoverIncidentNotification(snapshot.Rule, "dnspod_error", errorText, snapshot.ProbeIDs, now)
-	if err := recordDNSFailoverIncident(persistCtx, tx, snapshot, "dnspod_error", &newTarget, message, details, now); err != nil {
-		return errors.Join(recoveryErr, err)
-	}
-	if err := tx.Commit(); err != nil {
-		return errors.Join(recoveryErr, fmt.Errorf("commit DNS failover recovery transaction: %w", err))
-	}
-	return recoveryErr
-}
-
-func (s *DBService) persistDNSFailoverReconciliationIntent(ctx context.Context, groupID, desiredTargetID, actualTargetID, now, nextAttemptAt int64, errorText string) error {
-	var lastErr error
-	for range dnsFailoverRecoveryAttempts {
-		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dnsFailoverRecoveryTimeout)
-		err := func() error {
-			tx, err := s.db.BeginTx(persistCtx, nil)
-			if err != nil {
-				return fmt.Errorf("begin reconciliation intent: %w", err)
-			}
-			committed := false
-			defer func() {
-				if !committed {
-					_ = tx.Rollback()
-				}
-			}()
-			if _, err := tx.ExecContext(persistCtx, `INSERT INTO v2_dns_failover_eval_outbox (
-group_id, operation, target_id, source_target_id, requested_at, attempts, next_attempt_at, last_error, created_at, updated_at
-) VALUES ($1, 'reconcile', $2, $3, $4, 1, $5, $6, $4, $4)
-ON CONFLICT (group_id) DO UPDATE SET
-operation = 'reconcile', target_id = EXCLUDED.target_id, source_target_id = EXCLUDED.source_target_id,
-requested_at = EXCLUDED.requested_at, attempts = v2_dns_failover_eval_outbox.attempts + 1,
-next_attempt_at = EXCLUDED.next_attempt_at, last_error = EXCLUDED.last_error, updated_at = EXCLUDED.updated_at`,
-				groupID, desiredTargetID, actualTargetID, now, nextAttemptAt, errorText); err != nil {
-				return fmt.Errorf("upsert reconciliation intent: %w", err)
-			}
-			if _, err := tx.ExecContext(persistCtx, `SELECT pg_advisory_xact_lock($1)`, groupID); err != nil {
-				return fmt.Errorf("lock reconciliation intent group: %w", err)
-			}
-			if err := tx.Commit(); err != nil {
-				return fmt.Errorf("commit reconciliation intent: %w", err)
-			}
-			committed = true
-			return nil
-		}()
-		cancel()
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-	}
-	return lastErr
-}
-
-func (s *DBService) persistDNSFailoverRecoveryEvent(ctx context.Context, snapshot dnsFailoverWorkerSnapshot, oldTarget, newTarget DNSFailoverTargetRecord, switchResult, rollbackResult dnspod.RecordMutationResult, compensationErr error, errorText string, now int64) error {
-	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dnsFailoverRecoveryTimeout)
-	defer cancel()
-	tx, err := s.db.BeginTx(persistCtx, nil)
-	if err != nil {
-		return fmt.Errorf("begin DNS divergence event transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-	if _, err := tx.ExecContext(persistCtx, `SELECT pg_advisory_xact_lock($1)`, snapshot.Rule.ID); err != nil {
-		return fmt.Errorf("lock DNS divergence event group: %w", err)
-	}
-	details := dnsFailoverEventDetails(snapshot, &oldTarget, &newTarget, "dns_state_diverged", errorText, switchResult.RequestID, now)
-	details["switch_request_id"] = switchResult.RequestID
-	details["rollback_request_id"] = rollbackResult.RequestID
-	details["rollback_error"] = compensationErr.Error()
-	details["desired_target"] = dnsFailoverTargetDetails(oldTarget)
-	details["actual_target"] = dnsFailoverTargetDetails(newTarget)
-	message := formatDNSFailoverIncidentNotification(snapshot.Rule, "dns_state_diverged", "DNS 实际状态与数据库状态不一致，等待强制收敛", snapshot.ProbeIDs, now)
-	if err := recordDNSFailoverIncident(persistCtx, tx, snapshot, "dns_state_diverged", &newTarget, message, details, now); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit DNS divergence event transaction: %w", err)
-	}
-	committed = true
 	return nil
 }
 
@@ -960,33 +529,6 @@ func deleteDNSFailoverOutboxVersion(ctx context.Context, tx *sql.Tx, outbox dnsF
 	return nil
 }
 
-func (s *DBService) persistDNSFailoverMutationFailure(ctx context.Context, tx *sql.Tx, outbox dnsFailoverOutboxRow, snapshot dnsFailoverWorkerSnapshot, oldTarget, newTarget DNSFailoverTargetRecord, result dnspod.RecordMutationResult, mutationErr error, now int64, committed *bool) error {
-	errorText := truncateDNSFailoverError(mutationErr)
-	details := dnsFailoverEventDetails(snapshot, &oldTarget, &newTarget, "dnspod_error", errorText, result.RequestID, now)
-	message := formatDNSFailoverIncidentNotification(snapshot.Rule, "dnspod_error", errorText, snapshot.ProbeIDs, now)
-	if outbox.Operation == dnsFailoverOperationManual && snapshot.ActiveIncidentType != "" && snapshot.ActiveIncidentType != "dnspod_error" {
-		if outbox.Attempts == 0 {
-			if err := insertDNSFailoverEvent(ctx, tx, snapshot.Rule.ID, &newTarget.ID, "dnspod_error", message, details, now); err != nil {
-				return err
-			}
-		}
-	} else if err := recordDNSFailoverIncident(ctx, tx, snapshot, "dnspod_error", &newTarget, message, details, now); err != nil {
-		return err
-	}
-	nextAttemptAt := saturatingUnixAdd(now, dnsFailoverRetryDelay(outbox.Attempts))
-	_, err := tx.ExecContext(ctx, `UPDATE v2_dns_failover_eval_outbox
-SET attempts = $2, next_attempt_at = $3, last_error = $4, updated_at = $5
-WHERE id = $1 AND requested_at = $6`, outbox.ID, outbox.Attempts+1, nextAttemptAt, errorText, now, outbox.RequestedAt)
-	if err != nil {
-		return fmt.Errorf("schedule DNS failover retry: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit DNSPod failure event: %w", err)
-	}
-	*committed = true
-	return nil
-}
-
 func (s *DBService) dnsFailoverClient() (dnspodAPI, error) {
 	if s.dnsFailoverAPI != nil {
 		return s.dnsFailoverAPI, nil
@@ -1084,9 +626,23 @@ func (s *DBService) ManualSwitchDNSFailoverTarget(ctx context.Context, groupID, 
 	if err := s.ensureDNSFailoverSchema(ctx); err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	conn, err := s.db.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("begin manual DNS failover switch: %w", err)
+		return fmt.Errorf("open manual DNS failover connection: %w", err)
+	}
+	defer conn.Close()
+	var locked bool
+	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, groupID).Scan(&locked); err != nil {
+		return fmt.Errorf("lock manual DNS failover group: %w", err)
+	}
+	if !locked {
+		return errors.New("DNS 状态正在恢复或执行，请稍后再手动切换")
+	}
+	defer releaseDNSFailoverSessionLock(conn, groupID)
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin manual DNS failover request: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -1094,177 +650,36 @@ func (s *DBService) ManualSwitchDNSFailoverTarget(ctx context.Context, groupID, 
 			_ = tx.Rollback()
 		}
 	}()
+	var sagaExists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM v2_dns_failover_saga WHERE group_id = $1 AND phase = 'prepared')`, groupID).Scan(&sagaExists); err != nil {
+		return fmt.Errorf("check DNS failover recovery state: %w", err)
+	}
+	if sagaExists {
+		return errors.New("DNS 状态正在恢复，请稍后再手动切换")
+	}
 	now := time.Now().Unix()
-	manualResult, err := tx.ExecContext(ctx, `INSERT INTO v2_dns_failover_eval_outbox (
+	var outboxID, requestedAt int64
+	err = tx.QueryRowContext(ctx, `INSERT INTO v2_dns_failover_eval_outbox (
 group_id, operation, target_id, source_target_id, requested_at, attempts, next_attempt_at, last_error, created_at, updated_at
 ) VALUES ($1, 'manual', $2, NULL, $3, 0, $3, '', $3, $3)
 ON CONFLICT (group_id) DO UPDATE SET
 operation = 'manual', target_id = EXCLUDED.target_id, source_target_id = NULL,
 requested_at = EXCLUDED.requested_at, attempts = 0, next_attempt_at = EXCLUDED.next_attempt_at,
 last_error = '', updated_at = EXCLUDED.updated_at
-WHERE v2_dns_failover_eval_outbox.operation <> 'reconcile'`, groupID, targetID, now)
+WHERE v2_dns_failover_eval_outbox.operation <> 'reconcile'
+RETURNING id, requested_at`, groupID, targetID, now).Scan(&outboxID, &requestedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errors.New("DNS 状态正在恢复，请稍后再手动切换")
+	}
 	if err != nil {
 		return fmt.Errorf("persist manual DNS failover operation: %w", err)
 	}
-	if affected, err := manualResult.RowsAffected(); err != nil {
-		return fmt.Errorf("read manual DNS failover operation result: %w", err)
-	} else if affected == 0 {
-		return errors.New("DNS 状态正在强制收敛，请稍后再手动切换")
-	}
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, groupID); err != nil {
-		return fmt.Errorf("lock manual DNS failover group: %w", err)
-	}
-
-	snapshot, err := loadDNSFailoverRuleTargetsForUpdate(ctx, tx, groupID)
-	if err != nil {
-		return err
-	}
-	oldTarget, oldValid := enabledDNSFailoverTarget(snapshot.Targets, snapshot.Rule.CurrentTargetID)
-	if !oldValid {
-		return errors.New("当前故障转移目标不存在、已禁用或不属于该规则")
-	}
-	newTarget, targetValid := enabledDNSFailoverTarget(snapshot.Targets, &targetID)
-	if !targetValid {
-		return errors.New("手动切换目标不存在、已禁用或不属于该规则")
-	}
-	if oldTarget.ID == newTarget.ID {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_dns_failover_eval_outbox
-WHERE group_id = $1 AND operation = 'manual' AND target_id = $2`, groupID, targetID); err != nil {
-			return fmt.Errorf("ack idempotent manual DNS failover operation: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit idempotent manual DNS failover switch: %w", err)
-		}
-		committed = true
-		return nil
-	}
-
-	client, err := s.dnsFailoverClient()
-	var mutationResult dnspod.RecordMutationResult
-	if err == nil {
-		dnsCtx, cancel := context.WithTimeout(ctx, dnsFailoverDNSPodTimeout)
-		mutationResult, err = client.ModifyRecord(dnsCtx, buildDNSFailoverMutation(snapshot.Rule, newTarget))
-		cancel()
-		if err == nil {
-			manualOutbox := dnsFailoverOutboxRow{
-				GroupID: groupID, Operation: dnsFailoverOperationManual,
-				TargetID:       sql.NullInt64{Int64: newTarget.ID, Valid: true},
-				SourceTargetID: sql.NullInt64{Int64: oldTarget.ID, Valid: true}, RequestedAt: now,
-			}
-			recoverManualPersistenceFailure := func(persistenceErr error) error {
-				_ = tx.Rollback()
-				return s.recoverDNSFailoverAfterPersistenceFailure(ctx, client, manualOutbox, snapshot, oldTarget, newTarget, mutationResult, persistenceErr, now)
-			}
-			if _, updateErr := tx.ExecContext(ctx, `UPDATE v2_dns_failover_group
-SET current_target_id = $2, last_switch_at = $3, last_switch_reason = 'manual', last_evaluated_at = $3, updated_at = $3
-WHERE id = $1`, groupID, targetID, now); updateErr != nil {
-				return recoverManualPersistenceFailure(fmt.Errorf("update manual DNS failover target: %w", updateErr))
-			}
-			details := dnsFailoverEventDetails(snapshot, &oldTarget, &newTarget, "manual", "", mutationResult.RequestID, now)
-			message := formatDNSFailoverSwitchNotification(snapshot.Rule, oldTarget, newTarget, "manual", snapshot.ProbeIDs, false, time.Unix(now, 0))
-			if insertErr := insertDNSFailoverEvent(ctx, tx, groupID, &newTarget.ID, "manual_switch", message, details, now); insertErr != nil {
-				return recoverManualPersistenceFailure(insertErr)
-			}
-			if _, deleteErr := tx.ExecContext(ctx, `DELETE FROM v2_dns_failover_eval_outbox
-WHERE group_id = $1 AND operation = 'manual' AND target_id = $2`, groupID, targetID); deleteErr != nil {
-				return recoverManualPersistenceFailure(fmt.Errorf("ack manual DNS failover operation: %w", deleteErr))
-			}
-			if commitErr := tx.Commit(); commitErr != nil {
-				return s.recoverDNSFailoverAfterPersistenceFailure(ctx, client, manualOutbox, snapshot, oldTarget, newTarget, mutationResult, fmt.Errorf("commit manual DNS failover switch: %w", commitErr), now)
-			}
-			committed = true
-			return nil
-		}
-	}
-
-	errorText := truncateDNSFailoverError(err)
-	details := dnsFailoverEventDetails(snapshot, &oldTarget, &newTarget, "dnspod_error", errorText, mutationResult.RequestID, now)
-	details["operation"] = "manual_switch"
-	details["retry_semantics"] = "retry_requested_target"
-	message := formatDNSFailoverIncidentNotification(snapshot.Rule, "dnspod_error", errorText, snapshot.ProbeIDs, now)
-	if snapshot.ActiveIncidentType != "" && snapshot.ActiveIncidentType != "dnspod_error" {
-		if eventErr := insertDNSFailoverEvent(ctx, tx, snapshot.Rule.ID, &newTarget.ID, "dnspod_error", message, details, now); eventErr != nil {
-			return eventErr
-		}
-	} else if eventErr := recordDNSFailoverIncident(ctx, tx, snapshot, "dnspod_error", &newTarget, message, details, now); eventErr != nil {
-		return eventErr
-	}
-	nextAttemptAt := saturatingUnixAdd(now, dnsFailoverRetryDelay(0))
-	_, outboxErr := tx.ExecContext(ctx, `UPDATE v2_dns_failover_eval_outbox
-SET attempts = attempts + 1, next_attempt_at = $3, last_error = $4, updated_at = $5
-WHERE group_id = $1 AND operation = 'manual' AND target_id = $2`, groupID, targetID, nextAttemptAt, errorText, now)
-	if outboxErr != nil {
-		return fmt.Errorf("persist manual DNS failover retry: %w", outboxErr)
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return errors.Join(err, fmt.Errorf("commit manual DNS failure event: %w", commitErr))
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit manual DNS failover request: %w", err)
 	}
 	committed = true
-	if s.jobs != nil {
-		_ = s.RequestDNSFailoverEvaluation(context.WithoutCancel(ctx), []int64{groupID})
-	}
+	_, err = s.processClaimedDNSFailoverEvaluation(ctx, conn, outboxID, now)
 	return err
-}
-
-func loadDNSFailoverRuleTargetsForUpdate(ctx context.Context, tx *sql.Tx, groupID int64) (dnsFailoverWorkerSnapshot, error) {
-	var (
-		snapshot      dnsFailoverWorkerSnapshot
-		weight        sql.NullInt64
-		currentTarget sql.NullInt64
-		enabled       int64
-		autoFailback  int64
-		lastSwitch    sql.NullInt64
-	)
-	err := tx.QueryRowContext(ctx, `SELECT id, name, domain_id, domain, record_id, subdomain, record_line_id, record_line_name,
-ttl, mx, weight, current_target_id, enabled, auto_failback, check_interval_sec, tcp_timeout_ms, failure_threshold,
-success_threshold, single_probe_failure_threshold, single_probe_success_threshold, probe_offline_sec, cooldown_sec,
-last_switch_at, last_switch_reason, active_incident_type, active_incident_since, created_at, updated_at
-FROM v2_dns_failover_group
-WHERE id = $1
-FOR UPDATE`, groupID).Scan(
-		&snapshot.Rule.ID, &snapshot.Rule.Name, &snapshot.Rule.DomainID, &snapshot.Rule.Domain, &snapshot.Rule.RecordID,
-		&snapshot.Rule.Subdomain, &snapshot.Rule.RecordLineID, &snapshot.Rule.RecordLineName, &snapshot.Rule.TTL, &snapshot.Rule.MX,
-		&weight, &currentTarget, &enabled, &autoFailback, &snapshot.Rule.CheckIntervalSec, &snapshot.Rule.TCPTimeoutMS,
-		&snapshot.Rule.FailureThreshold, &snapshot.Rule.SuccessThreshold, &snapshot.Rule.SingleProbeFailureThreshold,
-		&snapshot.Rule.SingleProbeSuccessThreshold, &snapshot.Rule.ProbeOfflineSec, &snapshot.Rule.CooldownSec, &lastSwitch,
-		&snapshot.Rule.LastSwitchReason, &snapshot.ActiveIncidentType, &snapshot.ActiveIncidentSince, &snapshot.Rule.CreatedAt, &snapshot.Rule.UpdatedAt,
-	)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return dnsFailoverWorkerSnapshot{}, errors.New("故障转移规则不存在")
-		}
-		return dnsFailoverWorkerSnapshot{}, fmt.Errorf("lock DNS failover group: %w", err)
-	}
-	snapshot.Rule.Weight = dnsNullInt64Pointer(weight)
-	snapshot.Rule.CurrentTargetID = dnsNullInt64Pointer(currentTarget)
-	snapshot.Rule.Enabled = enabled != 0
-	snapshot.Rule.AutoFailback = autoFailback != 0
-	snapshot.Rule.LastSwitchAt = dnsNullInt64Pointer(lastSwitch)
-
-	rows, err := tx.QueryContext(ctx, `SELECT id, group_id, sort, name, dns_type, dns_value, check_host, check_port, enabled, created_at, updated_at
-FROM v2_dns_failover_target
-WHERE group_id = $1
-ORDER BY sort ASC, id ASC
-FOR UPDATE`, groupID)
-	if err != nil {
-		return dnsFailoverWorkerSnapshot{}, fmt.Errorf("lock DNS failover targets: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var target DNSFailoverTargetRecord
-		var targetEnabled int64
-		if err := rows.Scan(&target.ID, &target.GroupID, &target.Sort, &target.Name, &target.DNSType, &target.DNSValue,
-			&target.CheckHost, &target.CheckPort, &targetEnabled, &target.CreatedAt, &target.UpdatedAt); err != nil {
-			return dnsFailoverWorkerSnapshot{}, fmt.Errorf("scan DNS failover target: %w", err)
-		}
-		target.Enabled = targetEnabled != 0
-		snapshot.Targets = append(snapshot.Targets, target)
-	}
-	if err := rows.Err(); err != nil {
-		return dnsFailoverWorkerSnapshot{}, fmt.Errorf("iterate DNS failover targets: %w", err)
-	}
-	snapshot.Rule.Targets = snapshot.Targets
-	return snapshot, nil
 }
 
 func buildDNSFailoverMutation(rule DNSFailoverRuleRecord, target DNSFailoverTargetRecord) dnspod.RecordMutationRequest {
@@ -1289,7 +704,7 @@ func dnsFailoverProbeOnline(lastHeartbeat sql.NullInt64, prewarmCount, now, offl
 
 func isDNSFailoverIncident(eventType string) bool {
 	switch eventType {
-	case "all_probes_offline", "probe_disagreement", "no_healthy_target", "dnspod_error", "config_error":
+	case "all_probes_offline", "probe_disagreement", "no_healthy_target", "config_error":
 		return true
 	default:
 		return false
@@ -1315,19 +730,40 @@ func (s *DBService) drainPendingDNSFailoverNotifications(ctx context.Context, li
 	if s == nil || s.db == nil || limit <= 0 {
 		return nil
 	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("open DNS failover notification connection: %w", err)
+	}
+	defer conn.Close()
+	var locked bool
+	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, dnsFailoverNotificationLockKey).Scan(&locked); err != nil {
+		return fmt.Errorf("lock DNS failover notification delivery: %w", err)
+	}
+	if !locked {
+		return nil
+	}
+	defer releaseDNSFailoverSessionLock(conn, dnsFailoverNotificationLockKey)
 	for range limit {
-		tx, err := s.db.BeginTx(ctx, nil)
+		now := time.Now().Unix()
+		tx, err := conn.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("begin DNS failover notification transaction: %w", err)
 		}
 		var eventID int64
 		var message string
-		err = tx.QueryRowContext(ctx, `SELECT id, message
-FROM v2_dns_failover_event
-WHERE notified_at IS NULL
-ORDER BY created_at ASC, id ASC
+		var attempts int
+		err = tx.QueryRowContext(ctx, `SELECT id, message, notify_attempts
+FROM v2_dns_failover_event e
+WHERE e.notified_at IS NULL
+  AND e.notify_next_attempt_at <= $1
+  AND (e.notify_claim_token = '' OR e.notify_claimed_at IS NULL OR e.notify_claimed_at <= $2)
+  AND NOT EXISTS (
+    SELECT 1 FROM v2_dns_failover_event older
+    WHERE older.notified_at IS NULL AND older.id < e.id
+  )
+ORDER BY id ASC
 LIMIT 1
-FOR UPDATE SKIP LOCKED`).Scan(&eventID, &message)
+FOR UPDATE SKIP LOCKED`, now, saturatingUnixAdd(now, -dnsFailoverNotificationLease)).Scan(&eventID, &message, &attempts)
 		if errors.Is(err, sql.ErrNoRows) {
 			_ = tx.Rollback()
 			return nil
@@ -1336,22 +772,92 @@ FOR UPDATE SKIP LOCKED`).Scan(&eventID, &message)
 			_ = tx.Rollback()
 			return fmt.Errorf("claim DNS failover notification: %w", err)
 		}
-		if s.dnsFailoverNotifier == nil {
+		token, err := newDNSFailoverNotificationClaimToken()
+		if err != nil {
 			_ = tx.Rollback()
-			return ErrDNSFailoverNotifierUnavailable
+			return err
 		}
-		if err := s.dnsFailoverNotifier.NotifyAdmins(ctx, message, true); err != nil {
+		claimResult, err := tx.ExecContext(ctx, `UPDATE v2_dns_failover_event
+SET notify_claim_token = $2, notify_claimed_at = $3, notify_attempts = notify_attempts + 1, notify_next_attempt_at = $4
+WHERE id = $1 AND notified_at IS NULL`, eventID, token, now, saturatingUnixAdd(now, dnsFailoverNotificationLease))
+		if err != nil {
 			_ = tx.Rollback()
-			return fmt.Errorf("notify DNS failover event: %w", err)
+			return fmt.Errorf("claim DNS failover notification: %w", err)
 		}
-		now := time.Now().Unix()
-		if _, err := tx.ExecContext(ctx, `UPDATE v2_dns_failover_event SET notified_at = $2 WHERE id = $1 AND notified_at IS NULL`, eventID, now); err != nil {
+		claimed, err := claimResult.RowsAffected()
+		if err != nil {
 			_ = tx.Rollback()
-			return fmt.Errorf("mark DNS failover event notified: %w", err)
+			return fmt.Errorf("read DNS failover notification claim result: %w", err)
+		}
+		if claimed != 1 {
+			_ = tx.Rollback()
+			return fmt.Errorf("claim DNS failover notification: expected one updated row, got %d", claimed)
 		}
 		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit DNS failover notification: %w", err)
+			return fmt.Errorf("commit DNS failover notification claim: %w", err)
 		}
+
+		notifyErr := ErrDNSFailoverNotifierUnavailable
+		if s.dnsFailoverNotifier != nil {
+			notifyErr = s.dnsFailoverNotifier.NotifyAdmins(ctx, message, true)
+		}
+		if notifyErr != nil {
+			if err := releaseDNSFailoverNotificationClaim(ctx, conn, eventID, token, attempts+1, notifyErr); err != nil {
+				return errors.Join(fmt.Errorf("notify DNS failover event: %w", notifyErr), err)
+			}
+			return fmt.Errorf("notify DNS failover event: %w", notifyErr)
+		}
+
+		ackTx, err := conn.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin DNS failover notification ack: %w", err)
+		}
+		ackNow := time.Now().Unix()
+		ackResult, err := ackTx.ExecContext(ctx, `UPDATE v2_dns_failover_event
+SET notified_at = $3, notify_claim_token = '', notify_claimed_at = NULL
+WHERE id = $1 AND notify_claim_token = $2 AND notified_at IS NULL`, eventID, token, ackNow)
+		if err != nil {
+			_ = ackTx.Rollback()
+			return fmt.Errorf("mark DNS failover event notified: %w", err)
+		}
+		acked, err := ackResult.RowsAffected()
+		if err != nil {
+			_ = ackTx.Rollback()
+			return fmt.Errorf("read DNS failover notification ack result: %w", err)
+		}
+		if acked != 1 {
+			_ = ackTx.Rollback()
+			return fmt.Errorf("mark DNS failover event notified: expected one updated row, got %d", acked)
+		}
+		if err := ackTx.Commit(); err != nil {
+			return fmt.Errorf("commit DNS failover notification ack: %w", err)
+		}
+	}
+	return nil
+}
+
+func newDNSFailoverNotificationClaimToken() (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("create DNS failover notification claim token: %w", err)
+	}
+	return hex.EncodeToString(raw), nil
+}
+
+func releaseDNSFailoverNotificationClaim(ctx context.Context, conn *sql.Conn, eventID int64, token string, attempts int, notifyErr error) error {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin DNS failover notification retry: %w", err)
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	if _, err := tx.ExecContext(ctx, `UPDATE v2_dns_failover_event
+SET notify_claim_token = '', notify_claimed_at = NULL, notify_next_attempt_at = $3
+WHERE id = $1 AND notify_claim_token = $2 AND notified_at IS NULL`, eventID, token, saturatingUnixAdd(now, dnsFailoverRetryDelay(attempts-1))); err != nil {
+		return fmt.Errorf("schedule DNS failover notification retry after %v: %w", notifyErr, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit DNS failover notification retry after %v: %w", notifyErr, err)
 	}
 	return nil
 }

@@ -556,7 +556,11 @@ attempts = 0,
 next_attempt_at = EXCLUDED.next_attempt_at,
 last_error = '',
 updated_at = EXCLUDED.updated_at
-WHERE v2_dns_failover_eval_outbox.operation = 'evaluate'`, outboxJSON, now)
+WHERE v2_dns_failover_eval_outbox.operation = 'evaluate'
+  AND NOT EXISTS (
+    SELECT 1 FROM v2_dns_failover_saga saga
+    WHERE saga.group_id = v2_dns_failover_eval_outbox.group_id
+  )`, outboxJSON, now)
 		if err != nil {
 			return DNSProbeReportResult{}, fmt.Errorf("persist DNS failover evaluation outbox: %w", err)
 		}

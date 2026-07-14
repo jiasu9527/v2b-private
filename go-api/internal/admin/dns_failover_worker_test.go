@@ -44,6 +44,7 @@ type dnsFailoverWorkerNotifier struct {
 	messages     []string
 	includeStaff []bool
 	errors       []error
+	onNotify     func()
 }
 
 func (n *dnsFailoverWorkerNotifier) NotifyAdmins(_ context.Context, message string, includeStaff bool) error {
@@ -51,6 +52,9 @@ func (n *dnsFailoverWorkerNotifier) NotifyAdmins(_ context.Context, message stri
 	defer n.mu.Unlock()
 	n.messages = append(n.messages, message)
 	n.includeStaff = append(n.includeStaff, includeStaff)
+	if n.onNotify != nil {
+		n.onNotify()
+	}
 	if len(n.errors) == 0 {
 		return nil
 	}
@@ -65,12 +69,20 @@ type dnsFailoverWorkerDNSPod struct {
 	mutations []dnspod.RecordMutationRequest
 	results   []dnspod.RecordMutationResult
 	errors    []error
+	onModify  func(dnspod.RecordMutationRequest)
+	modify    func(context.Context, dnspod.RecordMutationRequest) (dnspod.RecordMutationResult, error)
 }
 
-func (f *dnsFailoverWorkerDNSPod) ModifyRecord(_ context.Context, request dnspod.RecordMutationRequest) (dnspod.RecordMutationResult, error) {
+func (f *dnsFailoverWorkerDNSPod) ModifyRecord(ctx context.Context, request dnspod.RecordMutationRequest) (dnspod.RecordMutationResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.mutations = append(f.mutations, request)
+	if f.onModify != nil {
+		f.onModify(request)
+	}
+	if f.modify != nil {
+		return f.modify(ctx, request)
+	}
 	var result dnspod.RecordMutationResult
 	if len(f.results) > 0 {
 		result = f.results[0]
@@ -146,30 +158,6 @@ func TestDNSFailoverWorkerRetryBackoffIsExponentialAndBounded(t *testing.T) {
 	}
 	if got := dnsFailoverRetryDelay(1_000); got != 5*time.Minute {
 		t.Fatalf("bounded retry delay = %v", got)
-	}
-}
-
-func TestDNSFailoverWorkerRetriesDurableReconciliationIntentPersistence(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock: %v", err)
-	}
-	defer db.Close()
-	service := &DBService{db: db}
-
-	mock.ExpectBegin().WillReturnError(errors.New("database restarting"))
-	mock.ExpectBegin()
-	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*VALUES \(\$1, 'reconcile', \$2, \$3.*ON CONFLICT \(group_id\) DO UPDATE SET.*operation = 'reconcile'`).
-		WithArgs(int64(8), int64(10), int64(20), int64(1000), int64(1005), "rollback failed").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	expectDNSFailoverGroupAdvisoryLock(mock, 8)
-	mock.ExpectCommit()
-
-	if err := service.persistDNSFailoverReconciliationIntent(context.Background(), 8, 10, 20, 1000, 1005, "rollback failed"); err != nil {
-		t.Fatalf("persist reconciliation intent after transient DB failure: %v", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("sql expectations: %v", err)
 	}
 }
 
@@ -336,27 +324,65 @@ func TestDNSFailoverWorkerNotificationFailureRemainsPendingThenMarksNotified(t *
 	notifier := &dnsFailoverWorkerNotifier{errors: []error{errors.New("telegram unavailable"), nil}}
 	service := (&DBService{db: db, dnsFailoverSchemaOK: true}).WithDNSFailoverNotifier(notifier)
 
-	columns := []string{"id", "message"}
-	mock.ExpectBegin()
-	mock.ExpectQuery(`(?s)SELECT id, message.*FROM v2_dns_failover_event.*notified_at IS NULL.*FOR UPDATE SKIP LOCKED`).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow(int64(11), "DNS 故障转移告警"))
-	mock.ExpectRollback()
+	expectDNSFailoverNotificationLock(mock, true)
+	expectDNSFailoverNotificationClaim(mock, 11, "DNS 故障转移告警", 0)
+	expectDNSFailoverNotificationRetry(mock, 11)
+	expectDNSFailoverNotificationUnlock(mock)
 	if err := service.drainPendingDNSFailoverNotifications(context.Background(), 1); err == nil {
 		t.Fatal("first notification should fail")
 	}
 
-	mock.ExpectBegin()
-	mock.ExpectQuery(`(?s)SELECT id, message.*FROM v2_dns_failover_event.*notified_at IS NULL.*FOR UPDATE SKIP LOCKED`).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow(int64(11), "DNS 故障转移告警"))
-	mock.ExpectExec(`UPDATE v2_dns_failover_event SET notified_at = \$2 WHERE id = \$1 AND notified_at IS NULL`).
-		WithArgs(int64(11), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
+	expectDNSFailoverNotificationLock(mock, true)
+	expectDNSFailoverNotificationClaim(mock, 11, "DNS 故障转移告警", 1)
+	expectDNSFailoverNotificationAck(mock, 11, nil)
+	expectDNSFailoverNotificationUnlock(mock)
 	if err := service.drainPendingDNSFailoverNotifications(context.Background(), 1); err != nil {
 		t.Fatalf("retry notification: %v", err)
 	}
 
 	if len(notifier.messages) != 2 || !notifier.includeStaff[0] || !notifier.includeStaff[1] {
 		t.Fatalf("unexpected notifier calls: messages=%#v staff=%#v", notifier.messages, notifier.includeStaff)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverWorkerNotificationClaimCommitsBeforeSynchronousSend(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	notifier := &dnsFailoverWorkerNotifier{}
+	service := (&DBService{db: db, dnsFailoverSchemaOK: true}).WithDNSFailoverNotifier(notifier)
+
+	mock.ExpectQuery(`SELECT pg_try_advisory_lock\(\$1\)`).WithArgs(dnsFailoverNotificationLockKey).
+		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT id, message, notify_attempts.*FROM v2_dns_failover_event.*notified_at IS NULL.*notify_next_attempt_at <= \$1.*notify_claim_token = ''.*ORDER BY id ASC.*FOR UPDATE SKIP LOCKED`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "message", "notify_attempts"}).AddRow(int64(11), "DNS 故障转移告警", 0))
+	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_event SET notify_claim_token = \$2, notify_claimed_at = \$3, notify_attempts = notify_attempts \+ 1, notify_next_attempt_at = \$4 WHERE id = \$1 AND notified_at IS NULL`).
+		WithArgs(int64(11), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	notifier.onNotify = func() {
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("Telegram send ran before claim transaction committed: %v", err)
+		}
+		mock.ExpectBegin()
+		mock.ExpectExec(`(?s)UPDATE v2_dns_failover_event SET notified_at = \$3, notify_claim_token = '', notify_claimed_at = NULL WHERE id = \$1 AND notify_claim_token = \$2 AND notified_at IS NULL`).
+			WithArgs(int64(11), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+		mock.ExpectQuery(`SELECT pg_advisory_unlock\(\$1\)`).WithArgs(dnsFailoverNotificationLockKey).
+			WillReturnRows(sqlmock.NewRows([]string{"unlocked"}).AddRow(true))
+	}
+
+	if err := service.drainPendingDNSFailoverNotifications(context.Background(), 1); err != nil {
+		t.Fatalf("drain notification: %v", err)
+	}
+	if len(notifier.messages) != 1 {
+		t.Fatalf("notifier calls = %d", len(notifier.messages))
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -371,10 +397,10 @@ func TestDNSFailoverWorkerNilNotifierLeavesEventPending(t *testing.T) {
 	defer db.Close()
 	service := &DBService{db: db, dnsFailoverSchemaOK: true}
 
-	mock.ExpectBegin()
-	mock.ExpectQuery(`(?s)SELECT id, message.*FROM v2_dns_failover_event.*notified_at IS NULL.*FOR UPDATE SKIP LOCKED`).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "message"}).AddRow(int64(12), "DNS 告警"))
-	mock.ExpectRollback()
+	expectDNSFailoverNotificationLock(mock, true)
+	expectDNSFailoverNotificationClaim(mock, 12, "DNS 告警", 0)
+	expectDNSFailoverNotificationRetry(mock, 12)
+	expectDNSFailoverNotificationUnlock(mock)
 	if err := service.drainPendingDNSFailoverNotifications(context.Background(), 1); !errors.Is(err, ErrDNSFailoverNotifierUnavailable) {
 		t.Fatalf("error = %v, want ErrDNSFailoverNotifierUnavailable", err)
 	}
@@ -391,22 +417,18 @@ func TestDNSFailoverWorkerSuccessfulSendButDBFailureRemainsPendingForAtLeastOnce
 	defer db.Close()
 	notifier := &dnsFailoverWorkerNotifier{}
 	service := (&DBService{db: db, dnsFailoverSchemaOK: true}).WithDNSFailoverNotifier(notifier)
-	rows := func() *sqlmock.Rows {
-		return sqlmock.NewRows([]string{"id", "message"}).AddRow(int64(13), "DNS 告警")
-	}
-
-	mock.ExpectBegin()
-	mock.ExpectQuery(`(?s)SELECT id, message.*FOR UPDATE SKIP LOCKED`).WillReturnRows(rows())
-	mock.ExpectExec(`UPDATE v2_dns_failover_event SET notified_at`).WillReturnError(errors.New("database unavailable"))
-	mock.ExpectRollback()
+	expectDNSFailoverNotificationLock(mock, true)
+	expectDNSFailoverNotificationClaim(mock, 13, "DNS 告警", 0)
+	expectDNSFailoverNotificationAck(mock, 13, errors.New("database unavailable"))
+	expectDNSFailoverNotificationUnlock(mock)
 	if err := service.drainPendingDNSFailoverNotifications(context.Background(), 1); err == nil {
 		t.Fatal("expected DB update failure")
 	}
 
-	mock.ExpectBegin()
-	mock.ExpectQuery(`(?s)SELECT id, message.*FOR UPDATE SKIP LOCKED`).WillReturnRows(rows())
-	mock.ExpectExec(`UPDATE v2_dns_failover_event SET notified_at`).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
+	expectDNSFailoverNotificationLock(mock, true)
+	expectDNSFailoverNotificationClaim(mock, 13, "DNS 告警", 1)
+	expectDNSFailoverNotificationAck(mock, 13, nil)
+	expectDNSFailoverNotificationUnlock(mock)
 	if err := service.drainPendingDNSFailoverNotifications(context.Background(), 1); err != nil {
 		t.Fatalf("retry pending event: %v", err)
 	}
@@ -416,6 +438,178 @@ func TestDNSFailoverWorkerSuccessfulSendButDBFailureRemainsPendingForAtLeastOnce
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
 	}
+}
+
+func TestDNSFailoverWorkerNotificationStrictOrderBlocksLaterEvents(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	notifier := &dnsFailoverWorkerNotifier{}
+	service := (&DBService{db: db, dnsFailoverSchemaOK: true}).WithDNSFailoverNotifier(notifier)
+
+	expectDNSFailoverNotificationLock(mock, true)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT id, message, notify_attempts.*FROM v2_dns_failover_event e.*notified_at IS NULL.*NOT EXISTS \(.*FROM v2_dns_failover_event older.*older.notified_at IS NULL.*older.id < e.id.*\).*ORDER BY id ASC.*FOR UPDATE SKIP LOCKED`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
+	expectDNSFailoverNotificationUnlock(mock)
+
+	if err := service.drainPendingDNSFailoverNotifications(context.Background(), 1); err != nil {
+		t.Fatalf("drain notifications: %v", err)
+	}
+	if len(notifier.messages) != 0 {
+		t.Fatalf("later notification sent while an older event is pending: %#v", notifier.messages)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("strict-order SQL expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverWorkerNotificationClaimMustUpdateOneRowBeforeSend(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	notifier := &dnsFailoverWorkerNotifier{}
+	service := (&DBService{db: db, dnsFailoverSchemaOK: true}).WithDNSFailoverNotifier(notifier)
+
+	expectDNSFailoverNotificationLock(mock, true)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT id, message, notify_attempts.*FROM v2_dns_failover_event.*FOR UPDATE SKIP LOCKED`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "message", "notify_attempts"}).AddRow(int64(15), "DNS 告警", 0))
+	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_event SET notify_claim_token = \$2.*WHERE id = \$1 AND notified_at IS NULL`).
+		WithArgs(int64(15), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectRollback()
+	expectDNSFailoverNotificationUnlock(mock)
+
+	if err := service.drainPendingDNSFailoverNotifications(context.Background(), 1); err == nil {
+		t.Fatal("zero-row notification claim must fail")
+	}
+	if len(notifier.messages) != 0 {
+		t.Fatalf("notification sent without a durable claim: %#v", notifier.messages)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("claim SQL expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverWorkerNotificationAckMustUpdateOneRow(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	notifier := &dnsFailoverWorkerNotifier{}
+	service := (&DBService{db: db, dnsFailoverSchemaOK: true}).WithDNSFailoverNotifier(notifier)
+
+	expectDNSFailoverNotificationLock(mock, true)
+	expectDNSFailoverNotificationClaim(mock, 16, "DNS 告警", 0)
+	mock.ExpectBegin()
+	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_event SET notified_at = \$3.*WHERE id = \$1 AND notify_claim_token = \$2 AND notified_at IS NULL`).
+		WithArgs(int64(16), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectRollback()
+	expectDNSFailoverNotificationUnlock(mock)
+
+	if err := service.drainPendingDNSFailoverNotifications(context.Background(), 1); err == nil {
+		t.Fatal("zero-row notification ack must fail and leave the event pending")
+	}
+	if len(notifier.messages) != 1 {
+		t.Fatalf("synchronous sends = %d, want 1 before ack failure", len(notifier.messages))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ack SQL expectations: %v", err)
+	}
+}
+
+func expectDNSFailoverNotificationLock(mock sqlmock.Sqlmock, locked bool) {
+	mock.ExpectQuery(`SELECT pg_try_advisory_lock\(\$1\)`).WithArgs(dnsFailoverNotificationLockKey).
+		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(locked))
+}
+
+func expectDNSFailoverNotificationUnlock(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery(`SELECT pg_advisory_unlock\(\$1\)`).WithArgs(dnsFailoverNotificationLockKey).
+		WillReturnRows(sqlmock.NewRows([]string{"unlocked"}).AddRow(true))
+}
+
+func TestDNSFailoverWorkerDiscardsSessionConnectionWhenAdvisoryUnlockFails(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		unlock func(sqlmock.Sqlmock)
+	}{
+		{
+			name: "query error",
+			unlock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(`SELECT pg_advisory_unlock\(\$1\)`).WithArgs(int64(8)).
+					WillReturnError(errors.New("database unavailable"))
+			},
+		},
+		{
+			name: "lock not owned",
+			unlock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(`SELECT pg_advisory_unlock\(\$1\)`).WithArgs(int64(8)).
+					WillReturnRows(sqlmock.NewRows([]string{"unlocked"}).AddRow(false))
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("sqlmock: %v", err)
+			}
+			defer db.Close()
+			conn, err := db.Conn(context.Background())
+			if err != nil {
+				t.Fatalf("db.Conn: %v", err)
+			}
+			test.unlock(mock)
+
+			releaseDNSFailoverSessionLock(conn, 8)
+
+			if err := conn.PingContext(context.Background()); !errors.Is(err, sql.ErrConnDone) {
+				t.Fatalf("connection error after failed unlock = %v, want sql.ErrConnDone", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("sql expectations: %v", err)
+			}
+		})
+	}
+}
+
+func expectDNSFailoverNotificationClaim(mock sqlmock.Sqlmock, eventID int64, message string, attempts int) {
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT id, message, notify_attempts.*FROM v2_dns_failover_event.*notified_at IS NULL.*notify_next_attempt_at <= \$1.*notify_claim_token = ''.*ORDER BY id ASC.*FOR UPDATE SKIP LOCKED`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "message", "notify_attempts"}).AddRow(eventID, message, attempts))
+	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_event SET notify_claim_token = \$2, notify_claimed_at = \$3, notify_attempts = notify_attempts \+ 1, notify_next_attempt_at = \$4 WHERE id = \$1 AND notified_at IS NULL`).
+		WithArgs(eventID, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+}
+
+func expectDNSFailoverNotificationRetry(mock sqlmock.Sqlmock, eventID int64) {
+	mock.ExpectBegin()
+	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_event SET notify_claim_token = '', notify_claimed_at = NULL, notify_next_attempt_at = \$3 WHERE id = \$1 AND notify_claim_token = \$2 AND notified_at IS NULL`).
+		WithArgs(eventID, sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+}
+
+func expectDNSFailoverNotificationAck(mock sqlmock.Sqlmock, eventID int64, execErr error) {
+	mock.ExpectBegin()
+	expectation := mock.ExpectExec(`(?s)UPDATE v2_dns_failover_event SET notified_at = \$3, notify_claim_token = '', notify_claimed_at = NULL WHERE id = \$1 AND notify_claim_token = \$2 AND notified_at IS NULL`).
+		WithArgs(eventID, sqlmock.AnyArg(), sqlmock.AnyArg())
+	if execErr != nil {
+		expectation.WillReturnError(execErr)
+		mock.ExpectRollback()
+		return
+	}
+	expectation.WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 }
 
 func TestDNSFailoverWorkerNotificationTextIncludesOperationalContext(t *testing.T) {
@@ -511,11 +705,11 @@ func TestDNSFailoverWorkerBusyGroupDefersClaimWithoutAttemptAndContinues(t *test
 	service := &DBService{db: db, dnsFailoverSchemaOK: true}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`(?s)SELECT id, group_id, operation, target_id, source_target_id, requested_at, attempts, last_error.*FROM v2_dns_failover_eval_outbox.*next_attempt_at <= \$1.*ORDER BY next_attempt_at ASC, requested_at ASC.*LIMIT 1.*FOR UPDATE SKIP LOCKED`).
+	mock.ExpectQuery(`(?s)SELECT id, group_id, operation, target_id, source_target_id, requested_at, attempts, last_error.*FROM v2_dns_failover_eval_outbox.*next_attempt_at <= \$1.*NOT EXISTS.*v2_dns_failover_saga.*ORDER BY next_attempt_at ASC, requested_at ASC.*LIMIT 1.*FOR UPDATE SKIP LOCKED`).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "group_id", "operation", "target_id", "source_target_id", "requested_at", "attempts", "last_error"}).
 			AddRow(int64(48), int64(8), "evaluate", nil, nil, int64(707), 2, ""))
-	mock.ExpectQuery(`SELECT pg_try_advisory_xact_lock\(\$1\)`).WithArgs(int64(8)).
+	mock.ExpectQuery(`SELECT pg_try_advisory_lock\(\$1\)`).WithArgs(int64(8)).
 		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(false))
 	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_eval_outbox SET next_attempt_at = \$2, updated_at = \$3 WHERE id = \$1 AND requested_at = \$4`).
 		WithArgs(int64(48), sqlmock.AnyArg(), sqlmock.AnyArg(), int64(707)).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -577,7 +771,20 @@ func TestDNSFailoverWorkerFailoverAtoCNAMECallsDNSPodBeforeStateCommit(t *testin
 	now := time.Now().Unix()
 	weight := int64(17)
 
-	expectDNSFailoverOutboxClaim(mock, 42, 8, 701, 0)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT id, group_id, operation, target_id, source_target_id, requested_at, attempts, last_error.*FROM v2_dns_failover_eval_outbox.*NOT EXISTS.*v2_dns_failover_saga.*FOR UPDATE SKIP LOCKED`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "group_id", "operation", "target_id", "source_target_id", "requested_at", "attempts", "last_error"}).
+			AddRow(int64(42), int64(8), "evaluate", nil, nil, int64(701), 0, ""))
+	mock.ExpectQuery(`SELECT pg_try_advisory_lock\(\$1\)`).WithArgs(int64(8)).
+		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_eval_outbox SET next_attempt_at = \$2, updated_at = \$3 WHERE id = \$1 AND requested_at = \$4`).
+		WithArgs(int64(42), sqlmock.AnyArg(), sqlmock.AnyArg(), int64(701)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT id, group_id, operation, target_id, source_target_id, requested_at, attempts, last_error.*FROM v2_dns_failover_eval_outbox.*WHERE id = \$1.*FOR UPDATE`).
+		WithArgs(int64(42)).WillReturnRows(sqlmock.NewRows([]string{"id", "group_id", "operation", "target_id", "source_target_id", "requested_at", "attempts", "last_error"}).
+		AddRow(int64(42), int64(8), "evaluate", nil, nil, int64(701), 0, ""))
 	expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRow(8, 10, true, true, &weight))
 	expectDNSFailoverTargets(mock,
 		dnsFailoverWorkerTargetRow(10, 8, 1, "主站", "A", "192.0.2.1", 443, true),
@@ -593,12 +800,32 @@ func TestDNSFailoverWorkerFailoverAtoCNAMECallsDNSPodBeforeStateCommit(t *testin
 		dnsFailoverWorkerStateRow(4, 20, 6, 0, "198.51.100.20"),
 		dnsFailoverWorkerStateRow(5, 20, 6, 0, "198.51.100.20"),
 	)
-	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_group SET current_target_id = \$2, last_switch_at = \$3, last_switch_reason = \$4, last_evaluated_at = \$3, updated_at = \$3 WHERE id = \$1`).
-		WithArgs(int64(8), int64(20), sqlmock.AnyArg(), "current_target_failed").WillReturnResult(sqlmock.NewResult(0, 1))
-	expectDNSFailoverEventInsert(mock, 8, 20, "failover")
-	mock.ExpectExec(`DELETE FROM v2_dns_failover_eval_outbox WHERE id = \$1 AND requested_at = \$2`).
-		WithArgs(int64(42), int64(701)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_saga.*phase.*original_operation.*desired_mutation.*rollback_mutation.*VALUES.*'prepared'`).
+		WithArgs(int64(8), "evaluate", nil, int64(701), "current_target_failed", int64(20), int64(10),
+			dnsFailoverSQLStringContainsAll{`"domain":"example.com"`, `"domain_id":101`, `"record_id":202`, `"record_line_id":"10=0"`, `"record_type":"CNAME"`, `"value":"backup.example.net."`, `"weight":17`},
+			dnsFailoverSQLStringContainsAll{`"record_type":"A"`, `"value":"192.0.2.1"`}, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
+	dnsAPI.onModify = func(dnspod.RecordMutationRequest) {
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("DNSPod called before prepared saga commit: %v", err)
+		}
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT active_dns_incident_type FROM v2_dns_failover_group WHERE id = \$1 FOR UPDATE`).WithArgs(int64(8)).
+			WillReturnRows(sqlmock.NewRows([]string{"active_dns_incident_type"}).AddRow("dnspod_error"))
+		mock.ExpectExec(`UPDATE v2_dns_failover_group SET active_dns_incident_type = '', active_dns_incident_since = NULL WHERE id = \$1`).
+			WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(`(?s)UPDATE v2_dns_failover_group SET current_target_id = \$2, last_switch_at = \$3, last_switch_reason = \$4, last_evaluated_at = \$3, updated_at = \$3 WHERE id = \$1`).
+			WithArgs(int64(8), int64(20), sqlmock.AnyArg(), "current_target_failed").WillReturnResult(sqlmock.NewResult(0, 1))
+		expectDNSFailoverEventInsert(mock, 8, 20, "failover")
+		mock.ExpectExec(`DELETE FROM v2_dns_failover_eval_outbox WHERE id = \$1 AND requested_at = \$2`).
+			WithArgs(int64(42), int64(701)).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(`DELETE FROM v2_dns_failover_saga WHERE group_id = \$1 AND phase = 'prepared'`).
+			WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+		mock.ExpectQuery(`SELECT pg_advisory_unlock\(\$1\)`).WithArgs(int64(8)).
+			WillReturnRows(sqlmock.NewRows([]string{"unlocked"}).AddRow(true))
+	}
 
 	if err := service.drainDNSFailoverEvaluationOutbox(context.Background(), 1); err != nil {
 		t.Fatalf("drain failover: %v", err)
@@ -611,6 +838,255 @@ func TestDNSFailoverWorkerFailoverAtoCNAMECallsDNSPodBeforeStateCommit(t *testin
 		mutation.RecordLineID != "10=0" || mutation.RecordLine != "默认" || mutation.RecordType != "CNAME" || mutation.Value != "backup.example.net." ||
 		mutation.TTL != 601 || mutation.MX != 9 || mutation.Weight == nil || *mutation.Weight != weight {
 		t.Fatalf("incomplete DNSPod mutation: %#v", mutation)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverWorkerPreparedSagaRecoveryUsesFrozenRollbackMutation(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	dnsAPI := &dnsFailoverWorkerDNSPod{results: []dnspod.RecordMutationResult{{RecordID: 202, RequestID: "rollback-frozen"}}}
+	service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI}
+	desired := `{"domain":"old.example.com","domain_id":101,"record_id":202,"subdomain":"www","record_type":"CNAME","record_line":"默认","record_line_id":"10=0","value":"new.example.net.","ttl":601,"mx":9,"weight":17}`
+	rollback := `{"domain":"old.example.com","domain_id":101,"record_id":202,"subdomain":"www","record_type":"A","record_line":"默认","record_line_id":"10=0","value":"192.0.2.1","ttl":601,"mx":9,"weight":17}`
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT group_id, phase, original_operation, original_target_id, original_requested_at, reason, desired_target_id, rollback_target_id, desired_mutation, rollback_mutation, attempts, next_attempt_at, last_error, created_at.*FROM v2_dns_failover_saga.*FOR UPDATE SKIP LOCKED`).
+		WithArgs(sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{
+		"group_id", "phase", "original_operation", "original_target_id", "original_requested_at", "reason",
+		"desired_target_id", "rollback_target_id", "desired_mutation", "rollback_mutation", "attempts", "next_attempt_at", "last_error", "created_at",
+	}).AddRow(int64(8), "prepared", "evaluate", nil, int64(701), "current_target_failed", int64(20), int64(10), desired, rollback, 1, int64(0), "finalize unavailable", int64(700)))
+	mock.ExpectQuery(`SELECT pg_try_advisory_lock\(\$1\)`).WithArgs(int64(8)).
+		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_saga SET next_attempt_at = \$2, updated_at = \$3 WHERE group_id = \$1 AND phase = 'prepared'`).
+		WithArgs(int64(8), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*VALUES \(\$1, 'evaluate', NULL, NULL, \$2.*ON CONFLICT`).
+		WithArgs(int64(8), int64(701), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(`SELECT active_dns_incident_type FROM v2_dns_failover_group WHERE id = \$1 FOR UPDATE`).WithArgs(int64(8)).
+		WillReturnRows(sqlmock.NewRows([]string{"active_dns_incident_type"}).AddRow("dns_state_diverged"))
+	mock.ExpectExec(`UPDATE v2_dns_failover_group SET active_dns_incident_type = '', active_dns_incident_since = NULL WHERE id = \$1`).
+		WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
+	expectDNSFailoverEventInsert(mock, 8, 10, "dns_state_reconciled")
+	mock.ExpectExec(`DELETE FROM v2_dns_failover_saga WHERE group_id = \$1 AND phase = 'prepared'`).
+		WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectQuery(`SELECT pg_advisory_unlock\(\$1\)`).WithArgs(int64(8)).
+		WillReturnRows(sqlmock.NewRows([]string{"unlocked"}).AddRow(true))
+
+	processed, err := service.processNextDNSFailoverSaga(context.Background())
+	if err != nil {
+		t.Fatalf("recover prepared saga: %v", err)
+	}
+	if !processed {
+		t.Fatal("prepared saga was not processed")
+	}
+	if len(dnsAPI.mutations) != 1 {
+		t.Fatalf("DNSPod calls = %d, want frozen rollback only", len(dnsAPI.mutations))
+	}
+	mutation := dnsAPI.mutations[0]
+	if mutation.Domain != "old.example.com" || mutation.DomainID != 101 || mutation.RecordID != 202 || mutation.RecordType != "A" || mutation.Value != "192.0.2.1" || mutation.RecordLineID != "10=0" {
+		t.Fatalf("recovery rebuilt mutation from mutable rule state: %#v", mutation)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverWorkerPrepareFailureNeverCallsDNSPod(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	dnsAPI := &dnsFailoverWorkerDNSPod{}
+	service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI}
+	now := time.Now().Unix()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT id, group_id, operation, target_id, source_target_id, requested_at, attempts, last_error.*NOT EXISTS.*v2_dns_failover_saga.*FOR UPDATE SKIP LOCKED`).
+		WithArgs(sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"id", "group_id", "operation", "target_id", "source_target_id", "requested_at", "attempts", "last_error"}).
+		AddRow(int64(69), int64(8), "evaluate", nil, nil, int64(914), 0, ""))
+	mock.ExpectQuery(`SELECT pg_try_advisory_lock\(\$1\)`).WithArgs(int64(8)).
+		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_eval_outbox SET next_attempt_at = \$2, updated_at = \$3`).
+		WithArgs(int64(69), sqlmock.AnyArg(), sqlmock.AnyArg(), int64(914)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT id, group_id, operation, target_id, source_target_id, requested_at, attempts, last_error.*WHERE id = \$1.*FOR UPDATE`).
+		WithArgs(int64(69)).WillReturnRows(sqlmock.NewRows([]string{"id", "group_id", "operation", "target_id", "source_target_id", "requested_at", "attempts", "last_error"}).
+		AddRow(int64(69), int64(8), "evaluate", nil, nil, int64(914), 0, ""))
+	expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRow(8, 10, true, true, nil))
+	expectDNSFailoverTargets(mock,
+		dnsFailoverWorkerTargetRow(10, 8, 1, "主站", "A", "192.0.2.1", 443, true),
+		dnsFailoverWorkerTargetRow(20, 8, 2, "备用", "CNAME", "backup.example.net.", 8443, true),
+	)
+	expectDNSFailoverProbes(mock, dnsFailoverWorkerProbeRow(4, now, 3))
+	expectDNSFailoverStates(mock,
+		dnsFailoverWorkerStateRow(4, 10, 0, 5, "192.0.2.1"),
+		dnsFailoverWorkerStateRow(4, 20, 8, 0, "198.51.100.20"),
+	)
+	mock.ExpectExec(`INSERT INTO v2_dns_failover_saga`).WillReturnError(errors.New("database unavailable before prepare commit"))
+	mock.ExpectRollback()
+	mock.ExpectQuery(`SELECT pg_advisory_unlock\(\$1\)`).WithArgs(int64(8)).
+		WillReturnRows(sqlmock.NewRows([]string{"unlocked"}).AddRow(true))
+
+	err = service.drainDNSFailoverEvaluationOutbox(context.Background(), 1)
+	if err == nil || !strings.Contains(err.Error(), "database unavailable before prepare commit") {
+		t.Fatalf("prepare error = %v", err)
+	}
+	if len(dnsAPI.mutations) != 0 {
+		t.Fatalf("DNSPod called without durable prepared saga: %#v", dnsAPI.mutations)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverWorkerFinalizeFailureRollsBackThroughDurablePreparedSaga(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("db.Conn: %v", err)
+	}
+	defer conn.Close()
+	dnsAPI := &dnsFailoverWorkerDNSPod{results: []dnspod.RecordMutationResult{{RecordID: 202, RequestID: "desired"}, {RecordID: 202, RequestID: "rollback"}}}
+	service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI}
+	weight := int64(17)
+	rule := DNSFailoverRuleRecord{ID: 8, Name: "官网", Domain: "example.com", DomainID: 101, RecordID: 202, Subdomain: "www", RecordLineID: "10=0", RecordLineName: "默认", TTL: 601, MX: 9, Weight: &weight}
+	oldTarget := DNSFailoverTargetRecord{ID: 10, Name: "主站", DNSType: "A", DNSValue: "192.0.2.1", CheckPort: 443}
+	newTarget := DNSFailoverTargetRecord{ID: 20, Name: "备用", DNSType: "CNAME", DNSValue: "backup.example.net.", CheckPort: 8443}
+	rule.Targets = []DNSFailoverTargetRecord{oldTarget, newTarget}
+	snapshot := dnsFailoverWorkerSnapshot{Rule: rule, Targets: rule.Targets}
+	saga := dnsFailoverSagaRecord{
+		GroupID: 8, Phase: "prepared", OriginalOperation: "evaluate", OriginalRequestedAt: 701,
+		Reason: "current_target_failed", DesiredTargetID: 20, RollbackTargetID: 10,
+		DesiredMutation:  freezeDNSFailoverMutation(buildDNSFailoverMutation(rule, newTarget)),
+		RollbackMutation: freezeDNSFailoverMutation(buildDNSFailoverMutation(rule, oldTarget)),
+	}
+	outbox := dnsFailoverOutboxRow{ID: 42, GroupID: 8, Operation: "evaluate", RequestedAt: 701}
+
+	mock.ExpectBegin()
+	expectDNSFailoverNoActiveDNSIncident(mock, 8)
+	mock.ExpectExec(`UPDATE v2_dns_failover_group`).WillReturnResult(sqlmock.NewResult(0, 1))
+	expectDNSFailoverEventInsert(mock, 8, 20, "failover")
+	mock.ExpectExec(`DELETE FROM v2_dns_failover_eval_outbox`).WithArgs(int64(42), int64(701)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_dns_failover_saga`).WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit().WillReturnError(errors.New("finalize commit unavailable"))
+	mock.ExpectQuery(`SELECT EXISTS .*v2_dns_failover_saga`).WithArgs(int64(8)).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectBegin()
+	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*'evaluate'`).
+		WithArgs(int64(8), int64(701), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(`SELECT active_dns_incident_type FROM v2_dns_failover_group`).WithArgs(int64(8)).
+		WillReturnRows(sqlmock.NewRows([]string{"active_dns_incident_type"}).AddRow(""))
+	mock.ExpectExec(`UPDATE v2_dns_failover_group SET active_dns_incident_type = \$2, active_dns_incident_since = \$3 WHERE id = \$1`).
+		WithArgs(int64(8), "dnspod_error", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	expectDNSFailoverEventInsert(mock, 8, 20, "dnspod_error")
+	mock.ExpectExec(`DELETE FROM v2_dns_failover_saga`).WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	err = service.executePreparedDNSFailoverSaga(context.Background(), conn, saga, outbox, snapshot, oldTarget, newTarget, "failover", time.Now().Unix())
+	if err == nil || !strings.Contains(err.Error(), "finalize commit unavailable") {
+		t.Fatalf("execute error = %v", err)
+	}
+	if len(dnsAPI.mutations) != 2 || dnsAPI.mutations[0].RecordType != "CNAME" || dnsAPI.mutations[1].RecordType != "A" {
+		t.Fatalf("mutations = %#v, want desired then frozen rollback", dnsAPI.mutations)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverWorkerDatabaseOutageAfterDNSLeavesPreparedSagaForRestart(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("db.Conn: %v", err)
+	}
+	defer conn.Close()
+	dnsAPI := &dnsFailoverWorkerDNSPod{results: []dnspod.RecordMutationResult{{RecordID: 202, RequestID: "desired"}}}
+	service := &DBService{db: db, dnsFailoverAPI: dnsAPI}
+	rule := DNSFailoverRuleRecord{ID: 8, Domain: "example.com", DomainID: 101, RecordID: 202, Subdomain: "www", RecordLineID: "10=0", RecordLineName: "默认", TTL: 600}
+	oldTarget := DNSFailoverTargetRecord{ID: 10, DNSType: "A", DNSValue: "192.0.2.1"}
+	newTarget := DNSFailoverTargetRecord{ID: 20, DNSType: "CNAME", DNSValue: "backup.example.net."}
+	saga := dnsFailoverSagaRecord{GroupID: 8, Phase: "prepared", OriginalOperation: "evaluate", OriginalRequestedAt: 701, Reason: "current_target_failed", DesiredTargetID: 20, RollbackTargetID: 10, DesiredMutation: freezeDNSFailoverMutation(buildDNSFailoverMutation(rule, newTarget)), RollbackMutation: freezeDNSFailoverMutation(buildDNSFailoverMutation(rule, oldTarget))}
+
+	mock.ExpectBegin().WillReturnError(errors.New("database remains unavailable"))
+	mock.ExpectQuery(`SELECT EXISTS .*v2_dns_failover_saga`).WithArgs(int64(8)).WillReturnError(errors.New("database remains unavailable"))
+
+	err = service.executePreparedDNSFailoverSaga(context.Background(), conn, saga, dnsFailoverOutboxRow{ID: 42, GroupID: 8, RequestedAt: 701}, dnsFailoverWorkerSnapshot{Rule: rule}, oldTarget, newTarget, "failover", time.Now().Unix())
+	if err == nil || !strings.Contains(err.Error(), "database remains unavailable") {
+		t.Fatalf("execute error = %v", err)
+	}
+	if len(dnsAPI.mutations) != 1 || dnsAPI.mutations[0].RecordType != "CNAME" {
+		t.Fatalf("database outage must leave prepared saga instead of unsafe rollback: %#v", dnsAPI.mutations)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverWorkerDesiredTimeoutRecoversWithFrozenRollback(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("db.Conn: %v", err)
+	}
+	defer conn.Close()
+	call := 0
+	dnsAPI := &dnsFailoverWorkerDNSPod{}
+	dnsAPI.modify = func(ctx context.Context, request dnspod.RecordMutationRequest) (dnspod.RecordMutationResult, error) {
+		call++
+		if call == 1 {
+			<-ctx.Done()
+			return dnspod.RecordMutationResult{}, ctx.Err()
+		}
+		return dnspod.RecordMutationResult{RecordID: request.RecordID, RequestID: "timeout-rollback"}, nil
+	}
+	service := &DBService{db: db, dnsFailoverAPI: dnsAPI}
+	rule := DNSFailoverRuleRecord{ID: 8, Domain: "example.com", DomainID: 101, RecordID: 202, Subdomain: "www", RecordLineID: "10=0", RecordLineName: "默认", TTL: 600}
+	oldTarget := DNSFailoverTargetRecord{ID: 10, DNSType: "A", DNSValue: "192.0.2.1"}
+	newTarget := DNSFailoverTargetRecord{ID: 20, DNSType: "CNAME", DNSValue: "backup.example.net."}
+	saga := dnsFailoverSagaRecord{GroupID: 8, Phase: "prepared", OriginalOperation: "evaluate", OriginalRequestedAt: 701, Reason: "current_target_failed", DesiredTargetID: 20, RollbackTargetID: 10, DesiredMutation: freezeDNSFailoverMutation(buildDNSFailoverMutation(rule, newTarget)), RollbackMutation: freezeDNSFailoverMutation(buildDNSFailoverMutation(rule, oldTarget))}
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*'evaluate'`).
+		WithArgs(int64(8), int64(701), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(`SELECT active_dns_incident_type FROM v2_dns_failover_group`).WithArgs(int64(8)).
+		WillReturnRows(sqlmock.NewRows([]string{"active_dns_incident_type"}).AddRow(""))
+	mock.ExpectExec(`UPDATE v2_dns_failover_group SET active_dns_incident_type = \$2, active_dns_incident_since = \$3 WHERE id = \$1`).
+		WithArgs(int64(8), "dnspod_error", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	expectDNSFailoverEventInsert(mock, 8, 20, "dnspod_error")
+	mock.ExpectExec(`DELETE FROM v2_dns_failover_saga`).WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	err = service.executePreparedDNSFailoverSaga(ctx, conn, saga, dnsFailoverOutboxRow{ID: 42, GroupID: 8, RequestedAt: 701}, dnsFailoverWorkerSnapshot{Rule: rule}, oldTarget, newTarget, "failover", time.Now().Unix())
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("timeout error = %v", err)
+	}
+	if len(dnsAPI.mutations) != 2 || dnsAPI.mutations[1].RecordType != "A" || dnsAPI.mutations[1].Value != "192.0.2.1" {
+		t.Fatalf("timeout recovery mutations = %#v", dnsAPI.mutations)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -641,11 +1117,14 @@ func TestDNSFailoverWorkerFailbackCNAMEtoA(t *testing.T) {
 		dnsFailoverWorkerStateRow(4, 10, 8, 0, "192.0.2.1"),
 		dnsFailoverWorkerStateRow(4, 20, 1, 0, "198.51.100.20"),
 	)
+	expectDNSFailoverSagaPrepare(mock)
+	expectDNSFailoverNoActiveDNSIncident(mock, 8)
 	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_group SET current_target_id = \$2, last_switch_at = \$3, last_switch_reason = \$4, last_evaluated_at = \$3, updated_at = \$3 WHERE id = \$1`).
 		WithArgs(int64(8), int64(10), sqlmock.AnyArg(), "higher_priority_target_recovered").WillReturnResult(sqlmock.NewResult(0, 1))
 	expectDNSFailoverEventInsertMessageContains(mock, 8, 10, "failback", "探针：4（单探针降级）")
 	mock.ExpectExec(`DELETE FROM v2_dns_failover_eval_outbox WHERE id = \$1 AND requested_at = \$2`).
 		WithArgs(int64(43), int64(702)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_dns_failover_saga`).WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	if err := service.drainDNSFailoverEvaluationOutbox(context.Background(), 1); err != nil {
@@ -680,18 +1159,22 @@ func TestDNSFailoverWorkerDNSPodErrorKeepsCurrentAndSchedulesRetry(t *testing.T)
 		dnsFailoverWorkerStateRow(4, 10, 0, 5, "192.0.2.1"),
 		dnsFailoverWorkerStateRow(4, 20, 8, 0, "198.51.100.20"),
 	)
-	expectDNSFailoverActiveIncidentSet(mock, 8, "dnspod_error")
+	expectDNSFailoverSagaPrepare(mock)
+	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*'evaluate'`).
+		WithArgs(int64(8), int64(703), sqlmock.AnyArg(), "DNSPod timeout").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(`SELECT active_dns_incident_type FROM v2_dns_failover_group`).WithArgs(int64(8)).
+		WillReturnRows(sqlmock.NewRows([]string{"active_dns_incident_type"}).AddRow(""))
+	mock.ExpectExec(`UPDATE v2_dns_failover_group SET active_dns_incident_type = \$2, active_dns_incident_since = \$3 WHERE id = \$1`).
+		WithArgs(int64(8), "dnspod_error", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	expectDNSFailoverEventInsert(mock, 8, 20, "dnspod_error")
-	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_eval_outbox SET attempts = \$2, next_attempt_at = \$3, last_error = \$4, updated_at = \$5 WHERE id = \$1 AND requested_at = \$6`).
-		WithArgs(int64(44), 3, sqlmock.AnyArg(), "DNSPod timeout", sqlmock.AnyArg(), int64(703)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_dns_failover_saga`).WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	if err := service.drainDNSFailoverEvaluationOutbox(context.Background(), 1); err != nil {
-		t.Fatalf("durably handled DNSPod error: %v", err)
+	if err := service.drainDNSFailoverEvaluationOutbox(context.Background(), 1); err == nil || !strings.Contains(err.Error(), "DNSPod timeout") {
+		t.Fatalf("DNSPod error = %v", err)
 	}
-	if len(dnsAPI.mutations) != 1 {
-		t.Fatalf("DNSPod calls = %d, want 1", len(dnsAPI.mutations))
+	if len(dnsAPI.mutations) != 2 || dnsAPI.mutations[1].RecordType != "A" {
+		t.Fatalf("DNSPod calls = %#v, want desired then rollback", dnsAPI.mutations)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -721,11 +1204,14 @@ func TestDNSFailoverWorkerManualOperationRetriesRequestedTargetIgnoringHealth(t 
 		dnsFailoverWorkerStateRow(4, 20, 0, 5, "198.51.100.20"),
 		dnsFailoverWorkerStateRow(4, 30, 8, 0, "2001:db8::30"),
 	)
-	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_group SET current_target_id = \$2, last_switch_at = \$3, last_switch_reason = 'manual', last_evaluated_at = \$3, updated_at = \$3 WHERE id = \$1`).
-		WithArgs(int64(8), int64(20), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	expectDNSFailoverSagaPrepare(mock)
+	expectDNSFailoverNoActiveDNSIncident(mock, 8)
+	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_group SET current_target_id = \$2, last_switch_at = \$3, last_switch_reason = \$4, last_evaluated_at = \$3, updated_at = \$3 WHERE id = \$1`).
+		WithArgs(int64(8), int64(20), sqlmock.AnyArg(), "manual").WillReturnResult(sqlmock.NewResult(0, 1))
 	expectDNSFailoverEventInsert(mock, 8, 20, "manual_switch")
 	mock.ExpectExec(`DELETE FROM v2_dns_failover_eval_outbox WHERE id = \$1 AND requested_at = \$2`).
 		WithArgs(int64(60), int64(900)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_dns_failover_saga`).WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	if err := service.drainDNSFailoverEvaluationOutbox(context.Background(), 1); err != nil {
@@ -757,11 +1243,14 @@ func TestDNSFailoverWorkerManualRetryStillRunsWhenAutomationIsDisabled(t *testin
 	)
 	expectDNSFailoverProbes(mock, dnsFailoverWorkerProbeRow(4, now, 3))
 	expectDNSFailoverStates(mock, dnsFailoverWorkerStateRow(4, 20, 0, 5, "198.51.100.20"))
-	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_group SET current_target_id = \$2, last_switch_at = \$3, last_switch_reason = 'manual', last_evaluated_at = \$3, updated_at = \$3 WHERE id = \$1`).
-		WithArgs(int64(8), int64(20), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	expectDNSFailoverSagaPrepare(mock)
+	expectDNSFailoverNoActiveDNSIncident(mock, 8)
+	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_group SET current_target_id = \$2, last_switch_at = \$3, last_switch_reason = \$4, last_evaluated_at = \$3, updated_at = \$3 WHERE id = \$1`).
+		WithArgs(int64(8), int64(20), sqlmock.AnyArg(), "manual").WillReturnResult(sqlmock.NewResult(0, 1))
 	expectDNSFailoverEventInsert(mock, 8, 20, "manual_switch")
 	mock.ExpectExec(`DELETE FROM v2_dns_failover_eval_outbox WHERE id = \$1 AND requested_at = \$2`).
 		WithArgs(int64(65), int64(909)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_dns_failover_saga`).WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	if err := service.drainDNSFailoverEvaluationOutbox(context.Background(), 1); err != nil {
@@ -826,17 +1315,22 @@ func TestDNSFailoverWorkerReconcileOperationForcesDNSWithoutHealthEvaluation(t *
 	now := time.Now().Unix()
 
 	expectDNSFailoverOutboxClaimOperation(mock, 61, 8, "reconcile", int64(10), int64(20), 901, 3)
-	expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRowWithState(8, 10, true, true, nil, nil, "dns_state_diverged", now-60))
+	expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRowWithState(8, 10, true, true, nil, nil, "all_probes_offline", now-60))
 	expectDNSFailoverTargets(mock,
 		dnsFailoverWorkerTargetRow(10, 8, 1, "数据库目标", "A", "192.0.2.1", 443, true),
 		dnsFailoverWorkerTargetRow(20, 8, 2, "外部实际目标", "CNAME", "external.example.net.", 8443, true),
 	)
 	expectDNSFailoverProbes(mock, dnsFailoverWorkerProbeRow(4, now, 3))
 	expectDNSFailoverStates(mock, dnsFailoverWorkerStateRow(4, 10, 8, 0, "192.0.2.1"))
-	expectDNSFailoverActiveIncidentClearDivergence(mock, 8)
+	expectDNSFailoverSagaPrepare(mock)
+	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*'evaluate'`).
+		WithArgs(int64(8), int64(901), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(`SELECT active_dns_incident_type FROM v2_dns_failover_group`).WithArgs(int64(8)).
+		WillReturnRows(sqlmock.NewRows([]string{"active_dns_incident_type"}).AddRow("dns_state_diverged"))
+	mock.ExpectExec(`UPDATE v2_dns_failover_group SET active_dns_incident_type = '', active_dns_incident_since = NULL WHERE id = \$1`).
+		WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
 	expectDNSFailoverEventInsert(mock, 8, 10, "dns_state_reconciled")
-	mock.ExpectExec(`DELETE FROM v2_dns_failover_eval_outbox WHERE id = \$1 AND requested_at = \$2`).
-		WithArgs(int64(61), int64(901)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_dns_failover_saga`).WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	if err := service.drainDNSFailoverEvaluationOutbox(context.Background(), 1); err != nil {
@@ -861,19 +1355,25 @@ func TestDNSFailoverWorkerReconcileFailureRetainsForcedOperationWithBackoff(t *t
 	now := time.Now().Unix()
 
 	expectDNSFailoverOutboxClaimOperation(mock, 63, 8, "reconcile", int64(10), int64(20), 907, 2)
-	expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRowWithState(8, 10, true, true, nil, nil, "dns_state_diverged", now-60))
+	expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRowWithState(8, 10, true, true, nil, nil, "all_probes_offline", now-60))
 	expectDNSFailoverTargets(mock,
 		dnsFailoverWorkerTargetRow(10, 8, 1, "数据库目标", "A", "192.0.2.1", 443, true),
 		dnsFailoverWorkerTargetRow(20, 8, 2, "外部实际目标", "CNAME", "external.example.net.", 8443, true),
 	)
 	expectDNSFailoverProbes(mock, dnsFailoverWorkerProbeRow(4, now, 3))
 	expectDNSFailoverStates(mock, dnsFailoverWorkerStateRow(4, 10, 8, 0, "192.0.2.1"))
-	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_eval_outbox SET attempts = \$2, next_attempt_at = \$3, last_error = \$4, updated_at = \$5 WHERE id = \$1 AND requested_at = \$6`).
-		WithArgs(int64(63), 3, sqlmock.AnyArg(), "reconcile failed", sqlmock.AnyArg(), int64(907)).WillReturnResult(sqlmock.NewResult(0, 1))
+	expectDNSFailoverSagaPrepare(mock)
+	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_saga SET attempts = attempts \+ 1, next_attempt_at = \$2, last_error = \$3, updated_at = \$4`).
+		WithArgs(int64(8), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT active_dns_incident_type FROM v2_dns_failover_group`).WithArgs(int64(8)).
+		WillReturnRows(sqlmock.NewRows([]string{"active_dns_incident_type"}).AddRow(""))
+	mock.ExpectExec(`UPDATE v2_dns_failover_group SET active_dns_incident_type = \$2, active_dns_incident_since = \$3 WHERE id = \$1`).
+		WithArgs(int64(8), "dns_state_diverged", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	expectDNSFailoverEventInsert(mock, 8, 10, "dns_state_diverged")
 	mock.ExpectCommit()
 
-	if err := service.drainDNSFailoverEvaluationOutbox(context.Background(), 1); err != nil {
-		t.Fatalf("reconcile retry: %v", err)
+	if err := service.drainDNSFailoverEvaluationOutbox(context.Background(), 1); err == nil || !strings.Contains(err.Error(), "reconcile failed") {
+		t.Fatalf("reconcile retry error: %v", err)
 	}
 	if len(dnsAPI.mutations) != 1 || dnsAPI.mutations[0].RecordType != "A" {
 		t.Fatalf("reconcile retry mutation = %#v", dnsAPI.mutations)
@@ -894,17 +1394,22 @@ func TestDNSFailoverWorkerReconcileStillRunsWhenAutomationIsDisabled(t *testing.
 	now := time.Now().Unix()
 
 	expectDNSFailoverOutboxClaimOperation(mock, 64, 8, "reconcile", int64(10), int64(20), 908, 2)
-	expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRowWithState(8, 10, false, true, nil, nil, "dns_state_diverged", now-60))
+	expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRowWithState(8, 10, false, true, nil, nil, "all_probes_offline", now-60))
 	expectDNSFailoverTargets(mock,
 		dnsFailoverWorkerTargetRow(10, 8, 1, "数据库目标", "A", "192.0.2.1", 443, true),
 		dnsFailoverWorkerTargetRow(20, 8, 2, "外部实际目标", "CNAME", "external.example.net.", 8443, true),
 	)
 	expectDNSFailoverProbes(mock, dnsFailoverWorkerProbeRow(4, now, 3))
 	expectDNSFailoverStates(mock, dnsFailoverWorkerStateRow(4, 10, 8, 0, "192.0.2.1"))
-	expectDNSFailoverActiveIncidentClearDivergence(mock, 8)
+	expectDNSFailoverSagaPrepare(mock)
+	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*'evaluate'`).
+		WithArgs(int64(8), int64(908), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(`SELECT active_dns_incident_type FROM v2_dns_failover_group`).WithArgs(int64(8)).
+		WillReturnRows(sqlmock.NewRows([]string{"active_dns_incident_type"}).AddRow("dns_state_diverged"))
+	mock.ExpectExec(`UPDATE v2_dns_failover_group SET active_dns_incident_type = '', active_dns_incident_since = NULL WHERE id = \$1`).
+		WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
 	expectDNSFailoverEventInsert(mock, 8, 10, "dns_state_reconciled")
-	mock.ExpectExec(`DELETE FROM v2_dns_failover_eval_outbox WHERE id = \$1 AND requested_at = \$2`).
-		WithArgs(int64(64), int64(908)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_dns_failover_saga`).WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	if err := service.drainDNSFailoverEvaluationOutbox(context.Background(), 1); err != nil {
@@ -929,7 +1434,7 @@ func TestDNSFailoverWorkerInvalidReconcileTargetStaysPendingInsteadOfBeingAcked(
 	now := time.Now().Unix()
 
 	expectDNSFailoverOutboxClaimOperation(mock, 68, 8, "reconcile", int64(10), int64(20), 913, 2)
-	expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRowWithState(8, 10, true, true, nil, nil, "dns_state_diverged", now-60))
+	expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRowWithState(8, 10, true, true, nil, nil, "all_probes_offline", now-60))
 	expectDNSFailoverTargets(mock,
 		dnsFailoverWorkerTargetRow(10, 8, 1, "已禁用数据库目标", "A", "192.0.2.1", 443, false),
 		dnsFailoverWorkerTargetRow(20, 8, 2, "外部实际目标", "CNAME", "external.example.net.", 8443, true),
@@ -954,238 +1459,6 @@ func TestDNSFailoverWorkerInvalidReconcileTargetStaysPendingInsteadOfBeingAcked(
 	}
 }
 
-func TestDNSFailoverWorkerCommitFailureCompensatesDNSPodAndPersistsRecovery(t *testing.T) {
-	for _, test := range []struct {
-		name             string
-		compensationErr  error
-		wantErrorSnippet string
-	}{
-		{name: "compensation succeeds", wantErrorSnippet: "commit failed"},
-		{name: "compensation fails", compensationErr: errors.New("rollback DNS failed"), wantErrorSnippet: "rollback DNS failed"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			db, mock, err := sqlmock.New()
-			if err != nil {
-				t.Fatalf("sqlmock: %v", err)
-			}
-			defer db.Close()
-			dnsAPI := &dnsFailoverWorkerDNSPod{
-				results: []dnspod.RecordMutationResult{{RecordID: 202, RequestID: "req-switch"}, {RecordID: 202, RequestID: "req-rollback"}, {RecordID: 202, RequestID: "req-reconcile"}},
-				errors:  []error{nil, test.compensationErr, nil},
-			}
-			service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI}
-			now := time.Now().Unix()
-
-			expectDNSFailoverOutboxClaim(mock, 45, 8, 704, 0)
-			expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRow(8, 10, true, true, nil))
-			expectDNSFailoverTargets(mock,
-				dnsFailoverWorkerTargetRow(10, 8, 1, "主站", "A", "192.0.2.1", 443, true),
-				dnsFailoverWorkerTargetRow(20, 8, 2, "备用", "CNAME", "backup.example.net.", 8443, true),
-			)
-			expectDNSFailoverProbes(mock, dnsFailoverWorkerProbeRow(4, now, 3))
-			expectDNSFailoverStates(mock,
-				dnsFailoverWorkerStateRow(4, 10, 0, 5, "192.0.2.1"),
-				dnsFailoverWorkerStateRow(4, 20, 8, 0, "198.51.100.20"),
-			)
-			mock.ExpectExec(`(?s)UPDATE v2_dns_failover_group SET current_target_id = \$2`).
-				WithArgs(int64(8), int64(20), sqlmock.AnyArg(), "current_target_failed").WillReturnResult(sqlmock.NewResult(0, 1))
-			expectDNSFailoverEventInsert(mock, 8, 20, "failover")
-			mock.ExpectExec(`DELETE FROM v2_dns_failover_eval_outbox WHERE id = \$1 AND requested_at = \$2`).
-				WithArgs(int64(45), int64(704)).WillReturnResult(sqlmock.NewResult(0, 1))
-			mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
-
-			if test.compensationErr != nil {
-				mock.ExpectBegin()
-				mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*operation, target_id, source_target_id.*VALUES \(\$1, 'reconcile', \$2, \$3.*ON CONFLICT \(group_id\) DO UPDATE SET.*operation = 'reconcile'.*target_id = EXCLUDED.target_id.*source_target_id = EXCLUDED.source_target_id`).
-					WithArgs(int64(8), int64(10), int64(20), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
-				expectDNSFailoverGroupAdvisoryLock(mock, 8)
-				mock.ExpectCommit()
-				mock.ExpectBegin()
-				expectDNSFailoverGroupAdvisoryLock(mock, 8)
-				expectDNSFailoverActiveIncidentSet(mock, 8, "dns_state_diverged")
-				expectDNSFailoverEventInsertDetailsContain(mock, 8, 20, "dns_state_diverged", `"desired_target"`, `"actual_target"`, `"rollback_error"`)
-				mock.ExpectCommit()
-			} else {
-				mock.ExpectBegin()
-				mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*operation, target_id, source_target_id.*VALUES \(\$1, 'evaluate', NULL, NULL.*ON CONFLICT \(group_id\) DO UPDATE SET.*operation = 'evaluate'.*target_id = NULL.*source_target_id = NULL`).
-					WithArgs(int64(8), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
-				expectDNSFailoverGroupAdvisoryLock(mock, 8)
-				expectDNSFailoverActiveIncidentSet(mock, 8, "dnspod_error")
-				expectDNSFailoverEventInsert(mock, 8, 20, "dnspod_error")
-				mock.ExpectCommit()
-			}
-
-			err = service.drainDNSFailoverEvaluationOutbox(context.Background(), 1)
-			if err == nil || !strings.Contains(err.Error(), test.wantErrorSnippet) {
-				t.Fatalf("error = %v, want snippet %q", err, test.wantErrorSnippet)
-			}
-			if len(dnsAPI.mutations) != 2 {
-				t.Fatalf("DNSPod calls = %d, want switch + compensation", len(dnsAPI.mutations))
-			}
-			rollback := dnsAPI.mutations[1]
-			if rollback.RecordType != "A" || rollback.Value != "192.0.2.1" || rollback.RecordID != 202 {
-				t.Fatalf("invalid compensation mutation: %#v", rollback)
-			}
-			if test.compensationErr != nil {
-				expectDNSFailoverOutboxClaimOperation(mock, 45, 8, "reconcile", int64(10), int64(20), 905, 1)
-				expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRowWithState(8, 10, true, true, nil, nil, "dns_state_diverged", int64(904)))
-				expectDNSFailoverTargets(mock,
-					dnsFailoverWorkerTargetRow(10, 8, 1, "主站", "A", "192.0.2.1", 443, true),
-					dnsFailoverWorkerTargetRow(20, 8, 2, "备用", "CNAME", "backup.example.net.", 8443, true),
-				)
-				expectDNSFailoverProbes(mock, dnsFailoverWorkerProbeRow(4, now, 3))
-				expectDNSFailoverStates(mock, dnsFailoverWorkerStateRow(4, 10, 8, 0, "192.0.2.1"))
-				expectDNSFailoverActiveIncidentClearDivergence(mock, 8)
-				expectDNSFailoverEventInsert(mock, 8, 10, "dns_state_reconciled")
-				mock.ExpectExec(`DELETE FROM v2_dns_failover_eval_outbox WHERE id = \$1 AND requested_at = \$2`).
-					WithArgs(int64(45), int64(905)).WillReturnResult(sqlmock.NewResult(0, 1))
-				mock.ExpectCommit()
-				if err := service.drainDNSFailoverEvaluationOutbox(context.Background(), 1); err != nil {
-					t.Fatalf("forced reconciliation after compensation failure: %v", err)
-				}
-				if len(dnsAPI.mutations) != 3 || dnsAPI.mutations[2].RecordType != "A" {
-					t.Fatalf("forced reconciliation mutations = %#v", dnsAPI.mutations)
-				}
-			}
-			if err := mock.ExpectationsWereMet(); err != nil {
-				t.Fatalf("sql expectations: %v", err)
-			}
-		})
-	}
-}
-
-func TestDNSFailoverWorkerDivergenceEventFailureKeepsDurableForcedReconciliation(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock: %v", err)
-	}
-	defer db.Close()
-	dnsAPI := &dnsFailoverWorkerDNSPod{
-		results: []dnspod.RecordMutationResult{
-			{RecordID: 202, RequestID: "req-switch"},
-			{RecordID: 202, RequestID: "req-rollback"},
-			{RecordID: 202, RequestID: "req-reconcile"},
-		},
-		errors: []error{nil, errors.New("rollback DNS failed"), nil},
-	}
-	service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI}
-	now := time.Now().Unix()
-
-	expectDNSFailoverOutboxClaim(mock, 66, 8, 910, 0)
-	expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRow(8, 10, true, true, nil))
-	expectDNSFailoverTargets(mock,
-		dnsFailoverWorkerTargetRow(10, 8, 1, "主站", "A", "192.0.2.1", 443, true),
-		dnsFailoverWorkerTargetRow(20, 8, 2, "备用", "CNAME", "backup.example.net.", 8443, true),
-	)
-	expectDNSFailoverProbes(mock, dnsFailoverWorkerProbeRow(4, now, 3))
-	expectDNSFailoverStates(mock,
-		dnsFailoverWorkerStateRow(4, 10, 0, 5, "192.0.2.1"),
-		dnsFailoverWorkerStateRow(4, 20, 8, 0, "198.51.100.20"),
-	)
-	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_group SET current_target_id = \$2`).
-		WithArgs(int64(8), int64(20), sqlmock.AnyArg(), "current_target_failed").WillReturnResult(sqlmock.NewResult(0, 1))
-	expectDNSFailoverEventInsert(mock, 8, 20, "failover")
-	mock.ExpectExec(`DELETE FROM v2_dns_failover_eval_outbox WHERE id = \$1 AND requested_at = \$2`).
-		WithArgs(int64(66), int64(910)).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
-
-	// The safety operation must commit before the independently best-effort
-	// divergence event, so an event failure cannot roll it back.
-	mock.ExpectBegin()
-	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*VALUES \(\$1, 'reconcile', \$2, \$3.*ON CONFLICT \(group_id\) DO UPDATE SET.*operation = 'reconcile'`).
-		WithArgs(int64(8), int64(10), int64(20), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
-	expectDNSFailoverGroupAdvisoryLock(mock, 8)
-	mock.ExpectCommit()
-	mock.ExpectBegin()
-	expectDNSFailoverGroupAdvisoryLock(mock, 8)
-	expectDNSFailoverActiveIncidentSet(mock, 8, "dns_state_diverged")
-	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_event.*VALUES \(\$1, NULL, \$2, \$3, \$4, \$5, \$6, NULL, \$7\)`).
-		WithArgs(int64(8), int64(20), "dns_state_diverged", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnError(errors.New("event write failed"))
-	mock.ExpectRollback()
-
-	err = service.drainDNSFailoverEvaluationOutbox(context.Background(), 1)
-	if err == nil || !strings.Contains(err.Error(), "event write failed") {
-		t.Fatalf("first drain error = %v", err)
-	}
-
-	// The next claim must remain reconcile even though the event transaction
-	// rolled back. It reconstructs the missing divergence event from outbox
-	// target/source/last_error before forcing DNS back to the DB target.
-	expectDNSFailoverOutboxClaimOperationWithError(mock, 66, 8, "reconcile", int64(10), int64(20), 911, 1, "commit failed; rollback DNS failed")
-	expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRow(8, 10, true, true, nil))
-	expectDNSFailoverTargets(mock,
-		dnsFailoverWorkerTargetRow(10, 8, 1, "主站", "A", "192.0.2.1", 443, true),
-		dnsFailoverWorkerTargetRow(20, 8, 2, "备用", "CNAME", "backup.example.net.", 8443, true),
-	)
-	expectDNSFailoverProbes(mock, dnsFailoverWorkerProbeRow(4, now, 3))
-	expectDNSFailoverStates(mock, dnsFailoverWorkerStateRow(4, 10, 8, 0, "192.0.2.1"))
-	expectDNSFailoverActiveIncidentSet(mock, 8, "dns_state_diverged")
-	expectDNSFailoverEventInsertDetailsContain(mock, 8, 20, "dns_state_diverged", `"desired_target"`, `"actual_target"`, `"rollback_error"`)
-	expectDNSFailoverActiveIncidentClearDivergence(mock, 8)
-	expectDNSFailoverEventInsert(mock, 8, 10, "dns_state_reconciled")
-	mock.ExpectExec(`DELETE FROM v2_dns_failover_eval_outbox WHERE id = \$1 AND requested_at = \$2`).
-		WithArgs(int64(66), int64(911)).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
-
-	if err := service.drainDNSFailoverEvaluationOutbox(context.Background(), 1); err != nil {
-		t.Fatalf("forced reconciliation after event failure: %v", err)
-	}
-	if len(dnsAPI.mutations) != 3 || dnsAPI.mutations[2].RecordType != "A" || dnsAPI.mutations[2].Value != "192.0.2.1" {
-		t.Fatalf("forced reconciliation mutations = %#v", dnsAPI.mutations)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("sql expectations: %v", err)
-	}
-}
-
-func TestDNSFailoverWorkerPostDNSPersistenceFailureAlsoCompensates(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock: %v", err)
-	}
-	defer db.Close()
-	dnsAPI := &dnsFailoverWorkerDNSPod{
-		results: []dnspod.RecordMutationResult{{RecordID: 202, RequestID: "req-switch"}, {RecordID: 202, RequestID: "req-rollback"}},
-	}
-	service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI}
-	now := time.Now().Unix()
-
-	expectDNSFailoverOutboxClaim(mock, 46, 8, 705, 0)
-	expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRow(8, 10, true, true, nil))
-	expectDNSFailoverTargets(mock,
-		dnsFailoverWorkerTargetRow(10, 8, 1, "主站", "A", "192.0.2.1", 443, true),
-		dnsFailoverWorkerTargetRow(20, 8, 2, "备用", "CNAME", "backup.example.net.", 8443, true),
-	)
-	expectDNSFailoverProbes(mock, dnsFailoverWorkerProbeRow(4, now, 3))
-	expectDNSFailoverStates(mock,
-		dnsFailoverWorkerStateRow(4, 10, 0, 5, "192.0.2.1"),
-		dnsFailoverWorkerStateRow(4, 20, 8, 0, "198.51.100.20"),
-	)
-	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_group SET current_target_id = \$2`).
-		WithArgs(int64(8), int64(20), sqlmock.AnyArg(), "current_target_failed").WillReturnError(errors.New("state update failed"))
-	mock.ExpectRollback()
-
-	mock.ExpectBegin()
-	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*operation, target_id, source_target_id.*VALUES \(\$1, 'evaluate', NULL, NULL.*ON CONFLICT \(group_id\) DO UPDATE SET`).
-		WithArgs(int64(8), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
-	expectDNSFailoverGroupAdvisoryLock(mock, 8)
-	expectDNSFailoverActiveIncidentSet(mock, 8, "dnspod_error")
-	expectDNSFailoverEventInsert(mock, 8, 20, "dnspod_error")
-	mock.ExpectCommit()
-
-	err = service.drainDNSFailoverEvaluationOutbox(context.Background(), 1)
-	if err == nil || !strings.Contains(err.Error(), "state update failed") {
-		t.Fatalf("error = %v", err)
-	}
-	if len(dnsAPI.mutations) != 2 || dnsAPI.mutations[1].RecordType != "A" {
-		t.Fatalf("persistence failure did not compensate DNS: %#v", dnsAPI.mutations)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("sql expectations: %v", err)
-	}
-}
-
 func TestDNSFailoverWorkerManualSwitchSuccessFailureAndSameTarget(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
@@ -1196,20 +1469,26 @@ func TestDNSFailoverWorkerManualSwitchSuccessFailureAndSameTarget(t *testing.T) 
 		dnsAPI := &dnsFailoverWorkerDNSPod{results: []dnspod.RecordMutationResult{{RecordID: 202, RequestID: "manual-request"}}}
 		service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI}
 
-		mock.ExpectBegin()
-		expectManualDNSFailoverOperationUpsert(mock, 8, 20)
-		expectDNSFailoverGroupAdvisoryLock(mock, 8)
+		expectManualDNSFailoverSagaRequest(mock, 70, 8, 20, 920)
 		expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRowWithState(8, 10, true, true, nil, nil, "all_probes_offline", int64(700)))
 		expectDNSFailoverTargets(mock,
 			dnsFailoverWorkerTargetRow(10, 8, 1, "主站", "A", "192.0.2.1", 443, true),
 			dnsFailoverWorkerTargetRow(20, 8, 2, "备用", "CNAME", "backup.example.net.", 8443, true),
 		)
-		mock.ExpectExec(`(?s)UPDATE v2_dns_failover_group SET current_target_id = \$2, last_switch_at = \$3, last_switch_reason = 'manual', last_evaluated_at = \$3, updated_at = \$3 WHERE id = \$1`).
-			WithArgs(int64(8), int64(20), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
-		expectDNSFailoverEventInsert(mock, 8, 20, "manual_switch")
-		mock.ExpectExec(`(?s)DELETE FROM v2_dns_failover_eval_outbox WHERE group_id = \$1 AND operation = 'manual' AND target_id = \$2`).
-			WithArgs(int64(8), int64(20)).WillReturnResult(sqlmock.NewResult(0, 1))
+		expectDNSFailoverProbes(mock)
+		expectDNSFailoverStates(mock)
+		mock.ExpectExec(`INSERT INTO v2_dns_failover_saga`).WillReturnResult(sqlmock.NewResult(1, 1))
 		mock.ExpectCommit()
+		mock.ExpectBegin()
+		expectDNSFailoverNoActiveDNSIncident(mock, 8)
+		mock.ExpectExec(`(?s)UPDATE v2_dns_failover_group SET current_target_id = \$2, last_switch_at = \$3, last_switch_reason = \$4, last_evaluated_at = \$3, updated_at = \$3 WHERE id = \$1`).
+			WithArgs(int64(8), int64(20), sqlmock.AnyArg(), "manual").WillReturnResult(sqlmock.NewResult(0, 1))
+		expectDNSFailoverEventInsert(mock, 8, 20, "manual_switch")
+		mock.ExpectExec(`DELETE FROM v2_dns_failover_eval_outbox WHERE id = \$1 AND requested_at = \$2`).
+			WithArgs(int64(70), int64(920)).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(`DELETE FROM v2_dns_failover_saga`).WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+		expectDNSFailoverGroupSessionUnlock(mock, 8)
 
 		if err := service.ManualSwitchDNSFailoverTarget(context.Background(), 8, 20); err != nil {
 			t.Fatalf("manual switch: %v", err)
@@ -1234,26 +1513,34 @@ func TestDNSFailoverWorkerManualSwitchSuccessFailureAndSameTarget(t *testing.T) 
 		}
 		service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI}
 
-		mock.ExpectBegin()
-		expectManualDNSFailoverOperationUpsert(mock, 8, 20)
-		expectDNSFailoverGroupAdvisoryLock(mock, 8)
+		expectManualDNSFailoverSagaRequest(mock, 71, 8, 20, 921)
 		expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRow(8, 10, true, true, nil))
 		expectDNSFailoverTargets(mock,
 			dnsFailoverWorkerTargetRow(10, 8, 1, "主站", "A", "192.0.2.1", 443, true),
 			dnsFailoverWorkerTargetRow(20, 8, 2, "备用", "CNAME", "backup.example.net.", 8443, true),
 		)
-		expectDNSFailoverActiveIncidentSet(mock, 8, "dnspod_error")
-		expectDNSFailoverEventInsertDetailsContain(mock, 8, 20, "dnspod_error", `"operation":"manual_switch"`, `"retry_semantics":"retry_requested_target"`, `"request_id":"manual-error-request"`)
-		mock.ExpectExec(`(?s)UPDATE v2_dns_failover_eval_outbox SET attempts = attempts \+ 1, next_attempt_at = \$3, last_error = \$4, updated_at = \$5 WHERE group_id = \$1 AND operation = 'manual' AND target_id = \$2`).
-			WithArgs(int64(8), int64(20), sqlmock.AnyArg(), "manual DNS failed", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+		expectDNSFailoverProbes(mock)
+		expectDNSFailoverStates(mock)
+		mock.ExpectExec(`INSERT INTO v2_dns_failover_saga`).WillReturnResult(sqlmock.NewResult(1, 1))
 		mock.ExpectCommit()
+		mock.ExpectBegin()
+		mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*VALUES \(\$1, 'manual'`).
+			WithArgs(int64(8), int64(20), int64(10), int64(921), sqlmock.AnyArg(), "manual DNS failed").WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectQuery(`SELECT active_dns_incident_type FROM v2_dns_failover_group`).WithArgs(int64(8)).
+			WillReturnRows(sqlmock.NewRows([]string{"active_dns_incident_type"}).AddRow(""))
+		mock.ExpectExec(`UPDATE v2_dns_failover_group SET active_dns_incident_type = \$2, active_dns_incident_since = \$3 WHERE id = \$1`).
+			WithArgs(int64(8), "dnspod_error", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+		expectDNSFailoverEventInsert(mock, 8, 20, "dnspod_error")
+		mock.ExpectExec(`DELETE FROM v2_dns_failover_saga`).WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+		expectDNSFailoverGroupSessionUnlock(mock, 8)
 
 		err = service.ManualSwitchDNSFailoverTarget(context.Background(), 8, 20)
 		if err == nil || !strings.Contains(err.Error(), "manual DNS failed") {
 			t.Fatalf("error = %v", err)
 		}
-		if len(dnsAPI.mutations) != 1 {
-			t.Fatalf("DNSPod calls = %d, want 1", len(dnsAPI.mutations))
+		if len(dnsAPI.mutations) != 2 || dnsAPI.mutations[0].RecordType != "CNAME" || dnsAPI.mutations[1].RecordType != "A" {
+			t.Fatalf("DNSPod calls = %#v, want desired then frozen rollback", dnsAPI.mutations)
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("sql expectations: %v", err)
@@ -1269,17 +1556,18 @@ func TestDNSFailoverWorkerManualSwitchSuccessFailureAndSameTarget(t *testing.T) 
 		dnsAPI := &dnsFailoverWorkerDNSPod{}
 		service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI}
 
-		mock.ExpectBegin()
-		expectManualDNSFailoverOperationUpsert(mock, 8, 10)
-		expectDNSFailoverGroupAdvisoryLock(mock, 8)
+		expectManualDNSFailoverSagaRequest(mock, 72, 8, 10, 922)
 		expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRow(8, 10, true, true, nil))
 		expectDNSFailoverTargets(mock,
 			dnsFailoverWorkerTargetRow(10, 8, 1, "主站", "A", "192.0.2.1", 443, true),
 			dnsFailoverWorkerTargetRow(20, 8, 2, "备用", "CNAME", "backup.example.net.", 8443, true),
 		)
-		mock.ExpectExec(`(?s)DELETE FROM v2_dns_failover_eval_outbox WHERE group_id = \$1 AND operation = 'manual' AND target_id = \$2`).
-			WithArgs(int64(8), int64(10)).WillReturnResult(sqlmock.NewResult(0, 1))
+		expectDNSFailoverProbes(mock)
+		expectDNSFailoverStates(mock)
+		mock.ExpectExec(`DELETE FROM v2_dns_failover_eval_outbox WHERE id = \$1 AND requested_at = \$2`).
+			WithArgs(int64(72), int64(922)).WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
+		expectDNSFailoverGroupSessionUnlock(mock, 8)
 
 		if err := service.ManualSwitchDNSFailoverTarget(context.Background(), 8, 10); err != nil {
 			t.Fatalf("same-target manual switch: %v", err)
@@ -1293,9 +1581,55 @@ func TestDNSFailoverWorkerManualSwitchSuccessFailureAndSameTarget(t *testing.T) 
 	})
 }
 
-func expectManualDNSFailoverOperationUpsert(mock sqlmock.Sqlmock, groupID, targetID int64) {
-	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*group_id, operation, target_id, source_target_id.*VALUES \(\$1, 'manual', \$2, NULL.*ON CONFLICT \(group_id\) DO UPDATE SET.*operation = 'manual'.*target_id = EXCLUDED.target_id.*attempts = 0.*WHERE v2_dns_failover_eval_outbox.operation <> 'reconcile'`).
-		WithArgs(groupID, targetID, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+func TestDNSFailoverWorkerManualRejectsPreparedSagaBeforeChangingOutbox(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	dnsAPI := &dnsFailoverWorkerDNSPod{}
+	service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI}
+
+	mock.ExpectQuery(`SELECT pg_try_advisory_lock\(\$1\)`).WithArgs(int64(8)).
+		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM v2_dns_failover_saga WHERE group_id = \$1 AND phase = 'prepared'\)`).
+		WithArgs(int64(8)).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectRollback()
+	mock.ExpectQuery(`SELECT pg_advisory_unlock\(\$1\)`).WithArgs(int64(8)).
+		WillReturnRows(sqlmock.NewRows([]string{"unlocked"}).AddRow(true))
+
+	err = service.ManualSwitchDNSFailoverTarget(context.Background(), 8, 20)
+	if err == nil || !strings.Contains(err.Error(), "正在恢复") {
+		t.Fatalf("manual switch error = %v", err)
+	}
+	if len(dnsAPI.mutations) != 0 {
+		t.Fatalf("manual switch called DNSPod during prepared saga: %#v", dnsAPI.mutations)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("manual changed outbox before checking saga: %v", err)
+	}
+}
+
+func expectManualDNSFailoverSagaRequest(mock sqlmock.Sqlmock, outboxID, groupID, targetID, requestedAt int64) {
+	mock.ExpectQuery(`SELECT pg_try_advisory_lock\(\$1\)`).WithArgs(groupID).
+		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM v2_dns_failover_saga`).WithArgs(groupID).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectQuery(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*VALUES \(\$1, 'manual', \$2.*RETURNING id, requested_at`).
+		WithArgs(groupID, targetID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "requested_at"}).AddRow(outboxID, requestedAt))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT id, group_id, operation, target_id, source_target_id, requested_at, attempts, last_error.*WHERE id = \$1.*FOR UPDATE`).
+		WithArgs(outboxID).WillReturnRows(sqlmock.NewRows([]string{"id", "group_id", "operation", "target_id", "source_target_id", "requested_at", "attempts", "last_error"}).
+		AddRow(outboxID, groupID, "manual", targetID, nil, requestedAt, 0, ""))
+}
+
+func expectDNSFailoverGroupSessionUnlock(mock sqlmock.Sqlmock, groupID int64) {
+	mock.ExpectQuery(`SELECT pg_advisory_unlock\(\$1\)`).WithArgs(groupID).
+		WillReturnRows(sqlmock.NewRows([]string{"unlocked"}).AddRow(true))
 }
 
 func TestDNSFailoverWorkerOfflineIncidentDedupRecoveryAndFutureIncident(t *testing.T) {
@@ -1362,6 +1696,7 @@ func TestDNSFailoverWorkerCooldownDoesNotClearActiveIncident(t *testing.T) {
 	mock.ExpectExec(`DELETE FROM v2_dns_failover_eval_outbox WHERE id = \$1 AND requested_at = \$2`).
 		WithArgs(int64(62), int64(906)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
+	expectDNSFailoverGroupSessionUnlock(mock, 8)
 
 	if err := service.drainDNSFailoverEvaluationOutbox(context.Background(), 1); err != nil {
 		t.Fatalf("cooldown evaluation: %v", err)
@@ -1400,6 +1735,7 @@ func expectDNSFailoverNoActionEvaluation(mock sqlmock.Sqlmock, outboxID, request
 	mock.ExpectExec(`DELETE FROM v2_dns_failover_eval_outbox WHERE id = \$1 AND requested_at = \$2`).
 		WithArgs(outboxID, requestedAt).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
+	expectDNSFailoverGroupSessionUnlock(mock, 8)
 }
 
 func dnsFailoverWorkerRuleRow(groupID, currentTargetID int64, enabled, autoFailback bool, weight *int64) []driver.Value {
@@ -1429,28 +1765,32 @@ func expectDNSFailoverOutboxClaim(mock sqlmock.Sqlmock, id, groupID, requestedAt
 	expectDNSFailoverOutboxClaimOperation(mock, id, groupID, "evaluate", nil, nil, requestedAt, attempts)
 }
 
+func expectDNSFailoverSagaPrepare(mock sqlmock.Sqlmock) {
+	mock.ExpectExec(`INSERT INTO v2_dns_failover_saga`).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+}
+
+func expectDNSFailoverNoActiveDNSIncident(mock sqlmock.Sqlmock, groupID int64) {
+	mock.ExpectQuery(`SELECT active_dns_incident_type FROM v2_dns_failover_group WHERE id = \$1 FOR UPDATE`).WithArgs(groupID).
+		WillReturnRows(sqlmock.NewRows([]string{"active_dns_incident_type"}).AddRow(""))
+}
+
 func expectDNSFailoverOutboxClaimOperation(mock sqlmock.Sqlmock, id, groupID int64, operation string, targetID, sourceTargetID any, requestedAt int64, attempts int) {
 	mock.ExpectBegin()
-	mock.ExpectQuery(`(?s)SELECT id, group_id, operation, target_id, source_target_id, requested_at, attempts, last_error.*FROM v2_dns_failover_eval_outbox.*next_attempt_at <= \$1.*ORDER BY next_attempt_at ASC, requested_at ASC.*LIMIT 1.*FOR UPDATE SKIP LOCKED`).
+	mock.ExpectQuery(`(?s)SELECT id, group_id, operation, target_id, source_target_id, requested_at, attempts, last_error.*FROM v2_dns_failover_eval_outbox.*next_attempt_at <= \$1.*NOT EXISTS.*v2_dns_failover_saga.*ORDER BY next_attempt_at ASC, requested_at ASC.*LIMIT 1.*FOR UPDATE SKIP LOCKED`).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "group_id", "operation", "target_id", "source_target_id", "requested_at", "attempts", "last_error"}).
 			AddRow(id, groupID, operation, targetID, sourceTargetID, requestedAt, attempts, ""))
-	mock.ExpectQuery(`SELECT pg_try_advisory_xact_lock\(\$1\)`).
+	mock.ExpectQuery(`SELECT pg_try_advisory_lock\(\$1\)`).
 		WithArgs(groupID).WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
-}
-
-func expectDNSFailoverOutboxClaimOperationWithError(mock sqlmock.Sqlmock, id, groupID int64, operation string, targetID, sourceTargetID any, requestedAt int64, attempts int, lastError string) {
+	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_eval_outbox SET next_attempt_at = \$2, updated_at = \$3 WHERE id = \$1 AND requested_at = \$4`).
+		WithArgs(id, sqlmock.AnyArg(), sqlmock.AnyArg(), requestedAt).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 	mock.ExpectBegin()
-	mock.ExpectQuery(`(?s)SELECT id, group_id, operation, target_id, source_target_id, requested_at, attempts, last_error.*FROM v2_dns_failover_eval_outbox.*next_attempt_at <= \$1.*ORDER BY next_attempt_at ASC, requested_at ASC.*LIMIT 1.*FOR UPDATE SKIP LOCKED`).
-		WithArgs(sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "group_id", "operation", "target_id", "source_target_id", "requested_at", "attempts", "last_error"}).
-			AddRow(id, groupID, operation, targetID, sourceTargetID, requestedAt, attempts, lastError))
-	mock.ExpectQuery(`SELECT pg_try_advisory_xact_lock\(\$1\)`).
-		WithArgs(groupID).WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
-}
-
-func expectDNSFailoverGroupAdvisoryLock(mock sqlmock.Sqlmock, groupID int64) {
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock\(\$1\)`).WithArgs(groupID).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`(?s)SELECT id, group_id, operation, target_id, source_target_id, requested_at, attempts, last_error.*FROM v2_dns_failover_eval_outbox.*WHERE id = \$1.*FOR UPDATE`).
+		WithArgs(id).WillReturnRows(sqlmock.NewRows([]string{"id", "group_id", "operation", "target_id", "source_target_id", "requested_at", "attempts", "last_error"}).
+		AddRow(id, groupID, operation, targetID, sourceTargetID, requestedAt, attempts, ""))
 }
 
 func expectDNSFailoverGroupLock(mock sqlmock.Sqlmock, values []driver.Value) {
@@ -1495,11 +1835,6 @@ func expectDNSFailoverActiveIncidentSet(mock sqlmock.Sqlmock, groupID int64, eve
 		WithArgs(groupID, eventType, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 }
 
-func expectDNSFailoverActiveIncidentClearDivergence(mock sqlmock.Sqlmock, groupID int64) {
-	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_group SET active_incident_type = '', active_incident_since = NULL WHERE id = \$1 AND active_incident_type = 'dns_state_diverged'`).
-		WithArgs(groupID).WillReturnResult(sqlmock.NewResult(0, 1))
-}
-
 func expectDNSFailoverEventInsert(mock sqlmock.Sqlmock, groupID, targetID int64, eventType string) {
 	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_event.*group_id, probe_id, target_id, event_type, message, details, dedupe_key, notified_at, created_at.*VALUES \(\$1, NULL, \$2, \$3, \$4, \$5, \$6, NULL, \$7\)`).
 		WithArgs(groupID, targetID, eventType, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
@@ -1537,11 +1872,5 @@ func (expected dnsFailoverSQLStringContainsAll) Match(value driver.Value) bool {
 func expectDNSFailoverEventInsertMessageContains(mock sqlmock.Sqlmock, groupID, targetID int64, eventType, messagePart string) {
 	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_event.*group_id, probe_id, target_id, event_type, message, details, dedupe_key, notified_at, created_at.*VALUES \(\$1, NULL, \$2, \$3, \$4, \$5, \$6, NULL, \$7\)`).
 		WithArgs(groupID, targetID, eventType, dnsFailoverSQLStringContains(messagePart), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-}
-
-func expectDNSFailoverEventInsertDetailsContain(mock sqlmock.Sqlmock, groupID, targetID int64, eventType string, detailParts ...string) {
-	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_event.*group_id, probe_id, target_id, event_type, message, details, dedupe_key, notified_at, created_at.*VALUES \(\$1, NULL, \$2, \$3, \$4, \$5, \$6, NULL, \$7\)`).
-		WithArgs(groupID, targetID, eventType, sqlmock.AnyArg(), dnsFailoverSQLStringContainsAll(detailParts), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 }

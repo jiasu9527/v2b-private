@@ -734,6 +734,9 @@ func expectDNSFailoverUpdateLocks(mock sqlmock.Sqlmock) {
 	mock.ExpectQuery(`SELECT current_target_id, last_switch_at, last_switch_reason, created_at FROM v2_dns_failover_group WHERE id = \$1 FOR UPDATE`).
 		WithArgs(int64(50)).
 		WillReturnRows(sqlmock.NewRows([]string{"current_target_id", "last_switch_at", "last_switch_reason", "created_at"}).AddRow(int64(71), int64(95), "manual switch", int64(100)))
+	mock.ExpectQuery(`(?s)SELECT EXISTS.*v2_dns_failover_saga.*UNION ALL.*v2_dns_failover_eval_outbox.*operation <> 'evaluate'`).
+		WithArgs(int64(50)).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectQuery(`SELECT id, sort, dns_type, dns_value, check_host, check_port, enabled, created_at FROM v2_dns_failover_target WHERE group_id = \$1 ORDER BY id ASC FOR UPDATE`).
 		WithArgs(int64(50)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "sort", "dns_type", "dns_value", "check_host", "check_port", "enabled", "created_at"}).
@@ -772,6 +775,33 @@ func TestDNSFailoverUpdateRuleRejectsRemovingOrDisablingCurrentTarget(t *testing
 				t.Fatalf("sql expectations: %v", err)
 			}
 		})
+	}
+}
+
+func TestDNSFailoverUpdateRuleRejectsUnfinishedForcedOperationBeforeTargetChanges(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	request := dnsFailoverUpdateRequestKeepingCurrent()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id FROM v2_dns_probe WHERE enabled = 1 AND id IN \(\$1\) ORDER BY id ASC FOR SHARE`).WithArgs(int64(4)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(4)))
+	mock.ExpectQuery(`SELECT current_target_id, last_switch_at, last_switch_reason, created_at FROM v2_dns_failover_group WHERE id = \$1 FOR UPDATE`).
+		WithArgs(int64(50)).WillReturnRows(sqlmock.NewRows([]string{"current_target_id", "last_switch_at", "last_switch_reason", "created_at"}).
+		AddRow(int64(71), int64(95), "manual switch", int64(100)))
+	mock.ExpectQuery(`(?s)SELECT EXISTS.*v2_dns_failover_saga.*UNION ALL.*v2_dns_failover_eval_outbox.*operation <> 'evaluate'`).
+		WithArgs(int64(50)).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectRollback()
+
+	if _, err := service.SaveDNSFailoverRule(context.Background(), request); err == nil || !strings.Contains(err.Error(), "等待恢复") {
+		t.Fatalf("SaveDNSFailoverRule error = %v, want unfinished recovery rejection", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("rule mutation reached target writes despite saga: %v", err)
 	}
 }
 
@@ -930,6 +960,8 @@ func TestDNSFailoverDeleteRuleRejectsEnabledRule(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT enabled FROM v2_dns_failover_group WHERE id = \$1 FOR UPDATE`).WithArgs(int64(50)).WillReturnRows(sqlmock.NewRows([]string{"enabled"}).AddRow(int64(1)))
+	mock.ExpectQuery(`(?s)SELECT EXISTS.*v2_dns_failover_saga.*UNION ALL.*v2_dns_failover_eval_outbox.*operation <> 'evaluate'`).
+		WithArgs(int64(50)).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectRollback()
 
 	if ok, err := service.DeleteDNSFailoverRule(context.Background(), 50); err == nil || ok || !strings.Contains(err.Error(), "先停用") {
@@ -937,6 +969,29 @@ func TestDNSFailoverDeleteRuleRejectsEnabledRule(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverDeleteRuleRejectsUnfinishedSagaBeforeCascade(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT enabled FROM v2_dns_failover_group WHERE id = \$1 FOR UPDATE`).WithArgs(int64(50)).
+		WillReturnRows(sqlmock.NewRows([]string{"enabled"}).AddRow(int64(0)))
+	mock.ExpectQuery(`(?s)SELECT EXISTS.*v2_dns_failover_saga.*UNION ALL.*v2_dns_failover_eval_outbox.*operation <> 'evaluate'`).
+		WithArgs(int64(50)).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectRollback()
+
+	if ok, err := service.DeleteDNSFailoverRule(context.Background(), 50); err == nil || ok || !strings.Contains(err.Error(), "等待恢复") {
+		t.Fatalf("DeleteDNSFailoverRule = %v, %v, want unfinished saga rejection", ok, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("delete reached cascading group delete despite saga: %v", err)
 	}
 }
 
@@ -954,6 +1009,8 @@ func TestDNSFailoverRuleToggleAndDeleteDisabledRule(t *testing.T) {
 	}
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT enabled FROM v2_dns_failover_group WHERE id = \$1 FOR UPDATE`).WithArgs(int64(50)).WillReturnRows(sqlmock.NewRows([]string{"enabled"}).AddRow(int64(0)))
+	mock.ExpectQuery(`(?s)SELECT EXISTS.*v2_dns_failover_saga.*UNION ALL.*v2_dns_failover_eval_outbox.*operation <> 'evaluate'`).
+		WithArgs(int64(50)).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectExec(`DELETE FROM v2_dns_failover_group WHERE id = \$1`).WithArgs(int64(50)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	if ok, err := service.DeleteDNSFailoverRule(context.Background(), 50); err != nil || !ok {
@@ -975,6 +1032,8 @@ func TestDNSFailoverDeleteRuleRollsBackAndPreservesDeleteError(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT enabled FROM v2_dns_failover_group WHERE id = \$1 FOR UPDATE`).WithArgs(int64(50)).WillReturnRows(sqlmock.NewRows([]string{"enabled"}).AddRow(int64(0)))
+	mock.ExpectQuery(`(?s)SELECT EXISTS.*v2_dns_failover_saga.*UNION ALL.*v2_dns_failover_eval_outbox.*operation <> 'evaluate'`).
+		WithArgs(int64(50)).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectExec(`DELETE FROM v2_dns_failover_group WHERE id = \$1`).WithArgs(int64(50)).WillReturnError(dbErr)
 	mock.ExpectRollback()
 

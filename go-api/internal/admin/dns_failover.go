@@ -560,6 +560,22 @@ func (s *DBService) SaveDNSFailoverRule(ctx context.Context, request DNSFailover
 	return rule, nil
 }
 
+func rejectUnfinishedDNSFailoverOperation(ctx context.Context, tx *sql.Tx, groupID int64) error {
+	var exists bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS (
+SELECT 1 FROM v2_dns_failover_saga WHERE group_id = $1
+UNION ALL
+SELECT 1 FROM v2_dns_failover_eval_outbox WHERE group_id = $1 AND operation <> 'evaluate'
+)`, groupID).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("检查 DNS 故障转移恢复状态失败: %w", err)
+	}
+	if exists {
+		return errors.New("DNS 状态正在切换或等待恢复，请等待恢复完成后再修改规则")
+	}
+	return nil
+}
+
 func createDNSFailoverRule(ctx context.Context, tx *sql.Tx, request DNSFailoverRuleSaveRequest) (DNSFailoverRuleRecord, error) {
 	now := time.Now().Unix()
 	rule := dnsFailoverRuleFromSaveRequest(request)
@@ -631,6 +647,9 @@ func updateDNSFailoverRule(ctx context.Context, tx *sql.Tx, request DNSFailoverR
 			return DNSFailoverRuleRecord{}, errors.New("故障转移规则不存在")
 		}
 		return DNSFailoverRuleRecord{}, fmt.Errorf("读取故障转移规则失败: %w", err)
+	}
+	if err := rejectUnfinishedDNSFailoverOperation(ctx, tx, groupID); err != nil {
+		return DNSFailoverRuleRecord{}, err
 	}
 
 	existingTargets, maxExistingSort, err := lockDNSFailoverTargets(ctx, tx, groupID)
@@ -961,6 +980,9 @@ func (s *DBService) DeleteDNSFailoverRule(ctx context.Context, id int64) (bool, 
 			return false, errors.New("故障转移规则不存在")
 		}
 		return false, fmt.Errorf("读取故障转移规则状态失败: %w", err)
+	}
+	if err := rejectUnfinishedDNSFailoverOperation(ctx, tx, id); err != nil {
+		return false, err
 	}
 	if enabled != 0 {
 		return false, errors.New("规则仍处于启用状态，请先停用后再删除")

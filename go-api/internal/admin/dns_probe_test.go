@@ -635,7 +635,7 @@ func expectDNSProbeBatchState(mock sqlmock.Sqlmock, probeID, warmedUp, affected 
 }
 
 func expectDNSFailoverEvaluationOutbox(mock sqlmock.Sqlmock, affected int64) {
-	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*operation, target_id, source_target_id.*'evaluate', NULL, NULL.*jsonb_to_recordset\(\$1::jsonb\).*ON CONFLICT \(group_id\) DO UPDATE SET.*WHERE v2_dns_failover_eval_outbox.operation = 'evaluate'`).
+	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*operation, target_id, source_target_id.*'evaluate', NULL, NULL.*jsonb_to_recordset\(\$1::jsonb\).*ON CONFLICT \(group_id\) DO UPDATE SET.*WHERE v2_dns_failover_eval_outbox.operation = 'evaluate'.*NOT EXISTS.*v2_dns_failover_saga`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, affected))
 }

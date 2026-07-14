@@ -65,13 +65,14 @@ func TestEnsureDNSFailoverSchemaCreatesTablesAndIndexesIdempotently(t *testing.T
 func expectDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	for _, pattern := range []string{
 		`CREATE TABLE IF NOT EXISTS v2_dns_probe`,
-		`(?s)CREATE TABLE IF NOT EXISTS v2_dns_failover_group.*last_evaluated_at BIGINT DEFAULT NULL.*active_incident_type varchar\(32\) NOT NULL DEFAULT ''.*active_incident_since BIGINT DEFAULT NULL`,
+		`(?s)CREATE TABLE IF NOT EXISTS v2_dns_failover_group.*last_evaluated_at BIGINT DEFAULT NULL.*active_incident_type varchar\(32\) NOT NULL DEFAULT ''.*active_incident_since BIGINT DEFAULT NULL.*active_dns_incident_type varchar\(32\) NOT NULL DEFAULT ''.*active_dns_incident_since BIGINT DEFAULT NULL`,
 		`CREATE TABLE IF NOT EXISTS v2_dns_failover_target`,
 		`CREATE TABLE IF NOT EXISTS v2_dns_failover_group_probe`,
 		`(?s)CREATE TABLE IF NOT EXISTS v2_dns_probe_target_state.*target_id BIGINT NOT NULL.*last_resolved_ip varchar\(128\) NOT NULL DEFAULT ''`,
 		`(?s)CREATE TABLE IF NOT EXISTS v2_dns_probe_result_inbox.*target_id BIGINT DEFAULT NULL.*result_id varchar\(128\) NOT NULL.*CONSTRAINT uniq_v2_dns_probe_result_inbox_result UNIQUE \(probe_id, result_id\)`,
 		`(?s)CREATE TABLE IF NOT EXISTS v2_dns_failover_eval_outbox.*group_id BIGINT NOT NULL.*operation varchar\(16\) NOT NULL DEFAULT 'evaluate'.*target_id BIGINT DEFAULT NULL.*source_target_id BIGINT DEFAULT NULL.*requested_at BIGINT NOT NULL.*attempts INTEGER NOT NULL DEFAULT 0.*next_attempt_at BIGINT NOT NULL.*last_error text NOT NULL DEFAULT ''.*CONSTRAINT uniq_v2_dns_failover_eval_outbox_group UNIQUE \(group_id\)`,
-		`CREATE TABLE IF NOT EXISTS v2_dns_failover_event`,
+		`(?s)CREATE TABLE IF NOT EXISTS v2_dns_failover_saga.*group_id BIGINT NOT NULL.*phase varchar\(16\) NOT NULL DEFAULT 'prepared'.*original_operation varchar\(16\) NOT NULL.*original_target_id BIGINT DEFAULT NULL.*original_requested_at BIGINT NOT NULL.*reason text NOT NULL.*desired_target_id BIGINT NOT NULL.*rollback_target_id BIGINT NOT NULL.*desired_mutation text NOT NULL.*rollback_mutation text NOT NULL.*attempts INTEGER NOT NULL DEFAULT 0.*next_attempt_at BIGINT NOT NULL.*last_error text NOT NULL DEFAULT ''.*PRIMARY KEY \(group_id\)`,
+		`(?s)CREATE TABLE IF NOT EXISTS v2_dns_failover_event.*notify_claim_token varchar\(64\) NOT NULL DEFAULT ''.*notify_claimed_at BIGINT DEFAULT NULL.*notify_attempts INTEGER NOT NULL DEFAULT 0.*notify_next_attempt_at BIGINT NOT NULL DEFAULT 0`,
 	} {
 		mock.ExpectExec(pattern).
 			WillReturnResult(sqlmock.NewResult(0, 0))
@@ -83,6 +84,8 @@ func expectDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	for _, column := range []string{
 		`active_incident_type varchar\(32\) NOT NULL DEFAULT ''`,
 		`active_incident_since BIGINT DEFAULT NULL`,
+		`active_dns_incident_type varchar\(32\) NOT NULL DEFAULT ''`,
+		`active_dns_incident_since BIGINT DEFAULT NULL`,
 	} {
 		mock.ExpectExec(`ALTER TABLE v2_dns_failover_group ADD COLUMN IF NOT EXISTS ` + column).
 			WillReturnResult(sqlmock.NewResult(0, 0))
@@ -95,6 +98,21 @@ func expectDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		mock.ExpectExec(`ALTER TABLE v2_dns_failover_eval_outbox ADD COLUMN IF NOT EXISTS ` + column).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
+	for _, column := range []string{
+		`notify_claim_token varchar\(64\) NOT NULL DEFAULT ''`,
+		`notify_claimed_at BIGINT DEFAULT NULL`,
+		`notify_attempts INTEGER NOT NULL DEFAULT 0`,
+		`notify_next_attempt_at BIGINT NOT NULL DEFAULT 0`,
+	} {
+		mock.ExpectExec(`ALTER TABLE v2_dns_failover_event ADD COLUMN IF NOT EXISTS ` + column).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_group.*active_dns_incident_type = active_incident_type.*active_incident_type IN \('dnspod_error', 'dns_state_diverged'\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_group.*active_incident_type = ''.*active_incident_type IN \('dnspod_error', 'dns_state_diverged'\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`(?s)ALTER TABLE v2_dns_failover_group DROP CONSTRAINT IF EXISTS chk_v2_dns_failover_group_incident.*ADD CONSTRAINT chk_v2_dns_failover_group_incident CHECK \(active_incident_type IN \('', 'all_probes_offline', 'probe_disagreement', 'no_healthy_target', 'config_error'\)\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta(dnsProbeInboxTargetFKMigration)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
@@ -115,6 +133,8 @@ func expectDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		`idx_v2_dns_probe_result_inbox_created ON v2_dns_probe_result_inbox\(created_at\)`,
 		`idx_v2_dns_failover_eval_outbox_due ON v2_dns_failover_eval_outbox\(next_attempt_at, requested_at\)`,
 		`idx_v2_dns_failover_eval_outbox_operation_due ON v2_dns_failover_eval_outbox\(operation, next_attempt_at, requested_at\)`,
+		`idx_v2_dns_failover_saga_due ON v2_dns_failover_saga\(next_attempt_at, created_at, group_id\)`,
+		`idx_v2_dns_failover_event_notify_due ON v2_dns_failover_event\(notified_at, notify_next_attempt_at, id\)`,
 		`idx_v2_dns_failover_event_created_id ON v2_dns_failover_event\(created_at DESC, id DESC\)`,
 		`idx_v2_dns_failover_event_group_created_id ON v2_dns_failover_event\(group_id, created_at DESC, id DESC\)`,
 		`idx_v2_dns_failover_event_type_created_id ON v2_dns_failover_event\(event_type, created_at DESC, id DESC\)`,
@@ -136,7 +156,7 @@ var expectedDNSFailoverConstraints = []struct {
 	{"v2_dns_failover_group", "chk_v2_dns_failover_group_timing", "CHECK (check_interval_sec > 0 AND tcp_timeout_ms > 0 AND probe_offline_sec > 0 AND cooldown_sec >= 0)"},
 	{"v2_dns_failover_group", "chk_v2_dns_failover_group_thresholds", "CHECK (failure_threshold > 0 AND success_threshold > 0 AND single_probe_failure_threshold > failure_threshold AND single_probe_success_threshold > success_threshold)"},
 	{"v2_dns_failover_group", "chk_v2_dns_failover_group_dns_values", "CHECK (ttl >= 0 AND mx >= 0 AND (weight IS NULL OR weight >= 0))"},
-	{"v2_dns_failover_group", "chk_v2_dns_failover_group_incident", "CHECK (active_incident_type IN ('', 'all_probes_offline', 'probe_disagreement', 'no_healthy_target', 'dnspod_error', 'config_error', 'dns_state_diverged'))"},
+	{"v2_dns_failover_group", "chk_v2_dns_failover_group_dns_incident", "CHECK (active_dns_incident_type IN ('', 'dnspod_error', 'dns_state_diverged'))"},
 	{"v2_dns_failover_target", "fk_v2_dns_failover_target_group", "FOREIGN KEY (group_id) REFERENCES v2_dns_failover_group(id) ON DELETE CASCADE"},
 	{"v2_dns_failover_target", "uniq_v2_dns_failover_target_group_id", "UNIQUE (group_id, id)"},
 	{"v2_dns_failover_target", "chk_v2_dns_failover_target_type", "CHECK (dns_type IN ('A', 'AAAA', 'CNAME'))"},
@@ -159,10 +179,15 @@ var expectedDNSFailoverConstraints = []struct {
 	{"v2_dns_failover_eval_outbox", "chk_v2_dns_failover_eval_outbox_attempts", "CHECK (attempts >= 0)"},
 	{"v2_dns_failover_eval_outbox", "chk_v2_dns_failover_eval_outbox_operation", "CHECK (operation IN ('evaluate', 'manual', 'reconcile'))"},
 	{"v2_dns_failover_eval_outbox", "chk_v2_dns_failover_eval_outbox_target", "CHECK ((operation = 'evaluate' AND target_id IS NULL) OR (operation IN ('manual', 'reconcile') AND target_id IS NOT NULL AND target_id > 0))"},
+	{"v2_dns_failover_saga", "chk_v2_dns_failover_saga_phase", "CHECK (phase = 'prepared')"},
+	{"v2_dns_failover_saga", "chk_v2_dns_failover_saga_operation", "CHECK (original_operation IN ('evaluate', 'manual'))"},
+	{"v2_dns_failover_saga", "chk_v2_dns_failover_saga_targets", "CHECK (desired_target_id > 0 AND rollback_target_id > 0 AND ((original_operation = 'evaluate' AND original_target_id IS NULL) OR (original_operation = 'manual' AND original_target_id IS NOT NULL AND original_target_id > 0)))"},
+	{"v2_dns_failover_saga", "chk_v2_dns_failover_saga_attempts", "CHECK (attempts >= 0)"},
 	{"v2_dns_failover_event", "fk_v2_dns_failover_event_group", "FOREIGN KEY (group_id) REFERENCES v2_dns_failover_group(id) ON DELETE CASCADE"},
 	{"v2_dns_failover_event", "fk_v2_dns_failover_event_probe", "FOREIGN KEY (probe_id) REFERENCES v2_dns_probe(id) ON DELETE SET NULL"},
 	{"v2_dns_failover_event", "fk_v2_dns_failover_event_target", "FOREIGN KEY (target_id) REFERENCES v2_dns_failover_target(id) ON DELETE SET NULL"},
 	{"v2_dns_failover_event", "chk_v2_dns_failover_event_type", "CHECK (btrim(event_type) <> '')"},
+	{"v2_dns_failover_event", "chk_v2_dns_failover_event_notify_attempts", "CHECK (notify_attempts >= 0)"},
 }
 
 func TestDNSFailoverGenericConstraintsExcludeAtomicInboxTargetFK(t *testing.T) {
