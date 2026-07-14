@@ -112,7 +112,7 @@ func TestDBServiceGetQueueWorkloadIncludesKnownQueuesWhenIdle(t *testing.T) {
 		byQueue[name] = row
 	}
 
-	for _, queueName := range []string{"order_handle", "send_email", "send_email_mass", "send_telegram", "stat", "stat_refresh", "maintenance_cleanup", "traffic_fetch"} {
+	for _, queueName := range []string{"order_handle", "send_email", "send_email_mass", "send_telegram", "stat", "stat_refresh", "maintenance_cleanup", "traffic_fetch", "dns_failover"} {
 		row, ok := byQueue[queueName]
 		if !ok {
 			t.Fatalf("expected queue %q in idle workload: %#v", queueName, workload)
@@ -123,6 +123,9 @@ func TestDBServiceGetQueueWorkloadIncludesKnownQueuesWhenIdle(t *testing.T) {
 	}
 	if byQueue["maintenance_cleanup"]["name"] != "自动清理队列" {
 		t.Fatalf("expected localized maintenance queue name, got %#v", byQueue["maintenance_cleanup"])
+	}
+	if byQueue["dns_failover"]["name"] != "DNS故障转移队列" {
+		t.Fatalf("expected localized DNS failover queue name, got %#v", byQueue["dns_failover"])
 	}
 }
 

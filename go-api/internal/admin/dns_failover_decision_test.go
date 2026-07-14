@@ -114,6 +114,8 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	}
 	mock.ExpectExec(`ALTER TABLE v2_dns_probe_target_state ADD COLUMN IF NOT EXISTS last_resolved_ip`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`ALTER TABLE v2_dns_failover_group ADD COLUMN IF NOT EXISTS last_evaluated_at`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`(?s)DO \$dns_probe_inbox_fk\$.*schema_name := current_schema\(\).*format\('%I.%I', schema_name, 'v2_dns_probe_result_inbox'\).*format\('%I.%I', schema_name, 'v2_dns_failover_target'\).*to_regclass\(inbox_table\).*to_regclass\(target_table\).*a.attrelid = inbox_relation.*a.attrelid = target_relation.*EXECUTE format\('ALTER TABLE %s ALTER COLUMN %I DROP NOT NULL'.*SELECT c.contype, c.confdeltype, c.confrelid, c.conkey, c.confkey.*current_referenced_relation IS DISTINCT FROM target_relation.*current_source_columns IS DISTINCT FROM ARRAY\[inbox_target_attnum\]::smallint\[\].*current_referenced_columns IS DISTINCT FROM ARRAY\[target_id_attnum\]::smallint\[\].*EXECUTE format\('ALTER TABLE %s DROP CONSTRAINT %I'.*EXECUTE format\('ALTER TABLE %s ADD CONSTRAINT %I FOREIGN KEY \(%I\) REFERENCES %s\(%I\) ON DELETE SET NULL'.*\$dns_probe_inbox_fk\$;`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	for _, constraint := range []string{
@@ -154,6 +156,7 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	for _, index := range []string{
 		"idx_v2_dns_probe_enabled_heartbeat",
 		"idx_v2_dns_failover_group_enabled",
+		"idx_v2_dns_failover_group_due",
 		"idx_v2_dns_failover_target_group_sort",
 		"idx_v2_dns_failover_group_probe_probe",
 		"idx_v2_dns_probe_target_state_target",

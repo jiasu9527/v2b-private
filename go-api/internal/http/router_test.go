@@ -1319,6 +1319,10 @@ func (f *fakeAdminService) SetDNSFailoverRuleEnabled(_ context.Context, _ int64,
 	return true, f.err
 }
 
+func (f *fakeAdminService) ManualSwitchDNSFailoverTarget(_ context.Context, _, _ int64) error {
+	return f.err
+}
+
 func (f *fakeAdminService) ListDNSFailoverEvents(_ context.Context, _ admin.DNSFailoverEventListRequest) (admin.DNSFailoverEventListResult, error) {
 	return admin.DNSFailoverEventListResult{}, f.err
 }

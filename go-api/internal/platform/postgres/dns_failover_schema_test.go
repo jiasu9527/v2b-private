@@ -65,7 +65,7 @@ func TestEnsureDNSFailoverSchemaCreatesTablesAndIndexesIdempotently(t *testing.T
 func expectDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	for _, pattern := range []string{
 		`CREATE TABLE IF NOT EXISTS v2_dns_probe`,
-		`CREATE TABLE IF NOT EXISTS v2_dns_failover_group`,
+		`(?s)CREATE TABLE IF NOT EXISTS v2_dns_failover_group.*last_evaluated_at BIGINT DEFAULT NULL`,
 		`CREATE TABLE IF NOT EXISTS v2_dns_failover_target`,
 		`CREATE TABLE IF NOT EXISTS v2_dns_failover_group_probe`,
 		`(?s)CREATE TABLE IF NOT EXISTS v2_dns_probe_target_state.*target_id BIGINT NOT NULL.*last_resolved_ip varchar\(128\) NOT NULL DEFAULT ''`,
@@ -77,6 +77,8 @@ func expectDNSFailoverSchema(mock sqlmock.Sqlmock) {
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 	mock.ExpectExec(`ALTER TABLE v2_dns_probe_target_state ADD COLUMN IF NOT EXISTS last_resolved_ip varchar\(128\) NOT NULL DEFAULT ''`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`ALTER TABLE v2_dns_failover_group ADD COLUMN IF NOT EXISTS last_evaluated_at BIGINT DEFAULT NULL`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta(dnsProbeInboxTargetFKMigration)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
@@ -90,6 +92,7 @@ func expectDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	for _, index := range []string{
 		`idx_v2_dns_probe_enabled_heartbeat ON v2_dns_probe\(enabled, last_heartbeat_at\)`,
 		`idx_v2_dns_failover_group_enabled ON v2_dns_failover_group\(enabled\)`,
+		`idx_v2_dns_failover_group_due ON v2_dns_failover_group\(enabled, last_evaluated_at, check_interval_sec\)`,
 		`idx_v2_dns_failover_target_group_sort ON v2_dns_failover_target\(group_id, enabled, sort\)`,
 		`idx_v2_dns_failover_group_probe_probe ON v2_dns_failover_group_probe\(probe_id\)`,
 		`idx_v2_dns_probe_target_state_target ON v2_dns_probe_target_state\(target_id\)`,

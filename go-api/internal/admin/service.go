@@ -39,6 +39,7 @@ var monitoredQueueWorkloadNames = []string{
 	"stat_refresh",
 	"maintenance_cleanup",
 	"traffic_fetch",
+	"dns_failover",
 }
 
 var monitoredQueueDisplayNames = map[string]string{
@@ -50,6 +51,7 @@ var monitoredQueueDisplayNames = map[string]string{
 	"stat_refresh":        "统计刷新队列",
 	"maintenance_cleanup": "自动清理队列",
 	"traffic_fetch":       "流量消费队列",
+	"dns_failover":        "DNS故障转移队列",
 }
 
 type SystemStatus struct {
@@ -357,6 +359,7 @@ type Service interface {
 	SaveDNSFailoverRule(ctx context.Context, req DNSFailoverRuleSaveRequest) (DNSFailoverRuleRecord, error)
 	DeleteDNSFailoverRule(ctx context.Context, id int64) (bool, error)
 	SetDNSFailoverRuleEnabled(ctx context.Context, id int64, enabled bool) (bool, error)
+	ManualSwitchDNSFailoverTarget(ctx context.Context, groupID, targetID int64) error
 	ListDNSFailoverEvents(ctx context.Context, req DNSFailoverEventListRequest) (DNSFailoverEventListResult, error)
 	FetchConfig(ctx context.Context, key string) (map[string]any, error)
 	SaveConfig(ctx context.Context, values map[string]any) (bool, error)
@@ -424,11 +427,19 @@ type DBService struct {
 	dnspodClientFactory       func(secretID, secretKey, edition string) dnspodAPI
 	dnspodLegacyClientFactory func(apiToken string) dnspodAPI
 	dnsFailoverEvaluator      DNSFailoverEvaluationRequester
+	dnsFailoverNotifier       DNSFailoverNotifier
+	dnsFailoverAPI            dnspodAPI
+	dnsFailoverTickInterval   time.Duration
+	dnsFailoverCycle          func(context.Context) error
 
 	clientEntryEnsureOnce sync.Once
 	clientEntryEnsureErr  error
 	dnsFailoverEnsureMu   sync.Mutex
 	dnsFailoverSchemaOK   bool
+	dnsFailoverWakeMu     sync.Mutex
+	dnsFailoverWakeQueued bool
+	dnsFailoverStartOnce  sync.Once
+	dnsFailoverWorkerWG   sync.WaitGroup
 }
 
 type paymentRow struct {

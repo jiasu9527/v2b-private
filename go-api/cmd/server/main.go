@@ -68,6 +68,8 @@ func main() {
 		if err := initializeDNSFailoverBeforeServe(ctx, adminDBService); err != nil {
 			log.Fatalf("initialize DNS failover schema: %v", err)
 		}
+		adminDBService.WithDNSFailoverNotifier(telegramService).WithDNSFailoverEvaluationRequester(adminDBService)
+		startDNSFailoverAutomationAfterSchema(ctx, adminDBService)
 		telegramService = telegramService.WithUserResolver(userDBService.ResolveClientUserID).WithAdminService(adminDBService)
 		adminService = adminDBService
 		nodeService = nodeapi.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig)
@@ -123,11 +125,21 @@ type dnsFailoverSchemaInitializer interface {
 	InitializeDNSFailoverSchema(context.Context) error
 }
 
+type dnsFailoverAutomationStarter interface {
+	StartDNSFailoverAutomation(context.Context)
+}
+
 func initializeDNSFailoverBeforeServe(ctx context.Context, initializer dnsFailoverSchemaInitializer) error {
 	if initializer == nil {
 		return nil
 	}
 	return initializer.InitializeDNSFailoverSchema(ctx)
+}
+
+func startDNSFailoverAutomationAfterSchema(ctx context.Context, starter dnsFailoverAutomationStarter) {
+	if starter != nil {
+		starter.StartDNSFailoverAutomation(ctx)
+	}
 }
 
 func dbReadyCheck(db *sql.DB) func(context.Context) error {

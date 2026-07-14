@@ -128,6 +128,7 @@ probe_offline_sec INTEGER NOT NULL DEFAULT 90,
 cooldown_sec INTEGER NOT NULL DEFAULT 300,
 last_switch_at BIGINT DEFAULT NULL,
 last_switch_reason text NOT NULL DEFAULT '',
+last_evaluated_at BIGINT DEFAULT NULL,
 created_at BIGINT NOT NULL,
 updated_at BIGINT NOT NULL,
 PRIMARY KEY (id),
@@ -217,6 +218,9 @@ PRIMARY KEY (id)
 	if _, err := db.ExecContext(ctx, `ALTER TABLE v2_dns_probe_target_state ADD COLUMN IF NOT EXISTS last_resolved_ip varchar(128) NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("ensure DNS failover state columns: %w", err)
 	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE v2_dns_failover_group ADD COLUMN IF NOT EXISTS last_evaluated_at BIGINT DEFAULT NULL`); err != nil {
+		return fmt.Errorf("ensure DNS failover scheduling columns: %w", err)
+	}
 	// Keep the nullable-column change and FK inspection/replacement in one
 	// PostgreSQL statement so an error cannot leave the inbox without its FK.
 	// It follows current_schema so it touches the same unqualified relations as
@@ -242,6 +246,7 @@ $dns_failover$;`, constraint.table, constraint.name, constraint.definition)
 	for _, stmt := range []string{
 		`CREATE INDEX IF NOT EXISTS idx_v2_dns_probe_enabled_heartbeat ON v2_dns_probe(enabled, last_heartbeat_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_dns_failover_group_enabled ON v2_dns_failover_group(enabled)`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_dns_failover_group_due ON v2_dns_failover_group(enabled, last_evaluated_at, check_interval_sec)`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_dns_failover_target_group_sort ON v2_dns_failover_target(group_id, enabled, sort)`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_dns_failover_group_probe_probe ON v2_dns_failover_group_probe(probe_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_dns_probe_target_state_target ON v2_dns_probe_target_state(target_id)`,
