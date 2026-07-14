@@ -2,13 +2,15 @@ package admin
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestEnsureDNSFailoverSchemaRunsOnce(t *testing.T) {
+func TestEnsureDNSFailoverSchemaRetriesAfterFailureAndStopsAfterSuccess(t *testing.T) {
 	t.Parallel()
 
 	db, mock, err := sqlmock.New()
@@ -17,15 +19,105 @@ func TestEnsureDNSFailoverSchemaRunsOnce(t *testing.T) {
 	}
 	defer db.Close()
 
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_dns_probe`).
+		WillReturnError(errors.New("temporary database error"))
+	expectAdminDNSFailoverSchema(mock)
+
+	service := &DBService{db: db}
+	if err := service.ensureDNSFailoverSchema(context.Background()); err == nil {
+		t.Fatal("first ensureDNSFailoverSchema call should fail")
+	}
+	if err := service.ensureDNSFailoverSchema(context.Background()); err != nil {
+		t.Fatalf("second ensureDNSFailoverSchema call should retry: %v", err)
+	}
+	if err := service.ensureDNSFailoverSchema(context.Background()); err != nil {
+		t.Fatalf("third ensureDNSFailoverSchema call should reuse success: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestEnsureDNSFailoverSchemaSerializesConcurrentInitialization(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	expectAdminDNSFailoverSchema(mock)
+
+	service := &DBService{db: db}
+	start := make(chan struct{})
+	errs := make(chan error, 8)
+	var wait sync.WaitGroup
+	for range 8 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			errs <- service.ensureDNSFailoverSchema(context.Background())
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent ensureDNSFailoverSchema: %v", err)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	for _, table := range []string{
 		"v2_dns_probe",
 		"v2_dns_failover_group",
 		"v2_dns_failover_target",
 		"v2_dns_failover_group_probe",
 		"v2_dns_probe_target_state",
+		"v2_dns_probe_result_inbox",
 		"v2_dns_failover_event",
 	} {
 		mock.ExpectExec(`CREATE TABLE IF NOT EXISTS ` + table).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	for _, constraint := range []string{
+		"chk_v2_dns_probe_enabled",
+		"chk_v2_dns_probe_prewarm",
+		"chk_v2_dns_failover_group_flags",
+		"chk_v2_dns_failover_group_timing",
+		"chk_v2_dns_failover_group_thresholds",
+		"chk_v2_dns_failover_group_dns_values",
+		"fk_v2_dns_failover_target_group",
+		"uniq_v2_dns_failover_target_group_id",
+		"chk_v2_dns_failover_target_type",
+		"chk_v2_dns_failover_target_enabled",
+		"chk_v2_dns_failover_target_sort",
+		"chk_v2_dns_failover_target_port",
+		"fk_v2_dns_failover_group_current_target",
+		"fk_v2_dns_failover_group_probe_group",
+		"fk_v2_dns_failover_group_probe_probe",
+		"fk_v2_dns_probe_target_state_probe",
+		"fk_v2_dns_probe_target_state_target",
+		"chk_v2_dns_probe_target_state_flags",
+		"chk_v2_dns_probe_target_state_streaks",
+		"chk_v2_dns_probe_target_state_latency",
+		"fk_v2_dns_probe_result_inbox_probe",
+		"fk_v2_dns_probe_result_inbox_target",
+		"uniq_v2_dns_probe_result_inbox_result",
+		"chk_v2_dns_probe_result_inbox_result_id",
+		"fk_v2_dns_failover_event_group",
+		"fk_v2_dns_failover_event_probe",
+		"fk_v2_dns_failover_event_target",
+		"chk_v2_dns_failover_event_type",
+	} {
+		mock.ExpectExec(`(?s)DO .*ADD CONSTRAINT ` + constraint).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 	for _, index := range []string{
@@ -34,20 +126,11 @@ func TestEnsureDNSFailoverSchemaRunsOnce(t *testing.T) {
 		"idx_v2_dns_failover_target_group_sort",
 		"idx_v2_dns_failover_group_probe_probe",
 		"idx_v2_dns_probe_target_state_target",
+		"idx_v2_dns_probe_result_inbox_target",
 		"idx_v2_dns_failover_event_group_created",
 	} {
 		mock.ExpectExec(`CREATE INDEX IF NOT EXISTS ` + index).
 			WillReturnResult(sqlmock.NewResult(0, 0))
-	}
-
-	service := &DBService{db: db}
-	for range 2 {
-		if err := service.ensureDNSFailoverSchema(context.Background()); err != nil {
-			t.Fatalf("ensureDNSFailoverSchema: %v", err)
-		}
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("sql expectations: %v", err)
 	}
 }
 

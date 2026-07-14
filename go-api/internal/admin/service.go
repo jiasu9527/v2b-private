@@ -415,8 +415,8 @@ type DBService struct {
 
 	clientEntryEnsureOnce sync.Once
 	clientEntryEnsureErr  error
-	dnsFailoverEnsureOnce sync.Once
-	dnsFailoverEnsureErr  error
+	dnsFailoverEnsureMu   sync.Mutex
+	dnsFailoverSchemaOK   bool
 }
 
 type paymentRow struct {
@@ -447,12 +447,17 @@ func (s *DBService) ensureDNSFailoverSchema(ctx context.Context) error {
 	if s.db == nil {
 		return ErrUnavailable
 	}
-	s.dnsFailoverEnsureOnce.Do(func() {
-		if err := platformpostgres.EnsureDNSFailoverSchema(ctx, s.db); err != nil {
-			s.dnsFailoverEnsureErr = fmt.Errorf("ensure DNS failover schema: %w", err)
-		}
-	})
-	return s.dnsFailoverEnsureErr
+
+	s.dnsFailoverEnsureMu.Lock()
+	defer s.dnsFailoverEnsureMu.Unlock()
+	if s.dnsFailoverSchemaOK {
+		return nil
+	}
+	if err := platformpostgres.EnsureDNSFailoverSchema(ctx, s.db); err != nil {
+		return fmt.Errorf("ensure DNS failover schema: %w", err)
+	}
+	s.dnsFailoverSchemaOK = true
+	return nil
 }
 
 func (s *DBService) WithQueueRuntime(jobs queue.Enqueuer) *DBService {
