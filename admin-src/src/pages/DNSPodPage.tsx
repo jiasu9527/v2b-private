@@ -64,6 +64,59 @@ type RecordRow = {
 
 type LineOption = { label: string; value: string; lineName: string };
 
+const lineNameTranslations: Record<string, string> = {
+  default: '默认',
+  global: '全球',
+  worldwide: '全球',
+  china: '中国',
+  domestic: '中国大陆',
+  mainland: '中国大陆',
+  oversea: '海外',
+  overseas: '海外',
+  'china mobile': '中国移动',
+  'china unicom': '中国联通',
+  'china telecom': '中国电信',
+  'china education': '中国教育网',
+  'china education network': '中国教育网',
+  cmcc: '中国移动',
+  cucc: '中国联通',
+  ctcc: '中国电信',
+  cernet: '中国教育网',
+  mobile: '移动',
+  unicom: '联通',
+  telecom: '电信',
+  education: '教育网',
+  asia: '亚洲',
+  europe: '欧洲',
+  africa: '非洲',
+  oceania: '大洋洲',
+  'north america': '北美洲',
+  'south america': '南美洲',
+  'middle east': '中东',
+  'hong kong': '中国香港',
+  macao: '中国澳门',
+  macau: '中国澳门',
+  taiwan: '中国台湾',
+};
+
+const regionDisplayNames = typeof Intl !== 'undefined' && typeof Intl.DisplayNames === 'function'
+  ? new Intl.DisplayNames(['zh-CN'], { type: 'region' })
+  : null;
+
+function localizeDNSPodLine(name: string, lineId = '') {
+  const rawName = String(name || '').trim();
+  const rawID = String(lineId || '').trim();
+  const translated = lineNameTranslations[rawName.toLowerCase()] || lineNameTranslations[rawID.toLowerCase()];
+  if (translated) return translated;
+
+  const regionCode = /^[a-z]{2}$/i.test(rawID) ? rawID : (/^[a-z]{2}$/i.test(rawName) ? rawName : '');
+  if (regionCode && regionDisplayNames) {
+    const localized = regionDisplayNames.of(regionCode.toUpperCase());
+    if (localized && localized.toUpperCase() !== regionCode.toUpperCase()) return localized;
+  }
+  return rawName || rawID || '默认';
+}
+
 function field(row: any, ...keys: string[]) {
   for (const key of keys) {
     if (row?.[key] !== undefined && row?.[key] !== null) return row[key];
@@ -109,7 +162,8 @@ function flattenLines(lines: any[], prefix = ''): LineOption[] {
   (lines || []).forEach((line) => {
     const lineName = String(field(line, 'LineName', 'line_name', 'name') || '默认');
     const lineId = String(field(line, 'LineId', 'line_id', 'id') || lineName);
-    const label = prefix ? `${prefix} / ${lineName}` : lineName;
+    const localizedName = localizeDNSPodLine(lineName, lineId);
+    const label = prefix ? `${prefix} / ${localizedName}` : localizedName;
     result.push({ label, value: lineId, lineName });
     const children = field(line, 'SubGroup', 'sub_group');
     if (Array.isArray(children) && children.length) result.push(...flattenLines(children, label));
@@ -411,7 +465,7 @@ export default function DNSPodPage() {
   const recordColumns = useMemo(() => [
     { title: '主机记录', dataIndex: 'name', width: 150, render: (value: string) => <strong>{value || '@'}</strong> },
     { title: '类型', dataIndex: 'type', width: 90, render: (value: string) => <Tag>{value}</Tag> },
-    { title: '线路', dataIndex: 'line', width: 160 },
+    { title: '线路', dataIndex: 'line', width: 160, render: (value: string, row: RecordRow) => localizeDNSPodLine(value, row.lineId) },
     { title: '记录值', dataIndex: 'value', minWidth: 260, ellipsis: true },
     { title: 'TTL', dataIndex: 'ttl', width: 90 },
     { title: 'MX', dataIndex: 'mx', width: 80, render: (value: number, row: RecordRow) => row.type === 'MX' ? value : '-' },
