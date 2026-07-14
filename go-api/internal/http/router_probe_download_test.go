@@ -27,7 +27,7 @@ func TestRouterProbeInstallRendersValidatedScript(t *testing.T) {
 		t.Fatalf("unexpected cache control %q", got)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"https://probe-public.example.com", "probe_token-1", "INTERVAL=45", "https://probe-public.example.com/api/v1/probe/download/linux"} {
+	for _, want := range []string{"https://probe-public.example.com", "probe_token-1", "INTERVAL=45", "https://probe-public.example.com/api/v1/probe/download/linux", `EXPECTED_SHA=$(awk 'NR==1 {print $1}'`, `ACTUAL_SHA=$(sha256sum "$TMP_DIR/$ARTIFACT"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("script missing %q: %s", want, body)
 		}

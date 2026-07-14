@@ -998,11 +998,14 @@ build_probe() {
 
 write_sha256() {
   local path="$1"
+  local dir base
+  dir="$(dirname "${path}")"
+  base="$(basename "${path}")"
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "${path}"
+    (cd "${dir}" && sha256sum "${base}")
     return
   fi
-  shasum -a 256 "${path}"
+  (cd "${dir}" && shasum -a 256 "${base}")
 }
 
 systemctl_available() {

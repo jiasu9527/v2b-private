@@ -18,6 +18,7 @@ GO_LOG="${TMP_DIR}/go.log" GO_BIN="${TMP_DIR}/fake-go" "${TMP_DIR}/scripts/appct
 for arch in amd64 arm64; do
   [[ -f "${TMP_DIR}/storage/probe/forest-probe-linux-${arch}" ]]
   [[ -f "${TMP_DIR}/storage/probe/forest-probe-linux-${arch}.sha256" ]]
+  grep -Eq "^[0-9a-f]{64}  forest-probe-linux-${arch}$" "${TMP_DIR}/storage/probe/forest-probe-linux-${arch}.sha256"
   rg -F "GOOS=linux GOARCH=${arch} build -o" "${TMP_DIR}/go.log" >/dev/null
 done
 echo 'appctl build-probe test passed'

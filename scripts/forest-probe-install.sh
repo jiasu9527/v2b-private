@@ -31,7 +31,10 @@ trap 'rm -rf "${TMP_DIR}"' EXIT
 artifact="forest-probe-linux-${ARCH}"
 curl -fsSL "${DOWNLOAD_BASE}/${ARCH}" -o "${TMP_DIR}/${artifact}"
 curl -fsSL "${DOWNLOAD_BASE}/${ARCH}.sha256" -o "${TMP_DIR}/${artifact}.sha256"
-(cd "${TMP_DIR}" && sha256sum -c "${artifact}.sha256")
+expected_sha="$(awk 'NR==1 {print $1}' "${TMP_DIR}/${artifact}.sha256")"
+[[ "${expected_sha}" =~ ^[0-9a-fA-F]{64}$ ]] || { echo "invalid probe checksum" >&2; exit 1; }
+actual_sha="$(sha256sum "${TMP_DIR}/${artifact}" | awk '{print $1}')"
+[[ "${actual_sha}" == "${expected_sha}" ]] || { echo "probe checksum mismatch" >&2; exit 1; }
 install -d -m 0755 "${INSTALL_DIR}" "${CONFIG_DIR}" "${SYSTEMD_DIR}"
 install -m 0755 "${TMP_DIR}/${artifact}" "${INSTALL_DIR}/forest-probe"
 umask 077
