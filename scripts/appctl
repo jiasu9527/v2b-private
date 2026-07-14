@@ -991,7 +991,7 @@ build_probe() {
   cd "${GO_DIR}"
   for arch in amd64 arm64; do
     output="${probe_dir}/forest-probe-linux-${arch}"
-    GOOS=linux GOARCH="${arch}" "${GO_BIN}" build -o "${output}" ./cmd/probe
+    CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" "${GO_BIN}" build -o "${output}" ./cmd/probe
     write_sha256 "${output}" > "${output}.sha256"
   done
 }

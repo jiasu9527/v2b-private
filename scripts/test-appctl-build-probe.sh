@@ -6,7 +6,7 @@ mkdir -p "${TMP_DIR}/scripts" "${TMP_DIR}/go-api"
 cp "${REPO_ROOT}/scripts/appctl" "${TMP_DIR}/scripts/appctl"; chmod +x "${TMP_DIR}/scripts/appctl"
 cat > "${TMP_DIR}/fake-go" <<'SH'
 #!/usr/bin/env bash
-printf 'GOOS=%s GOARCH=%s %s\n' "${GOOS:-}" "${GOARCH:-}" "$*" >> "${GO_LOG}"
+printf 'GOOS=%s GOARCH=%s CGO_ENABLED=%s %s\n' "${GOOS:-}" "${GOARCH:-}" "${CGO_ENABLED:-}" "$*" >> "${GO_LOG}"
 if [[ "$1" == build ]]; then
   for ((i=1; i <= $#; i++)); do
     if [[ "${!i}" == -o ]]; then j=$((i+1)); mkdir -p "$(dirname "${!j}")"; printf binary > "${!j}"; fi
@@ -19,6 +19,6 @@ for arch in amd64 arm64; do
   [[ -f "${TMP_DIR}/storage/probe/forest-probe-linux-${arch}" ]]
   [[ -f "${TMP_DIR}/storage/probe/forest-probe-linux-${arch}.sha256" ]]
   grep -Eq "^[0-9a-f]{64}  forest-probe-linux-${arch}$" "${TMP_DIR}/storage/probe/forest-probe-linux-${arch}.sha256"
-  rg -F "GOOS=linux GOARCH=${arch} build -o" "${TMP_DIR}/go.log" >/dev/null
+  rg -F "GOOS=linux GOARCH=${arch} CGO_ENABLED=0 build -o" "${TMP_DIR}/go.log" >/dev/null
 done
 echo 'appctl build-probe test passed'
