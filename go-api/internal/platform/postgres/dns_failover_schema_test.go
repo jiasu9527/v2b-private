@@ -3,10 +3,40 @@ package postgres
 import (
 	"context"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
+
+func TestDNSFailoverInboxTargetFKMigrationUsesCurrentSchemaAndValidatesExactFK(t *testing.T) {
+	migration := dnsProbeInboxTargetFKMigration
+	if strings.Contains(migration, "public.v2_") || strings.Contains(migration, "'public.") {
+		t.Fatalf("migration must not hard-code public schema:\n%s", migration)
+	}
+	for _, required := range []string{
+		"schema_name := current_schema();",
+		"format('%I.%I', schema_name, 'v2_dns_probe_result_inbox')",
+		"format('%I.%I', schema_name, 'v2_dns_failover_target')",
+		"inbox_relation := to_regclass(inbox_table);",
+		"target_relation := to_regclass(target_table);",
+		"a.attrelid = inbox_relation",
+		"a.attrelid = target_relation",
+		"SELECT c.contype, c.confdeltype, c.confrelid, c.conkey, c.confkey",
+		"current_constraint_type IS DISTINCT FROM 'f'",
+		"current_delete_action IS DISTINCT FROM 'n'",
+		"current_referenced_relation IS DISTINCT FROM target_relation",
+		"current_source_columns IS DISTINCT FROM ARRAY[inbox_target_attnum]::smallint[]",
+		"current_referenced_columns IS DISTINCT FROM ARRAY[target_id_attnum]::smallint[]",
+		"EXECUTE format('ALTER TABLE %s ALTER COLUMN %I DROP NOT NULL'",
+		"EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I'",
+		"EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I FOREIGN KEY (%I) REFERENCES %s(%I) ON DELETE SET NULL'",
+	} {
+		if !strings.Contains(migration, required) {
+			t.Errorf("migration missing %q", required)
+		}
+	}
+}
 
 func TestEnsureDNSFailoverSchemaCreatesTablesAndIndexesIdempotently(t *testing.T) {
 	t.Parallel()
@@ -48,7 +78,7 @@ func expectDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	}
 	mock.ExpectExec(`ALTER TABLE v2_dns_probe_target_state ADD COLUMN IF NOT EXISTS last_resolved_ip varchar\(128\) NOT NULL DEFAULT ''`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`(?s)DO \$dns_probe_inbox_fk\$.*SELECT a.attnotnull.*FROM pg_attribute a.*a.attrelid = 'public.v2_dns_probe_result_inbox'::regclass.*a.attname = 'target_id'.*IF target_is_not_null THEN.*ALTER TABLE public.v2_dns_probe_result_inbox ALTER COLUMN target_id DROP NOT NULL.*END IF;.*SELECT c.contype, c.confdeltype.*FROM pg_constraint c.*c.conrelid = 'public.v2_dns_probe_result_inbox'::regclass.*c.conname = 'fk_v2_dns_probe_result_inbox_target'.*IF current_constraint_type IS NULL THEN.*ALTER TABLE public.v2_dns_probe_result_inbox ADD CONSTRAINT fk_v2_dns_probe_result_inbox_target FOREIGN KEY \(target_id\) REFERENCES public.v2_dns_failover_target\(id\) ON DELETE SET NULL.*ELSIF current_constraint_type <> 'f' OR current_delete_action <> 'n' THEN.*ALTER TABLE public.v2_dns_probe_result_inbox DROP CONSTRAINT fk_v2_dns_probe_result_inbox_target.*ALTER TABLE public.v2_dns_probe_result_inbox ADD CONSTRAINT fk_v2_dns_probe_result_inbox_target FOREIGN KEY \(target_id\) REFERENCES public.v2_dns_failover_target\(id\) ON DELETE SET NULL.*END IF;.*END;.*\$dns_probe_inbox_fk\$;`).
+	mock.ExpectExec(regexp.QuoteMeta(dnsProbeInboxTargetFKMigration)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	for _, constraint := range expectedDNSFailoverConstraints {

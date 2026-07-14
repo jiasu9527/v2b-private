@@ -6,6 +6,79 @@ import (
 	"fmt"
 )
 
+const dnsProbeInboxTargetFKMigration = `DO $dns_probe_inbox_fk$
+DECLARE
+schema_name text;
+inbox_table text;
+target_table text;
+inbox_relation oid;
+target_relation oid;
+inbox_target_attnum smallint;
+target_id_attnum smallint;
+target_is_not_null boolean;
+current_constraint_type "char";
+current_delete_action "char";
+current_referenced_relation oid;
+current_source_columns smallint[];
+current_referenced_columns smallint[];
+BEGIN
+schema_name := current_schema();
+IF schema_name IS NULL THEN
+RAISE EXCEPTION 'DNS failover schema is not present in search_path';
+END IF;
+
+inbox_table := format('%I.%I', schema_name, 'v2_dns_probe_result_inbox');
+target_table := format('%I.%I', schema_name, 'v2_dns_failover_target');
+inbox_relation := to_regclass(inbox_table);
+target_relation := to_regclass(target_table);
+IF inbox_relation IS NULL OR target_relation IS NULL THEN
+RAISE EXCEPTION 'DNS failover tables are missing from schema %', schema_name;
+END IF;
+
+SELECT a.attnum, a.attnotnull
+INTO inbox_target_attnum, target_is_not_null
+FROM pg_attribute a
+WHERE a.attrelid = inbox_relation
+AND a.attname = 'target_id'
+AND NOT a.attisdropped;
+
+SELECT a.attnum
+INTO target_id_attnum
+FROM pg_attribute a
+WHERE a.attrelid = target_relation
+AND a.attname = 'id'
+AND NOT a.attisdropped;
+
+IF inbox_target_attnum IS NULL OR target_id_attnum IS NULL THEN
+RAISE EXCEPTION 'DNS failover target key columns are missing from schema %', schema_name;
+END IF;
+
+IF target_is_not_null THEN
+EXECUTE format('ALTER TABLE %s ALTER COLUMN %I DROP NOT NULL', inbox_table, 'target_id');
+END IF;
+
+SELECT c.contype, c.confdeltype, c.confrelid, c.conkey, c.confkey
+INTO current_constraint_type, current_delete_action, current_referenced_relation,
+current_source_columns, current_referenced_columns
+FROM pg_constraint c
+WHERE c.conrelid = inbox_relation
+AND c.conname = 'fk_v2_dns_probe_result_inbox_target';
+
+IF current_constraint_type IS NULL THEN
+EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I FOREIGN KEY (%I) REFERENCES %s(%I) ON DELETE SET NULL',
+inbox_table, 'fk_v2_dns_probe_result_inbox_target', 'target_id', target_table, 'id');
+ELSIF current_constraint_type IS DISTINCT FROM 'f'
+OR current_delete_action IS DISTINCT FROM 'n'
+OR current_referenced_relation IS DISTINCT FROM target_relation
+OR current_source_columns IS DISTINCT FROM ARRAY[inbox_target_attnum]::smallint[]
+OR current_referenced_columns IS DISTINCT FROM ARRAY[target_id_attnum]::smallint[] THEN
+EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', inbox_table, 'fk_v2_dns_probe_result_inbox_target');
+EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I FOREIGN KEY (%I) REFERENCES %s(%I) ON DELETE SET NULL',
+inbox_table, 'fk_v2_dns_probe_result_inbox_target', 'target_id', target_table, 'id');
+END IF;
+END;
+$dns_probe_inbox_fk$;`
+
 // EnsureDNSFailoverSchema creates the persistent state used by DNS failover.
 // Every statement is safe to execute more than once for eager startup and the
 // defensive lazy fallback without coordinating across processes.
@@ -146,44 +219,10 @@ PRIMARY KEY (id)
 	}
 	// Keep the nullable-column change and FK inspection/replacement in one
 	// PostgreSQL statement so an error cannot leave the inbox without its FK.
-	// sqlmock verifies all three branches structurally; empty DB, legacy CASCADE,
-	// and already-correct SET NULL branches remain real-PostgreSQL checks for Task 9.
-	if _, err := db.ExecContext(ctx, `DO $dns_probe_inbox_fk$
-DECLARE
-target_is_not_null boolean;
-current_constraint_type "char";
-current_delete_action "char";
-BEGIN
-SELECT a.attnotnull
-INTO target_is_not_null
-FROM pg_attribute a
-WHERE a.attrelid = 'public.v2_dns_probe_result_inbox'::regclass
-AND a.attname = 'target_id'
-AND NOT a.attisdropped;
-
-IF target_is_not_null THEN
-ALTER TABLE public.v2_dns_probe_result_inbox ALTER COLUMN target_id DROP NOT NULL;
-END IF;
-
-SELECT c.contype, c.confdeltype
-INTO current_constraint_type, current_delete_action
-FROM pg_constraint c
-WHERE c.conrelid = 'public.v2_dns_probe_result_inbox'::regclass
-AND c.conname = 'fk_v2_dns_probe_result_inbox_target';
-
-IF current_constraint_type IS NULL THEN
-ALTER TABLE public.v2_dns_probe_result_inbox
-ADD CONSTRAINT fk_v2_dns_probe_result_inbox_target
-FOREIGN KEY (target_id) REFERENCES public.v2_dns_failover_target(id) ON DELETE SET NULL;
-ELSIF current_constraint_type <> 'f' OR current_delete_action <> 'n' THEN
-ALTER TABLE public.v2_dns_probe_result_inbox
-DROP CONSTRAINT fk_v2_dns_probe_result_inbox_target;
-ALTER TABLE public.v2_dns_probe_result_inbox
-ADD CONSTRAINT fk_v2_dns_probe_result_inbox_target
-FOREIGN KEY (target_id) REFERENCES public.v2_dns_failover_target(id) ON DELETE SET NULL;
-END IF;
-END;
-$dns_probe_inbox_fk$;`); err != nil {
+	// It follows current_schema so it touches the same unqualified relations as
+	// the ordinary DDL above. Cross-schema shadowing and all catalog branches
+	// remain real-PostgreSQL checks for Task 9.
+	if _, err := db.ExecContext(ctx, dnsProbeInboxTargetFKMigration); err != nil {
 		return fmt.Errorf("atomically ensure DNS probe result tombstone target constraint: %w", err)
 	}
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -292,6 +293,21 @@ func Load() Config {
 	}
 
 	return cfg
+}
+
+// ValidateProbeTrustedProxyCIDRs rejects unsafe startup configuration before
+// the public probe router can silently ignore a misspelled proxy boundary.
+func ValidateProbeTrustedProxyCIDRs(values []string) error {
+	for index, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return fmt.Errorf("PROBE_TRUSTED_PROXY_CIDRS entry %d is empty", index+1)
+		}
+		if _, err := netip.ParsePrefix(value); err != nil {
+			return fmt.Errorf("PROBE_TRUSTED_PROXY_CIDRS entry %d %q is invalid: %w", index+1, value, err)
+		}
+	}
+	return nil
 }
 
 func getEnv(key, fallback string) string {

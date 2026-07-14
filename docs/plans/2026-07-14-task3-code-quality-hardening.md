@@ -77,5 +77,5 @@
 1. Run focused admin/http/postgres tests, `go test ./...`, `go vet ./...`, and race tests.
 2. Run `git diff --check`, remove `go-api/internal/storage`, and verify a clean intended diff.
 3. Task 4 consumes `v2_dns_failover_eval_outbox` by due `next_attempt_at`, updating attempts/backoff/error and deleting or acknowledging only after evaluation succeeds.
-4. Task 9 must exercise real PostgreSQL empty-schema, legacy CASCADE, existing SET NULL, repeated initialization, and concurrent outbox consumption.
+4. Task 9 must exercise real PostgreSQL empty-schema, legacy CASCADE, existing SET NULL, repeated initialization, and concurrent outbox consumption. It must also set `search_path=tenant,public` with shadow tables in both schemas and prove the atomic inbox migration changes only `tenant`.
 5. Tombstones have no automatic deletion in Task 3. Task 9 must define retention from the maximum probe retry/replay window before any cleanup is introduced.

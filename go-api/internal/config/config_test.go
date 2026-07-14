@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -65,6 +66,22 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 	if len(cfg.ProbeTrustedProxyCIDRs) != 2 || cfg.ProbeTrustedProxyCIDRs[0] != "10.0.0.0/8" || cfg.ProbeTrustedProxyCIDRs[1] != "2001:db8:1::/48" {
 		t.Fatalf("probe trusted proxy CIDRs = %#v", cfg.ProbeTrustedProxyCIDRs)
+	}
+}
+
+func TestValidateProbeTrustedProxyCIDRsRejectsInvalidCIDR(t *testing.T) {
+	if err := ValidateProbeTrustedProxyCIDRs([]string{"127.0.0.0/8", "::1/128"}); err != nil {
+		t.Fatalf("default CIDRs rejected: %v", err)
+	}
+
+	t.Setenv("PROBE_TRUSTED_PROXY_CIDRS", "10.0.0.0/8,not-a-cidr")
+	cfg := Load()
+	err := ValidateProbeTrustedProxyCIDRs(cfg.ProbeTrustedProxyCIDRs)
+	if err == nil {
+		t.Fatal("invalid CIDR was accepted")
+	}
+	if !strings.Contains(err.Error(), "PROBE_TRUSTED_PROXY_CIDRS") || !strings.Contains(err.Error(), "not-a-cidr") {
+		t.Fatalf("error is not actionable: %v", err)
 	}
 }
 

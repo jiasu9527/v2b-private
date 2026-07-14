@@ -26,6 +26,9 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if err := validateServerConfig(cfg); err != nil {
+		log.Fatalf("invalid configuration: %v", err)
+	}
 	runtimeConfig := config.NewRuntimeState(cfg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -110,6 +113,10 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("listen and serve: %v", err)
 	}
+}
+
+func validateServerConfig(cfg config.Config) error {
+	return config.ValidateProbeTrustedProxyCIDRs(cfg.ProbeTrustedProxyCIDRs)
 }
 
 type dnsFailoverSchemaInitializer interface {
