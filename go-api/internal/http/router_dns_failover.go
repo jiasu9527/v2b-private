@@ -30,6 +30,9 @@ func handleAdminDNSFailover(w http.ResponseWriter, r *http.Request, sessions ses
 	if len(parts) == 1 && parts[0] == "probes" {
 		return handleDNSFailoverProbes(w, r, service)
 	}
+	if len(parts) == 2 && parts[0] == "probes" {
+		return handleDNSFailoverProbeDelete(w, r, service, parts[1])
+	}
 	if len(parts) == 3 && parts[0] == "probes" && (parts[2] == "enabled" || parts[2] == "revoke") {
 		return handleDNSFailoverProbeMutation(w, r, service, parts[1], parts[2])
 	}
@@ -86,7 +89,19 @@ func handleDNSFailoverProbes(w http.ResponseWriter, r *http.Request, service adm
 		if err != nil {
 			return writeDNSFailoverError(w, err)
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"data": probes})
+		settings, err := service.GetDNSFailoverSettings(r.Context())
+		if err != nil {
+			return writeDNSFailoverError(w, err)
+		}
+		data := make([]map[string]any, 0, len(probes))
+		for _, probe := range probes {
+			raw, _ := json.Marshal(probe)
+			item := map[string]any{}
+			_ = json.Unmarshal(raw, &item)
+			item["install_command"] = dnsFailoverInstallCommand(settings.ProbeAPIURL, probe.Secret, probe.Name)
+			data = append(data, item)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": data})
 	case http.MethodPost:
 		var input struct {
 			Name string `json:"name"`
@@ -115,6 +130,21 @@ func handleDNSFailoverProbes(w http.ResponseWriter, r *http.Request, service adm
 	default:
 		return dnsFailoverMethodNotAllowed(w, r, http.MethodGet+", "+http.MethodPost)
 	}
+	return true
+}
+
+func handleDNSFailoverProbeDelete(w http.ResponseWriter, r *http.Request, service admin.Service, rawID string) bool {
+	if r.Method != http.MethodDelete {
+		return dnsFailoverMethodNotAllowed(w, r, http.MethodDelete)
+	}
+	id, ok := dnsFailoverPositiveID(w, rawID, "探针 ID")
+	if !ok {
+		return true
+	}
+	if _, err := service.DeleteDNSProbe(r.Context(), id); err != nil {
+		return writeDNSFailoverError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": true})
 	return true
 }
 

@@ -34,8 +34,8 @@ func TestDNSFailoverRoutesRejectUnauthenticatedRequests(t *testing.T) {
 	}
 }
 
-func TestDNSFailoverSettingsAndProbeSecretAreMappedSafely(t *testing.T) {
-	service := &fakeAdminService{dnsFailoverSettings: admin.DNSFailoverSettings{ProbeAPIURL: "https://probe.example/api"}, dnsProbeCreate: admin.DNSProbeCreateResult{Probe: admin.DNSProbeRecord{ID: 7, Name: "cn-a"}, Secret: "s p'ec"}, dnsProbes: []admin.DNSProbeRecord{{ID: 7, Name: "cn-a"}}}
+func TestDNSFailoverSettingsAndPersistentProbeSecretAreMapped(t *testing.T) {
+	service := &fakeAdminService{dnsFailoverSettings: admin.DNSFailoverSettings{ProbeAPIURL: "https://probe.example/api"}, dnsProbeCreate: admin.DNSProbeCreateResult{Probe: admin.DNSProbeRecord{ID: 7, Name: "cn-a"}, Secret: "s p'ec"}, dnsProbes: []admin.DNSProbeRecord{{ID: 7, Name: "cn-a", Secret: "s p'ec"}}}
 	router := dnsFailoverRouter(service)
 	for _, tc := range []struct{ method, path, body string }{{http.MethodGet, "/api/v1/control/dns-failover/settings", ""}, {http.MethodPut, "/api/v1/control/dns-failover/settings", `{"dns_probe_api_url":"https://new.example"}`}, {http.MethodPost, "/api/v1/control/dns-failover/probes", `{"name":"cn-a"}`}, {http.MethodGet, "/api/v1/control/dns-failover/probes", ""}} {
 		rec := dnsFailoverRequest(router, tc.method, tc.path, tc.body)
@@ -45,12 +45,21 @@ func TestDNSFailoverSettingsAndProbeSecretAreMappedSafely(t *testing.T) {
 		if tc.method == http.MethodPost && (!strings.Contains(rec.Body.String(), `"secret":"s p'ec"`) || !strings.Contains(rec.Body.String(), "/probe/install.sh")) {
 			t.Fatalf("create response=%s", rec.Body.String())
 		}
-		if tc.method == http.MethodGet && tc.path != "/api/v1/control/dns-failover/settings" && strings.Contains(rec.Body.String(), "s p'ec") {
-			t.Fatalf("listed secret leaked: %s", rec.Body.String())
+		if tc.method == http.MethodGet && tc.path != "/api/v1/control/dns-failover/settings" && (!strings.Contains(rec.Body.String(), `"secret":"s p'ec"`) || !strings.Contains(rec.Body.String(), `"install_command"`)) {
+			t.Fatalf("listed probe omitted reusable installation data: %s", rec.Body.String())
 		}
 	}
 	if service.lastDNSFailoverSettingsSave.ProbeAPIURL != "https://new.example" || service.lastDNSProbeCreate.Name != "cn-a" {
 		t.Fatalf("request mapping failed: %#v %#v", service.lastDNSFailoverSettingsSave, service.lastDNSProbeCreate)
+	}
+}
+
+func TestDNSFailoverProbeDeleteRoute(t *testing.T) {
+	service := &fakeAdminService{}
+	router := dnsFailoverRouter(service)
+	rec := dnsFailoverRequest(router, http.MethodDelete, "/api/v1/control/dns-failover/probes/7", "")
+	if rec.Code != http.StatusOK || service.lastDNSProbeDeleteID != 7 {
+		t.Fatalf("delete: status=%d id=%d body=%s", rec.Code, service.lastDNSProbeDeleteID, rec.Body.String())
 	}
 }
 

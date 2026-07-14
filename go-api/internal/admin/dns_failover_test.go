@@ -93,7 +93,7 @@ func (matcher *dnsProbeTokenHashMatcher) Match(value driver.Value) bool {
 	return true
 }
 
-func TestDNSFailoverProbeSecretIsReturnedOnceAndOnlyHashIsStored(t *testing.T) {
+func TestDNSFailoverProbeSecretIsPersistedAndReturnedInList(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -102,8 +102,8 @@ func TestDNSFailoverProbeSecretIsReturnedOnceAndOnlyHashIsStored(t *testing.T) {
 
 	service := &DBService{db: db, dnsFailoverSchemaOK: true}
 	hashMatcher := &dnsProbeTokenHashMatcher{}
-	mock.ExpectQuery(`INSERT INTO v2_dns_probe \(name, token_hash, enabled, created_at, updated_at\)\s+VALUES \(\$1, \$2, 1, \$3, \$4\)\s+RETURNING id, created_at, updated_at`).
-		WithArgs("北京探针", hashMatcher, sqlmock.AnyArg(), sqlmock.AnyArg()).
+	mock.ExpectQuery(`INSERT INTO v2_dns_probe \(name, token_hash, token_plaintext, enabled, created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, 1, \$4, \$5\)\s+RETURNING id, created_at, updated_at`).
+		WithArgs("北京探针", hashMatcher, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "updated_at"}).AddRow(int64(7), int64(100), int64(100)))
 
 	created, err := service.CreateDNSProbe(context.Background(), DNSProbeCreateRequest{Name: " 北京探针 "})
@@ -125,22 +125,31 @@ func TestDNSFailoverProbeSecretIsReturnedOnceAndOnlyHashIsStored(t *testing.T) {
 		t.Fatalf("unexpected created probe: %#v", created.Probe)
 	}
 
-	mock.ExpectQuery(`SELECT id, name, enabled, version, arch, public_ip, last_heartbeat_at, prewarm_count, created_at, updated_at\s+FROM v2_dns_probe\s+ORDER BY id ASC`).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "enabled", "version", "arch", "public_ip", "last_heartbeat_at", "prewarm_count", "created_at", "updated_at"}).
-			AddRow(int64(7), "北京探针", int64(1), "v1.2.3", "amd64", "203.0.113.7", nil, int64(0), int64(100), int64(100)))
+	mock.ExpectQuery(`SELECT id, name, token_plaintext, enabled, version, arch, public_ip, last_heartbeat_at, prewarm_count, created_at, updated_at\s+FROM v2_dns_probe\s+ORDER BY id ASC`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "token_plaintext", "enabled", "version", "arch", "public_ip", "last_heartbeat_at", "prewarm_count", "created_at", "updated_at"}).
+			AddRow(int64(7), "北京探针", created.Secret, int64(1), "v1.2.3", "amd64", "203.0.113.7", nil, int64(0), int64(100), int64(100)))
 	probes, err := service.ListDNSProbes(context.Background())
 	if err != nil {
 		t.Fatalf("ListDNSProbes: %v", err)
 	}
-	if len(probes) != 1 || probes[0].ID != 7 || probes[0].Name != "北京探针" {
+	if len(probes) != 1 || probes[0].ID != 7 || probes[0].Name != "北京探针" || probes[0].Secret != created.Secret {
 		t.Fatalf("unexpected probes: %#v", probes)
 	}
-	encoded, err := json.Marshal(probes)
-	if err != nil {
-		t.Fatalf("marshal probes: %v", err)
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
 	}
-	if strings.Contains(string(encoded), created.Secret) || strings.Contains(string(encoded), hashMatcher.value) || strings.Contains(string(encoded), "token_hash") {
-		t.Fatalf("probe list leaked secret material: %s", encoded)
+}
+
+func TestDeleteDNSProbeRemovesProbeAndReliesOnForeignKeyCleanup(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	mock.ExpectExec(`DELETE FROM v2_dns_probe WHERE id = \$1`).WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 1))
+	if ok, err := service.DeleteDNSProbe(context.Background(), 7); err != nil || !ok {
+		t.Fatalf("DeleteDNSProbe = %v, %v", ok, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -170,9 +179,9 @@ func TestDNSFailoverProbeListAndRevoke(t *testing.T) {
 	defer db.Close()
 
 	service := &DBService{db: db, dnsFailoverSchemaOK: true}
-	mock.ExpectQuery(`SELECT id, name, enabled, version, arch, public_ip, last_heartbeat_at, prewarm_count, created_at, updated_at\s+FROM v2_dns_probe\s+ORDER BY id ASC`).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "enabled", "version", "arch", "public_ip", "last_heartbeat_at", "prewarm_count", "created_at", "updated_at"}).
-			AddRow(int64(3), "上海探针", int64(1), "", "", "", int64(90), int64(3), int64(10), int64(90)))
+	mock.ExpectQuery(`SELECT id, name, token_plaintext, enabled, version, arch, public_ip, last_heartbeat_at, prewarm_count, created_at, updated_at\s+FROM v2_dns_probe\s+ORDER BY id ASC`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "token_plaintext", "enabled", "version", "arch", "public_ip", "last_heartbeat_at", "prewarm_count", "created_at", "updated_at"}).
+			AddRow(int64(3), "上海探针", "secret", int64(1), "", "", "", int64(90), int64(3), int64(10), int64(90)))
 	probes, err := service.ListDNSProbes(context.Background())
 	if err != nil {
 		t.Fatalf("ListDNSProbes: %v", err)
@@ -228,7 +237,7 @@ func TestDNSFailoverListProbeQueryErrorIsWrapped(t *testing.T) {
 	service := &DBService{db: db, dnsFailoverSchemaOK: true}
 	dbErr := errors.New("probe query failed")
 
-	mock.ExpectQuery(`SELECT id, name, enabled, version, arch, public_ip, last_heartbeat_at, prewarm_count, created_at, updated_at\s+FROM v2_dns_probe`).WillReturnError(dbErr)
+	mock.ExpectQuery(`SELECT id, name, token_plaintext, enabled, version, arch, public_ip, last_heartbeat_at, prewarm_count, created_at, updated_at\s+FROM v2_dns_probe`).WillReturnError(dbErr)
 	if _, err := service.ListDNSProbes(context.Background()); err == nil || !errors.Is(err, dbErr) || !strings.Contains(err.Error(), "探针列表") {
 		t.Fatalf("ListDNSProbes error = %v, want wrapped database error", err)
 	}

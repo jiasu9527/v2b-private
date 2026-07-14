@@ -39,6 +39,7 @@ type DNSFailoverSettingsSaveRequest struct {
 type DNSProbeRecord struct {
 	ID              int64  `json:"id"`
 	Name            string `json:"name"`
+	Secret          string `json:"secret"`
 	Enabled         bool   `json:"enabled"`
 	Version         string `json:"version"`
 	Arch            string `json:"arch"`
@@ -224,7 +225,7 @@ func (s *DBService) ListDNSProbes(ctx context.Context) ([]DNSProbeRecord, error)
 	if err := s.ensureDNSFailoverSchema(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, enabled, version, arch, public_ip, last_heartbeat_at, prewarm_count, created_at, updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, token_plaintext, enabled, version, arch, public_ip, last_heartbeat_at, prewarm_count, created_at, updated_at
 FROM v2_dns_probe
 ORDER BY id ASC`)
 	if err != nil {
@@ -242,6 +243,7 @@ ORDER BY id ASC`)
 		if err := rows.Scan(
 			&probe.ID,
 			&probe.Name,
+			&probe.Secret,
 			&enabled,
 			&probe.Version,
 			&probe.Arch,
@@ -290,12 +292,33 @@ func (s *DBService) CreateDNSProbe(ctx context.Context, request DNSProbeCreateRe
 	hashText := hex.EncodeToString(hash[:])
 	now := time.Now().Unix()
 	probe := DNSProbeRecord{Name: name, Enabled: true}
-	if err := s.db.QueryRowContext(ctx, `INSERT INTO v2_dns_probe (name, token_hash, enabled, created_at, updated_at)
-VALUES ($1, $2, 1, $3, $4)
-RETURNING id, created_at, updated_at`, name, hashText, now, now).Scan(&probe.ID, &probe.CreatedAt, &probe.UpdatedAt); err != nil {
+	if err := s.db.QueryRowContext(ctx, `INSERT INTO v2_dns_probe (name, token_hash, token_plaintext, enabled, created_at, updated_at)
+VALUES ($1, $2, $3, 1, $4, $5)
+RETURNING id, created_at, updated_at`, name, hashText, secret, now, now).Scan(&probe.ID, &probe.CreatedAt, &probe.UpdatedAt); err != nil {
 		return DNSProbeCreateResult{}, fmt.Errorf("创建探针失败: %w", err)
 	}
 	return DNSProbeCreateResult{Probe: probe, Secret: secret}, nil
+}
+
+func (s *DBService) DeleteDNSProbe(ctx context.Context, id int64) (bool, error) {
+	if err := s.ensureDNSFailoverSchema(ctx); err != nil {
+		return false, err
+	}
+	if id <= 0 {
+		return false, errors.New("探针 ID 无效")
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM v2_dns_probe WHERE id = $1`, id)
+	if err != nil {
+		return false, fmt.Errorf("删除探针失败: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("读取探针删除结果失败: %w", err)
+	}
+	if affected == 0 {
+		return false, errors.New("探针不存在")
+	}
+	return true, nil
 }
 
 func (s *DBService) SetDNSProbeEnabled(ctx context.Context, id int64, enabled bool) (bool, error) {

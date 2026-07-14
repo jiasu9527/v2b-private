@@ -115,6 +115,8 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	}
 	mock.ExpectExec(`ALTER TABLE v2_dns_probe_target_state ADD COLUMN IF NOT EXISTS last_resolved_ip`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`ALTER TABLE v2_dns_probe ADD COLUMN IF NOT EXISTS token_plaintext`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`ALTER TABLE v2_dns_failover_group ADD COLUMN IF NOT EXISTS last_evaluated_at`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	for range 7 {

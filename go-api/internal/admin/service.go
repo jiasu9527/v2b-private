@@ -354,6 +354,7 @@ type Service interface {
 	ListDNSProbes(ctx context.Context) ([]DNSProbeRecord, error)
 	CreateDNSProbe(ctx context.Context, req DNSProbeCreateRequest) (DNSProbeCreateResult, error)
 	SetDNSProbeEnabled(ctx context.Context, id int64, enabled bool) (bool, error)
+	DeleteDNSProbe(ctx context.Context, id int64) (bool, error)
 	ListDNSFailoverRules(ctx context.Context) ([]DNSFailoverRuleRecord, error)
 	GetDNSFailoverRule(ctx context.Context, id int64) (DNSFailoverRuleRecord, error)
 	SaveDNSFailoverRule(ctx context.Context, req DNSFailoverRuleSaveRequest) (DNSFailoverRuleRecord, error)
