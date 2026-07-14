@@ -35,13 +35,22 @@ func TestLegacyClientListsDomainsWithLoginToken(t *testing.T) {
 }
 
 func TestLegacyClientMapsRecordsTypesAndLines(t *testing.T) {
+	var gotTypeGrade, gotLineGrade string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/Record.List":
 			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"info":{"record_total":"1"},"records":[{"id":"8","name":"www","type":"A","value":"192.0.2.1","line":"Default","line_id":"default","ttl":"600","mx":"0","enabled":"1","status":"enabled","updated_on":"2026-01-01 00:00:00"}]}`))
 		case "/Record.Type":
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("parse Record.Type form: %v", err)
+			}
+			gotTypeGrade = r.Form.Get("domain_grade")
 			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"types":["A","CNAME","TXT"]}`))
 		case "/Record.Line":
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("parse Record.Line form: %v", err)
+			}
+			gotLineGrade = r.Form.Get("domain_grade")
 			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"lines":{"default":{"name":"Default","sub_area":{"default":"Default"}},"asia":{"name":"Asia","sub_area":{"JP":"Japan","SG":"Singapore"}}}}`))
 		default:
 			http.NotFound(w, r)
@@ -54,13 +63,16 @@ func TestLegacyClientMapsRecordsTypesAndLines(t *testing.T) {
 	if err != nil || records.Total != 1 || len(records.Records) != 1 || records.Records[0].Status != "ENABLE" {
 		t.Fatalf("unexpected records=%#v err=%v", records, err)
 	}
-	types, err := client.DescribeRecordType(context.Background(), DescribeRecordTypeRequest{DomainGrade: "DP_Free"})
+	types, err := client.DescribeRecordType(context.Background(), DescribeRecordTypeRequest{DomainGrade: "DP_Pro"})
 	if err != nil || len(types.Types) != 3 || types.Types[1] != "CNAME" {
 		t.Fatalf("unexpected types=%#v err=%v", types, err)
 	}
-	lines, err := client.DescribeRecordLineList(context.Background(), DescribeRecordLineListRequest{Domain: "dnspod.com", DomainGrade: "DP_Free"})
+	lines, err := client.DescribeRecordLineList(context.Background(), DescribeRecordLineListRequest{Domain: "dnspod.com", DomainGrade: "DP_Pro"})
 	if err != nil || len(lines.Lines) != 2 || lines.Lines[0].LineID != "asia" || len(lines.Lines[0].SubGroup) != 2 || lines.Lines[0].SubGroup[0].LineID != "JP" {
 		t.Fatalf("unexpected lines=%#v err=%v", lines, err)
+	}
+	if gotTypeGrade != "DP_Free" || gotLineGrade != "DP_Free" {
+		t.Fatalf("legacy type/line APIs only support DP_Free, got type=%q line=%q", gotTypeGrade, gotLineGrade)
 	}
 }
 
@@ -79,6 +91,22 @@ func TestLegacyClientRequiresDomainIDForRecordList(t *testing.T) {
 	}
 	if called {
 		t.Fatal("legacy Record.List must reject a missing domain ID before sending the request")
+	}
+}
+
+func TestLegacyClientProvidesDefaultLineWhenProviderReturnsNoLines(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"lines":{}}`))
+	}))
+	defer server.Close()
+
+	client := NewLegacyClient("1,token", WithLegacyEndpoint(server.URL))
+	result, err := client.DescribeRecordLineList(context.Background(), DescribeRecordLineListRequest{Domain: "example.com", DomainGrade: "DP_Free"})
+	if err != nil {
+		t.Fatalf("DescribeRecordLineList: %v", err)
+	}
+	if len(result.Lines) != 1 || result.Lines[0].LineID != "default" || result.Lines[0].LineName != "Default" {
+		t.Fatalf("expected default line fallback, got %#v", result.Lines)
 	}
 }
 

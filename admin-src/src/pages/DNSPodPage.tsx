@@ -272,13 +272,17 @@ export default function DNSPodPage() {
   const loadRecordLines = async (recordType: string, currentLineId = '', currentLineName = '') => {
     if (!selectedDomain || !recordType) return;
     setLinesLoading(true);
+    const defaultLine: LineOption = config.auth_type === 'token'
+      ? { label: '默认', value: 'default', lineName: 'Default' }
+      : { label: '默认', value: '0=0', lineName: '默认' };
     try {
       const response = await apiGet('/dns/record/lines', {
         domain: selectedDomain.name,
         domain_grade: selectedDomain.grade,
         record_type: recordType,
       });
-      const options = flattenLines(response.data || []);
+      const loadedOptions = flattenLines(response.data || []);
+      const options = loadedOptions.length ? loadedOptions : [defaultLine];
       setLineOptions(options);
       let selected = currentLineId || recordForm.getFieldValue('record_line_id');
       if (!selected && currentLineName) {
@@ -288,8 +292,9 @@ export default function DNSPodPage() {
       if (!selected || !options.some((item) => item.value === selected)) selected = options[0]?.value;
       if (selected) recordForm.setFieldValue('record_line_id', selected);
     } catch (error: any) {
-      setLineOptions([]);
-      message.error(error.message || '加载解析线路失败');
+      setLineOptions([defaultLine]);
+      recordForm.setFieldValue('record_line_id', defaultLine.value);
+      message.warning(`${error.message || '加载解析线路失败'}，已使用默认线路`);
     } finally {
       setLinesLoading(false);
     }

@@ -203,7 +203,9 @@ func (c *LegacyClient) DescribeRecordList(ctx context.Context, request DescribeR
 }
 
 func (c *LegacyClient) DescribeRecordType(ctx context.Context, request DescribeRecordTypeRequest) (DescribeRecordTypeResult, error) {
-	payload, err := c.call(ctx, "Record.Type", url.Values{"domain_grade": {request.DomainGrade}})
+	// DNSPod international's legacy Record.Type endpoint currently accepts DP_Free only,
+	// even when Domain.List reports a different grade for the selected domain.
+	payload, err := c.call(ctx, "Record.Type", url.Values{"domain_grade": {"DP_Free"}})
 	if err != nil {
 		return DescribeRecordTypeResult{}, err
 	}
@@ -216,7 +218,8 @@ func (c *LegacyClient) DescribeRecordType(ctx context.Context, request DescribeR
 }
 
 func (c *LegacyClient) DescribeRecordLineList(ctx context.Context, request DescribeRecordLineListRequest) (DescribeRecordLineListResult, error) {
-	values := url.Values{"domain_grade": {request.DomainGrade}}
+	// Record.Line has the same DP_Free-only restriction as Record.Type.
+	values := url.Values{"domain_grade": {"DP_Free"}}
 	setLegacyDomain(values, request.Domain, request.DomainID)
 	payload, err := c.call(ctx, "Record.Line", values)
 	if err != nil {
@@ -233,6 +236,9 @@ func (c *LegacyClient) DescribeRecordLineList(ctx context.Context, request Descr
 			line.SubGroup = append(line.SubGroup, RecordLine{LineID: subKey, LineName: legacyString(subAreas[subKey]), Useful: true})
 		}
 		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		lines = append(lines, RecordLine{LineID: "default", LineName: "Default", Useful: true})
 	}
 	return DescribeRecordLineListResult{Lines: lines}, nil
 }
