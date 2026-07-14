@@ -42,7 +42,7 @@ func TestDNSFailoverSettingsAndPersistentProbeSecretAreMapped(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s %s: status=%d body=%s", tc.method, tc.path, rec.Code, rec.Body.String())
 		}
-		if tc.method == http.MethodPost && (!strings.Contains(rec.Body.String(), `"secret":"s p'ec"`) || !strings.Contains(rec.Body.String(), "/probe/install.sh")) {
+		if tc.method == http.MethodPost && (!strings.Contains(rec.Body.String(), `"secret":"s p'ec"`) || !strings.Contains(rec.Body.String(), "/api/v1/probe/install.sh")) {
 			t.Fatalf("create response=%s", rec.Body.String())
 		}
 		if tc.method == http.MethodGet && tc.path != "/api/v1/control/dns-failover/settings" && (!strings.Contains(rec.Body.String(), `"secret":"s p'ec"`) || !strings.Contains(rec.Body.String(), `"install_command"`)) {
@@ -121,9 +121,12 @@ func TestDNSFailoverRoutesRejectMalformedJSONAndSurfaceManualConflict(t *testing
 
 func TestDNSFailoverInstallCommandEscapesURLAndParameters(t *testing.T) {
 	command := dnsFailoverInstallCommand("https://probe.example/a b/", "secret'; touch /tmp/pwned", "cn west")
-	for _, want := range []string{"https://probe.example/a b/probe/install.sh", "--api-url", "--token", "--name", "'\\\"'\\\"'"} {
+	for _, want := range []string{"https://probe.example/a b/api/v1/probe/install.sh?", "api_url=https%3A%2F%2Fprobe.example%2Fa+b", "token=secret%27%3B+touch+%2Ftmp%2Fpwned"} {
 		if !strings.Contains(command, want) {
 			t.Fatalf("install command missing %q: %s", want, command)
 		}
+	}
+	if strings.Contains(command, "--token") || strings.Contains(command, "touch /tmp/pwned") {
+		t.Fatalf("install command must pass validated values in the request query: %s", command)
 	}
 }

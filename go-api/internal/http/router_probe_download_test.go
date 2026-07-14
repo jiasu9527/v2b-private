@@ -13,7 +13,7 @@ import (
 
 func TestRouterProbeInstallRendersValidatedScript(t *testing.T) {
 	router := NewRouter(config.Config{ProbeStorageDir: t.TempDir()})
-	req := httptest.NewRequest(http.MethodGet, "https://panel.example.com/probe/install.sh?api_url=https%3A%2F%2Fpanel.example.com%2Fapi%2Fv1&token=probe_token-1&interval=45", nil)
+	req := httptest.NewRequest(http.MethodGet, "https://panel.example.com/api/v1/probe/install.sh?api_url=https%3A%2F%2Fpanel.example.com&token=probe_token-1&interval=45", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -27,13 +27,13 @@ func TestRouterProbeInstallRendersValidatedScript(t *testing.T) {
 		t.Fatalf("unexpected cache control %q", got)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"https://panel.example.com/api/v1", "probe_token-1", "INTERVAL=45", "https://panel.example.com/probe/download/linux"} {
+	for _, want := range []string{"https://panel.example.com", "probe_token-1", "INTERVAL=45", "https://panel.example.com/api/v1/probe/download/linux"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("script missing %q: %s", want, body)
 		}
 	}
 
-	bad := httptest.NewRequest(http.MethodGet, "/probe/install.sh?api_url=file%3A%2F%2F%2Ftmp%2Fx&token=$(id)", nil)
+	bad := httptest.NewRequest(http.MethodGet, "/api/v1/probe/install.sh?api_url=file%3A%2F%2F%2Ftmp%2Fx&token=$(id)", nil)
 	badRec := httptest.NewRecorder()
 	router.ServeHTTP(badRec, bad)
 	if badRec.Code != http.StatusBadRequest {
@@ -52,7 +52,7 @@ func TestRouterProbeDownloadUsesFixedArtifactNames(t *testing.T) {
 	}
 	router := NewRouter(config.Config{ProbeStorageDir: storage})
 
-	for _, path := range []string{"/probe/download/linux/amd64", "/probe/download/linux/amd64.sha256"} {
+	for _, path := range []string{"/api/v1/probe/download/linux/amd64", "/api/v1/probe/download/linux/amd64.sha256"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
@@ -69,13 +69,13 @@ func TestRouterProbeDownloadUsesFixedArtifactNames(t *testing.T) {
 			t.Fatalf("%s unexpected content type %q", path, rec.Header().Get("Content-Type"))
 		}
 	}
-	traversal := httptest.NewRequest(http.MethodGet, "/probe/download/linux/../amd64", nil)
+	traversal := httptest.NewRequest(http.MethodGet, "/api/v1/probe/download/linux/../amd64", nil)
 	traversalRec := httptest.NewRecorder()
 	router.ServeHTTP(traversalRec, traversal)
 	if traversalRec.Code != http.StatusNotFound {
 		t.Fatalf("traversal expected 404, got %d", traversalRec.Code)
 	}
-	missing := httptest.NewRequest(http.MethodGet, "/probe/download/linux/arm64", nil)
+	missing := httptest.NewRequest(http.MethodGet, "/api/v1/probe/download/linux/arm64", nil)
 	missingRec := httptest.NewRecorder()
 	router.ServeHTTP(missingRec, missing)
 	if missingRec.Code != http.StatusNotFound {

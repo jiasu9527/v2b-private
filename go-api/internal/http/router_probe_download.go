@@ -29,7 +29,7 @@ func handleProbeInstall(w http.ResponseWriter, r *http.Request) {
 	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") == "http" {
 		scheme = "http"
 	}
-	downloadBase := scheme + "://" + r.Host + "/probe/download/linux"
+	downloadBase := scheme + "://" + r.Host + "/api/v1/probe/download/linux"
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	fmt.Fprintf(w, probeInstallScript, shellQuote(apiURL), shellQuote(token), interval, shellQuote(downloadBase))
@@ -63,10 +63,14 @@ func handleProbeDownload(w http.ResponseWriter, r *http.Request, cfg config.Conf
 		return
 	}
 	name, ok := map[string]string{
-		"/probe/download/linux/amd64":        "forest-probe-linux-amd64",
-		"/probe/download/linux/arm64":        "forest-probe-linux-arm64",
-		"/probe/download/linux/amd64.sha256": "forest-probe-linux-amd64.sha256",
-		"/probe/download/linux/arm64.sha256": "forest-probe-linux-arm64.sha256",
+		"/api/v1/probe/download/linux/amd64":        "forest-probe-linux-amd64",
+		"/api/v1/probe/download/linux/arm64":        "forest-probe-linux-arm64",
+		"/api/v1/probe/download/linux/amd64.sha256": "forest-probe-linux-amd64.sha256",
+		"/api/v1/probe/download/linux/arm64.sha256": "forest-probe-linux-arm64.sha256",
+		"/probe/download/linux/amd64":               "forest-probe-linux-amd64",
+		"/probe/download/linux/arm64":               "forest-probe-linux-arm64",
+		"/probe/download/linux/amd64.sha256":        "forest-probe-linux-amd64.sha256",
+		"/probe/download/linux/arm64.sha256":        "forest-probe-linux-arm64.sha256",
 	}[r.URL.Path]
 	if !ok {
 		http.NotFound(w, r)

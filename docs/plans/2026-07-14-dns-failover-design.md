@@ -58,8 +58,8 @@ flowchart LR
 
 ## 探针协议
 
-- `GET /probe/install.sh`：生成 systemd 安装脚本。
-- `GET /probe/download/{os}/{arch}`：下载面板服务器本地编译的二进制。
+- `GET /api/v1/probe/install.sh`：生成 systemd 安装脚本。
+- `GET /api/v1/probe/download/{os}/{arch}`：下载面板服务器本地编译的二进制。
 - `POST /api/v1/probe/heartbeat`：更新版本、架构、IP 和心跳。
 - `GET /api/v1/probe/tasks`：按绑定关系返回目标、端口、超时和间隔。
 - `POST /api/v1/probe/results`：批量上报 TCP 结果。

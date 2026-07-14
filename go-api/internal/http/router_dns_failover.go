@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -405,7 +406,9 @@ func dnsFailoverInstallCommand(apiURL, secret, name string) string {
 	if base == "" {
 		return ""
 	}
-	return fmt.Sprintf("curl -fsSL %s | sudo sh -s -- --api-url %s --token %s --name %s", dnsFailoverShellQuote(base+"/probe/install.sh"), dnsFailoverShellQuote(base), dnsFailoverShellQuote(secret), dnsFailoverShellQuote(name))
+	query := url.Values{"api_url": {base}, "token": {secret}}
+	installURL := base + "/api/v1/probe/install.sh?" + query.Encode()
+	return fmt.Sprintf("curl -fsSL %s | sudo bash", dnsFailoverShellQuote(installURL))
 }
 func dnsFailoverShellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\\"'\\\"'") + "'"
