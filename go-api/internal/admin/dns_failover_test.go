@@ -272,7 +272,7 @@ func validDNSFailoverRuleSaveRequest() DNSFailoverRuleSaveRequest {
 		ProbeIDs:                    []int64{9, 4, 9},
 		Targets: []DNSFailoverTargetSaveRequest{
 			{Sort: 20, Name: "备用域名", DNSType: " cname ", DNSValue: "Backup.Example.COM.", CheckHost: "Backup.Example.COM.", CheckPort: 443, Enabled: true},
-			{Sort: 10, Name: "停用旧地址", DNSType: "A", DNSValue: "192.0.2.10", CheckHost: "192.0.2.10", CheckPort: 443, Enabled: false},
+			{Sort: 10, Name: "停用旧地址", DNSType: "A", DNSValue: "192.0.2.10", CheckHost: "different.example.com", CheckPort: 443, Enabled: false},
 			{Sort: 15, Name: "IPv6", DNSType: "aaaa", DNSValue: "2001:0db8::1", CheckHost: "2001:db8::1", CheckPort: 443, Enabled: true},
 		},
 	}
@@ -289,7 +289,7 @@ func TestDNSFailoverRuleValidationNormalizesTargetTypesAndRejectsBadValues(t *te
 	if request.Targets[0].Sort != 10 || request.Targets[1].Sort != 15 || request.Targets[2].Sort != 20 {
 		t.Fatalf("targets were not sorted: %#v", request.Targets)
 	}
-	if request.Targets[1].DNSValue != "2001:db8::1" || request.Targets[2].DNSValue != "backup.example.com" || request.Targets[2].CheckHost != "backup.example.com" {
+	if request.Targets[0].CheckHost != request.Targets[0].DNSValue || request.Targets[1].CheckHost != request.Targets[1].DNSValue || request.Targets[2].DNSValue != "backup.example.com" || request.Targets[2].CheckHost != request.Targets[2].DNSValue {
 		t.Fatalf("targets were not normalized: %#v", request.Targets)
 	}
 	if len(request.ProbeIDs) != 2 || request.ProbeIDs[0] != 4 || request.ProbeIDs[1] != 9 {
@@ -400,7 +400,6 @@ func TestDNSFailoverRuleValidationRejectsInvalidTextAndControlCharacters(t *test
 		{name: "target value invalid UTF-8", mutate: func(request *DNSFailoverRuleSaveRequest) {
 			request.Targets[0].DNSValue = string([]byte{'b', 'a', 'd', 0xff})
 		}},
-		{name: "check host NUL", mutate: func(request *DNSFailoverRuleSaveRequest) { request.Targets[0].CheckHost = "host\x00.example.com" }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := validDNSFailoverRuleSaveRequest()
@@ -821,7 +820,6 @@ func TestDNSFailoverUpdateRuleRejectsCurrentTargetCriticalFieldChanges(t *testin
 	}{
 		{name: "dns type", mutate: func(target *DNSFailoverTargetSaveRequest) { target.DNSType, target.DNSValue = "A", "192.0.2.1" }},
 		{name: "dns value", mutate: func(target *DNSFailoverTargetSaveRequest) { target.DNSValue = "2001:db8::2" }},
-		{name: "check host", mutate: func(target *DNSFailoverTargetSaveRequest) { target.CheckHost = "check.example.com" }},
 		{name: "check port", mutate: func(target *DNSFailoverTargetSaveRequest) { target.CheckPort = 8443 }},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -1306,10 +1306,7 @@ func normalizeDNSFailoverRuleSaveRequest(request *DNSFailoverRuleSaveRequest) er
 		if err != nil {
 			return fmt.Errorf("目标 %q: %w", target.Name, err)
 		}
-		target.CheckHost, err = normalizeDNSFailoverCheckHost(target.CheckHost)
-		if err != nil {
-			return fmt.Errorf("目标 %q 的检测主机格式不正确", target.Name)
-		}
+		target.CheckHost = target.DNSValue
 		if target.CheckPort < 1 || target.CheckPort > 65535 {
 			return fmt.Errorf("目标 %q 的检测端口必须在 1 到 65535 之间", target.Name)
 		}
@@ -1367,14 +1364,6 @@ func normalizeDNSFailoverTargetValue(dnsType, value string) (string, error) {
 	default:
 		return "", errors.New("DNS 类型仅支持 A、AAAA 或 CNAME")
 	}
-}
-
-func normalizeDNSFailoverCheckHost(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if ip := net.ParseIP(value); ip != nil {
-		return ip.String(), nil
-	}
-	return normalizeDNSFailoverHostname(value)
 }
 
 func normalizeDNSFailoverHostname(value string) (string, error) {

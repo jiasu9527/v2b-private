@@ -13,3 +13,7 @@ grep -q "apiGet('/dns/domain/list'" "$page"
 grep -q "apiGet('/dns/record/list'" "$page"
 grep -q 'label="选择 DNSPod 域名"' "$page"
 grep -q 'label="选择解析记录"' "$page"
+if grep -q 'label="check_host"' "$page"; then
+  echo "DNS failover target form must derive check_host from dns_value" >&2
+  exit 1
+fi
