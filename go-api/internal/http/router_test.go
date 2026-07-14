@@ -75,6 +75,31 @@ func TestRouterUnknownAPIPathReturnsNotFound(t *testing.T) {
 	}
 }
 
+type fakeAdminDNSProbeService struct {
+	*fakeAdminService
+	*fakeDNSProbeService
+}
+
+func TestRouterAdminServiceAutomaticallyProvidesPublicProbeProtocolBeforeDynamicAdminRoutes(t *testing.T) {
+	service := &fakeAdminDNSProbeService{
+		fakeAdminService:    &fakeAdminService{},
+		fakeDNSProbeService: &fakeDNSProbeService{tasks: []admin.DNSProbeTask{}},
+	}
+	router := NewRouter(config.Config{AdminPath: "probe"}, WithAdminService(service))
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/probe/tasks", nil)
+	request.Header.Set("Authorization", "Bearer good-secret")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if len(service.authenticatedSecrets) != 1 || service.authenticatedSecrets[0] != "good-secret" {
+		t.Fatalf("probe authentication calls = %#v", service.authenticatedSecrets)
+	}
+}
+
 func TestRouterGuestConfigEndpoint(t *testing.T) {
 	router := NewRouter(
 		config.Config{AppName: "forest-go"},

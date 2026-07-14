@@ -92,6 +92,7 @@ target_id BIGINT NOT NULL,
 last_success SMALLINT DEFAULT NULL,
 last_latency_ms INTEGER DEFAULT NULL,
 last_error text NOT NULL DEFAULT '',
+last_resolved_ip varchar(128) NOT NULL DEFAULT '',
 consecutive_success INTEGER NOT NULL DEFAULT 0,
 consecutive_failure INTEGER NOT NULL DEFAULT 0,
 last_reported_at BIGINT DEFAULT NULL,
@@ -127,6 +128,9 @@ PRIMARY KEY (id)
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("ensure DNS failover table: %w", err)
 		}
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE v2_dns_probe_target_state ADD COLUMN IF NOT EXISTS last_resolved_ip varchar(128) NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("ensure DNS failover state columns: %w", err)
 	}
 
 	for _, constraint := range dnsFailoverConstraints {

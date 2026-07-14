@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -42,6 +41,7 @@ type routerState struct {
 	user              usersvc.Service
 	payment           payment.Service
 	admin             admin.Service
+	dnsProbe          admin.DNSProbeService
 	node              nodeapi.Service
 	jobs              queue.Enqueuer
 	telegram          telegramWebhookService
@@ -104,6 +104,9 @@ func WithPaymentService(service payment.Service) Option {
 func WithAdminService(service admin.Service) Option {
 	return func(state *routerState) {
 		state.admin = service
+		if probeService, ok := service.(admin.DNSProbeService); ok {
+			state.dnsProbe = probeService
+		}
 	}
 }
 
@@ -205,6 +208,15 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleGuestConfig(w, r, state.guest) {
 				return
 			}
+		case r.URL.Path == "/api/v1/probe/heartbeat":
+			handleDNSProbeHeartbeat(w, r, state.dnsProbe)
+			return
+		case r.URL.Path == "/api/v1/probe/tasks":
+			handleDNSProbeTasks(w, r, state.dnsProbe)
+			return
+		case r.URL.Path == "/api/v1/probe/results":
+			handleDNSProbeResults(w, r, state.dnsProbe)
+			return
 		case r.URL.Path == "/api/v1/guest/plan/fetch":
 			if handleGuestPlans(w, r, state.guest) {
 				return
@@ -6624,21 +6636,7 @@ func handleAdminError(w http.ResponseWriter, err error) bool {
 }
 
 func requestIP(r *http.Request) string {
-	for _, header := range []string{"X-Forwarded-For", "X-Real-IP"} {
-		value := strings.TrimSpace(r.Header.Get(header))
-		if value == "" {
-			continue
-		}
-		first := strings.TrimSpace(strings.Split(value, ",")[0])
-		if first != "" {
-			return first
-		}
-	}
-	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err == nil && host != "" {
-		return host
-	}
-	return strings.TrimSpace(r.RemoteAddr)
+	return normalizedRequestIP(r)
 }
 
 func jsonNumberToInt64Pointer(value *json.Number) (*int64, error) {

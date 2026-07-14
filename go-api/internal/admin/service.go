@@ -423,6 +423,7 @@ type DBService struct {
 	sleep                     func(context.Context, time.Duration) error
 	dnspodClientFactory       func(secretID, secretKey, edition string) dnspodAPI
 	dnspodLegacyClientFactory func(apiToken string) dnspodAPI
+	dnsFailoverEvaluator      DNSFailoverEvaluationRequester
 
 	clientEntryEnsureOnce sync.Once
 	clientEntryEnsureErr  error

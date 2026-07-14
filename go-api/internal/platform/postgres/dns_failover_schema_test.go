@@ -38,13 +38,15 @@ func expectDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		`CREATE TABLE IF NOT EXISTS v2_dns_failover_group`,
 		`CREATE TABLE IF NOT EXISTS v2_dns_failover_target`,
 		`CREATE TABLE IF NOT EXISTS v2_dns_failover_group_probe`,
-		`CREATE TABLE IF NOT EXISTS v2_dns_probe_target_state`,
+		`(?s)CREATE TABLE IF NOT EXISTS v2_dns_probe_target_state.*last_resolved_ip varchar\(128\) NOT NULL DEFAULT ''`,
 		`(?s)CREATE TABLE IF NOT EXISTS v2_dns_probe_result_inbox.*result_id varchar\(128\) NOT NULL.*CONSTRAINT uniq_v2_dns_probe_result_inbox_result UNIQUE \(probe_id, result_id\)`,
 		`CREATE TABLE IF NOT EXISTS v2_dns_failover_event`,
 	} {
 		mock.ExpectExec(pattern).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
+	mock.ExpectExec(`ALTER TABLE v2_dns_probe_target_state ADD COLUMN IF NOT EXISTS last_resolved_ip varchar\(128\) NOT NULL DEFAULT ''`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	for _, constraint := range expectedDNSFailoverConstraints {
 		alter := "ALTER TABLE " + constraint.table + " ADD CONSTRAINT " + constraint.name + " " + constraint.definition
