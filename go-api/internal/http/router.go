@@ -210,11 +210,8 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 		case strings.HasPrefix(r.URL.Path, "/api/v1/probe/download/"):
 			handleProbeDownload(w, r, cfg)
 			return
-		case r.URL.Path == "/probe/install.sh":
-			handleProbeInstall(w, r)
-			return
-		case strings.HasPrefix(r.URL.Path, "/probe/download/"):
-			handleProbeDownload(w, r, cfg)
+		case r.URL.Path == "/probe/install.sh", strings.HasPrefix(r.URL.Path, "/probe/download/"):
+			http.NotFound(w, r)
 			return
 		case r.URL.Path == "/healthz", r.URL.Path == "/readyz", r.URL.Path == "/api/_meta/runtime", r.URL.Path == "/monitor/api/stats":
 			mux.ServeHTTP(w, r)

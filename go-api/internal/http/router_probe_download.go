@@ -67,10 +67,6 @@ func handleProbeDownload(w http.ResponseWriter, r *http.Request, cfg config.Conf
 		"/api/v1/probe/download/linux/arm64":        "forest-probe-linux-arm64",
 		"/api/v1/probe/download/linux/amd64.sha256": "forest-probe-linux-amd64.sha256",
 		"/api/v1/probe/download/linux/arm64.sha256": "forest-probe-linux-arm64.sha256",
-		"/probe/download/linux/amd64":               "forest-probe-linux-amd64",
-		"/probe/download/linux/arm64":               "forest-probe-linux-arm64",
-		"/probe/download/linux/amd64.sha256":        "forest-probe-linux-amd64.sha256",
-		"/probe/download/linux/arm64.sha256":        "forest-probe-linux-arm64.sha256",
 	}[r.URL.Path]
 	if !ok {
 		http.NotFound(w, r)

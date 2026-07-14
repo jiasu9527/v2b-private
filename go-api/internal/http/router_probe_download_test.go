@@ -82,3 +82,15 @@ func TestRouterProbeDownloadUsesFixedArtifactNames(t *testing.T) {
 		t.Fatalf("missing expected 404, got %d", missingRec.Code)
 	}
 }
+
+func TestRouterRejectsLegacyProbeDistributionPaths(t *testing.T) {
+	router := NewRouter(config.Config{ProbeStorageDir: t.TempDir()})
+	for _, path := range []string{"/probe/install.sh", "/probe/download/linux/amd64"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s status=%d, want 404", path, rec.Code)
+		}
+	}
+}
