@@ -338,7 +338,7 @@ type Service interface {
 	CopyManagedServer(ctx context.Context, serverType string, id int64) (bool, error)
 	GetDNSPodConfig(ctx context.Context) (DNSPodConfigStatus, error)
 	SaveDNSPodConfig(ctx context.Context, req DNSPodConfigSaveRequest) (DNSPodConfigStatus, error)
-	TestDNSPodConfig(ctx context.Context, secretID, secretKey string) error
+	TestDNSPodConfig(ctx context.Context, secretID, secretKey, edition string) error
 	ListDNSPodDomains(ctx context.Context, req DNSPodDomainListRequest) (dnspod.DescribeDomainListResult, error)
 	ListDNSPodRecords(ctx context.Context, req DNSPodRecordListRequest) (dnspod.DescribeRecordListResult, error)
 	ListDNSPodRecordTypes(ctx context.Context, domainGrade string) (dnspod.DescribeRecordTypeResult, error)
@@ -409,7 +409,7 @@ type DBService struct {
 	authCache           *session.AuthCache
 	mailSender          func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error
 	sleep               func(context.Context, time.Duration) error
-	dnspodClientFactory func(secretID, secretKey string) dnspodAPI
+	dnspodClientFactory func(secretID, secretKey, edition string) dnspodAPI
 
 	clientEntryEnsureOnce sync.Once
 	clientEntryEnsureErr  error

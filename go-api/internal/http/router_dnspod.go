@@ -37,7 +37,7 @@ func handleAdminDNSPodConfigSave(w http.ResponseWriter, r *http.Request, session
 	}
 	status, err := service.SaveDNSPodConfig(r.Context(), admin.DNSPodConfigSaveRequest{
 		SecretID: strings.TrimSpace(inputs["secret_id"]), SecretKey: strings.TrimSpace(inputs["secret_key"]),
-		Verify: parseBoolish(inputs["verify"]), Clear: parseBoolish(inputs["clear"]),
+		Edition: strings.TrimSpace(inputs["edition"]), Verify: parseBoolish(inputs["verify"]), Clear: parseBoolish(inputs["clear"]),
 	})
 	if err != nil {
 		return handleAdminError(w, err)
@@ -57,7 +57,7 @@ func handleAdminDNSPodConfigTest(w http.ResponseWriter, r *http.Request, session
 	if !ok {
 		return true
 	}
-	if err := service.TestDNSPodConfig(r.Context(), inputs["secret_id"], inputs["secret_key"]); err != nil {
+	if err := service.TestDNSPodConfig(r.Context(), inputs["secret_id"], inputs["secret_key"], inputs["edition"]); err != nil {
 		return handleAdminError(w, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": true})

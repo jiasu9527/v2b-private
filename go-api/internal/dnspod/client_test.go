@@ -104,3 +104,15 @@ func TestClientHonorsCancelledContext(t *testing.T) {
 		t.Fatalf("expected context cancellation, got %v", err)
 	}
 }
+
+func TestEndpointForEditionUsesInternationalEndpoint(t *testing.T) {
+	if got := EndpointForEdition(EditionInternational); got != InternationalEndpoint {
+		t.Fatalf("international endpoint = %q, want %q", got, InternationalEndpoint)
+	}
+	if got := EndpointForEdition(EditionChina); got != ChinaEndpoint {
+		t.Fatalf("china endpoint = %q, want %q", got, ChinaEndpoint)
+	}
+	if got := EndpointForEdition(""); got != InternationalEndpoint {
+		t.Fatalf("default endpoint = %q, want international %q", got, InternationalEndpoint)
+	}
+}

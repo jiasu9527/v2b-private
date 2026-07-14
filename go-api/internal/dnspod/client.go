@@ -18,11 +18,22 @@ import (
 )
 
 const (
-	DefaultEndpoint = "https://dnspod.tencentcloudapi.com"
-	APIVersion      = "2021-03-23"
-	serviceName     = "dnspod"
-	algorithm       = "TC3-HMAC-SHA256"
+	ChinaEndpoint         = "https://dnspod.tencentcloudapi.com"
+	InternationalEndpoint = "https://dnspod.intl.tencentcloudapi.com"
+	DefaultEndpoint       = ChinaEndpoint
+	EditionChina          = "china"
+	EditionInternational  = "international"
+	APIVersion            = "2021-03-23"
+	serviceName           = "dnspod"
+	algorithm             = "TC3-HMAC-SHA256"
 )
+
+func EndpointForEdition(edition string) string {
+	if strings.EqualFold(strings.TrimSpace(edition), EditionChina) {
+		return ChinaEndpoint
+	}
+	return InternationalEndpoint
+}
 
 type Option func(*Client)
 

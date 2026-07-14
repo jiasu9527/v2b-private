@@ -22,7 +22,7 @@ func newDNSPodAdminRouter(adminService *fakeAdminService) (http.Handler, *fakeSe
 }
 
 func TestRouterAdminDNSPodConfigNeverReturnsSecretKey(t *testing.T) {
-	service := &fakeAdminService{dnspodConfig: admin.DNSPodConfigStatus{Configured: true, SecretIDMasked: "AKID12****7890", Source: "config"}}
+	service := &fakeAdminService{dnspodConfig: admin.DNSPodConfigStatus{Configured: true, SecretIDMasked: "AKID12****7890", Source: "config", Edition: dnspod.EditionInternational}}
 	router, sessions := newDNSPodAdminRouter(service)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/dns/config?auth_data=jwt-admin", nil)
 	rec := httptest.NewRecorder()
@@ -33,6 +33,22 @@ func TestRouterAdminDNSPodConfigNeverReturnsSecretKey(t *testing.T) {
 	}
 	if !sessions.lastRequireAdmin || !strings.Contains(rec.Body.String(), `"secret_id_masked":"AKID12****7890"`) || strings.Contains(strings.ToLower(rec.Body.String()), "secret_key") {
 		t.Fatalf("unexpected config response: %s", rec.Body.String())
+	}
+}
+
+func TestRouterAdminDNSPodConfigSavePassesEdition(t *testing.T) {
+	service := &fakeAdminService{dnspodConfig: admin.DNSPodConfigStatus{Configured: true, Edition: dnspod.EditionInternational}}
+	router, _ := newDNSPodAdminRouter(service)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/dns/config/save", strings.NewReader(`{"auth_data":"jwt-admin","secret_id":"AKID","secret_key":"KEY","edition":"international","verify":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if service.lastDNSPodConfigSave.Edition != dnspod.EditionInternational || !service.lastDNSPodConfigSave.Verify {
+		t.Fatalf("unexpected DNSPod config save: %#v", service.lastDNSPodConfigSave)
 	}
 }
 

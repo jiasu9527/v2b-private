@@ -13,6 +13,7 @@ import (
 const (
 	dnspodSecretIDKey  = "dnspod_secret_id"
 	dnspodSecretKeyKey = "dnspod_secret_key"
+	dnspodEditionKey   = "dnspod_edition"
 )
 
 type dnspodAPI interface {
@@ -30,11 +31,13 @@ type DNSPodConfigStatus struct {
 	Configured     bool   `json:"configured"`
 	SecretIDMasked string `json:"secret_id_masked"`
 	Source         string `json:"source"`
+	Edition        string `json:"edition"`
 }
 
 type DNSPodConfigSaveRequest struct {
 	SecretID  string
 	SecretKey string
+	Edition   string
 	Verify    bool
 	Clear     bool
 }
@@ -70,7 +73,7 @@ type DNSPodRecordSaveRequest struct {
 }
 
 func (s *DBService) GetDNSPodConfig(_ context.Context) (DNSPodConfigStatus, error) {
-	secretID, secretKey, source, err := s.dnspodCredentials()
+	secretID, secretKey, source, edition, err := s.dnspodCredentials()
 	if err != nil {
 		return DNSPodConfigStatus{}, err
 	}
@@ -78,6 +81,7 @@ func (s *DBService) GetDNSPodConfig(_ context.Context) (DNSPodConfigStatus, erro
 		Configured:     secretID != "" && secretKey != "",
 		SecretIDMasked: maskDNSPodSecretID(secretID),
 		Source:         source,
+		Edition:        edition,
 	}, nil
 }
 
@@ -89,7 +93,8 @@ func (s *DBService) SaveDNSPodConfig(ctx context.Context, request DNSPodConfigSa
 	if request.Clear {
 		delete(cfg.values, dnspodSecretIDKey)
 		delete(cfg.values, dnspodSecretKeyKey)
-		cfg.order = removeConfigKeys(cfg.order, dnspodSecretIDKey, dnspodSecretKeyKey)
+		delete(cfg.values, dnspodEditionKey)
+		cfg.order = removeConfigKeys(cfg.order, dnspodSecretIDKey, dnspodSecretKeyKey, dnspodEditionKey)
 	} else {
 		secretID := strings.TrimSpace(request.SecretID)
 		secretKey := strings.TrimSpace(request.SecretKey)
@@ -102,14 +107,19 @@ func (s *DBService) SaveDNSPodConfig(ctx context.Context, request DNSPodConfigSa
 		if secretID == "" || secretKey == "" {
 			return DNSPodConfigStatus{}, errors.New("请填写完整的 DNSPod SecretId 和 SecretKey")
 		}
+		edition := normalizeDNSPodEdition(request.Edition)
+		if strings.TrimSpace(request.Edition) == "" {
+			edition = normalizeDNSPodEdition(cfg.stringValue(dnspodEditionKey, ""))
+		}
 		if request.Verify {
-			if err := s.testDNSPodCredentials(ctx, secretID, secretKey); err != nil {
+			if err := s.testDNSPodCredentials(ctx, secretID, secretKey, edition); err != nil {
 				return DNSPodConfigStatus{}, err
 			}
 		}
 		cfg.values[dnspodSecretIDKey] = phpConfigValue{kind: phpConfigScalar, scalar: secretID}
 		cfg.values[dnspodSecretKeyKey] = phpConfigValue{kind: phpConfigScalar, scalar: secretKey}
-		cfg.order = appendMissingConfigKeys(cfg.order, sortedMissingKeys(cfg, dnspodSecretIDKey, dnspodSecretKeyKey), cfg.values)
+		cfg.values[dnspodEditionKey] = phpConfigValue{kind: phpConfigScalar, scalar: edition}
+		cfg.order = appendMissingConfigKeys(cfg.order, sortedMissingKeys(cfg, dnspodSecretIDKey, dnspodSecretKeyKey, dnspodEditionKey), cfg.values)
 	}
 	if err := writeJSONConfigFile(adminConfigPath(), cfg); err != nil {
 		return DNSPodConfigStatus{}, errors.New("保存 DNSPod 配置失败")
@@ -117,11 +127,11 @@ func (s *DBService) SaveDNSPodConfig(ctx context.Context, request DNSPodConfigSa
 	return s.GetDNSPodConfig(ctx)
 }
 
-func (s *DBService) TestDNSPodConfig(ctx context.Context, secretID, secretKey string) error {
+func (s *DBService) TestDNSPodConfig(ctx context.Context, secretID, secretKey, edition string) error {
 	secretID = strings.TrimSpace(secretID)
 	secretKey = strings.TrimSpace(secretKey)
 	if secretID == "" || secretKey == "" {
-		storedID, storedKey, _, err := s.dnspodCredentials()
+		storedID, storedKey, _, storedEdition, err := s.dnspodCredentials()
 		if err != nil {
 			return err
 		}
@@ -131,11 +141,14 @@ func (s *DBService) TestDNSPodConfig(ctx context.Context, secretID, secretKey st
 		if secretKey == "" {
 			secretKey = storedKey
 		}
+		if strings.TrimSpace(edition) == "" {
+			edition = storedEdition
+		}
 	}
 	if secretID == "" || secretKey == "" {
 		return errors.New("请先配置 DNSPod SecretId 和 SecretKey")
 	}
-	return s.testDNSPodCredentials(ctx, secretID, secretKey)
+	return s.testDNSPodCredentials(ctx, secretID, secretKey, normalizeDNSPodEdition(edition))
 }
 
 func (s *DBService) ListDNSPodDomains(ctx context.Context, request DNSPodDomainListRequest) (dnspod.DescribeDomainListResult, error) {
@@ -266,27 +279,28 @@ func (s *DBService) SetDNSPodRecordStatus(ctx context.Context, domain string, re
 	return client.ModifyRecordStatus(ctx, dnspod.ModifyRecordStatusRequest{Domain: domain, RecordID: recordID, Status: status})
 }
 
-func (s *DBService) dnspodCredentials() (secretID, secretKey, source string, err error) {
+func (s *DBService) dnspodCredentials() (secretID, secretKey, source, edition string, err error) {
 	envID := strings.TrimSpace(os.Getenv("DNSPOD_SECRET_ID"))
 	envKey := strings.TrimSpace(os.Getenv("DNSPOD_SECRET_KEY"))
 	if envID != "" || envKey != "" {
-		return envID, envKey, "env", nil
+		return envID, envKey, "env", normalizeDNSPodEdition(os.Getenv("DNSPOD_EDITION")), nil
 	}
 	cfg, err := loadAdminConfigStore(adminConfigPath())
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	secretID = strings.TrimSpace(cfg.stringValue(dnspodSecretIDKey, ""))
 	secretKey = strings.TrimSpace(cfg.stringValue(dnspodSecretKeyKey, ""))
+	edition = normalizeDNSPodEdition(cfg.stringValue(dnspodEditionKey, ""))
 	source = "config"
 	if secretID == "" && secretKey == "" {
 		source = ""
 	}
-	return secretID, secretKey, source, nil
+	return secretID, secretKey, source, edition, nil
 }
 
 func (s *DBService) dnspodClient() (dnspodAPI, error) {
-	secretID, secretKey, _, err := s.dnspodCredentials()
+	secretID, secretKey, _, edition, err := s.dnspodCredentials()
 	if err != nil {
 		return nil, err
 	}
@@ -294,20 +308,27 @@ func (s *DBService) dnspodClient() (dnspodAPI, error) {
 		return nil, errors.New("请先配置 DNSPod SecretId 和 SecretKey")
 	}
 	if s.dnspodClientFactory != nil {
-		return s.dnspodClientFactory(secretID, secretKey), nil
+		return s.dnspodClientFactory(secretID, secretKey, edition), nil
 	}
-	return dnspod.NewClient(secretID, secretKey), nil
+	return dnspod.NewClient(secretID, secretKey, dnspod.WithEndpoint(dnspod.EndpointForEdition(edition))), nil
 }
 
-func (s *DBService) testDNSPodCredentials(ctx context.Context, secretID, secretKey string) error {
+func (s *DBService) testDNSPodCredentials(ctx context.Context, secretID, secretKey, edition string) error {
 	var client dnspodAPI
 	if s.dnspodClientFactory != nil {
-		client = s.dnspodClientFactory(secretID, secretKey)
+		client = s.dnspodClientFactory(secretID, secretKey, edition)
 	} else {
-		client = dnspod.NewClient(secretID, secretKey)
+		client = dnspod.NewClient(secretID, secretKey, dnspod.WithEndpoint(dnspod.EndpointForEdition(edition)))
 	}
 	_, err := client.DescribeDomainList(ctx, dnspod.DescribeDomainListRequest{Offset: 0, Limit: 1})
 	return err
+}
+
+func normalizeDNSPodEdition(edition string) string {
+	if strings.EqualFold(strings.TrimSpace(edition), dnspod.EditionChina) {
+		return dnspod.EditionChina
+	}
+	return dnspod.EditionInternational
 }
 
 func normalizeDNSPodPage(current, pageSize int64) (int64, int64) {

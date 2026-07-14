@@ -1204,9 +1204,10 @@ func (f *fakeAdminService) SaveDNSPodConfig(_ context.Context, req admin.DNSPodC
 	return f.dnspodConfig, f.err
 }
 
-func (f *fakeAdminService) TestDNSPodConfig(_ context.Context, secretID, secretKey string) error {
+func (f *fakeAdminService) TestDNSPodConfig(_ context.Context, secretID, secretKey, edition string) error {
 	f.lastDNSPodConfigSave.SecretID = secretID
 	f.lastDNSPodConfigSave.SecretKey = secretKey
+	f.lastDNSPodConfigSave.Edition = edition
 	return f.err
 }
 

@@ -11,7 +11,17 @@ type DNSPodConfigStatus = {
   configured: boolean;
   secret_id_masked?: string;
   source?: string;
+  edition?: 'international' | 'china';
 };
+
+const editionOptions = [
+  { label: 'DNSPod 国际版', value: 'international' },
+  { label: 'DNSPod 中国版', value: 'china' },
+];
+
+function editionLabel(edition?: string) {
+  return edition === 'china' ? 'DNSPod 中国版' : 'DNSPod 国际版';
+}
 
 type DomainRow = {
   id: number;
@@ -222,7 +232,7 @@ export default function DNSPodPage() {
 
   const openSettings = () => {
     settingsForm.resetFields();
-    settingsForm.setFieldsValue({ secret_id: '', secret_key: '', verify: true });
+    settingsForm.setFieldsValue({ secret_id: '', secret_key: '', edition: config.edition || 'international', verify: true });
     setSettingsOpen(true);
   };
 
@@ -412,7 +422,7 @@ export default function DNSPodPage() {
           <div className="dnspod-account-copy">
             <CloudServerOutlined />
             <div>
-              <div className="dnspod-account-title">DNSPod 3.0</div>
+              <div className="dnspod-account-title">{editionLabel(config.edition)} API 3.0</div>
               <div className="dnspod-account-subtitle">
                 {config.configured ? <>已连接 · {config.secret_id_masked || '凭证已配置'}{config.source === 'env' ? ' · 环境变量' : ''}</> : '等待配置账号凭证'}
               </div>
@@ -502,8 +512,11 @@ export default function DNSPodPage() {
       </div>}
       destroyOnHidden
     >
-      {config.source === 'env' ? <Alert className="dnspod-modal-alert" type="info" showIcon message="当前使用环境变量中的 DNSPod 凭证" description="修改后台配置不会覆盖 DNSPOD_SECRET_ID 和 DNSPOD_SECRET_KEY。" /> : null}
+      {config.source === 'env' ? <Alert className="dnspod-modal-alert" type="info" showIcon message="当前使用环境变量中的 DNSPod 凭证" description="修改后台配置不会覆盖 DNSPOD_SECRET_ID、DNSPOD_SECRET_KEY 和 DNSPOD_EDITION。" /> : null}
       <Form form={settingsForm} layout="vertical">
+        <Form.Item name="edition" label="DNSPod 版本" rules={[{ required: true, message: '请选择 DNSPod 版本' }]} extra="国际版与中国版使用不同的 API 接入地址，密钥不能混用">
+          <Select options={editionOptions} />
+        </Form.Item>
         <Form.Item name="secret_id" label="SecretId" rules={[{ required: !config.configured, message: '请输入 SecretId' }]} extra={config.configured ? `当前：${config.secret_id_masked || '已配置'}，留空表示不修改` : '在腾讯云访问管理的 API 密钥管理中创建'}>
           <Input autoComplete="off" placeholder={config.configured ? '留空表示不修改' : '请输入 DNSPod SecretId'} />
         </Form.Item>

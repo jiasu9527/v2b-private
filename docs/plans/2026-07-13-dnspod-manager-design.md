@@ -6,7 +6,7 @@
 
 ## 范围
 
-- 使用腾讯云 DNSPod API 3.0，服务地址为 `https://dnspod.tencentcloudapi.com`，版本为 `2021-03-23`。
+- 使用腾讯云 DNSPod API 3.0，支持国际版 `https://dnspod.intl.tencentcloudapi.com` 与中国版 `https://dnspod.tencentcloudapi.com`，版本为 `2021-03-23`。默认使用国际版。
 - 使用 `SecretId + SecretKey` 认证。
 - 管理已有域名及其解析记录，不实现域名购买、续费和注册。
 - 支持 DNSPod 返回的记录类型与解析线路，不在前端维护静态线路全集。
@@ -16,7 +16,7 @@
 
 浏览器只访问 Forest 管理员 API，不直接请求 DNSPod。Go 后端实现精简的 TC3-HMAC-SHA256 客户端，负责签名、超时、错误转换和响应解析。管理员 API 在完成现有登录与管理员权限校验后调用该客户端。
 
-凭证通过“域名解析”页面的账号设置保存到现有 JSON 配置文件中；`DNSPOD_SECRET_ID` 和 `DNSPOD_SECRET_KEY` 环境变量拥有更高优先级。读取配置状态时只返回是否已配置及脱敏后的 SecretId，SecretKey 永远不返回浏览器。
+凭证通过“域名解析”页面的账号设置保存到现有 JSON 配置文件中；`DNSPOD_SECRET_ID`、`DNSPOD_SECRET_KEY` 和 `DNSPOD_EDITION` 环境变量拥有更高优先级。读取配置状态时只返回版本、是否已配置及脱敏后的 SecretId，SecretKey 永远不返回浏览器。
 
 ## 后台交互
 
