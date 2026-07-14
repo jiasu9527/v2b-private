@@ -10,8 +10,10 @@ import { apiGet, apiPost } from '../lib/api';
 type DNSPodConfigStatus = {
   configured: boolean;
   secret_id_masked?: string;
+  credential_masked?: string;
   source?: string;
   edition?: 'international' | 'china';
+  auth_type?: 'tc3' | 'token';
 };
 
 const editionOptions = [
@@ -19,8 +21,17 @@ const editionOptions = [
   { label: 'DNSPod 中国版', value: 'china' },
 ];
 
+const authTypeOptions = [
+  { label: 'DNSPod 国际版 API Token', value: 'token' },
+  { label: '腾讯云 API 3.0', value: 'tc3' },
+];
+
 function editionLabel(edition?: string) {
   return edition === 'china' ? 'DNSPod 中国版' : 'DNSPod 国际版';
+}
+
+function authTypeLabel(authType?: string) {
+  return authType === 'token' ? 'Token API' : 'API 3.0';
 }
 
 type DomainRow = {
@@ -143,6 +154,7 @@ export default function DNSPodPage() {
   const [settingsForm] = Form.useForm();
   const [recordForm] = Form.useForm();
   const watchedRecordType = Form.useWatch('record_type', recordForm);
+  const watchedAuthType = Form.useWatch('auth_type', settingsForm);
 
   const loadConfig = async () => {
     setConfigLoading(true);
@@ -178,6 +190,7 @@ export default function DNSPodPage() {
     try {
       const response = await apiGet('/dns/record/list', {
         domain: selectedDomain.name,
+        domain_id: selectedDomain.id,
         current: recordPage,
         page_size: recordPageSize,
         keyword: recordQuery,
@@ -202,7 +215,7 @@ export default function DNSPodPage() {
     }
   };
 
-  const loadRecordLines = async (recordType: string, currentLineId = '') => {
+  const loadRecordLines = async (recordType: string, currentLineId = '', currentLineName = '') => {
     if (!selectedDomain || !recordType) return;
     setLinesLoading(true);
     try {
@@ -213,8 +226,13 @@ export default function DNSPodPage() {
       });
       const options = flattenLines(response.data || []);
       setLineOptions(options);
-      const selected = currentLineId || recordForm.getFieldValue('record_line_id');
-      if (!selected && options.length) recordForm.setFieldValue('record_line_id', options[0].value);
+      let selected = currentLineId || recordForm.getFieldValue('record_line_id');
+      if (!selected && currentLineName) {
+        const normalizedLine = currentLineName.trim().toLowerCase();
+        selected = options.find((item) => item.lineName.trim().toLowerCase() === normalizedLine || item.label.trim().toLowerCase() === normalizedLine)?.value;
+      }
+      if (!selected || !options.some((item) => item.value === selected)) selected = options[0]?.value;
+      if (selected) recordForm.setFieldValue('record_line_id', selected);
     } catch (error: any) {
       setLineOptions([]);
       message.error(error.message || '加载解析线路失败');
@@ -227,12 +245,19 @@ export default function DNSPodPage() {
   useEffect(() => { if (config.configured) loadDomains(); }, [config.configured, domainPage, domainPageSize, domainQuery]);
   useEffect(() => { if (selectedDomain) loadRecords(); }, [selectedDomain, recordPage, recordPageSize, recordQuery, recordTypeFilter]);
   useEffect(() => {
-    if (editingRecord !== undefined && watchedRecordType) loadRecordLines(watchedRecordType, editingRecord?.lineId || '');
+    if (editingRecord !== undefined && watchedRecordType) loadRecordLines(watchedRecordType, editingRecord?.lineId || '', editingRecord?.line || '');
   }, [watchedRecordType, editingRecord, selectedDomain]);
 
   const openSettings = () => {
     settingsForm.resetFields();
-    settingsForm.setFieldsValue({ secret_id: '', secret_key: '', edition: config.edition || 'international', verify: true });
+    settingsForm.setFieldsValue({
+      auth_type: config.configured ? (config.auth_type || 'tc3') : 'token',
+      api_token: '',
+      secret_id: '',
+      secret_key: '',
+      edition: config.edition || 'international',
+      verify: true,
+    });
     setSettingsOpen(true);
   };
 
@@ -322,6 +347,7 @@ export default function DNSPodPage() {
       await apiPost('/dns/record/save', {
         ...values,
         domain: selectedDomain.name,
+        domain_id: selectedDomain.id,
         record_id: editingRecord?.id || 0,
         record_line: selectedLine?.lineName || editingRecord?.line || '默认',
       });
@@ -340,6 +366,7 @@ export default function DNSPodPage() {
     try {
       await apiPost('/dns/record/status', {
         domain: selectedDomain.name,
+        domain_id: selectedDomain.id,
         record_id: record.id,
         status: enabled ? 'ENABLE' : 'DISABLE',
       });
@@ -353,7 +380,7 @@ export default function DNSPodPage() {
   const deleteRecord = async (record: RecordRow) => {
     if (!selectedDomain) return;
     try {
-      await apiPost('/dns/record/delete', { domain: selectedDomain.name, record_id: record.id });
+      await apiPost('/dns/record/delete', { domain: selectedDomain.name, domain_id: selectedDomain.id, record_id: record.id });
       message.success('解析记录已删除');
       loadRecords();
     } catch (error: any) {
@@ -413,7 +440,7 @@ export default function DNSPodPage() {
         type="warning"
         showIcon
         message="尚未配置 DNSPod"
-        description="配置 DNSPod 3.0 SecretId 和 SecretKey 后，即可在这里管理账号下的域名与解析记录。"
+        description="可使用 DNSPod 国际版 ID,Token，或腾讯云 API 3.0 SecretId/SecretKey 管理域名与解析记录。"
         action={<Button icon={<SettingOutlined />} onClick={openSettings}>立即配置</Button>}
       /> : null}
 
@@ -422,9 +449,9 @@ export default function DNSPodPage() {
           <div className="dnspod-account-copy">
             <CloudServerOutlined />
             <div>
-              <div className="dnspod-account-title">{editionLabel(config.edition)} API 3.0</div>
+              <div className="dnspod-account-title">{editionLabel(config.edition)} {authTypeLabel(config.auth_type)}</div>
               <div className="dnspod-account-subtitle">
-                {config.configured ? <>已连接 · {config.secret_id_masked || '凭证已配置'}{config.source === 'env' ? ' · 环境变量' : ''}</> : '等待配置账号凭证'}
+                {config.configured ? <>已连接 · {config.credential_masked || config.secret_id_masked || '凭证已配置'}{config.source === 'env' ? ' · 环境变量' : ''}</> : '等待配置账号凭证'}
               </div>
             </div>
           </div>
@@ -512,17 +539,38 @@ export default function DNSPodPage() {
       </div>}
       destroyOnHidden
     >
-      {config.source === 'env' ? <Alert className="dnspod-modal-alert" type="info" showIcon message="当前使用环境变量中的 DNSPod 凭证" description="修改后台配置不会覆盖 DNSPOD_SECRET_ID、DNSPOD_SECRET_KEY 和 DNSPOD_EDITION。" /> : null}
+      {config.source === 'env' ? <Alert className="dnspod-modal-alert" type="info" showIcon message="当前使用环境变量中的 DNSPod 凭证" description="修改后台配置不会覆盖 DNSPOD_AUTH_TYPE、DNSPOD_API_TOKEN、DNSPOD_SECRET_ID、DNSPOD_SECRET_KEY 和 DNSPOD_EDITION。" /> : null}
       <Form form={settingsForm} layout="vertical">
-        <Form.Item name="edition" label="DNSPod 版本" rules={[{ required: true, message: '请选择 DNSPod 版本' }]} extra="国际版与中国版使用不同的 API 接入地址，密钥不能混用">
-          <Select options={editionOptions} />
+        <Form.Item name="auth_type" label="鉴权方式" rules={[{ required: true, message: '请选择鉴权方式' }]} extra="国际版控制台生成的 ID,Token 与腾讯云 SecretId/SecretKey 是两套独立凭证，不能混填">
+          <Select
+            options={authTypeOptions}
+            onChange={(value) => {
+              if (value === 'token') settingsForm.setFieldValue('edition', 'international');
+            }}
+          />
         </Form.Item>
-        <Form.Item name="secret_id" label="SecretId" rules={[{ required: !config.configured, message: '请输入 SecretId' }]} extra={config.configured ? `当前：${config.secret_id_masked || '已配置'}，留空表示不修改` : '在腾讯云访问管理的 API 密钥管理中创建'}>
-          <Input autoComplete="off" placeholder={config.configured ? '留空表示不修改' : '请输入 DNSPod SecretId'} />
-        </Form.Item>
-        <Form.Item name="secret_key" label="SecretKey" rules={[{ required: !config.configured, message: '请输入 SecretKey' }]} extra={config.configured ? '出于安全原因不会回显，留空表示不修改' : undefined}>
-          <Input.Password autoComplete="new-password" placeholder={config.configured ? '留空表示不修改' : '请输入 DNSPod SecretKey'} />
-        </Form.Item>
+        {watchedAuthType === 'token' ? <Form.Item
+          name="api_token"
+          label="API Token"
+          preserve={false}
+          rules={[
+            { required: !(config.configured && config.auth_type === 'token'), message: '请输入 API Token' },
+            { pattern: /^\s*[^,\s]+\s*,\s*[^,\s]+\s*$/, message: '格式应为 ID,Token，例如 123456,abcdef' },
+          ]}
+          extra={config.configured && config.auth_type === 'token' ? `当前：${config.credential_masked || '已配置'}，留空表示不修改` : '请填写 DNSPod 国际版控制台创建的完整 ID,Token'}
+        >
+          <Input.Password autoComplete="new-password" placeholder={config.configured && config.auth_type === 'token' ? '留空表示不修改' : '例如 123456,abcdef'} />
+        </Form.Item> : <>
+          <Form.Item name="edition" label="DNSPod 版本" rules={[{ required: true, message: '请选择 DNSPod 版本' }]} extra="国际版与中国版使用不同的 API 接入地址，密钥不能混用">
+            <Select options={editionOptions} />
+          </Form.Item>
+          <Form.Item name="secret_id" label="SecretId" preserve={false} rules={[{ required: !(config.configured && config.auth_type === 'tc3'), message: '请输入 SecretId' }]} extra={config.configured && config.auth_type === 'tc3' ? `当前：${config.credential_masked || config.secret_id_masked || '已配置'}，留空表示不修改` : '在对应腾讯云账号的 API 密钥管理中创建'}>
+            <Input autoComplete="off" placeholder={config.configured && config.auth_type === 'tc3' ? '留空表示不修改' : '请输入 DNSPod SecretId'} />
+          </Form.Item>
+          <Form.Item name="secret_key" label="SecretKey" preserve={false} rules={[{ required: !(config.configured && config.auth_type === 'tc3'), message: '请输入 SecretKey' }]} extra={config.configured && config.auth_type === 'tc3' ? '出于安全原因不会回显，留空表示不修改' : undefined}>
+            <Input.Password autoComplete="new-password" placeholder={config.configured && config.auth_type === 'tc3' ? '留空表示不修改' : '请输入 DNSPod SecretKey'} />
+          </Form.Item>
+        </>}
         <Form.Item name="verify" label="保存前验证" valuePropName="checked"><Switch /></Form.Item>
       </Form>
     </Modal>

@@ -97,7 +97,10 @@ func writeJSONConfigFile(path string, cfg *phpConfigFile) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(cfg.marshalJSON()), 0o644)
+	if err := os.WriteFile(path, []byte(cfg.marshalJSON()), 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
 }
 
 func fileExists(path string) bool {

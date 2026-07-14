@@ -23,6 +23,8 @@ const (
 	DefaultEndpoint       = ChinaEndpoint
 	EditionChina          = "china"
 	EditionInternational  = "international"
+	AuthTypeTC3           = "tc3"
+	AuthTypeToken         = "token"
 	APIVersion            = "2021-03-23"
 	serviceName           = "dnspod"
 	algorithm             = "TC3-HMAC-SHA256"
@@ -290,7 +292,7 @@ type RecordCountInfo struct {
 
 type DescribeRecordListRequest struct {
 	Domain       string `json:"Domain"`
-	DomainID     int64  `json:"DomainId,omitempty"`
+	DomainID     int64  `json:"-"`
 	Subdomain    string `json:"Subdomain,omitempty"`
 	RecordType   string `json:"RecordType,omitempty"`
 	RecordLine   string `json:"RecordLine,omitempty"`
@@ -339,6 +341,7 @@ type RecordLine struct {
 
 type DescribeRecordLineListRequest struct {
 	Domain      string `json:"Domain"`
+	DomainID    int64  `json:"-"`
 	DomainGrade string `json:"DomainGrade"`
 	RecordType  string `json:"RecordType"`
 }
@@ -356,6 +359,7 @@ func (c *Client) DescribeRecordLineList(ctx context.Context, request DescribeRec
 
 type RecordMutationRequest struct {
 	Domain       string `json:"Domain"`
+	DomainID     int64  `json:"-"`
 	RecordID     int64  `json:"RecordId,omitempty"`
 	SubDomain    string `json:"SubDomain"`
 	RecordType   string `json:"RecordType"`
@@ -387,6 +391,7 @@ func (c *Client) ModifyRecord(ctx context.Context, request RecordMutationRequest
 
 type DeleteRecordRequest struct {
 	Domain   string `json:"Domain"`
+	DomainID int64  `json:"-"`
 	RecordID int64  `json:"RecordId"`
 }
 
@@ -396,6 +401,7 @@ func (c *Client) DeleteRecord(ctx context.Context, request DeleteRecordRequest) 
 
 type ModifyRecordStatusRequest struct {
 	Domain   string `json:"Domain"`
+	DomainID int64  `json:"-"`
 	RecordID int64  `json:"RecordId"`
 	Status   string `json:"Status"`
 }

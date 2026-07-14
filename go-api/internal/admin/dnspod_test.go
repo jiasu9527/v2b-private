@@ -98,6 +98,13 @@ func TestDBServiceSaveDNSPodConfigMasksSecretAndDoesNotExposeKey(t *testing.T) {
 	if !strings.Contains(string(rawConfig), "dnspod_secret_id") || !strings.Contains(string(rawConfig), "super-secret-key") {
 		t.Fatalf("credentials were not persisted: %s", rawConfig)
 	}
+	info, err := os.Stat(filepath.Join(root, "config", "admin.json"))
+	if err != nil {
+		t.Fatalf("stat admin config: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("admin config permissions = %v; want 0600", info.Mode().Perm())
+	}
 }
 
 func TestDBServiceDNSPodEnvironmentCredentialsTakePrecedence(t *testing.T) {
@@ -151,7 +158,118 @@ func TestDBServiceDNSPodOperationsValidateAndDelegate(t *testing.T) {
 	if _, err := service.SaveDNSPodRecord(context.Background(), DNSPodRecordSaveRequest{Domain: "example.com", RecordType: "A"}); err == nil {
 		t.Fatal("expected empty record value validation error")
 	}
-	if err := service.SetDNSPodRecordStatus(context.Background(), "example.com", 8, "invalid"); err == nil {
+	if err := service.SetDNSPodRecordStatus(context.Background(), "example.com", 0, 8, "invalid"); err == nil {
 		t.Fatal("expected invalid status validation error")
+	}
+}
+
+func TestDBServiceDNSPodTokenModeUsesLegacyClientAndMasksToken(t *testing.T) {
+	root := useDNSPodConfigRoot(t)
+	t.Setenv("DNSPOD_SECRET_ID", "")
+	t.Setenv("DNSPOD_SECRET_KEY", "")
+	t.Setenv("DNSPOD_API_TOKEN", "")
+	fake := &fakeDNSPodAPI{domains: dnspod.DescribeDomainListResult{Total: 1}}
+	gotToken := ""
+	service := &DBService{dnspodLegacyClientFactory: func(apiToken string) dnspodAPI {
+		gotToken = apiToken
+		return fake
+	}}
+
+	status, err := service.SaveDNSPodConfig(context.Background(), DNSPodConfigSaveRequest{
+		AuthType: dnspod.AuthTypeToken,
+		APIToken: "730060,token-secret",
+		Edition:  dnspod.EditionInternational,
+		Verify:   true,
+	})
+	if err != nil {
+		t.Fatalf("SaveDNSPodConfig token mode: %v", err)
+	}
+	if !status.Configured || status.AuthType != dnspod.AuthTypeToken || status.CredentialMasked != "730060,****" || gotToken != "730060,token-secret" {
+		t.Fatalf("unexpected token status=%#v gotToken=%q", status, gotToken)
+	}
+	rawStatus, _ := json.Marshal(status)
+	if strings.Contains(string(rawStatus), "token-secret") {
+		t.Fatalf("status leaked token: %s", rawStatus)
+	}
+	rawConfig, err := os.ReadFile(filepath.Join(root, "config", "admin.json"))
+	if err != nil || !strings.Contains(string(rawConfig), "dnspod_api_token") {
+		t.Fatalf("token was not persisted: raw=%s err=%v", rawConfig, err)
+	}
+
+	if _, err := service.ListDNSPodDomains(context.Background(), DNSPodDomainListRequest{Current: 1, PageSize: 20}); err != nil {
+		t.Fatalf("ListDNSPodDomains token mode: %v", err)
+	}
+	if gotToken != "730060,token-secret" {
+		t.Fatalf("legacy client did not receive persisted token, got %q", gotToken)
+	}
+}
+
+func TestDBServiceDNSPodEnvironmentOverridesAreMergedPerField(t *testing.T) {
+	useDNSPodConfigRoot(t)
+	t.Setenv("DNSPOD_SECRET_ID", "")
+	t.Setenv("DNSPOD_SECRET_KEY", "")
+	t.Setenv("DNSPOD_API_TOKEN", "")
+	t.Setenv("DNSPOD_AUTH_TYPE", "")
+	t.Setenv("DNSPOD_EDITION", "")
+	service := &DBService{}
+	if _, err := service.SaveDNSPodConfig(context.Background(), DNSPodConfigSaveRequest{
+		SecretID: "stored-id", SecretKey: "stored-key", AuthType: dnspod.AuthTypeTC3, Edition: dnspod.EditionInternational,
+	}); err != nil {
+		t.Fatalf("save stored credentials: %v", err)
+	}
+
+	t.Setenv("DNSPOD_SECRET_ID", "env-id")
+	t.Setenv("DNSPOD_EDITION", dnspod.EditionChina)
+	var gotID, gotKey, gotEdition string
+	service.dnspodClientFactory = func(secretID, secretKey, edition string) dnspodAPI {
+		gotID, gotKey, gotEdition = secretID, secretKey, edition
+		return &fakeDNSPodAPI{}
+	}
+	if _, err := service.ListDNSPodDomains(context.Background(), DNSPodDomainListRequest{Current: 1, PageSize: 1}); err != nil {
+		t.Fatalf("list with partial environment overrides: %v", err)
+	}
+	if gotID != "env-id" || gotKey != "stored-key" || gotEdition != dnspod.EditionChina {
+		t.Fatalf("environment overrides were not merged: id=%q key=%q edition=%q", gotID, gotKey, gotEdition)
+	}
+	status, err := service.GetDNSPodConfig(context.Background())
+	if err != nil || status.Source != "env" {
+		t.Fatalf("expected environment source, got status=%#v err=%v", status, err)
+	}
+}
+
+func TestDBServiceDNSPodSwitchingAuthRemovesInactiveCredentials(t *testing.T) {
+	root := useDNSPodConfigRoot(t)
+	t.Setenv("DNSPOD_SECRET_ID", "")
+	t.Setenv("DNSPOD_SECRET_KEY", "")
+	t.Setenv("DNSPOD_API_TOKEN", "")
+	t.Setenv("DNSPOD_AUTH_TYPE", "")
+	t.Setenv("DNSPOD_EDITION", "")
+	service := &DBService{}
+	if _, err := service.SaveDNSPodConfig(context.Background(), DNSPodConfigSaveRequest{
+		SecretID: "old-id", SecretKey: "old-key", AuthType: dnspod.AuthTypeTC3,
+	}); err != nil {
+		t.Fatalf("save TC3 credentials: %v", err)
+	}
+	if _, err := service.SaveDNSPodConfig(context.Background(), DNSPodConfigSaveRequest{
+		APIToken: "730060,new-token", AuthType: dnspod.AuthTypeToken,
+	}); err != nil {
+		t.Fatalf("switch to token credentials: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "config", "admin.json"))
+	if err != nil {
+		t.Fatalf("read admin config: %v", err)
+	}
+	var values map[string]any
+	if err := json.Unmarshal(raw, &values); err != nil {
+		t.Fatalf("decode admin config: %v", err)
+	}
+	if _, exists := values[dnspodSecretIDKey]; exists {
+		t.Fatalf("inactive SecretId was retained: %s", raw)
+	}
+	if _, exists := values[dnspodSecretKeyKey]; exists {
+		t.Fatalf("inactive SecretKey was retained: %s", raw)
+	}
+	if values[dnspodAPITokenKey] != "730060,new-token" {
+		t.Fatalf("active token missing: %s", raw)
 	}
 }

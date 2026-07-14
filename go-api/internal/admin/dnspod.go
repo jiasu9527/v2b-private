@@ -14,6 +14,8 @@ const (
 	dnspodSecretIDKey  = "dnspod_secret_id"
 	dnspodSecretKeyKey = "dnspod_secret_key"
 	dnspodEditionKey   = "dnspod_edition"
+	dnspodAuthTypeKey  = "dnspod_auth_type"
+	dnspodAPITokenKey  = "dnspod_api_token"
 )
 
 type dnspodAPI interface {
@@ -28,16 +30,20 @@ type dnspodAPI interface {
 }
 
 type DNSPodConfigStatus struct {
-	Configured     bool   `json:"configured"`
-	SecretIDMasked string `json:"secret_id_masked"`
-	Source         string `json:"source"`
-	Edition        string `json:"edition"`
+	Configured       bool   `json:"configured"`
+	SecretIDMasked   string `json:"secret_id_masked"`
+	Source           string `json:"source"`
+	Edition          string `json:"edition"`
+	AuthType         string `json:"auth_type"`
+	CredentialMasked string `json:"credential_masked"`
 }
 
 type DNSPodConfigSaveRequest struct {
 	SecretID  string
 	SecretKey string
 	Edition   string
+	AuthType  string
+	APIToken  string
 	Verify    bool
 	Clear     bool
 }
@@ -51,6 +57,7 @@ type DNSPodDomainListRequest struct {
 
 type DNSPodRecordListRequest struct {
 	Domain     string
+	DomainID   int64
 	Current    int64
 	PageSize   int64
 	Keyword    string
@@ -61,6 +68,7 @@ type DNSPodRecordListRequest struct {
 
 type DNSPodRecordSaveRequest struct {
 	Domain       string
+	DomainID     int64
 	RecordID     int64
 	SubDomain    string
 	RecordType   string
@@ -73,15 +81,23 @@ type DNSPodRecordSaveRequest struct {
 }
 
 func (s *DBService) GetDNSPodConfig(_ context.Context) (DNSPodConfigStatus, error) {
-	secretID, secretKey, source, edition, err := s.dnspodCredentials()
+	credentials, err := s.dnspodCredentials()
 	if err != nil {
 		return DNSPodConfigStatus{}, err
 	}
+	configured := credentials.SecretID != "" && credentials.SecretKey != ""
+	masked := maskDNSPodSecretID(credentials.SecretID)
+	if credentials.AuthType == dnspod.AuthTypeToken {
+		configured = dnspod.ValidLegacyToken(credentials.APIToken)
+		masked = maskDNSPodAPIToken(credentials.APIToken)
+	}
 	return DNSPodConfigStatus{
-		Configured:     secretID != "" && secretKey != "",
-		SecretIDMasked: maskDNSPodSecretID(secretID),
-		Source:         source,
-		Edition:        edition,
+		Configured:       configured,
+		SecretIDMasked:   maskDNSPodSecretID(credentials.SecretID),
+		Source:           credentials.Source,
+		Edition:          credentials.Edition,
+		AuthType:         credentials.AuthType,
+		CredentialMasked: masked,
 	}, nil
 }
 
@@ -94,32 +110,65 @@ func (s *DBService) SaveDNSPodConfig(ctx context.Context, request DNSPodConfigSa
 		delete(cfg.values, dnspodSecretIDKey)
 		delete(cfg.values, dnspodSecretKeyKey)
 		delete(cfg.values, dnspodEditionKey)
-		cfg.order = removeConfigKeys(cfg.order, dnspodSecretIDKey, dnspodSecretKeyKey, dnspodEditionKey)
+		delete(cfg.values, dnspodAuthTypeKey)
+		delete(cfg.values, dnspodAPITokenKey)
+		cfg.order = removeConfigKeys(cfg.order, dnspodSecretIDKey, dnspodSecretKeyKey, dnspodEditionKey, dnspodAuthTypeKey, dnspodAPITokenKey)
 	} else {
-		secretID := strings.TrimSpace(request.SecretID)
-		secretKey := strings.TrimSpace(request.SecretKey)
-		if secretID == "" {
-			secretID = cfg.stringValue(dnspodSecretIDKey, "")
+		authType := normalizeDNSPodAuthType(request.AuthType, request.APIToken)
+		if strings.TrimSpace(request.AuthType) == "" && strings.TrimSpace(request.APIToken) == "" {
+			authType = normalizeDNSPodAuthType(cfg.stringValue(dnspodAuthTypeKey, ""), cfg.stringValue(dnspodAPITokenKey, ""))
 		}
-		if secretKey == "" {
-			secretKey = cfg.stringValue(dnspodSecretKeyKey, "")
+		credentials := dnspodCredentials{
+			Edition: normalizeDNSPodEdition(request.Edition), AuthType: authType, Source: "config",
 		}
-		if secretID == "" || secretKey == "" {
-			return DNSPodConfigStatus{}, errors.New("请填写完整的 DNSPod SecretId 和 SecretKey")
+		if credentials.AuthType == dnspod.AuthTypeToken {
+			credentials.APIToken = strings.TrimSpace(request.APIToken)
+			if credentials.APIToken == "" {
+				credentials.APIToken = cfg.stringValue(dnspodAPITokenKey, "")
+			}
+			credentials.Edition = dnspod.EditionInternational
+		} else {
+			credentials.SecretID = strings.TrimSpace(request.SecretID)
+			credentials.SecretKey = strings.TrimSpace(request.SecretKey)
+			if credentials.SecretID == "" {
+				credentials.SecretID = cfg.stringValue(dnspodSecretIDKey, "")
+			}
+			if credentials.SecretKey == "" {
+				credentials.SecretKey = cfg.stringValue(dnspodSecretKeyKey, "")
+			}
 		}
 		edition := normalizeDNSPodEdition(request.Edition)
 		if strings.TrimSpace(request.Edition) == "" {
 			edition = normalizeDNSPodEdition(cfg.stringValue(dnspodEditionKey, ""))
 		}
+		if credentials.AuthType == dnspod.AuthTypeTC3 {
+			credentials.Edition = edition
+		}
+		if err := validateDNSPodCredentials(credentials); err != nil {
+			return DNSPodConfigStatus{}, err
+		}
 		if request.Verify {
-			if err := s.testDNSPodCredentials(ctx, secretID, secretKey, edition); err != nil {
+			if err := s.testDNSPodCredentials(ctx, credentials); err != nil {
 				return DNSPodConfigStatus{}, err
 			}
 		}
-		cfg.values[dnspodSecretIDKey] = phpConfigValue{kind: phpConfigScalar, scalar: secretID}
-		cfg.values[dnspodSecretKeyKey] = phpConfigValue{kind: phpConfigScalar, scalar: secretKey}
-		cfg.values[dnspodEditionKey] = phpConfigValue{kind: phpConfigScalar, scalar: edition}
-		cfg.order = appendMissingConfigKeys(cfg.order, sortedMissingKeys(cfg, dnspodSecretIDKey, dnspodSecretKeyKey, dnspodEditionKey), cfg.values)
+		cfg.values[dnspodEditionKey] = phpConfigValue{kind: phpConfigScalar, scalar: credentials.Edition}
+		cfg.values[dnspodAuthTypeKey] = phpConfigValue{kind: phpConfigScalar, scalar: credentials.AuthType}
+		keys := []string{dnspodEditionKey, dnspodAuthTypeKey}
+		if credentials.AuthType == dnspod.AuthTypeToken {
+			delete(cfg.values, dnspodSecretIDKey)
+			delete(cfg.values, dnspodSecretKeyKey)
+			cfg.order = removeConfigKeys(cfg.order, dnspodSecretIDKey, dnspodSecretKeyKey)
+			cfg.values[dnspodAPITokenKey] = phpConfigValue{kind: phpConfigScalar, scalar: credentials.APIToken}
+			keys = append(keys, dnspodAPITokenKey)
+		} else {
+			delete(cfg.values, dnspodAPITokenKey)
+			cfg.order = removeConfigKeys(cfg.order, dnspodAPITokenKey)
+			cfg.values[dnspodSecretIDKey] = phpConfigValue{kind: phpConfigScalar, scalar: credentials.SecretID}
+			cfg.values[dnspodSecretKeyKey] = phpConfigValue{kind: phpConfigScalar, scalar: credentials.SecretKey}
+			keys = append(keys, dnspodSecretIDKey, dnspodSecretKeyKey)
+		}
+		cfg.order = appendMissingConfigKeys(cfg.order, sortedMissingKeys(cfg, keys...), cfg.values)
 	}
 	if err := writeJSONConfigFile(adminConfigPath(), cfg); err != nil {
 		return DNSPodConfigStatus{}, errors.New("保存 DNSPod 配置失败")
@@ -127,28 +176,34 @@ func (s *DBService) SaveDNSPodConfig(ctx context.Context, request DNSPodConfigSa
 	return s.GetDNSPodConfig(ctx)
 }
 
-func (s *DBService) TestDNSPodConfig(ctx context.Context, secretID, secretKey, edition string) error {
-	secretID = strings.TrimSpace(secretID)
-	secretKey = strings.TrimSpace(secretKey)
-	if secretID == "" || secretKey == "" {
-		storedID, storedKey, _, storedEdition, err := s.dnspodCredentials()
-		if err != nil {
-			return err
-		}
-		if secretID == "" {
-			secretID = storedID
-		}
-		if secretKey == "" {
-			secretKey = storedKey
-		}
-		if strings.TrimSpace(edition) == "" {
-			edition = storedEdition
-		}
+func (s *DBService) TestDNSPodConfig(ctx context.Context, request DNSPodConfigSaveRequest) error {
+	stored, err := s.dnspodCredentials()
+	if err != nil {
+		return err
 	}
-	if secretID == "" || secretKey == "" {
-		return errors.New("请先配置 DNSPod SecretId 和 SecretKey")
+	credentials := dnspodCredentials{
+		SecretID: strings.TrimSpace(request.SecretID), SecretKey: strings.TrimSpace(request.SecretKey), APIToken: strings.TrimSpace(request.APIToken),
+		Edition: normalizeDNSPodEdition(request.Edition), AuthType: normalizeDNSPodAuthType(request.AuthType, request.APIToken), Source: "temporary",
 	}
-	return s.testDNSPodCredentials(ctx, secretID, secretKey, normalizeDNSPodEdition(edition))
+	if credentials.SecretID == "" {
+		credentials.SecretID = stored.SecretID
+	}
+	if credentials.SecretKey == "" {
+		credentials.SecretKey = stored.SecretKey
+	}
+	if credentials.APIToken == "" {
+		credentials.APIToken = stored.APIToken
+	}
+	if strings.TrimSpace(request.Edition) == "" {
+		credentials.Edition = stored.Edition
+	}
+	if strings.TrimSpace(request.AuthType) == "" {
+		credentials.AuthType = stored.AuthType
+	}
+	if err := validateDNSPodCredentials(credentials); err != nil {
+		return err
+	}
+	return s.testDNSPodCredentials(ctx, credentials)
 }
 
 func (s *DBService) ListDNSPodDomains(ctx context.Context, request DNSPodDomainListRequest) (dnspod.DescribeDomainListResult, error) {
@@ -177,6 +232,7 @@ func (s *DBService) ListDNSPodRecords(ctx context.Context, request DNSPodRecordL
 	current, pageSize := normalizeDNSPodPage(request.Current, request.PageSize)
 	return client.DescribeRecordList(ctx, dnspod.DescribeRecordListRequest{
 		Domain:     domain,
+		DomainID:   request.DomainID,
 		Subdomain:  strings.TrimSpace(request.Subdomain),
 		RecordType: strings.ToUpper(strings.TrimSpace(request.RecordType)),
 		RecordLine: strings.TrimSpace(request.RecordLine),
@@ -241,7 +297,7 @@ func (s *DBService) SaveDNSPodRecord(ctx context.Context, request DNSPodRecordSa
 		return dnspod.RecordMutationResult{}, err
 	}
 	mutation := dnspod.RecordMutationRequest{
-		Domain: request.Domain, RecordID: request.RecordID, SubDomain: request.SubDomain,
+		Domain: request.Domain, DomainID: request.DomainID, RecordID: request.RecordID, SubDomain: request.SubDomain,
 		RecordType: request.RecordType, RecordLine: request.RecordLine, RecordLineID: request.RecordLineID,
 		Value: request.Value, TTL: request.TTL, MX: request.MX, Weight: request.Weight,
 	}
@@ -251,7 +307,7 @@ func (s *DBService) SaveDNSPodRecord(ctx context.Context, request DNSPodRecordSa
 	return client.CreateRecord(ctx, mutation)
 }
 
-func (s *DBService) DeleteDNSPodRecord(ctx context.Context, domain string, recordID int64) error {
+func (s *DBService) DeleteDNSPodRecord(ctx context.Context, domain string, domainID, recordID int64) error {
 	domain = strings.TrimSpace(domain)
 	if domain == "" || recordID <= 0 {
 		return errors.New("域名或记录 ID 无效")
@@ -260,10 +316,10 @@ func (s *DBService) DeleteDNSPodRecord(ctx context.Context, domain string, recor
 	if err != nil {
 		return err
 	}
-	return client.DeleteRecord(ctx, dnspod.DeleteRecordRequest{Domain: domain, RecordID: recordID})
+	return client.DeleteRecord(ctx, dnspod.DeleteRecordRequest{Domain: domain, DomainID: domainID, RecordID: recordID})
 }
 
-func (s *DBService) SetDNSPodRecordStatus(ctx context.Context, domain string, recordID int64, status string) error {
+func (s *DBService) SetDNSPodRecordStatus(ctx context.Context, domain string, domainID, recordID int64, status string) error {
 	domain = strings.TrimSpace(domain)
 	status = strings.ToUpper(strings.TrimSpace(status))
 	if domain == "" || recordID <= 0 {
@@ -276,52 +332,124 @@ func (s *DBService) SetDNSPodRecordStatus(ctx context.Context, domain string, re
 	if err != nil {
 		return err
 	}
-	return client.ModifyRecordStatus(ctx, dnspod.ModifyRecordStatusRequest{Domain: domain, RecordID: recordID, Status: status})
+	return client.ModifyRecordStatus(ctx, dnspod.ModifyRecordStatusRequest{Domain: domain, DomainID: domainID, RecordID: recordID, Status: status})
 }
 
-func (s *DBService) dnspodCredentials() (secretID, secretKey, source, edition string, err error) {
-	envID := strings.TrimSpace(os.Getenv("DNSPOD_SECRET_ID"))
-	envKey := strings.TrimSpace(os.Getenv("DNSPOD_SECRET_KEY"))
-	if envID != "" || envKey != "" {
-		return envID, envKey, "env", normalizeDNSPodEdition(os.Getenv("DNSPOD_EDITION")), nil
-	}
+type dnspodCredentials struct {
+	SecretID  string
+	SecretKey string
+	APIToken  string
+	AuthType  string
+	Edition   string
+	Source    string
+}
+
+func (s *DBService) dnspodCredentials() (dnspodCredentials, error) {
 	cfg, err := loadAdminConfigStore(adminConfigPath())
 	if err != nil {
-		return "", "", "", "", err
+		return dnspodCredentials{}, err
 	}
-	secretID = strings.TrimSpace(cfg.stringValue(dnspodSecretIDKey, ""))
-	secretKey = strings.TrimSpace(cfg.stringValue(dnspodSecretKeyKey, ""))
-	edition = normalizeDNSPodEdition(cfg.stringValue(dnspodEditionKey, ""))
-	source = "config"
-	if secretID == "" && secretKey == "" {
-		source = ""
+	credentials := dnspodCredentials{
+		SecretID:  strings.TrimSpace(cfg.stringValue(dnspodSecretIDKey, "")),
+		SecretKey: strings.TrimSpace(cfg.stringValue(dnspodSecretKeyKey, "")),
+		APIToken:  strings.TrimSpace(cfg.stringValue(dnspodAPITokenKey, "")),
+		Edition:   normalizeDNSPodEdition(cfg.stringValue(dnspodEditionKey, "")),
+		Source:    "config",
 	}
-	return secretID, secretKey, source, edition, nil
+	credentials.AuthType = normalizeDNSPodAuthType(cfg.stringValue(dnspodAuthTypeKey, ""), credentials.APIToken)
+	if credentials.SecretID == "" && credentials.SecretKey == "" && credentials.APIToken == "" {
+		credentials.Source = ""
+	}
+	envID := strings.TrimSpace(os.Getenv("DNSPOD_SECRET_ID"))
+	envKey := strings.TrimSpace(os.Getenv("DNSPOD_SECRET_KEY"))
+	envToken := strings.TrimSpace(os.Getenv("DNSPOD_API_TOKEN"))
+	envAuthType := strings.TrimSpace(os.Getenv("DNSPOD_AUTH_TYPE"))
+	envEdition := strings.TrimSpace(os.Getenv("DNSPOD_EDITION"))
+	if envID != "" {
+		credentials.SecretID = envID
+	}
+	if envKey != "" {
+		credentials.SecretKey = envKey
+	}
+	if envToken != "" {
+		credentials.APIToken = envToken
+	}
+	switch {
+	case envAuthType != "":
+		credentials.AuthType = normalizeDNSPodAuthType(envAuthType, envToken)
+	case envToken != "":
+		credentials.AuthType = dnspod.AuthTypeToken
+	case envID != "" || envKey != "":
+		credentials.AuthType = dnspod.AuthTypeTC3
+	}
+	if envEdition != "" {
+		credentials.Edition = normalizeDNSPodEdition(envEdition)
+	}
+	if credentials.AuthType == dnspod.AuthTypeToken {
+		credentials.Edition = dnspod.EditionInternational
+	}
+	if envID != "" || envKey != "" || envToken != "" || envAuthType != "" || envEdition != "" {
+		credentials.Source = "env"
+	}
+	return credentials, nil
 }
 
 func (s *DBService) dnspodClient() (dnspodAPI, error) {
-	secretID, secretKey, _, edition, err := s.dnspodCredentials()
+	credentials, err := s.dnspodCredentials()
 	if err != nil {
 		return nil, err
 	}
-	if secretID == "" || secretKey == "" {
-		return nil, errors.New("请先配置 DNSPod SecretId 和 SecretKey")
+	if err := validateDNSPodCredentials(credentials); err != nil {
+		return nil, err
+	}
+	if credentials.AuthType == dnspod.AuthTypeToken {
+		if s.dnspodLegacyClientFactory != nil {
+			return s.dnspodLegacyClientFactory(credentials.APIToken), nil
+		}
+		return dnspod.NewLegacyClient(credentials.APIToken), nil
 	}
 	if s.dnspodClientFactory != nil {
-		return s.dnspodClientFactory(secretID, secretKey, edition), nil
+		return s.dnspodClientFactory(credentials.SecretID, credentials.SecretKey, credentials.Edition), nil
 	}
-	return dnspod.NewClient(secretID, secretKey, dnspod.WithEndpoint(dnspod.EndpointForEdition(edition))), nil
+	return dnspod.NewClient(credentials.SecretID, credentials.SecretKey, dnspod.WithEndpoint(dnspod.EndpointForEdition(credentials.Edition))), nil
 }
 
-func (s *DBService) testDNSPodCredentials(ctx context.Context, secretID, secretKey, edition string) error {
+func (s *DBService) testDNSPodCredentials(ctx context.Context, credentials dnspodCredentials) error {
 	var client dnspodAPI
-	if s.dnspodClientFactory != nil {
-		client = s.dnspodClientFactory(secretID, secretKey, edition)
+	if credentials.AuthType == dnspod.AuthTypeToken {
+		if s.dnspodLegacyClientFactory != nil {
+			client = s.dnspodLegacyClientFactory(credentials.APIToken)
+		} else {
+			client = dnspod.NewLegacyClient(credentials.APIToken)
+		}
+	} else if s.dnspodClientFactory != nil {
+		client = s.dnspodClientFactory(credentials.SecretID, credentials.SecretKey, credentials.Edition)
 	} else {
-		client = dnspod.NewClient(secretID, secretKey, dnspod.WithEndpoint(dnspod.EndpointForEdition(edition)))
+		client = dnspod.NewClient(credentials.SecretID, credentials.SecretKey, dnspod.WithEndpoint(dnspod.EndpointForEdition(credentials.Edition)))
 	}
 	_, err := client.DescribeDomainList(ctx, dnspod.DescribeDomainListRequest{Offset: 0, Limit: 1})
 	return err
+}
+
+func validateDNSPodCredentials(credentials dnspodCredentials) error {
+	if credentials.AuthType == dnspod.AuthTypeToken {
+		if !dnspod.ValidLegacyToken(credentials.APIToken) {
+			return errors.New("请填写完整的 DNSPod API Token，格式为 ID,Token")
+		}
+		return nil
+	}
+	if credentials.SecretID == "" || credentials.SecretKey == "" {
+		return errors.New("请填写完整的 DNSPod SecretId 和 SecretKey")
+	}
+	return nil
+}
+
+func normalizeDNSPodAuthType(authType, apiToken string) string {
+	if strings.EqualFold(strings.TrimSpace(authType), dnspod.AuthTypeToken) ||
+		(strings.TrimSpace(authType) == "" && strings.TrimSpace(apiToken) != "") {
+		return dnspod.AuthTypeToken
+	}
+	return dnspod.AuthTypeTC3
 }
 
 func normalizeDNSPodEdition(edition string) string {
@@ -357,6 +485,14 @@ func maskDNSPodSecretID(value string) string {
 		prefix = len(value) - 4
 	}
 	return value[:prefix] + "****" + value[len(value)-4:]
+}
+
+func maskDNSPodAPIToken(value string) string {
+	parts := strings.SplitN(strings.TrimSpace(value), ",", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+		return ""
+	}
+	return strings.TrimSpace(parts[0]) + ",****"
 }
 
 func removeConfigKeys(order []string, keys ...string) []string {

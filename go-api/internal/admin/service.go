@@ -338,14 +338,14 @@ type Service interface {
 	CopyManagedServer(ctx context.Context, serverType string, id int64) (bool, error)
 	GetDNSPodConfig(ctx context.Context) (DNSPodConfigStatus, error)
 	SaveDNSPodConfig(ctx context.Context, req DNSPodConfigSaveRequest) (DNSPodConfigStatus, error)
-	TestDNSPodConfig(ctx context.Context, secretID, secretKey, edition string) error
+	TestDNSPodConfig(ctx context.Context, req DNSPodConfigSaveRequest) error
 	ListDNSPodDomains(ctx context.Context, req DNSPodDomainListRequest) (dnspod.DescribeDomainListResult, error)
 	ListDNSPodRecords(ctx context.Context, req DNSPodRecordListRequest) (dnspod.DescribeRecordListResult, error)
 	ListDNSPodRecordTypes(ctx context.Context, domainGrade string) (dnspod.DescribeRecordTypeResult, error)
 	ListDNSPodRecordLines(ctx context.Context, domain, domainGrade, recordType string) (dnspod.DescribeRecordLineListResult, error)
 	SaveDNSPodRecord(ctx context.Context, req DNSPodRecordSaveRequest) (dnspod.RecordMutationResult, error)
-	DeleteDNSPodRecord(ctx context.Context, domain string, recordID int64) error
-	SetDNSPodRecordStatus(ctx context.Context, domain string, recordID int64, status string) error
+	DeleteDNSPodRecord(ctx context.Context, domain string, domainID, recordID int64) error
+	SetDNSPodRecordStatus(ctx context.Context, domain string, domainID, recordID int64, status string) error
 	FetchConfig(ctx context.Context, key string) (map[string]any, error)
 	SaveConfig(ctx context.Context, values map[string]any) (bool, error)
 	ListThemes(ctx context.Context) (map[string]any, error)
@@ -401,15 +401,16 @@ type Service interface {
 }
 
 type DBService struct {
-	cfg                 config.Config
-	runtime             *config.RuntimeState
-	db                  *sql.DB
-	orders              orderRuntime
-	jobs                queue.Enqueuer
-	authCache           *session.AuthCache
-	mailSender          func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error
-	sleep               func(context.Context, time.Duration) error
-	dnspodClientFactory func(secretID, secretKey, edition string) dnspodAPI
+	cfg                       config.Config
+	runtime                   *config.RuntimeState
+	db                        *sql.DB
+	orders                    orderRuntime
+	jobs                      queue.Enqueuer
+	authCache                 *session.AuthCache
+	mailSender                func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error
+	sleep                     func(context.Context, time.Duration) error
+	dnspodClientFactory       func(secretID, secretKey, edition string) dnspodAPI
+	dnspodLegacyClientFactory func(apiToken string) dnspodAPI
 
 	clientEntryEnsureOnce sync.Once
 	clientEntryEnsureErr  error

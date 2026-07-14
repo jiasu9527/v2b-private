@@ -70,6 +70,29 @@ func TestClientReturnsDNSPodAPIError(t *testing.T) {
 	}
 }
 
+func TestTC3ClientDoesNotSendLegacyDomainIDAlongsideDomain(t *testing.T) {
+	var gotPayload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"Response":{"RecordCountInfo":{"TotalCount":0},"RecordList":[],"RequestId":"req-domain"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("id", "key", WithEndpoint(server.URL))
+	_, err := client.DescribeRecordList(context.Background(), DescribeRecordListRequest{Domain: "example.com", DomainID: 7, Limit: 20})
+	if err != nil {
+		t.Fatalf("DescribeRecordList: %v", err)
+	}
+	if gotPayload["Domain"] != "example.com" {
+		t.Fatalf("expected domain name in TC3 payload, got %#v", gotPayload)
+	}
+	if _, exists := gotPayload["DomainId"]; exists {
+		t.Fatalf("legacy-only DomainId must not be sent with Domain in TC3 payload: %#v", gotPayload)
+	}
+}
+
 func TestClientTranslatesEnglishCredentialErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"Response":{"Error":{"Code":"AuthFailure.SecretIdNotFound","Message":"The SecretId is not found, please ensure that your SecretId is correct."},"RequestId":"req-english"}}`))

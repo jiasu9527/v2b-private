@@ -884,8 +884,10 @@ type fakeAdminService struct {
 	lastDNSPodRecordList          admin.DNSPodRecordListRequest
 	lastDNSPodRecordSave          admin.DNSPodRecordSaveRequest
 	lastDNSPodDeleteDomain        string
+	lastDNSPodDeleteDomainID      int64
 	lastDNSPodDeleteID            int64
 	lastDNSPodStatusDomain        string
+	lastDNSPodStatusDomainID      int64
 	lastDNSPodStatusID            int64
 	lastDNSPodStatus              string
 	lastConfigKey                 string
@@ -1204,10 +1206,8 @@ func (f *fakeAdminService) SaveDNSPodConfig(_ context.Context, req admin.DNSPodC
 	return f.dnspodConfig, f.err
 }
 
-func (f *fakeAdminService) TestDNSPodConfig(_ context.Context, secretID, secretKey, edition string) error {
-	f.lastDNSPodConfigSave.SecretID = secretID
-	f.lastDNSPodConfigSave.SecretKey = secretKey
-	f.lastDNSPodConfigSave.Edition = edition
+func (f *fakeAdminService) TestDNSPodConfig(_ context.Context, req admin.DNSPodConfigSaveRequest) error {
+	f.lastDNSPodConfigSave = req
 	return f.err
 }
 
@@ -1238,14 +1238,16 @@ func (f *fakeAdminService) SaveDNSPodRecord(_ context.Context, req admin.DNSPodR
 	return f.dnspodMutation, f.err
 }
 
-func (f *fakeAdminService) DeleteDNSPodRecord(_ context.Context, domain string, recordID int64) error {
+func (f *fakeAdminService) DeleteDNSPodRecord(_ context.Context, domain string, domainID, recordID int64) error {
 	f.lastDNSPodDeleteDomain = domain
+	f.lastDNSPodDeleteDomainID = domainID
 	f.lastDNSPodDeleteID = recordID
 	return f.err
 }
 
-func (f *fakeAdminService) SetDNSPodRecordStatus(_ context.Context, domain string, recordID int64, status string) error {
+func (f *fakeAdminService) SetDNSPodRecordStatus(_ context.Context, domain string, domainID, recordID int64, status string) error {
 	f.lastDNSPodStatusDomain = domain
+	f.lastDNSPodStatusDomainID = domainID
 	f.lastDNSPodStatusID = recordID
 	f.lastDNSPodStatus = status
 	return f.err
