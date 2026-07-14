@@ -347,6 +347,16 @@ type Service interface {
 	SaveDNSPodRecord(ctx context.Context, req DNSPodRecordSaveRequest) (dnspod.RecordMutationResult, error)
 	DeleteDNSPodRecord(ctx context.Context, domain string, domainID, recordID int64) error
 	SetDNSPodRecordStatus(ctx context.Context, domain string, domainID, recordID int64, status string) error
+	GetDNSFailoverSettings(ctx context.Context) (DNSFailoverSettings, error)
+	SaveDNSFailoverSettings(ctx context.Context, req DNSFailoverSettingsSaveRequest) (DNSFailoverSettings, error)
+	ListDNSProbes(ctx context.Context) ([]DNSProbeRecord, error)
+	CreateDNSProbe(ctx context.Context, req DNSProbeCreateRequest) (DNSProbeCreateResult, error)
+	SetDNSProbeEnabled(ctx context.Context, id int64, enabled bool) (bool, error)
+	ListDNSFailoverRules(ctx context.Context) ([]DNSFailoverRuleRecord, error)
+	GetDNSFailoverRule(ctx context.Context, id int64) (DNSFailoverRuleRecord, error)
+	SaveDNSFailoverRule(ctx context.Context, req DNSFailoverRuleSaveRequest) (DNSFailoverRuleRecord, error)
+	DeleteDNSFailoverRule(ctx context.Context, id int64) (bool, error)
+	SetDNSFailoverRuleEnabled(ctx context.Context, id int64, enabled bool) (bool, error)
 	FetchConfig(ctx context.Context, key string) (map[string]any, error)
 	SaveConfig(ctx context.Context, values map[string]any) (bool, error)
 	ListThemes(ctx context.Context) (map[string]any, error)
