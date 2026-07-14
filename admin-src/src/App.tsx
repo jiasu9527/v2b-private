@@ -4,7 +4,7 @@ import {
   AppstoreOutlined, DashboardOutlined, UserOutlined, ShoppingCartOutlined, ClusterOutlined,
   SettingOutlined, FileTextOutlined, GiftOutlined, CreditCardOutlined, QuestionCircleOutlined,
   MessageOutlined, MenuFoldOutlined, MenuUnfoldOutlined, LogoutOutlined, DeploymentUnitOutlined,
-  ShareAltOutlined, DatabaseOutlined, BellOutlined, DownOutlined, SafetyCertificateOutlined
+  ShareAltOutlined, DatabaseOutlined, BellOutlined, DownOutlined, SafetyCertificateOutlined, GlobalOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import Login from './pages/Login';
@@ -27,6 +27,7 @@ import ServerRoutePage from './pages/ServerRoutePage';
 import ClientEntryPage from './pages/ClientEntryPage';
 import ClientEntryUserPolicyPage from './pages/ClientEntryUserPolicyPage';
 import SubscribeGuardPage from './pages/SubscribeGuardPage';
+import DNSPodPage from './pages/DNSPodPage';
 import { checkLogin, clearAuth, getAdminUserInfo, getAuth, getCurrentUserInfo, getSettings, pathAdminSegment, setAdminUserInfo } from './lib/api';
 
 const { Header, Sider, Content } = Layout;
@@ -49,6 +50,7 @@ const menu = [
   { type: 'item', key: '/server/route', icon: <ShareAltOutlined />, label: '路由管理' },
   { type: 'item', key: '/server/client-entry', icon: <ClusterOutlined />, label: '客户端入口' },
   { type: 'item', key: '/server/client-entry-user-policy', icon: <ClusterOutlined />, label: '用户入口分配' },
+  { type: 'item', key: '/dns', icon: <GlobalOutlined />, label: '域名解析' },
   { type: 'heading', key: 'finance-heading', label: '财务' },
   { type: 'item', key: '/plan', icon: <AppstoreOutlined />, label: '订阅管理' },
   { type: 'item', key: '/order', icon: <ShoppingCartOutlined />, label: '订单管理' },
@@ -87,6 +89,7 @@ function Page({ path }: { path: string }) {
   if (route === '/server/route') return <ServerRoutePage />;
   if (route === '/server/client-entry') return <ClientEntryPage />;
   if (route === '/server/client-entry-user-policy') return <ClientEntryUserPolicyPage />;
+  if (route === '/dns') return <DNSPodPage />;
   if (route === '/config/system') return <ConfigPage />;
   if (route === '/config/payment') return <PaymentPage />;
   if (route === '/config/subscribe-guard') return <SubscribeGuardPage />;

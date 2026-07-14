@@ -29,6 +29,17 @@ html,body,#root{height:100%;margin:0}body{background:#f0f3f8;font-family:Inter,-
 /* order detail modal */
 .order-detail-modal .ant-modal-body{padding-top:10px}
 .legacy-detail-modal{display:flex;flex-direction:column;gap:16px}
+
+/* DNSPod domain manager */
+.dnspod-page>.legacy-alert{margin-left:24px;margin-right:24px}
+.dnspod-account-bar{min-height:70px;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid var(--forest-line)}
+.dnspod-account-copy{display:flex;align-items:center;gap:12px;min-width:0}.dnspod-account-copy>.anticon{font-size:26px;color:#111}
+.dnspod-account-title{font-weight:700;color:#111}.dnspod-account-subtitle{margin-top:3px;color:#777;font-size:12px}
+.dnspod-view-head{padding:14px 15px;display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid var(--forest-line)}
+.dnspod-view-title{display:flex;align-items:center;gap:12px;min-width:0}.dnspod-view-title>div{display:flex;flex-direction:column;min-width:0}.dnspod-view-title strong{font-size:15px;color:#111;overflow:hidden;text-overflow:ellipsis}.dnspod-view-title span{font-size:12px;color:#777;margin-top:2px}.dnspod-view-divider{width:1px;height:28px;background:var(--forest-line)}
+.dnspod-search{width:250px}.dnspod-type-filter{width:130px}.dnspod-domain-link{font-weight:700}.dnspod-muted-cell{display:block;max-width:360px;color:#777;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dnspod-danger-link{color:#c53030!important}.dnspod-settings-footer{display:flex;justify-content:space-between;align-items:center;gap:12px}.dnspod-modal-alert{margin-bottom:18px}.dnspod-record-form .dnspod-record-value{grid-column:1/-1}
+@media(max-width:768px){.dnspod-page>.legacy-alert{margin-left:10px;margin-right:10px}.dnspod-account-bar,.dnspod-view-head{align-items:stretch;flex-direction:column}.dnspod-view-head>.ant-space{width:100%}.dnspod-search,.dnspod-type-filter{width:100%}.dnspod-settings-footer{align-items:stretch;flex-direction:column-reverse}.dnspod-settings-footer>.ant-space{justify-content:flex-end}}
 .legacy-detail-section{border:1px solid var(--forest-line,#e5e5e5);background:#fff}
 .legacy-detail-section-title{padding:10px 14px;border-bottom:1px solid var(--forest-line,#e5e5e5);background:#fafafa;color:#111;font-size:13px;font-weight:700}
 .legacy-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;border-top:0}
