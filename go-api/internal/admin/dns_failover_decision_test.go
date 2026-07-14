@@ -106,6 +106,7 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		"v2_dns_failover_group_probe",
 		"v2_dns_probe_target_state",
 		"v2_dns_probe_result_inbox",
+		"v2_dns_failover_log",
 		"v2_dns_failover_eval_outbox",
 		"v2_dns_failover_saga",
 		"v2_dns_failover_event",
@@ -164,6 +165,12 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		"fk_v2_dns_probe_result_inbox_probe",
 		"uniq_v2_dns_probe_result_inbox_result",
 		"chk_v2_dns_probe_result_inbox_result_id",
+		"fk_v2_dns_failover_log_group",
+		"fk_v2_dns_failover_log_probe",
+		"fk_v2_dns_failover_log_target",
+		"chk_v2_dns_failover_log_stage",
+		"chk_v2_dns_failover_log_level",
+		"chk_v2_dns_failover_log_outcome",
 		"fk_v2_dns_failover_eval_outbox_group",
 		"uniq_v2_dns_failover_eval_outbox_group",
 		"chk_v2_dns_failover_eval_outbox_attempts",
@@ -196,6 +203,14 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		"idx_v2_dns_probe_target_state_target",
 		"idx_v2_dns_probe_result_inbox_target",
 		"idx_v2_dns_probe_result_inbox_created",
+		"idx_v2_dns_failover_log_created_id",
+		"idx_v2_dns_failover_log_group_created_id",
+		"idx_v2_dns_failover_log_probe_created_id",
+		"idx_v2_dns_failover_log_target_created_id",
+		"idx_v2_dns_failover_log_stage_created_id",
+		"idx_v2_dns_failover_log_level_created_id",
+		"idx_v2_dns_failover_log_outcome_created_id",
+		"idx_v2_dns_failover_log_group_stage_outcome_created_id",
 		"idx_v2_dns_failover_eval_outbox_due",
 		"idx_v2_dns_failover_eval_outbox_operation_due",
 		"idx_v2_dns_failover_saga_due",
@@ -275,7 +290,7 @@ func TestDecideDNSFailover(t *testing.T) {
 				input.Probes = oneProbe
 				input.States = states(state(101, 1, 0, 4), state(101, 2, 8, 0))
 			},
-			want: dnsFailoverDecision{Action: dnsFailoverActionNone, Reason: dnsFailoverReasonCurrentHealthy},
+			want: dnsFailoverDecision{Action: dnsFailoverActionNone, Reason: dnsFailoverReasonFailureThresholdPending},
 		},
 		{
 			name: "single probe switches at degraded thresholds",
@@ -284,6 +299,22 @@ func TestDecideDNSFailover(t *testing.T) {
 				input.States = states(state(101, 1, 0, 5), state(101, 2, 8, 0))
 			},
 			want: dnsFailoverDecision{Action: dnsFailoverActionFailover, TargetID: 2, Reason: dnsFailoverReasonCurrentFailed},
+		},
+		{
+			name: "one fresh probe and one stale probe switches only at single probe thresholds",
+			mutate: func(input *dnsFailoverDecisionInput) {
+				input.Probes = dualProbes
+				input.States = states(state(101, 1, 0, 5), state(101, 2, 8, 0))
+			},
+			want: dnsFailoverDecision{Action: dnsFailoverActionFailover, TargetID: 2, Reason: dnsFailoverReasonCurrentFailed},
+		},
+		{
+			name: "one fresh probe and one stale probe does not use multi probe thresholds",
+			mutate: func(input *dnsFailoverDecisionInput) {
+				input.Probes = dualProbes
+				input.States = states(state(101, 1, 0, 3), state(101, 2, 6, 0))
+			},
+			want: dnsFailoverDecision{Action: dnsFailoverActionNone, Reason: dnsFailoverReasonFailureThresholdPending},
 		},
 		{
 			name: "single probe requires degraded recovery threshold",

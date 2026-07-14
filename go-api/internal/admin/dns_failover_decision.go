@@ -20,7 +20,10 @@ const (
 	dnsFailoverReasonProbeDisagreement       = "probe_disagreement"
 	dnsFailoverReasonNoHealthyTarget         = "no_healthy_target"
 	dnsFailoverReasonCurrentHealthy          = "current_target_healthy"
+	dnsFailoverReasonFailureThresholdPending = "failure_threshold_pending"
+	dnsFailoverReasonNoProbeData             = "no_probe_data"
 	dnsFailoverReasonHigherPriorityRecovered = "higher_priority_target_recovered"
+	dnsFailoverReasonRuleDisabled            = "rule_disabled"
 )
 
 type dnsFailoverDecision struct {
@@ -63,13 +66,13 @@ type dnsFailoverProbeTargetSnapshot struct {
 }
 
 func decideDNSFailover(input dnsFailoverDecisionInput) dnsFailoverDecision {
-	onlineProbeIDs := make(map[int64]struct{}, len(input.Probes))
+	heartbeatOnlineProbeIDs := make(map[int64]struct{}, len(input.Probes))
 	for _, probe := range input.Probes {
 		if probe.Online {
-			onlineProbeIDs[probe.ID] = struct{}{}
+			heartbeatOnlineProbeIDs[probe.ID] = struct{}{}
 		}
 	}
-	if len(onlineProbeIDs) == 0 {
+	if len(heartbeatOnlineProbeIDs) == 0 {
 		return dnsFailoverDecision{Action: dnsFailoverActionNone, Reason: dnsFailoverReasonAllProbesOffline}
 	}
 
@@ -77,9 +80,14 @@ func decideDNSFailover(input dnsFailoverDecisionInput) dnsFailoverDecision {
 		return dnsFailoverDecision{Action: dnsFailoverActionNone, Reason: dnsFailoverReasonCooldown}
 	}
 
+	availableProbeIDs := dnsFailoverDecisionAvailableProbeIDs(input.Probes, input.States, input.CurrentTargetID)
+	if len(availableProbeIDs) == 0 {
+		return dnsFailoverDecision{Action: dnsFailoverActionNone, Reason: dnsFailoverReasonNoProbeData}
+	}
+
 	failureThreshold := input.FailureThreshold
 	successThreshold := input.SuccessThreshold
-	if len(onlineProbeIDs) == 1 {
+	if len(availableProbeIDs) == 1 {
 		failureThreshold = input.SingleProbeFailureThreshold
 		successThreshold = input.SingleProbeSuccessThreshold
 	}
@@ -94,7 +102,7 @@ func decideDNSFailover(input dnsFailoverDecisionInput) dnsFailoverDecision {
 	}
 
 	allMeet := func(targetID int64, threshold int, success bool) bool {
-		for probeID := range onlineProbeIDs {
+		for probeID := range availableProbeIDs {
 			state, ok := stateByProbeTarget[stateKey{probeID: probeID, targetID: targetID}]
 			if !ok {
 				return false
@@ -110,7 +118,7 @@ func decideDNSFailover(input dnsFailoverDecisionInput) dnsFailoverDecision {
 		return true
 	}
 	anyMeet := func(targetID int64, threshold int) bool {
-		for probeID := range onlineProbeIDs {
+		for probeID := range availableProbeIDs {
 			if state, ok := stateByProbeTarget[stateKey{probeID: probeID, targetID: targetID}]; ok && state.FailureStreak >= threshold {
 				return true
 			}
@@ -168,8 +176,51 @@ func decideDNSFailover(input dnsFailoverDecisionInput) dnsFailoverDecision {
 		}
 	}
 
-	if len(onlineProbeIDs) > 1 && anyMeet(input.CurrentTargetID, failureThreshold) {
+	if len(availableProbeIDs) > 1 && anyMeet(input.CurrentTargetID, failureThreshold) {
 		return dnsFailoverDecision{Action: dnsFailoverActionNone, Reason: dnsFailoverReasonProbeDisagreement}
 	}
+	hasCurrentState := false
+	hasCurrentFailure := false
+	for probeID := range availableProbeIDs {
+		if state, ok := stateByProbeTarget[stateKey{probeID: probeID, targetID: input.CurrentTargetID}]; ok {
+			hasCurrentState = true
+			hasCurrentFailure = hasCurrentFailure || state.FailureStreak > 0
+		}
+	}
+	if !hasCurrentState {
+		return dnsFailoverDecision{Action: dnsFailoverActionNone, Reason: dnsFailoverReasonNoProbeData}
+	}
+	if hasCurrentFailure {
+		return dnsFailoverDecision{Action: dnsFailoverActionNone, Reason: dnsFailoverReasonFailureThresholdPending}
+	}
 	return dnsFailoverDecision{Action: dnsFailoverActionNone, Reason: dnsFailoverReasonCurrentHealthy}
+}
+
+func dnsFailoverDecisionAvailableProbeIDs(probes []dnsFailoverProbeSnapshot, states []dnsFailoverProbeTargetSnapshot, currentTargetID int64) map[int64]struct{} {
+	probesWithFreshCurrentState := make(map[int64]struct{}, len(states))
+	for _, state := range states {
+		if state.TargetID == currentTargetID {
+			probesWithFreshCurrentState[state.ProbeID] = struct{}{}
+		}
+	}
+	available := make(map[int64]struct{}, len(probes))
+	for _, probe := range probes {
+		if !probe.Online {
+			continue
+		}
+		if _, ok := probesWithFreshCurrentState[probe.ID]; ok {
+			available[probe.ID] = struct{}{}
+		}
+	}
+	return available
+}
+
+func dnsFailoverDecisionAvailableProbeIDList(probes []dnsFailoverProbeSnapshot, states []dnsFailoverProbeTargetSnapshot, currentTargetID int64) []int64 {
+	available := dnsFailoverDecisionAvailableProbeIDs(probes, states, currentTargetID)
+	ids := make([]int64, 0, len(available))
+	for probeID := range available {
+		ids = append(ids, probeID)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }

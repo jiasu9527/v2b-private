@@ -63,6 +63,22 @@ func TestDNSFailoverProbeDeleteRoute(t *testing.T) {
 	}
 }
 
+func TestDNSFailoverRuleStatusRoute(t *testing.T) {
+	service := &fakeAdminService{dnsStatus: admin.DNSFailoverStatus{Rule: admin.DNSFailoverRuleRecord{ID: 9}, Decision: admin.DNSFailoverDecisionStatus{Reason: "failure_threshold_pending"}}}
+	rec := dnsFailoverRequest(dnsFailoverRouter(service), http.MethodGet, "/api/v1/control/dns-failover/rules/9/status", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "failure_threshold_pending") || service.lastDNSRuleStatusID != 9 {
+		t.Fatalf("status=%d id=%d body=%s", rec.Code, service.lastDNSRuleStatusID, rec.Body.String())
+	}
+}
+
+func TestDNSFailoverLogRouteMapsFilters(t *testing.T) {
+	service := &fakeAdminService{dnsLogs: admin.DNSFailoverLogListResult{Total: 1, Data: []admin.DNSFailoverLogRecord{{ID: 8, Outcome: "failure"}}}}
+	rec := dnsFailoverRequest(dnsFailoverRouter(service), http.MethodGet, "/api/v1/control/dns-failover/logs?group=9&stage=probe_result&current=2&page_size=10", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"outcome":"failure"`) || service.lastDNSLogs.GroupID == nil || *service.lastDNSLogs.GroupID != 9 || service.lastDNSLogs.Current != 2 {
+		t.Fatalf("status=%d request=%#v body=%s", rec.Code, service.lastDNSLogs, rec.Body.String())
+	}
+}
+
 func TestDNSFailoverRuleEventsAndManualRoutesMapRequests(t *testing.T) {
 	service := &fakeAdminService{dnsRule: admin.DNSFailoverRuleRecord{ID: 9}, dnsEvents: admin.DNSFailoverEventListResult{Total: 31, Current: 2, PageSize: 10}}
 	router := dnsFailoverRouter(service)

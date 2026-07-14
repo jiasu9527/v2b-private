@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -33,10 +34,15 @@ type fileConfig struct {
 }
 type Task struct {
 	TargetID         int64  `json:"target_id"`
+	GroupID          int64  `json:"group_id"`
 	CheckHost        string `json:"check_host"`
 	CheckPort        int    `json:"check_port"`
 	TCPTimeoutMS     int64  `json:"tcp_timeout_ms"`
 	CheckIntervalSec int64  `json:"check_interval_sec"`
+}
+type taskWorker struct {
+	task   Task
+	cancel context.CancelFunc
 }
 type Result struct {
 	ResultID   string `json:"result_id"`
@@ -51,11 +57,13 @@ type Checker interface {
 }
 type Option func(*Agent)
 type Agent struct {
-	cfg            Config
-	client         *http.Client
-	checker        Checker
-	allowLocalHTTP bool
-	results        chan Result
+	cfg             Config
+	client          *http.Client
+	checker         Checker
+	allowLocalHTTP  bool
+	results         chan Result
+	operationMu     sync.Mutex
+	operationFailed map[string]bool
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -80,7 +88,13 @@ func WithHTTPClient(client *http.Client) Option { return func(a *Agent) { a.clie
 func WithChecker(checker Checker) Option        { return func(a *Agent) { a.checker = checker } }
 func WithInsecureLocalHTTP() Option             { return func(a *Agent) { a.allowLocalHTTP = true } }
 func New(cfg Config, options ...Option) (*Agent, error) {
-	a := &Agent{cfg: cfg, client: &http.Client{Timeout: 10 * time.Second}, checker: TCPChecker{}, results: make(chan Result, maxResultBatch)}
+	a := &Agent{
+		cfg:             cfg,
+		client:          &http.Client{Timeout: 10 * time.Second},
+		checker:         TCPChecker{},
+		results:         make(chan Result, maxResultBatch),
+		operationFailed: make(map[string]bool),
+	}
 	for _, option := range options {
 		option(a)
 	}
@@ -113,11 +127,11 @@ func isLocalHost(host string) bool {
 }
 
 func (a *Agent) Run(ctx context.Context) error {
-	workers := map[int64]context.CancelFunc{}
+	workers := map[int64]taskWorker{}
 	var workerWG sync.WaitGroup
 	defer func() {
-		for _, cancel := range workers {
-			cancel()
+		for _, worker := range workers {
+			worker.cancel()
 		}
 		workerWG.Wait()
 	}()
@@ -135,9 +149,10 @@ func (a *Agent) Run(ctx context.Context) error {
 				next[task.TargetID] = task
 			}
 		}
-		for id, cancel := range workers {
-			if _, ok := next[id]; !ok {
-				cancel()
+		for id, worker := range workers {
+			task, exists := next[id]
+			if !exists || worker.task != task {
+				worker.cancel()
 				delete(workers, id)
 			}
 		}
@@ -146,7 +161,7 @@ func (a *Agent) Run(ctx context.Context) error {
 				continue
 			}
 			taskCtx, cancel := context.WithCancel(ctx)
-			workers[id] = cancel
+			workers[id] = taskWorker{task: task, cancel: cancel}
 			workerWG.Add(1)
 			go func(task Task) { defer workerWG.Done(); a.runTask(taskCtx, task) }(task)
 		}
@@ -220,17 +235,41 @@ func (a *Agent) flush(ctx context.Context, pending []Result) []Result {
 	return pending
 }
 func (a *Agent) heartbeat(ctx context.Context) error {
-	return a.request(ctx, http.MethodPost, "/api/v1/probe/heartbeat", map[string]string{"version": a.cfg.Version, "arch": runtime.GOARCH}, nil)
+	err := a.request(ctx, http.MethodPost, "/api/v1/probe/heartbeat", map[string]string{"version": a.cfg.Version, "arch": runtime.GOARCH}, nil)
+	a.logOperationResult(ctx, "heartbeat", err)
+	return err
 }
 func (a *Agent) tasks(ctx context.Context) ([]Task, error) {
 	var payload struct {
 		Data []Task `json:"data"`
 	}
 	err := a.request(ctx, http.MethodGet, "/api/v1/probe/tasks", nil, &payload)
+	a.logOperationResult(ctx, "tasks", err)
 	return payload.Data, err
 }
 func (a *Agent) report(ctx context.Context, results []Result) error {
-	return a.request(ctx, http.MethodPost, "/api/v1/probe/results", map[string][]Result{"results": results}, nil)
+	err := a.request(ctx, http.MethodPost, "/api/v1/probe/results", map[string][]Result{"results": results}, nil)
+	a.logOperationResult(ctx, "report", err)
+	return err
+}
+func (a *Agent) logOperationResult(ctx context.Context, operation string, err error) {
+	if err != nil && ctx.Err() != nil {
+		return
+	}
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	failed := a.operationFailed[operation]
+	if err != nil {
+		if !failed {
+			a.operationFailed[operation] = true
+			log.Printf("probe %s failed: %v", operation, err)
+		}
+		return
+	}
+	if failed {
+		delete(a.operationFailed, operation)
+		log.Printf("probe %s recovered", operation)
+	}
 }
 func (a *Agent) request(ctx context.Context, method, path string, body any, target any) error {
 	var reader io.Reader
@@ -256,6 +295,12 @@ func (a *Agent) request(ctx context.Context, method, path string, body any, targ
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		detail, readErr := io.ReadAll(io.LimitReader(response.Body, 4<<10))
+		if readErr == nil {
+			if message := strings.TrimSpace(string(detail)); message != "" {
+				return fmt.Errorf("probe api %s: %s: response=%q", path, response.Status, message)
+			}
+		}
 		return fmt.Errorf("probe api %s: %s", path, response.Status)
 	}
 	if target == nil {

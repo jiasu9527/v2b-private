@@ -360,7 +360,7 @@ ORDER BY p.id ASC`, groupID)
 		return dnsFailoverWorkerSnapshot{}, fmt.Errorf("iterate DNS failover probes: %w", err)
 	}
 
-	stateRows, err := tx.QueryContext(ctx, `SELECT s.probe_id, s.target_id, s.consecutive_success, s.consecutive_failure, s.last_resolved_ip
+	stateRows, err := tx.QueryContext(ctx, `SELECT s.probe_id, s.target_id, s.consecutive_success, s.consecutive_failure, s.last_resolved_ip, s.last_reported_at
 FROM v2_dns_probe_target_state s
 JOIN v2_dns_failover_target t ON t.id = s.target_id
 JOIN v2_dns_failover_group_probe gp ON gp.probe_id = s.probe_id AND gp.group_id = t.group_id
@@ -372,16 +372,25 @@ ORDER BY s.probe_id ASC, s.target_id ASC`, groupID)
 	for stateRows.Next() {
 		var probeID, targetID, success, failure int64
 		var resolvedIP string
-		if err := stateRows.Scan(&probeID, &targetID, &success, &failure, &resolvedIP); err != nil {
+		var lastReportedAt sql.NullInt64
+		if err := stateRows.Scan(&probeID, &targetID, &success, &failure, &resolvedIP, &lastReportedAt); err != nil {
 			stateRows.Close()
 			return dnsFailoverWorkerSnapshot{}, fmt.Errorf("scan DNS failover state: %w", err)
 		}
-		snapshot.States = append(snapshot.States, dnsFailoverProbeTargetSnapshot{
-			ProbeID: probeID, TargetID: targetID, SuccessStreak: safeInt(success), FailureStreak: safeInt(failure),
-		})
+		fresh := dnsFailoverProbeStateFresh(lastReportedAt, now, snapshot.Rule.CheckIntervalSec, snapshot.Rule.TCPTimeoutMS, snapshot.Rule.ProbeOfflineSec)
+		var reportedAt any
+		if lastReportedAt.Valid {
+			reportedAt = lastReportedAt.Int64
+		}
 		snapshot.StateFacts = append(snapshot.StateFacts, map[string]any{
 			"probe_id": probeID, "target_id": targetID, "success_streak": success, "failure_streak": failure, "resolved_ip": resolvedIP,
+			"last_reported_at": reportedAt, "stale": !fresh,
 		})
+		if fresh {
+			snapshot.States = append(snapshot.States, dnsFailoverProbeTargetSnapshot{
+				ProbeID: probeID, TargetID: targetID, SuccessStreak: safeInt(success), FailureStreak: safeInt(failure),
+			})
+		}
 	}
 	if err := stateRows.Close(); err != nil {
 		return dnsFailoverWorkerSnapshot{}, fmt.Errorf("close DNS failover states: %w", err)
@@ -477,12 +486,12 @@ WHERE id = $1 AND active_incident_type = $2`, snapshot.Rule.ID, snapshot.ActiveI
 }
 
 func dnsFailoverCurrentTargetHealthy(snapshot dnsFailoverWorkerSnapshot, targetID int64) bool {
-	online := onlineDNSFailoverProbeIDs(snapshot.Probes)
-	if len(online) == 0 {
+	available := dnsFailoverDecisionAvailableProbeIDList(snapshot.Probes, snapshot.States, targetID)
+	if len(available) == 0 {
 		return false
 	}
 	threshold := safeInt(snapshot.Rule.SuccessThreshold)
-	if len(online) == 1 {
+	if len(available) == 1 {
 		threshold = safeInt(snapshot.Rule.SingleProbeSuccessThreshold)
 	}
 	states := make(map[int64]dnsFailoverProbeTargetSnapshot, len(snapshot.States))
@@ -491,7 +500,7 @@ func dnsFailoverCurrentTargetHealthy(snapshot dnsFailoverWorkerSnapshot, targetI
 			states[state.ProbeID] = state
 		}
 	}
-	for _, probeID := range online {
+	for _, probeID := range available {
 		state, ok := states[probeID]
 		if !ok || state.SuccessStreak < threshold {
 			return false
@@ -537,8 +546,15 @@ func (s *DBService) dnsFailoverClient() (dnspodAPI, error) {
 }
 
 func dnsFailoverEventDetails(snapshot dnsFailoverWorkerSnapshot, oldTarget, newTarget *DNSFailoverTargetRecord, reason, errorText, requestID string, now int64) map[string]any {
+	decisionCurrentTargetID := int64(0)
+	if oldTarget != nil {
+		decisionCurrentTargetID = oldTarget.ID
+	} else if snapshot.Rule.CurrentTargetID != nil {
+		decisionCurrentTargetID = *snapshot.Rule.CurrentTargetID
+	}
+	decisionProbeIDs := dnsFailoverDecisionAvailableProbeIDList(snapshot.Probes, snapshot.States, decisionCurrentTargetID)
 	details := map[string]any{
-		"reason": reason, "probe_ids": append([]int64(nil), snapshot.ProbeIDs...), "states": snapshot.StateFacts,
+		"reason": reason, "probe_ids": decisionProbeIDs, "bound_probe_ids": append([]int64(nil), snapshot.ProbeIDs...), "states": snapshot.StateFacts,
 		"request_id": requestID, "error": errorText, "time": time.Unix(now, 0).UTC().Format(time.RFC3339),
 	}
 	if oldTarget != nil {

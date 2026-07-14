@@ -357,11 +357,13 @@ type Service interface {
 	DeleteDNSProbe(ctx context.Context, id int64) (bool, error)
 	ListDNSFailoverRules(ctx context.Context) ([]DNSFailoverRuleRecord, error)
 	GetDNSFailoverRule(ctx context.Context, id int64) (DNSFailoverRuleRecord, error)
+	GetDNSFailoverStatus(ctx context.Context, id int64) (DNSFailoverStatus, error)
 	SaveDNSFailoverRule(ctx context.Context, req DNSFailoverRuleSaveRequest) (DNSFailoverRuleRecord, error)
 	DeleteDNSFailoverRule(ctx context.Context, id int64) (bool, error)
 	SetDNSFailoverRuleEnabled(ctx context.Context, id int64, enabled bool) (bool, error)
 	ManualSwitchDNSFailoverTarget(ctx context.Context, groupID, targetID int64) error
 	ListDNSFailoverEvents(ctx context.Context, req DNSFailoverEventListRequest) (DNSFailoverEventListResult, error)
+	ListDNSFailoverLogs(ctx context.Context, req DNSFailoverLogListRequest) (DNSFailoverLogListResult, error)
 	FetchConfig(ctx context.Context, key string) (map[string]any, error)
 	SaveConfig(ctx context.Context, values map[string]any) (bool, error)
 	ListThemes(ctx context.Context) (map[string]any, error)
@@ -433,6 +435,7 @@ type DBService struct {
 	dnsFailoverTickInterval   time.Duration
 	dnsFailoverCycle          func(context.Context) error
 	dnsFailoverLogf           func(string, ...any)
+	dnsFailoverLogWriter      func(context.Context, []dnsFailoverLogEntry) error
 
 	clientEntryEnsureOnce   sync.Once
 	clientEntryEnsureErr    error
@@ -469,7 +472,13 @@ func NewDBService(cfg config.Config, db *sql.DB, orders ...orderRuntime) *DBServ
 	if len(orders) > 0 {
 		runtime = orders[0]
 	}
-	return &DBService{cfg: cfg, db: db, orders: runtime}
+	service := &DBService{cfg: cfg, db: db, orders: runtime}
+	if db != nil {
+		service.dnsFailoverLogWriter = func(ctx context.Context, entries []dnsFailoverLogEntry) error {
+			return insertDNSFailoverLogs(ctx, db, entries)
+		}
+	}
+	return service
 }
 
 func (s *DBService) ensureDNSFailoverSchema(ctx context.Context) error {

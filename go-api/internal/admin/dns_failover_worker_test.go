@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -146,6 +147,49 @@ func TestDNSFailoverWorkerProbeOnlineRequiresFreshWarmedHeartbeat(t *testing.T) 
 				t.Fatalf("dnsFailoverProbeOnline() = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestLoadDNSFailoverWorkerSnapshotExcludesStaleProbeResults(t *testing.T) {
+	now := int64(1_700_000_000)
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	expectDNSFailoverGroupLock(mock, dnsFailoverWorkerRuleRow(8, 10, true, true, nil))
+	expectDNSFailoverTargets(mock,
+		dnsFailoverWorkerTargetRow(10, 8, 10, "primary", "A", "192.0.2.10", 443, true),
+		dnsFailoverWorkerTargetRow(20, 8, 20, "backup", "A", "198.51.100.20", 443, true),
+	)
+	expectDNSFailoverProbes(mock, dnsFailoverWorkerProbeRow(4, now-5, 3))
+	expectDNSFailoverStates(mock,
+		dnsFailoverWorkerStateRowAt(4, 10, 0, 5, "192.0.2.10", now-91),
+		dnsFailoverWorkerStateRowAt(4, 20, 8, 0, "198.51.100.20", now-91),
+	)
+	mock.ExpectRollback()
+
+	snapshot, err := loadDNSFailoverWorkerSnapshot(context.Background(), tx, 8, now)
+	if err != nil {
+		t.Fatalf("loadDNSFailoverWorkerSnapshot: %v", err)
+	}
+	if len(snapshot.States) != 0 {
+		t.Fatalf("stale probe states remained decision-eligible: %#v", snapshot.States)
+	}
+	if len(snapshot.StateFacts) != 2 || snapshot.StateFacts[0]["stale"] != true || snapshot.StateFacts[1]["stale"] != true {
+		t.Fatalf("stale diagnostics missing: %#v", snapshot.StateFacts)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
 	}
 }
 
@@ -767,7 +811,8 @@ func TestDNSFailoverWorkerFailoverAtoCNAMECallsDNSPodBeforeStateCommit(t *testin
 	}
 	defer db.Close()
 	dnsAPI := &dnsFailoverWorkerDNSPod{results: []dnspod.RecordMutationResult{{RecordID: 202, RequestID: "req-failover"}}}
-	service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI}
+	collector := &dnsFailoverTraceCollector{}
+	service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI, dnsFailoverLogWriter: collector.write}
 	now := time.Now().Unix()
 	weight := int64(17)
 
@@ -833,6 +878,22 @@ func TestDNSFailoverWorkerFailoverAtoCNAMECallsDNSPodBeforeStateCommit(t *testin
 	if len(dnsAPI.mutations) != 1 {
 		t.Fatalf("DNSPod calls = %d, want 1", len(dnsAPI.mutations))
 	}
+	decisionLog, decisionLogged := collector.find("evaluation", "switch")
+	if !decisionLogged {
+		t.Fatalf("missing switch decision log: %#v", collector.entries)
+	}
+	decisionDetails := normalizedTraceDetails(t, decisionLog)
+	if decisionDetails["action"] != "failover" || decisionDetails["reason"] != "current_target_failed" || decisionDetails["target_id"] != float64(20) {
+		t.Fatalf("switch decision details = %#v", decisionDetails)
+	}
+	preparedLog, preparedLogged := collector.find("saga", "prepared")
+	if !preparedLogged {
+		t.Fatalf("missing prepared saga log: %#v", collector.entries)
+	}
+	preparedDetails := normalizedTraceDetails(t, preparedLog)
+	if preparedDetails["desired_target_id"] != float64(20) || preparedDetails["rollback_target_id"] != float64(10) || preparedDetails["outbox_id"] != float64(42) {
+		t.Fatalf("prepared saga details = %#v", preparedDetails)
+	}
 	mutation := dnsAPI.mutations[0]
 	if mutation.Domain != "example.com" || mutation.DomainID != 101 || mutation.RecordID != 202 || mutation.SubDomain != "www" ||
 		mutation.RecordLineID != "10=0" || mutation.RecordLine != "默认" || mutation.RecordType != "CNAME" || mutation.Value != "backup.example.net." ||
@@ -851,7 +912,8 @@ func TestDNSFailoverWorkerPreparedSagaRecoveryUsesFrozenRollbackMutation(t *test
 	}
 	defer db.Close()
 	dnsAPI := &dnsFailoverWorkerDNSPod{results: []dnspod.RecordMutationResult{{RecordID: 202, RequestID: "rollback-frozen"}}}
-	service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI}
+	collector := &dnsFailoverTraceCollector{}
+	service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI, dnsFailoverLogWriter: collector.write}
 	desired := `{"domain":"old.example.com","domain_id":101,"record_id":202,"subdomain":"www","record_type":"CNAME","record_line":"默认","record_line_id":"10=0","value":"new.example.net.","ttl":601,"mx":9,"weight":17}`
 	rollback := `{"domain":"old.example.com","domain_id":101,"record_id":202,"subdomain":"www","record_type":"A","record_line":"默认","record_line_id":"10=0","value":"192.0.2.1","ttl":601,"mx":9,"weight":17}`
 
@@ -889,6 +951,24 @@ func TestDNSFailoverWorkerPreparedSagaRecoveryUsesFrozenRollbackMutation(t *test
 	}
 	if len(dnsAPI.mutations) != 1 {
 		t.Fatalf("DNSPod calls = %d, want frozen rollback only", len(dnsAPI.mutations))
+	}
+	claimedLog, claimed := collector.find("saga", "claimed")
+	if !claimed {
+		t.Fatalf("missing persisted saga claim log: %#v", collector.entries)
+	}
+	claimedDetails := normalizedTraceDetails(t, claimedLog)
+	if claimedDetails["attempt"] != float64(1) || claimedDetails["last_error"] != "finalize unavailable" {
+		t.Fatalf("saga claim details = %#v", claimedDetails)
+	}
+	providerLog, providerSucceeded := collector.find("dns_provider", "success")
+	if !providerSucceeded || normalizedTraceDetails(t, providerLog)["operation"] != "rollback" {
+		t.Fatalf("missing rollback provider result: %#v", collector.entries)
+	}
+	if _, recovered := collector.find("saga", "recovered"); !recovered {
+		t.Fatalf("missing saga recovery log: %#v", collector.entries)
+	}
+	if _, retried := collector.find("outbox", "retry_scheduled"); !retried {
+		t.Fatalf("missing evaluation retry log after rollback: %#v", collector.entries)
 	}
 	mutation := dnsAPI.mutations[0]
 	if mutation.Domain != "old.example.com" || mutation.DomainID != 101 || mutation.RecordID != 202 || mutation.RecordType != "A" || mutation.Value != "192.0.2.1" || mutation.RecordLineID != "10=0" {
@@ -1111,17 +1191,19 @@ func TestDNSFailoverWorkerFailbackCNAMEtoA(t *testing.T) {
 	)
 	expectDNSFailoverProbes(mock,
 		dnsFailoverWorkerProbeRow(4, now, 3),
-		dnsFailoverWorkerProbeRow(5, now-91, 3),
+		dnsFailoverWorkerProbeRow(5, now, 3),
 	)
 	expectDNSFailoverStates(mock,
 		dnsFailoverWorkerStateRow(4, 10, 8, 0, "192.0.2.1"),
 		dnsFailoverWorkerStateRow(4, 20, 1, 0, "198.51.100.20"),
+		dnsFailoverWorkerStateRowAt(5, 10, 8, 0, "192.0.2.1", now-67),
+		dnsFailoverWorkerStateRowAt(5, 20, 1, 0, "198.51.100.20", now-67),
 	)
 	expectDNSFailoverSagaPrepare(mock)
 	expectDNSFailoverNoActiveDNSIncident(mock, 8)
 	mock.ExpectExec(`(?s)UPDATE v2_dns_failover_group SET current_target_id = \$2, last_switch_at = \$3, last_switch_reason = \$4, last_evaluated_at = \$3, updated_at = \$3 WHERE id = \$1`).
 		WithArgs(int64(8), int64(10), sqlmock.AnyArg(), "higher_priority_target_recovered").WillReturnResult(sqlmock.NewResult(0, 1))
-	expectDNSFailoverEventInsertMessageContains(mock, 8, 10, "failback", "探针：4（单探针降级）")
+	expectDNSFailoverEventInsertMessageAndDetailsContain(mock, 8, 10, "failback", "探针：4（单探针降级）", `"probe_ids":[4]`, `"bound_probe_ids":[4,5]`)
 	mock.ExpectExec(`DELETE FROM v2_dns_failover_eval_outbox WHERE id = \$1 AND requested_at = \$2`).
 		WithArgs(int64(43), int64(702)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`DELETE FROM v2_dns_failover_saga`).WithArgs(int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -1144,8 +1226,11 @@ func TestDNSFailoverWorkerDNSPodErrorKeepsCurrentAndSchedulesRetry(t *testing.T)
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	dnsAPI := &dnsFailoverWorkerDNSPod{errors: []error{errors.New("DNSPod timeout")}}
-	service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI}
+	const providerSecret = "super-secret-token"
+	providerError := "DNSPod timeout Authorization: Bearer " + providerSecret + " SecretKey=hidden-secret"
+	dnsAPI := &dnsFailoverWorkerDNSPod{errors: []error{errors.New(providerError)}}
+	collector := &dnsFailoverTraceCollector{}
+	service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI, dnsFailoverLogWriter: collector.write}
 	now := time.Now().Unix()
 
 	expectDNSFailoverOutboxClaim(mock, 44, 8, 703, 2)
@@ -1161,7 +1246,7 @@ func TestDNSFailoverWorkerDNSPodErrorKeepsCurrentAndSchedulesRetry(t *testing.T)
 	)
 	expectDNSFailoverSagaPrepare(mock)
 	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*'evaluate'`).
-		WithArgs(int64(8), int64(703), sqlmock.AnyArg(), "DNSPod timeout").WillReturnResult(sqlmock.NewResult(1, 1))
+		WithArgs(int64(8), int64(703), sqlmock.AnyArg(), providerError).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery(`SELECT active_dns_incident_type FROM v2_dns_failover_group`).WithArgs(int64(8)).
 		WillReturnRows(sqlmock.NewRows([]string{"active_dns_incident_type"}).AddRow(""))
 	mock.ExpectExec(`UPDATE v2_dns_failover_group SET active_dns_incident_type = \$2, active_dns_incident_since = \$3 WHERE id = \$1`).
@@ -1175,6 +1260,26 @@ func TestDNSFailoverWorkerDNSPodErrorKeepsCurrentAndSchedulesRetry(t *testing.T)
 	}
 	if len(dnsAPI.mutations) != 2 || dnsAPI.mutations[1].RecordType != "A" {
 		t.Fatalf("DNSPod calls = %#v, want desired then rollback", dnsAPI.mutations)
+	}
+	providerFailure, failed := collector.find("dns_provider", "error")
+	if !failed {
+		t.Fatalf("missing provider failure log: %#v", collector.entries)
+	}
+	providerDetails := normalizedTraceDetails(t, providerFailure)
+	if providerDetails["operation"] != "desired" || !strings.Contains(providerDetails["error"].(string), "[REDACTED]") {
+		t.Fatalf("provider failure details = %#v", providerDetails)
+	}
+	if _, failed := collector.find("switch", "failed"); !failed {
+		t.Fatalf("missing final switch failure log: %#v", collector.entries)
+	}
+	for _, entry := range collector.entries {
+		raw, marshalErr := json.Marshal(entry)
+		if marshalErr != nil {
+			t.Fatalf("marshal trace entry: %v", marshalErr)
+		}
+		if strings.Contains(string(raw), providerSecret) || strings.Contains(string(raw), "hidden-secret") {
+			t.Fatalf("provider credential leaked in diagnostic log: %s", raw)
+		}
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -1351,7 +1456,8 @@ func TestDNSFailoverWorkerReconcileFailureRetainsForcedOperationWithBackoff(t *t
 	}
 	defer db.Close()
 	dnsAPI := &dnsFailoverWorkerDNSPod{errors: []error{errors.New("reconcile failed")}}
-	service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI}
+	collector := &dnsFailoverTraceCollector{}
+	service := &DBService{db: db, dnsFailoverSchemaOK: true, dnsFailoverAPI: dnsAPI, dnsFailoverLogWriter: collector.write}
 	now := time.Now().Unix()
 
 	expectDNSFailoverOutboxClaimOperation(mock, 63, 8, "reconcile", int64(10), int64(20), 907, 2)
@@ -1377,6 +1483,14 @@ func TestDNSFailoverWorkerReconcileFailureRetainsForcedOperationWithBackoff(t *t
 	}
 	if len(dnsAPI.mutations) != 1 || dnsAPI.mutations[0].RecordType != "A" {
 		t.Fatalf("reconcile retry mutation = %#v", dnsAPI.mutations)
+	}
+	retryLog, retryScheduled := collector.find("saga", "retry_scheduled")
+	if !retryScheduled {
+		t.Fatalf("missing saga retry log after rollback failure: %#v", collector.entries)
+	}
+	retryDetails := normalizedTraceDetails(t, retryLog)
+	if retryDetails["attempt"] != float64(1) || retryDetails["next_attempt_at"] == nil || retryDetails["error"] == "" {
+		t.Fatalf("saga retry details = %#v", retryDetails)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("reconcile failure must remain pending: %v", err)
@@ -1758,7 +1872,11 @@ func dnsFailoverWorkerProbeRow(id, heartbeat, prewarm int64) []driver.Value {
 }
 
 func dnsFailoverWorkerStateRow(probeID, targetID, success, failure int64, resolvedIP string) []driver.Value {
-	return []driver.Value{probeID, targetID, success, failure, resolvedIP}
+	return dnsFailoverWorkerStateRowAt(probeID, targetID, success, failure, resolvedIP, time.Now().Unix())
+}
+
+func dnsFailoverWorkerStateRowAt(probeID, targetID, success, failure int64, resolvedIP string, lastReportedAt any) []driver.Value {
+	return []driver.Value{probeID, targetID, success, failure, resolvedIP, lastReportedAt}
 }
 
 func expectDNSFailoverOutboxClaim(mock sqlmock.Sqlmock, id, groupID, requestedAt int64, attempts int) {
@@ -1822,11 +1940,11 @@ func expectDNSFailoverProbes(mock sqlmock.Sqlmock, values ...[]driver.Value) {
 }
 
 func expectDNSFailoverStates(mock sqlmock.Sqlmock, values ...[]driver.Value) {
-	rows := sqlmock.NewRows([]string{"probe_id", "target_id", "consecutive_success", "consecutive_failure", "last_resolved_ip"})
+	rows := sqlmock.NewRows([]string{"probe_id", "target_id", "consecutive_success", "consecutive_failure", "last_resolved_ip", "last_reported_at"})
 	for _, value := range values {
 		rows.AddRow(value...)
 	}
-	mock.ExpectQuery(`(?s)SELECT s.probe_id, s.target_id, s.consecutive_success, s.consecutive_failure, s.last_resolved_ip.*FROM v2_dns_probe_target_state s.*s.warmed_up = 1.*t.group_id = \$1.*ORDER BY s.probe_id ASC, s.target_id ASC`).
+	mock.ExpectQuery(`(?s)SELECT s.probe_id, s.target_id, s.consecutive_success, s.consecutive_failure, s.last_resolved_ip, s.last_reported_at.*FROM v2_dns_probe_target_state s.*s.warmed_up = 1.*t.group_id = \$1.*ORDER BY s.probe_id ASC, s.target_id ASC`).
 		WithArgs(int64(8)).WillReturnRows(rows)
 }
 
@@ -1872,5 +1990,11 @@ func (expected dnsFailoverSQLStringContainsAll) Match(value driver.Value) bool {
 func expectDNSFailoverEventInsertMessageContains(mock sqlmock.Sqlmock, groupID, targetID int64, eventType, messagePart string) {
 	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_event.*group_id, probe_id, target_id, event_type, message, details, dedupe_key, notified_at, created_at.*VALUES \(\$1, NULL, \$2, \$3, \$4, \$5, \$6, NULL, \$7\)`).
 		WithArgs(groupID, targetID, eventType, dnsFailoverSQLStringContains(messagePart), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+}
+
+func expectDNSFailoverEventInsertMessageAndDetailsContain(mock sqlmock.Sqlmock, groupID, targetID int64, eventType, messagePart string, detailParts ...string) {
+	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_event.*group_id, probe_id, target_id, event_type, message, details, dedupe_key, notified_at, created_at.*VALUES \(\$1, NULL, \$2, \$3, \$4, \$5, \$6, NULL, \$7\)`).
+		WithArgs(groupID, targetID, eventType, dnsFailoverSQLStringContains(messagePart), dnsFailoverSQLStringContainsAll(detailParts), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 }

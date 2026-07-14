@@ -810,7 +810,11 @@ type fakeAdminService struct {
 	lastDNSProbeDeleteID          int64
 	dnsRules                      []admin.DNSFailoverRuleRecord
 	dnsRule                       admin.DNSFailoverRuleRecord
+	dnsStatus                     admin.DNSFailoverStatus
+	lastDNSRuleStatusID           int64
 	dnsEvents                     admin.DNSFailoverEventListResult
+	dnsLogs                       admin.DNSFailoverLogListResult
+	lastDNSLogs                   admin.DNSFailoverLogListRequest
 	hostUpdateResult              admin.ManagedServerHostUpdateResult
 	configData                    map[string]any
 	themes                        map[string]any
@@ -1322,6 +1326,16 @@ func (f *fakeAdminService) SetDNSProbeEnabled(_ context.Context, id int64, enabl
 func (f *fakeAdminService) DeleteDNSProbe(_ context.Context, id int64) (bool, error) {
 	f.lastDNSProbeDeleteID = id
 	return true, f.err
+}
+
+func (f *fakeAdminService) GetDNSFailoverStatus(_ context.Context, id int64) (admin.DNSFailoverStatus, error) {
+	f.lastDNSRuleStatusID = id
+	return f.dnsStatus, f.err
+}
+
+func (f *fakeAdminService) ListDNSFailoverLogs(_ context.Context, request admin.DNSFailoverLogListRequest) (admin.DNSFailoverLogListResult, error) {
+	f.lastDNSLogs = request
+	return f.dnsLogs, f.err
 }
 
 func (f *fakeAdminService) ListDNSFailoverRules(_ context.Context) ([]admin.DNSFailoverRuleRecord, error) {

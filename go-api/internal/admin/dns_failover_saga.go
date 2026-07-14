@@ -153,6 +153,15 @@ WHERE group_id = $1 AND phase = 'prepared'`, saga.GroupID, saturatingUnixAdd(now
 		return false, fmt.Errorf("commit prepared DNS failover saga lease: %w", err)
 	}
 	committed = true
+	claimedTargetID := saga.DesiredTargetID
+	s.writeDNSFailoverLogsBestEffort(ctx, dnsFailoverLogEntry{
+		GroupID: saga.GroupID, TargetID: &claimedTargetID, Stage: "saga", Level: "info", Outcome: "claimed",
+		Message: "prepared DNS switch saga claimed for recovery", Details: map[string]any{
+			"operation": saga.OriginalOperation, "attempt": saga.Attempts, "last_error": dnsFailoverSafeDiagnosticText(saga.LastError),
+			"reason": saga.Reason, "desired_target_id": saga.DesiredTargetID, "rollback_target_id": saga.RollbackTargetID,
+			"lease_until": saturatingUnixAdd(now, dnsFailoverClaimLease),
+		}, CreatedAt: now,
+	})
 	cause := errors.New("recover prepared DNS failover saga")
 	if saga.LastError != "" {
 		cause = errors.New(saga.LastError)
@@ -218,6 +227,9 @@ WHERE id = $1 AND requested_at = $4`, outbox.ID, saturatingUnixAdd(now, dnsFailo
 		return false, fmt.Errorf("commit DNS failover evaluation lease: %w", err)
 	}
 	committed = true
+	s.writeDNSFailoverLogsBestEffort(ctx, dnsFailoverOutboxTrace(outbox, "claimed", "info", "evaluation outbox claimed", now, map[string]any{
+		"lease_until": saturatingUnixAdd(now, dnsFailoverClaimLease),
+	}))
 	return s.processClaimedDNSFailoverEvaluation(ctx, conn, outbox.ID, now)
 }
 
@@ -274,6 +286,7 @@ FOR UPDATE`, outboxID), &outbox)
 	}
 
 	var newTarget DNSFailoverTargetRecord
+	var evaluationDecision *dnsFailoverDecision
 	eventType := "manual_switch"
 	reason := "manual"
 	switch outbox.Operation {
@@ -322,6 +335,7 @@ FOR UPDATE`, outboxID), &outbox)
 			return true, nil
 		}
 		decision := decideDNSFailover(buildDNSFailoverDecisionInput(snapshot, now))
+		evaluationDecision = &decision
 		if decision.Action == dnsFailoverActionNone {
 			if err := applyDNSFailoverNoAction(ctx, tx, outbox, snapshot, currentTarget, decision, now); err != nil {
 				return false, err
@@ -330,6 +344,11 @@ FOR UPDATE`, outboxID), &outbox)
 				return false, fmt.Errorf("commit DNS failover evaluation: %w", err)
 			}
 			committed = true
+			logs := dnsFailoverEvaluationTraceEntries(snapshot, outbox, decision, now)
+			logs = append(logs, dnsFailoverOutboxTrace(outbox, "acked", "info", "evaluation completed without a switch", now, map[string]any{
+				"decision_action": string(decision.Action), "decision_reason": decision.Reason,
+			}))
+			s.writeDNSFailoverLogsBestEffort(ctx, logs...)
 			return true, nil
 		}
 		var ok bool
@@ -376,6 +395,19 @@ attempts, next_attempt_at, last_error, created_at, updated_at
 		return false, fmt.Errorf("commit prepared DNS failover saga: %w", err)
 	}
 	committed = true
+	preparedLogs := make([]dnsFailoverLogEntry, 0, 3)
+	if evaluationDecision != nil {
+		preparedLogs = append(preparedLogs, dnsFailoverEvaluationTraceEntries(snapshot, outbox, *evaluationDecision, now)...)
+	}
+	preparedTargetID := newTarget.ID
+	preparedLogs = append(preparedLogs, dnsFailoverLogEntry{
+		GroupID: outbox.GroupID, TargetID: &preparedTargetID, Stage: "saga", Level: "info", Outcome: "prepared",
+		Message: "durable DNS switch saga prepared", Details: map[string]any{
+			"outbox_id": outbox.ID, "operation": originalOperation, "requested_at": outbox.RequestedAt,
+			"reason": reason, "desired_target_id": newTarget.ID, "rollback_target_id": currentTarget.ID,
+		}, CreatedAt: now,
+	})
+	s.writeDNSFailoverLogsBestEffort(ctx, preparedLogs...)
 	saga := dnsFailoverSagaRecord{
 		GroupID: outbox.GroupID, Phase: "prepared", OriginalOperation: originalOperation,
 		OriginalTargetID: outbox.TargetID, OriginalRequestedAt: outbox.RequestedAt, Reason: reason,
@@ -433,16 +465,29 @@ func persistDNSFailoverForcedConfigurationFailureWithoutCommit(ctx context.Conte
 func (s *DBService) executePreparedDNSFailoverSaga(ctx context.Context, conn *sql.Conn, saga dnsFailoverSagaRecord, outbox dnsFailoverOutboxRow, snapshot dnsFailoverWorkerSnapshot, oldTarget, newTarget DNSFailoverTargetRecord, eventType string, now int64) error {
 	client, err := s.dnsFailoverClient()
 	if err != nil {
+		s.logDNSFailoverProviderFailure(ctx, saga, "desired", saga.DesiredMutation, err, now)
 		recoveryErr := s.recoverPreparedDNSFailoverSaga(ctx, conn, saga, err, now)
 		return errors.Join(err, recoveryErr)
 	}
+	desiredTargetID := saga.DesiredTargetID
+	s.writeDNSFailoverLogsBestEffort(ctx, dnsFailoverLogEntry{
+		GroupID: saga.GroupID, TargetID: &desiredTargetID, Stage: "dns_provider", Level: "info", Outcome: "request_started",
+		Message: "sending desired DNS mutation", Details: dnsFailoverProviderMutationDetails("desired", saga.DesiredMutation), CreatedAt: now,
+	})
 	dnsCtx, cancel := context.WithTimeout(ctx, dnsFailoverDNSPodTimeout)
 	result, mutationErr := client.ModifyRecord(dnsCtx, saga.DesiredMutation.request())
 	cancel()
 	if mutationErr != nil {
+		s.logDNSFailoverProviderFailure(ctx, saga, "desired", saga.DesiredMutation, mutationErr, now)
 		recoveryErr := s.recoverPreparedDNSFailoverSaga(ctx, conn, saga, mutationErr, now)
 		return errors.Join(mutationErr, recoveryErr)
 	}
+	providerDetails := dnsFailoverProviderMutationDetails("desired", saga.DesiredMutation)
+	providerDetails["request_id"] = result.RequestID
+	s.writeDNSFailoverLogsBestEffort(ctx, dnsFailoverLogEntry{
+		GroupID: saga.GroupID, TargetID: &desiredTargetID, Stage: "dns_provider", Level: "info", Outcome: "success",
+		Message: "desired DNS mutation succeeded", Details: providerDetails, CreatedAt: now,
+	})
 	finalizeErr := func() error {
 		tx, err := conn.BeginTx(ctx, nil)
 		if err != nil {
@@ -470,8 +515,8 @@ WHERE id = $1`, saga.GroupID, saga.DesiredTargetID, now, saga.Reason); err != ni
 			return err
 		}
 		details := dnsFailoverEventDetails(snapshot, &oldTarget, &newTarget, saga.Reason, "", result.RequestID, now)
-		onlineProbeIDs := onlineDNSFailoverProbeIDs(snapshot.Probes)
-		message := formatDNSFailoverSwitchNotification(snapshot.Rule, oldTarget, newTarget, saga.Reason, onlineProbeIDs, len(onlineProbeIDs) == 1, time.Unix(now, 0))
+		decisionProbeIDs := dnsFailoverDecisionAvailableProbeIDList(snapshot.Probes, snapshot.States, oldTarget.ID)
+		message := formatDNSFailoverSwitchNotification(snapshot.Rule, oldTarget, newTarget, saga.Reason, decisionProbeIDs, len(decisionProbeIDs) == 1, time.Unix(now, 0))
 		if err := insertDNSFailoverEvent(ctx, tx, saga.GroupID, &newTarget.ID, eventType, message, details, now); err != nil {
 			return err
 		}
@@ -488,6 +533,26 @@ WHERE id = $1`, saga.GroupID, saga.DesiredTargetID, now, saga.Reason); err != ni
 		return nil
 	}()
 	if finalizeErr == nil {
+		s.writeDNSFailoverLogsBestEffort(ctx,
+			dnsFailoverLogEntry{
+				GroupID: saga.GroupID, TargetID: &desiredTargetID, Stage: "switch", Level: "info", Outcome: "succeeded",
+				Message: "DNS failover switch completed", Details: map[string]any{
+					"from_target_id": oldTarget.ID, "to_target_id": newTarget.ID, "reason": saga.Reason, "request_id": result.RequestID,
+				}, CreatedAt: now,
+			},
+			dnsFailoverLogEntry{
+				GroupID: saga.GroupID, TargetID: &desiredTargetID, Stage: "saga", Level: "info", Outcome: "finalized",
+				Message: "prepared switch saga finalized", Details: map[string]any{
+					"rollback_target_id": saga.RollbackTargetID, "desired_target_id": saga.DesiredTargetID,
+				}, CreatedAt: now,
+			},
+			dnsFailoverLogEntry{
+				GroupID: saga.GroupID, TargetID: &desiredTargetID, Stage: "outbox", Level: "info", Outcome: "acked",
+				Message: "evaluation outbox acknowledged", Details: map[string]any{
+					"outbox_id": outbox.ID, "requested_at": outbox.RequestedAt, "operation": outbox.Operation,
+				}, CreatedAt: now,
+			},
+		)
 		return nil
 	}
 	// A failed COMMIT is ambiguous. Only compensate when the durable prepared
@@ -501,6 +566,38 @@ WHERE id = $1`, saga.GroupID, saga.DesiredTargetID, now, saga.Reason); err != ni
 	}
 	recoveryErr := s.recoverPreparedDNSFailoverSaga(ctx, conn, saga, fmt.Errorf("finalize DNS failover saga: %w", finalizeErr), now)
 	return errors.Join(fmt.Errorf("finalize DNS failover saga: %w", finalizeErr), recoveryErr)
+}
+
+func (s *DBService) logDNSFailoverProviderFailure(ctx context.Context, saga dnsFailoverSagaRecord, operation string, mutation dnsFailoverMutationSnapshot, providerErr error, now int64) {
+	targetID := saga.DesiredTargetID
+	if operation == "rollback" {
+		targetID = saga.RollbackTargetID
+	}
+	safeError := dnsFailoverSafeDiagnosticError(providerErr)
+	details := dnsFailoverProviderMutationDetails(operation, mutation)
+	details["error"] = safeError
+	s.writeDNSFailoverLogsBestEffort(ctx,
+		dnsFailoverLogEntry{
+			GroupID: saga.GroupID, TargetID: &targetID, Stage: "dns_provider", Level: "error", Outcome: "error",
+			Message: operation + " DNS mutation failed", Details: details, CreatedAt: now,
+		},
+		dnsFailoverLogEntry{
+			GroupID: saga.GroupID, TargetID: &targetID, Stage: "switch", Level: "error", Outcome: "failed",
+			Message: "DNS failover switch failed", Details: map[string]any{
+				"operation": operation, "error": safeError, "reason": saga.Reason,
+				"desired_target_id": saga.DesiredTargetID, "rollback_target_id": saga.RollbackTargetID,
+			}, CreatedAt: now,
+		},
+	)
+}
+
+func dnsFailoverProviderMutationDetails(operation string, mutation dnsFailoverMutationSnapshot) map[string]any {
+	return map[string]any{
+		"operation": operation, "domain": mutation.Domain, "domain_id": mutation.DomainID,
+		"record_id": mutation.RecordID, "subdomain": mutation.SubDomain, "record_type": mutation.RecordType,
+		"record_line_id": mutation.RecordLineID, "value": mutation.Value, "ttl": mutation.TTL,
+		"mx": mutation.MX, "weight": mutation.Weight,
+	}
 }
 
 func clearDNSFailoverDNSIncidentAfterDesired(ctx context.Context, tx *sql.Tx, groupID int64) error {
@@ -519,15 +616,28 @@ func clearDNSFailoverDNSIncidentAfterDesired(ctx context.Context, tx *sql.Tx, gr
 }
 
 func (s *DBService) recoverPreparedDNSFailoverSaga(ctx context.Context, conn *sql.Conn, saga dnsFailoverSagaRecord, cause error, now int64) error {
+	rollbackTargetID := saga.RollbackTargetID
+	s.writeDNSFailoverLogsBestEffort(ctx, dnsFailoverLogEntry{
+		GroupID: saga.GroupID, TargetID: &rollbackTargetID, Stage: "dns_provider", Level: "warning", Outcome: "request_started",
+		Message: "sending rollback DNS mutation", Details: dnsFailoverProviderMutationDetails("rollback", saga.RollbackMutation), CreatedAt: now,
+	})
 	client, err := s.dnsFailoverClient()
+	var result dnspod.RecordMutationResult
 	if err == nil {
 		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dnsFailoverDNSPodTimeout)
-		_, err = client.ModifyRecord(rollbackCtx, saga.RollbackMutation.request())
+		result, err = client.ModifyRecord(rollbackCtx, saga.RollbackMutation.request())
 		cancel()
 	}
 	if err != nil {
+		s.logDNSFailoverProviderFailure(ctx, saga, "rollback", saga.RollbackMutation, err, now)
 		return s.persistDNSFailoverSagaRollbackFailure(ctx, conn, saga, errors.Join(cause, fmt.Errorf("rollback DNS failed: %w", err)), now)
 	}
+	providerDetails := dnsFailoverProviderMutationDetails("rollback", saga.RollbackMutation)
+	providerDetails["request_id"] = result.RequestID
+	s.writeDNSFailoverLogsBestEffort(ctx, dnsFailoverLogEntry{
+		GroupID: saga.GroupID, TargetID: &rollbackTargetID, Stage: "dns_provider", Level: "info", Outcome: "success",
+		Message: "rollback DNS mutation succeeded", Details: providerDetails, CreatedAt: now,
+	})
 	return s.finalizeDNSFailoverSagaRecovery(ctx, conn, saga, cause, now)
 }
 
@@ -540,9 +650,10 @@ func (s *DBService) persistDNSFailoverSagaRollbackFailure(ctx context.Context, c
 	}
 	defer tx.Rollback()
 	errorText := truncateDNSFailoverError(rollbackErr)
+	nextAttemptAt := saturatingUnixAdd(now, dnsFailoverRetryDelay(saga.Attempts))
 	if _, err := tx.ExecContext(persistCtx, `UPDATE v2_dns_failover_saga
 SET attempts = attempts + 1, next_attempt_at = $2, last_error = $3, updated_at = $4
-WHERE group_id = $1 AND phase = 'prepared'`, saga.GroupID, saturatingUnixAdd(now, dnsFailoverRetryDelay(saga.Attempts)), errorText, now); err != nil {
+WHERE group_id = $1 AND phase = 'prepared'`, saga.GroupID, nextAttemptAt, errorText, now); err != nil {
 		return errors.Join(rollbackErr, err)
 	}
 	if err := setDNSFailoverDNSIncident(persistCtx, tx, saga, "dns_state_diverged", errorText, now); err != nil {
@@ -551,6 +662,15 @@ WHERE group_id = $1 AND phase = 'prepared'`, saga.GroupID, saturatingUnixAdd(now
 	if err := tx.Commit(); err != nil {
 		return errors.Join(rollbackErr, err)
 	}
+	targetID := saga.DesiredTargetID
+	s.writeDNSFailoverLogsBestEffort(ctx, dnsFailoverLogEntry{
+		GroupID: saga.GroupID, TargetID: &targetID, Stage: "saga", Level: "error", Outcome: "retry_scheduled",
+		Message: "prepared saga rollback failed and was scheduled for retry", Details: map[string]any{
+			"attempt": saga.Attempts + 1, "next_attempt_at": nextAttemptAt,
+			"error": dnsFailoverSafeDiagnosticError(rollbackErr), "desired_target_id": saga.DesiredTargetID,
+			"rollback_target_id": saga.RollbackTargetID,
+		}, CreatedAt: now,
+	})
 	return rollbackErr
 }
 
@@ -595,6 +715,38 @@ WHERE v2_dns_failover_eval_outbox.operation IN ('evaluate', 'reconcile')`, saga.
 	if err := tx.Commit(); err != nil {
 		return errors.Join(cause, err)
 	}
+	desiredTargetID := saga.DesiredTargetID
+	safeCause := dnsFailoverSafeDiagnosticError(cause)
+	nextAttemptAt := saturatingUnixAdd(now, dnsFailoverRetryDelay(saga.Attempts))
+	var retryTargetID *int64
+	if saga.OriginalOperation == dnsFailoverOperationManual && saga.OriginalTargetID.Valid {
+		targetID := saga.OriginalTargetID.Int64
+		retryTargetID = &targetID
+	}
+	s.writeDNSFailoverLogsBestEffort(ctx,
+		dnsFailoverLogEntry{
+			GroupID: saga.GroupID, TargetID: &desiredTargetID, Stage: "switch", Level: "error", Outcome: "rolled_back",
+			Message: "DNS switch was rolled back", Details: map[string]any{
+				"reason": saga.Reason, "cause": safeCause,
+				"desired_target_id": saga.DesiredTargetID, "rollback_target_id": saga.RollbackTargetID,
+			}, CreatedAt: now,
+		},
+		dnsFailoverLogEntry{
+			GroupID: saga.GroupID, TargetID: &desiredTargetID, Stage: "saga", Level: "warning", Outcome: "recovered",
+			Message: "prepared DNS switch saga recovered", Details: map[string]any{
+				"cause": safeCause, "desired_target_id": saga.DesiredTargetID,
+				"rollback_target_id": saga.RollbackTargetID,
+			}, CreatedAt: now,
+		},
+		dnsFailoverLogEntry{
+			GroupID: saga.GroupID, TargetID: retryTargetID, Stage: "outbox", Level: "warning", Outcome: "retry_scheduled",
+			Message: "DNS failover operation scheduled for retry", Details: map[string]any{
+				"operation": saga.OriginalOperation, "attempt": saga.Attempts + 1,
+				"requested_at": saga.OriginalRequestedAt, "next_attempt_at": nextAttemptAt,
+				"last_error": safeCause,
+			}, CreatedAt: now,
+		},
+	)
 	return nil
 }
 

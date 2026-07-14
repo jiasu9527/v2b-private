@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"forest/go-api/internal/config"
+
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
@@ -490,17 +492,16 @@ func TestDNSProbeResultsEnforceSuccessFailureFieldMatrix(t *testing.T) {
 	}
 }
 
-func TestDNSProbeResultsRejectDuplicateTargetInBatch(t *testing.T) {
+func TestDNSProbeResultsAllowMultipleOrderedResultsForTargetInBatch(t *testing.T) {
 	trueValue := true
 	falseValue := false
 	latency := int64(10)
-	service := &DBService{dnsFailoverSchemaOK: true}
-	_, err := service.ReportDNSProbeResults(context.Background(), 7, DNSProbeResultsRequest{Results: []DNSProbeResult{
+	request := DNSProbeResultsRequest{Results: []DNSProbeResult{
 		{ResultID: "success", TargetID: 11, Success: &trueValue, LatencyMS: &latency},
 		{ResultID: "failure", TargetID: 11, Success: &falseValue, Error: "timeout"},
-	}})
-	if !errors.Is(err, ErrDNSProbeInvalidRequest) || !strings.Contains(err.Error(), "target_id") {
-		t.Fatalf("error = %v, want duplicate target_id validation", err)
+	}}
+	if err := normalizeDNSProbeResultsRequest(&request); err != nil {
+		t.Fatalf("multiple ordered results for one target were rejected: %v", err)
 	}
 }
 
@@ -572,11 +573,42 @@ func expectDNSProbeExistingResultIDs(mock sqlmock.Sqlmock, probeID int64, result
 }
 
 func expectDNSProbeAllowedTargets(mock sqlmock.Sqlmock, probeID int64, targetGroups ...[2]int64) {
-	rows := sqlmock.NewRows([]string{"target_id", "group_id"})
+	rows := sqlmock.NewRows([]string{
+		"target_id", "group_id", "check_interval_sec", "tcp_timeout_ms", "probe_offline_sec",
+		"last_success", "consecutive_success", "consecutive_failure", "last_reported_at",
+	})
 	for _, targetGroup := range targetGroups {
-		rows.AddRow(targetGroup[0], targetGroup[1])
+		rows.AddRow(targetGroup[0], targetGroup[1], int64(30), int64(3000), int64(90), sql.NullInt64{}, int64(0), int64(0), sql.NullInt64{})
 	}
 	mock.ExpectQuery(`(?s)SELECT requested.target_id, t.group_id.*jsonb_to_recordset\(\$2::jsonb\).*WHERE gp.probe_id = \$1 AND g.enabled = 1 AND t.enabled = 1.*FOR SHARE`).
+		WithArgs(probeID, sqlmock.AnyArg()).
+		WillReturnRows(rows)
+}
+
+type expectedDNSProbeAllowedTargetState struct {
+	TargetID         int64
+	GroupID          int64
+	CheckIntervalSec int64
+	TCPTimeoutMS     int64
+	ProbeOfflineSec  int64
+	LastSuccess      sql.NullInt64
+	SuccessStreak    int64
+	FailureStreak    int64
+	LastReportedAt   sql.NullInt64
+}
+
+func expectDNSProbeAllowedTargetStates(mock sqlmock.Sqlmock, probeID int64, states ...expectedDNSProbeAllowedTargetState) {
+	rows := sqlmock.NewRows([]string{
+		"target_id", "group_id", "check_interval_sec", "tcp_timeout_ms", "probe_offline_sec",
+		"last_success", "consecutive_success", "consecutive_failure", "last_reported_at",
+	})
+	for _, state := range states {
+		rows.AddRow(
+			state.TargetID, state.GroupID, state.CheckIntervalSec, state.TCPTimeoutMS, state.ProbeOfflineSec,
+			state.LastSuccess, state.SuccessStreak, state.FailureStreak, state.LastReportedAt,
+		)
+	}
+	mock.ExpectQuery(`(?s)SELECT requested.target_id, t.group_id.*g.check_interval_sec.*g.tcp_timeout_ms.*g.probe_offline_sec.*s.last_success.*s.consecutive_success.*s.consecutive_failure.*s.last_reported_at.*jsonb_to_recordset\(\$2::jsonb\).*WHERE gp.probe_id = \$1 AND g.enabled = 1 AND t.enabled = 1.*FOR SHARE`).
 		WithArgs(probeID, sqlmock.AnyArg()).
 		WillReturnRows(rows)
 }
@@ -614,6 +646,84 @@ func (expected dnsProbeStateBatchArgument) Match(value driver.Value) bool {
 	return reflect.DeepEqual(actual, []dnsProbeStateBatchRow(expected))
 }
 
+type expectedDNSProbeResultLogRow struct {
+	GroupID    int64  `json:"group_id"`
+	TargetID   int64  `json:"target_id"`
+	ResultID   string `json:"result_id"`
+	Success    bool   `json:"success"`
+	LatencyMS  *int64 `json:"latency_ms"`
+	Error      string `json:"error"`
+	ResolvedIP string `json:"resolved_ip"`
+}
+
+type dnsProbeResultLogBatchArgument []expectedDNSProbeResultLogRow
+
+func (expected dnsProbeResultLogBatchArgument) Match(value driver.Value) bool {
+	encoded, ok := value.(string)
+	if !ok {
+		return false
+	}
+	var actual []dnsFailoverLogEntry
+	if err := json.Unmarshal([]byte(encoded), &actual); err != nil {
+		return false
+	}
+	groupIDs := make(map[int64]struct{})
+	probeLogs := make([]dnsFailoverLogEntry, 0, len(expected))
+	queuedGroups := make(map[int64]struct{})
+	for _, entry := range actual {
+		switch entry.Stage {
+		case "probe_result":
+			probeLogs = append(probeLogs, entry)
+		case "outbox":
+			if entry.Outcome != "queued" || entry.Message == "" {
+				return false
+			}
+			detailsJSON, err := json.Marshal(entry.Details)
+			if err != nil {
+				return false
+			}
+			var details map[string]any
+			if err := json.Unmarshal(detailsJSON, &details); err != nil || details["source"] != "probe_report" {
+				return false
+			}
+			queuedGroups[entry.GroupID] = struct{}{}
+		default:
+			return false
+		}
+	}
+	if len(probeLogs) != len(expected) {
+		return false
+	}
+	for index, want := range expected {
+		got := probeLogs[index]
+		groupIDs[want.GroupID] = struct{}{}
+		if got.GroupID != want.GroupID || got.ProbeID == nil || *got.ProbeID <= 0 || got.TargetID == nil || *got.TargetID != want.TargetID || got.Stage != "probe_result" || got.CreatedAt <= 0 {
+			return false
+		}
+		wantLevel, wantOutcome, wantMessage := "warning", "failure", "probe check failed"
+		if want.Success {
+			wantLevel, wantOutcome, wantMessage = "info", "success", "probe check succeeded"
+		}
+		if got.Level != wantLevel || got.Outcome != wantOutcome || got.Message != wantMessage {
+			return false
+		}
+		detailsJSON, err := json.Marshal(got.Details)
+		if err != nil {
+			return false
+		}
+		var details expectedDNSProbeResultLogRow
+		if err := json.Unmarshal(detailsJSON, &details); err != nil {
+			return false
+		}
+		details.GroupID = want.GroupID
+		details.TargetID = want.TargetID
+		if !reflect.DeepEqual(details, want) {
+			return false
+		}
+	}
+	return reflect.DeepEqual(queuedGroups, groupIDs)
+}
+
 func expectDNSProbeBatchInbox(mock sqlmock.Sqlmock, probeID int64, accepted ...dnsProbeAcceptedResult) {
 	rows := sqlmock.NewRows([]string{"result_id", "target_id"})
 	for _, result := range accepted {
@@ -629,8 +739,20 @@ func expectDNSProbeBatchState(mock sqlmock.Sqlmock, probeID, warmedUp, affected 
 	if len(batchArguments) > 0 {
 		batchArgument = batchArguments[0]
 	}
-	mock.ExpectExec(`(?s)INSERT INTO v2_dns_probe_target_state.*jsonb_to_recordset\(\$2::jsonb\).*ON CONFLICT \(probe_id, target_id\) DO UPDATE SET.*CASE WHEN v2_dns_probe_target_state.consecutive_success >= 2147483647 THEN 2147483647 ELSE v2_dns_probe_target_state.consecutive_success \+ 1 END.*CASE WHEN v2_dns_probe_target_state.consecutive_failure >= 2147483647 THEN 2147483647 ELSE v2_dns_probe_target_state.consecutive_failure \+ 1 END`).
+	mock.ExpectExec(`(?s)INSERT INTO v2_dns_probe_target_state.*jsonb_to_recordset\(\$2::jsonb\).*ON CONFLICT \(probe_id, target_id\) DO UPDATE SET.*consecutive_success = EXCLUDED.consecutive_success.*consecutive_failure = EXCLUDED.consecutive_failure`).
 		WithArgs(probeID, batchArgument, sqlmock.AnyArg(), warmedUp).
+		WillReturnResult(sqlmock.NewResult(0, affected))
+}
+
+func expectDNSProbeAbsoluteBatchState(mock sqlmock.Sqlmock, probeID, warmedUp, affected int64, batchArgument sqlmock.Argument) {
+	mock.ExpectExec(`(?s)INSERT INTO v2_dns_probe_target_state.*jsonb_to_recordset\(\$2::jsonb\).*ON CONFLICT \(probe_id, target_id\) DO UPDATE SET.*consecutive_success = EXCLUDED.consecutive_success.*consecutive_failure = EXCLUDED.consecutive_failure`).
+		WithArgs(probeID, batchArgument, sqlmock.AnyArg(), warmedUp).
+		WillReturnResult(sqlmock.NewResult(0, affected))
+}
+
+func expectDNSProbeResultLogBatch(mock sqlmock.Sqlmock, probeID, affected int64, batchArgument sqlmock.Argument) {
+	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_log.*group_id, probe_id, target_id, stage, level, outcome, message, details, created_at.*SELECT requested.group_id, requested.probe_id, requested.target_id.*COALESCE\(requested.details, '\{\}'::jsonb\)::text.*jsonb_to_recordset\(\$1::jsonb\)`).
+		WithArgs(batchArgument).
 		WillReturnResult(sqlmock.NewResult(0, affected))
 }
 
@@ -640,6 +762,176 @@ func expectDNSFailoverEvaluationOutbox(mock sqlmock.Sqlmock, affected int64) {
 		WillReturnResult(sqlmock.NewResult(0, affected))
 }
 
+func dnsProbeReportSkipped(t *testing.T, report DNSProbeReportResult) int {
+	t.Helper()
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("marshal report: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("decode report: %v", err)
+	}
+	value, ok := payload["skipped"].(float64)
+	if !ok {
+		t.Fatalf("report has no numeric skipped statistic: %s", raw)
+	}
+	return int(value)
+}
+
+func TestDNSProbeResultsSkipInvalidBacklogTargetAndAcceptValidResult(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	falseValue := false
+	trueValue := true
+	latency := int64(12)
+
+	expectDNSProbeReportLock(mock, 7, 3)
+	expectDNSProbeExistingResultIDs(mock, 7)
+	expectDNSProbeAllowedTargetStates(mock, 7, expectedDNSProbeAllowedTargetState{
+		TargetID: 11, GroupID: 4, CheckIntervalSec: 30, TCPTimeoutMS: 3000, ProbeOfflineSec: 90,
+	})
+	expectDNSProbeBatchInbox(mock, 7, dnsProbeAcceptedResult{"valid-result", 11})
+	expectDNSProbeAbsoluteBatchState(mock, 7, 1, 1, dnsProbeStateBatchArgument{{
+		TargetID: 11, LastSuccess: 1, LatencyMS: &latency, LastError: "", InitialSuccess: 1,
+	}})
+	expectDNSFailoverEvaluationOutbox(mock, 1)
+	mock.ExpectCommit()
+
+	report, err := service.ReportDNSProbeResults(context.Background(), 7, DNSProbeResultsRequest{Results: []DNSProbeResult{
+		{ResultID: "deleted-target-backlog", TargetID: 99, Success: &falseValue, Error: "timeout"},
+		{ResultID: "valid-result", TargetID: 11, Success: &trueValue, LatencyMS: &latency},
+	}})
+	if err != nil {
+		t.Fatalf("ReportDNSProbeResults: %v", err)
+	}
+	if report.Accepted != 1 || report.Duplicates != 0 || dnsProbeReportSkipped(t, report) != 1 || report.PrewarmCount != 3 {
+		t.Fatalf("report = %#v", report)
+	}
+	if len(report.GroupIDs) != 1 || report.GroupIDs[0] != 4 {
+		t.Fatalf("group IDs = %#v", report.GroupIDs)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSProbeResultsAggregateAcceptedBacklogWithoutInventingStreaks(t *testing.T) {
+	now := time.Now().Unix()
+	falseValue := false
+	trueValue := true
+	latency := int64(8)
+	tests := []struct {
+		name              string
+		existingResultIDs []string
+		state             expectedDNSProbeAllowedTargetState
+		results           []DNSProbeResult
+		accepted          []dnsProbeAcceptedResult
+		want              dnsProbeStateBatchRow
+		wantDuplicates    int
+	}{
+		{
+			name: "success then failure resets existing failure streak to final suffix",
+			state: expectedDNSProbeAllowedTargetState{
+				TargetID: 11, GroupID: 4, CheckIntervalSec: 30, TCPTimeoutMS: 3000, ProbeOfflineSec: 90,
+				LastSuccess: sql.NullInt64{Int64: 0, Valid: true}, FailureStreak: 4,
+				LastReportedAt: sql.NullInt64{Int64: now, Valid: true},
+			},
+			results: []DNSProbeResult{
+				{ResultID: "backlog-success", TargetID: 11, Success: &trueValue, LatencyMS: &latency},
+				{ResultID: "backlog-failure", TargetID: 11, Success: &falseValue, Error: "timeout"},
+			},
+			accepted: []dnsProbeAcceptedResult{{"backlog-success", 11}, {"backlog-failure", 11}},
+			want: dnsProbeStateBatchRow{
+				TargetID: 11, LastSuccess: 0, LastError: "timeout", InitialFailure: 1,
+			},
+		},
+		{
+			name: "two failures advance a fresh failure streak by two",
+			state: expectedDNSProbeAllowedTargetState{
+				TargetID: 11, GroupID: 4, CheckIntervalSec: 30, TCPTimeoutMS: 3000, ProbeOfflineSec: 90,
+				LastSuccess: sql.NullInt64{Int64: 0, Valid: true}, FailureStreak: 4,
+				LastReportedAt: sql.NullInt64{Int64: now, Valid: true},
+			},
+			results: []DNSProbeResult{
+				{ResultID: "failure-one", TargetID: 11, Success: &falseValue, Error: "timeout one"},
+				{ResultID: "failure-two", TargetID: 11, Success: &falseValue, Error: "timeout two"},
+			},
+			accepted: []dnsProbeAcceptedResult{{"failure-one", 11}, {"failure-two", 11}},
+			want: dnsProbeStateBatchRow{
+				TargetID: 11, LastSuccess: 0, LastError: "timeout two", InitialFailure: 6,
+			},
+		},
+		{
+			name: "stale database streak resets before one failure",
+			state: expectedDNSProbeAllowedTargetState{
+				TargetID: 11, GroupID: 4, CheckIntervalSec: 30, TCPTimeoutMS: 3000, ProbeOfflineSec: 90,
+				LastSuccess: sql.NullInt64{Int64: 0, Valid: true}, FailureStreak: 4,
+				LastReportedAt: sql.NullInt64{Int64: now - 91, Valid: true},
+			},
+			results: []DNSProbeResult{
+				{ResultID: "failure-after-gap", TargetID: 11, Success: &falseValue, Error: "timeout"},
+			},
+			accepted: []dnsProbeAcceptedResult{{"failure-after-gap", 11}},
+			want: dnsProbeStateBatchRow{
+				TargetID: 11, LastSuccess: 0, LastError: "timeout", InitialFailure: 1,
+			},
+		},
+		{
+			name:              "persisted replay ID does not increment state again",
+			existingResultIDs: []string{"already-committed"},
+			state: expectedDNSProbeAllowedTargetState{
+				TargetID: 11, GroupID: 4, CheckIntervalSec: 30, TCPTimeoutMS: 3000, ProbeOfflineSec: 90,
+				LastSuccess: sql.NullInt64{Int64: 0, Valid: true}, FailureStreak: 1,
+				LastReportedAt: sql.NullInt64{Int64: now, Valid: true},
+			},
+			results: []DNSProbeResult{
+				{ResultID: "already-committed", TargetID: 11, Success: &falseValue, Error: "old timeout"},
+				{ResultID: "new-failure", TargetID: 11, Success: &falseValue, Error: "new timeout"},
+			},
+			accepted: []dnsProbeAcceptedResult{{"new-failure", 11}},
+			want: dnsProbeStateBatchRow{
+				TargetID: 11, LastSuccess: 0, LastError: "new timeout", InitialFailure: 2,
+			},
+			wantDuplicates: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("sqlmock: %v", err)
+			}
+			defer db.Close()
+			service := &DBService{db: db, dnsFailoverSchemaOK: true}
+
+			expectDNSProbeReportLock(mock, 7, 3)
+			expectDNSProbeExistingResultIDs(mock, 7, test.existingResultIDs...)
+			expectDNSProbeAllowedTargetStates(mock, 7, test.state)
+			expectDNSProbeBatchInbox(mock, 7, test.accepted...)
+			expectDNSProbeAbsoluteBatchState(mock, 7, 1, 1, dnsProbeStateBatchArgument{test.want})
+			expectDNSFailoverEvaluationOutbox(mock, 1)
+			mock.ExpectCommit()
+
+			report, err := service.ReportDNSProbeResults(context.Background(), 7, DNSProbeResultsRequest{Results: test.results})
+			if err != nil {
+				t.Fatalf("ReportDNSProbeResults: %v", err)
+			}
+			if report.Accepted != len(test.accepted) || report.Duplicates != test.wantDuplicates || dnsProbeReportSkipped(t, report) != 0 {
+				t.Fatalf("report = %#v", report)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("sql expectations: %v", err)
+			}
+		})
+	}
+}
+
 func TestDNSProbeResultsUpdateStreaksWarmAfterThirdRoundAndEvaluateDeduplicatedGroups(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -647,7 +939,8 @@ func TestDNSProbeResultsUpdateStreaksWarmAfterThirdRoundAndEvaluateDeduplicatedG
 	}
 	defer db.Close()
 	evaluator := &recordingDNSFailoverEvaluationRequester{}
-	service := (&DBService{db: db, dnsFailoverSchemaOK: true}).WithDNSFailoverEvaluationRequester(evaluator)
+	service := NewDBService(config.Config{}, db).WithDNSFailoverEvaluationRequester(evaluator)
+	service.dnsFailoverSchemaOK = true
 	trueValue := true
 	falseValue := false
 	latency40 := int64(40)
@@ -666,6 +959,11 @@ func TestDNSProbeResultsUpdateStreaksWarmAfterThirdRoundAndEvaluateDeduplicatedG
 		{TargetID: 12, LastSuccess: 0, LatencyMS: nil, LastError: "timeout", ResolvedIP: "", InitialSuccess: 0, InitialFailure: 1},
 		{TargetID: 20, LastSuccess: 1, LatencyMS: &latency8, LastError: "", ResolvedIP: "203.0.113.20", InitialSuccess: 1, InitialFailure: 0},
 	})
+	logArgument := dnsProbeResultLogBatchArgument{
+		{GroupID: 3, TargetID: 11, ResultID: "success-1", Success: true, LatencyMS: &latency40, Error: "", ResolvedIP: "2001:db8::11"},
+		{GroupID: 3, TargetID: 12, ResultID: "failure-1", Success: false, LatencyMS: nil, Error: "timeout", ResolvedIP: ""},
+		{GroupID: 9, TargetID: 20, ResultID: "success-2", Success: true, LatencyMS: &latency8, Error: "", ResolvedIP: "203.0.113.20"},
+	}
 	mock.ExpectExec(`UPDATE v2_dns_probe SET prewarm_count = \$2, updated_at = \$3 WHERE id = \$1`).
 		WithArgs(int64(7), int64(3), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -674,6 +972,7 @@ func TestDNSProbeResultsUpdateStreaksWarmAfterThirdRoundAndEvaluateDeduplicatedG
 		WillReturnResult(sqlmock.NewResult(0, 3))
 	expectDNSFailoverEvaluationOutbox(mock, 2)
 	mock.ExpectCommit()
+	expectDNSProbeResultLogBatch(mock, 7, 5, logArgument)
 	evaluator.onCall = func() {
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Errorf("evaluator ran before commit: %v", err)
@@ -709,18 +1008,22 @@ func TestDNSProbeResultsUsesConstantBatchSQLAndPersistsEvaluationOutboxForMaxBat
 	}
 	defer db.Close()
 	evaluator := &recordingDNSFailoverEvaluationRequester{}
-	service := (&DBService{db: db, dnsFailoverSchemaOK: true}).WithDNSFailoverEvaluationRequester(evaluator)
+	service := NewDBService(config.Config{}, db).WithDNSFailoverEvaluationRequester(evaluator)
+	service.dnsFailoverSchemaOK = true
 
 	latency := int64(10)
 	trueValue := true
 	results := make([]DNSProbeResult, maxDNSProbeResultBatch)
-	allowedRows := sqlmock.NewRows([]string{"target_id", "group_id"})
+	allowedRows := sqlmock.NewRows([]string{
+		"target_id", "group_id", "check_interval_sec", "tcp_timeout_ms", "probe_offline_sec",
+		"last_success", "consecutive_success", "consecutive_failure", "last_reported_at",
+	})
 	acceptedRows := sqlmock.NewRows([]string{"result_id", "target_id"})
 	for index := range results {
 		targetID := int64(index + 1)
 		resultID := fmt.Sprintf("batch-%03d", index+1)
 		results[index] = DNSProbeResult{ResultID: resultID, TargetID: targetID, Success: &trueValue, LatencyMS: &latency}
-		allowedRows.AddRow(targetID, int64(9))
+		allowedRows.AddRow(targetID, int64(9), int64(30), int64(3000), int64(90), sql.NullInt64{}, int64(0), int64(0), sql.NullInt64{})
 		acceptedRows.AddRow(resultID, targetID)
 	}
 
@@ -740,7 +1043,7 @@ func TestDNSProbeResultsUsesConstantBatchSQLAndPersistsEvaluationOutboxForMaxBat
 	mock.ExpectQuery(`(?s)INSERT INTO v2_dns_probe_result_inbox.*jsonb_to_recordset\(\$2::jsonb\).*ON CONFLICT \(probe_id, result_id\) DO NOTHING.*RETURNING result_id, target_id`).
 		WithArgs(int64(7), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(acceptedRows)
-	mock.ExpectExec(`(?s)INSERT INTO v2_dns_probe_target_state.*jsonb_to_recordset\(\$2::jsonb\).*ON CONFLICT \(probe_id, target_id\) DO UPDATE SET.*CASE WHEN v2_dns_probe_target_state.consecutive_success >= 2147483647 THEN 2147483647 ELSE v2_dns_probe_target_state.consecutive_success \+ 1 END.*CASE WHEN v2_dns_probe_target_state.consecutive_failure >= 2147483647 THEN 2147483647 ELSE v2_dns_probe_target_state.consecutive_failure \+ 1 END`).
+	mock.ExpectExec(`(?s)INSERT INTO v2_dns_probe_target_state.*jsonb_to_recordset\(\$2::jsonb\).*ON CONFLICT \(probe_id, target_id\) DO UPDATE SET.*consecutive_success = EXCLUDED.consecutive_success.*consecutive_failure = EXCLUDED.consecutive_failure`).
 		WithArgs(int64(7), sqlmock.AnyArg(), sqlmock.AnyArg(), int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, maxDNSProbeResultBatch))
 	mock.ExpectExec(`UPDATE v2_dns_probe SET prewarm_count = \$2, updated_at = \$3 WHERE id = \$1`).
@@ -750,6 +1053,7 @@ func TestDNSProbeResultsUsesConstantBatchSQLAndPersistsEvaluationOutboxForMaxBat
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
+	expectDNSProbeResultLogBatch(mock, 7, maxDNSProbeResultBatch+1, sqlmock.AnyArg())
 
 	report, err := service.ReportDNSProbeResults(context.Background(), 7, DNSProbeResultsRequest{Results: results})
 	if err != nil {
@@ -874,7 +1178,10 @@ func TestDNSProbeResultsAuthorizesOnlyNewResultsAfterPersistedDuplicateClassific
 	// authorized, proving tombstones are classified before current target auth.
 	mock.ExpectQuery(`(?s)SELECT requested.target_id, t.group_id.*jsonb_to_recordset\(\$2::jsonb\).*WHERE gp.probe_id = \$1 AND g.enabled = 1 AND t.enabled = 1.*FOR SHARE`).
 		WithArgs(int64(7), dnsProbeResultsBatchArgument{newResult}).
-		WillReturnRows(sqlmock.NewRows([]string{"target_id", "group_id"}).AddRow(int64(11), int64(4)))
+		WillReturnRows(sqlmock.NewRows([]string{
+			"target_id", "group_id", "check_interval_sec", "tcp_timeout_ms", "probe_offline_sec",
+			"last_success", "consecutive_success", "consecutive_failure", "last_reported_at",
+		}).AddRow(int64(11), int64(4), int64(30), int64(3000), int64(90), sql.NullInt64{}, int64(0), int64(0), sql.NullInt64{}))
 	expectDNSProbeBatchInbox(mock, 7, dnsProbeAcceptedResult{"new-result", 11})
 	expectDNSProbeBatchState(mock, 7, 1, 1)
 	expectDNSFailoverEvaluationOutbox(mock, 1)
@@ -907,25 +1214,25 @@ func TestDNSProbeResultsDuplicateDoesNotHideNewUnauthorizedTarget(t *testing.T) 
 	expectDNSProbeReportLock(mock, 7, 3)
 	expectDNSProbeExistingResultIDs(mock, 7, "old-duplicate")
 	expectDNSProbeAllowedTargets(mock, 7)
-	mock.ExpectRollback()
+	mock.ExpectCommit()
 
 	falseValue := false
-	_, err = service.ReportDNSProbeResults(context.Background(), 7, DNSProbeResultsRequest{Results: []DNSProbeResult{
+	report, err := service.ReportDNSProbeResults(context.Background(), 7, DNSProbeResultsRequest{Results: []DNSProbeResult{
 		{ResultID: "old-duplicate", TargetID: 98, Success: &falseValue, Error: "old timeout"},
 		{ResultID: "new-unauthorized", TargetID: 99, Success: &falseValue, Error: "timeout"},
 	}})
-	if !errors.Is(err, ErrDNSProbeInvalidRequest) {
-		t.Fatalf("error = %v, want invalid request for the new target", err)
+	if err != nil || report.Accepted != 0 || report.Duplicates != 1 || dnsProbeReportSkipped(t, report) != 1 {
+		t.Fatalf("report = %#v, error = %v", report, err)
 	}
 	if len(evaluator.calls) != 0 {
-		t.Fatalf("evaluator called for rolled-back batch: %#v", evaluator.calls)
+		t.Fatalf("evaluator called for skipped batch: %#v", evaluator.calls)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
 	}
 }
 
-func TestDNSProbeResultsRejectUnboundTargetWithoutInboxWrite(t *testing.T) {
+func TestDNSProbeResultsAcceptValidAndSkipUnboundTarget(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -935,16 +1242,22 @@ func TestDNSProbeResultsRejectUnboundTargetWithoutInboxWrite(t *testing.T) {
 	expectDNSProbeReportLock(mock, 7, 1)
 	expectDNSProbeExistingResultIDs(mock, 7)
 	expectDNSProbeAllowedTargets(mock, 7, [2]int64{11, 4})
-	mock.ExpectRollback()
+	expectDNSProbeBatchInbox(mock, 7, dnsProbeAcceptedResult{"valid-first", 11})
+	expectDNSProbeAbsoluteBatchState(mock, 7, 0, 1, sqlmock.AnyArg())
+	mock.ExpectExec(`UPDATE v2_dns_probe SET prewarm_count = \$2, updated_at = \$3 WHERE id = \$1`).
+		WithArgs(int64(7), int64(2), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectDNSFailoverEvaluationOutbox(mock, 1)
+	mock.ExpectCommit()
 
 	falseValue := false
-	_, err = service.ReportDNSProbeResults(context.Background(), 7, DNSProbeResultsRequest{Results: []DNSProbeResult{{
+	report, err := service.ReportDNSProbeResults(context.Background(), 7, DNSProbeResultsRequest{Results: []DNSProbeResult{{
 		ResultID: "valid-first", TargetID: 11, Success: &falseValue, Error: "timeout",
 	}, {
 		ResultID: "foreign-target-later", TargetID: 99, Success: &falseValue, Error: "timeout",
 	}}})
-	if !errors.Is(err, ErrDNSProbeInvalidRequest) || errors.Is(err, ErrDNSProbeUnauthorized) {
-		t.Fatalf("error = %v, want ordinary invalid request", err)
+	if err != nil || report.Accepted != 1 || dnsProbeReportSkipped(t, report) != 1 || report.Duplicates != 0 {
+		t.Fatalf("report = %#v, error = %v", report, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -984,6 +1297,47 @@ func TestDNSProbeResultsRollBackInboxAndSkipEvaluatorWhenStateWriteFails(t *test
 	}
 	if len(evaluator.calls) != 0 {
 		t.Fatalf("evaluator called before successful commit: %#v", evaluator.calls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSProbeResultsDiagnosticLogWriteFailureDoesNotRejectAcceptedState(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	evaluator := &recordingDNSFailoverEvaluationRequester{}
+	service := NewDBService(config.Config{}, db).WithDNSFailoverEvaluationRequester(evaluator)
+	service.dnsFailoverSchemaOK = true
+	service.dnsFailoverLogf = func(string, ...any) {}
+
+	expectDNSProbeReportLock(mock, 7, 3)
+	expectDNSProbeExistingResultIDs(mock, 7)
+	expectDNSProbeAllowedTargets(mock, 7, [2]int64{11, 4})
+	expectDNSProbeBatchInbox(mock, 7, dnsProbeAcceptedResult{"log-write-rolls-back", 11})
+	mock.ExpectExec(`(?s)INSERT INTO v2_dns_probe_target_state.*jsonb_to_recordset\(\$2::jsonb\).*ON CONFLICT \(probe_id, target_id\) DO UPDATE SET`).
+		WithArgs(int64(7), sqlmock.AnyArg(), sqlmock.AnyArg(), int64(1)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectDNSFailoverEvaluationOutbox(mock, 1)
+	mock.ExpectCommit()
+	logErr := errors.New("diagnostic log write failed")
+	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_log.*jsonb_to_recordset\(\$1::jsonb\)`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnError(logErr)
+
+	trueValue := true
+	latency := int64(10)
+	result, err := service.ReportDNSProbeResults(context.Background(), 7, DNSProbeResultsRequest{Results: []DNSProbeResult{{
+		ResultID: "log-write-rolls-back", TargetID: 11, Success: &trueValue, LatencyMS: &latency,
+	}}})
+	if err != nil || result.Accepted != 1 || len(result.GroupIDs) != 1 || result.GroupIDs[0] != 4 {
+		t.Fatalf("accepted report = %#v, %v", result, err)
+	}
+	if len(evaluator.calls) != 1 || len(evaluator.calls[0]) != 1 || evaluator.calls[0][0] != 4 {
+		t.Fatalf("evaluator was not called after committed state: %#v", evaluator.calls)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)

@@ -43,13 +43,35 @@ func handleAdminDNSFailover(w http.ResponseWriter, r *http.Request, sessions ses
 	if len(parts) == 2 && parts[0] == "rules" {
 		return handleDNSFailoverRule(w, r, service, parts[1])
 	}
+	if len(parts) == 3 && parts[0] == "rules" && parts[2] == "status" {
+		return handleDNSFailoverRuleStatus(w, r, service, parts[1])
+	}
 	if len(parts) == 3 && parts[0] == "rules" && (parts[2] == "enabled" || parts[2] == "manual-switch") {
 		return handleDNSFailoverRuleMutation(w, r, service, parts[1], parts[2])
 	}
 	if len(parts) == 1 && parts[0] == "events" {
 		return handleDNSFailoverEvents(w, r, service)
 	}
+	if len(parts) == 1 && parts[0] == "logs" {
+		return handleDNSFailoverLogs(w, r, service)
+	}
 	writeJSON(w, http.StatusNotFound, map[string]any{"message": "DNS 故障转移接口不存在"})
+	return true
+}
+
+func handleDNSFailoverRuleStatus(w http.ResponseWriter, r *http.Request, service admin.Service, rawID string) bool {
+	if r.Method != http.MethodGet {
+		return dnsFailoverMethodNotAllowed(w, r, http.MethodGet)
+	}
+	id, ok := dnsFailoverPositiveID(w, rawID, "规则 ID")
+	if !ok {
+		return true
+	}
+	status, err := service.GetDNSFailoverStatus(r.Context(), id)
+	if err != nil {
+		return writeDNSFailoverError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": status})
 	return true
 }
 
@@ -352,6 +374,47 @@ func handleDNSFailoverEvents(w http.ResponseWriter, r *http.Request, service adm
 		return writeDNSFailoverError(w, err)
 	}
 	writeJSON(w, 200, map[string]any{"data": result.Data, "total": result.Total, "current": result.Current, "page_size": result.PageSize})
+	return true
+}
+
+func handleDNSFailoverLogs(w http.ResponseWriter, r *http.Request, service admin.Service) bool {
+	if r.Method != http.MethodGet {
+		return dnsFailoverMethodNotAllowed(w, r, http.MethodGet)
+	}
+	q := r.URL.Query()
+	request := admin.DNSFailoverLogListRequest{Stage: q.Get("stage"), Level: q.Get("level"), Outcome: q.Get("outcome"), Current: 1, PageSize: 20}
+	for _, entry := range []struct {
+		key, name string
+		target    **int64
+	}{{"group", "group 参数", &request.GroupID}, {"probe_id", "probe_id 参数", &request.ProbeID}, {"target_id", "target_id 参数", &request.TargetID}} {
+		if q.Get(entry.key) == "" {
+			continue
+		}
+		value, ok := dnsFailoverPositiveID(w, q.Get(entry.key), entry.name)
+		if !ok {
+			return true
+		}
+		*entry.target = &value
+	}
+	for _, entry := range []struct {
+		key, name string
+		target    *int64
+	}{{"current", "current 参数", &request.Current}, {"page_size", "page_size 参数", &request.PageSize}} {
+		if q.Get(entry.key) == "" {
+			continue
+		}
+		value, err := strconv.ParseInt(q.Get(entry.key), 10, 64)
+		if err != nil || value <= 0 {
+			writeJSON(w, 400, map[string]any{"message": entry.name + "无效"})
+			return true
+		}
+		*entry.target = value
+	}
+	result, err := service.ListDNSFailoverLogs(r.Context(), request)
+	if err != nil {
+		return writeDNSFailoverError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": result.Data, "total": result.Total, "current": result.Current, "page_size": result.PageSize})
 	return true
 }
 
