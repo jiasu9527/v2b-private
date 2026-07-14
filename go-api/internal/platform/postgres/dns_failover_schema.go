@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 const dnsProbeInboxTargetFKMigration = `DO $dns_probe_inbox_fk$
@@ -160,6 +161,93 @@ EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I UNIQUE (%I, %I)', target_table,
 END IF;
 END;
 $dns_failover_target_group_id_unique$;`
+
+// dnsFailoverUniqueConstraintMigration reconciles a legacy UNIQUE index with
+// the constraint name used by the current schema. PostgreSQL places indexes
+// and constraints in related namespaces, so reusing an index named like the
+// desired constraint must first choose a free constraint/index name.
+func dnsFailoverUniqueConstraintMigration(table, constraintName string, columns []string) string {
+	columnNames := make([]string, len(columns))
+	for i, column := range columns {
+		columnNames[i] = "'" + strings.ReplaceAll(column, "'", "''") + "'"
+	}
+	return strings.NewReplacer(
+		"{{TABLE}}", table,
+		"{{CONSTRAINT}}", constraintName,
+		"{{COLUMNS}}", strings.Join(columnNames, ", "),
+		"{{COLUMNS_SQL}}", strings.Join(columns, ", "),
+	).Replace(`DO $dns_failover_unique$
+DECLARE
+schema_name text;
+table_name text;
+table_relation oid;
+expected_column_names name[] := ARRAY[{{COLUMNS}}]::name[];
+expected_columns smallint[];
+expected_columns_sql text := '{{COLUMNS_SQL}}';
+existing_index_name name;
+candidate_constraint_name text := '{{CONSTRAINT}}';
+candidate_suffix integer := 0;
+BEGIN
+schema_name := current_schema();
+IF schema_name IS NULL THEN
+RAISE EXCEPTION 'DNS failover schema is not present in search_path';
+END IF;
+
+table_name := format('%I.%I', schema_name, '{{TABLE}}');
+table_relation := to_regclass(table_name);
+IF table_relation IS NULL THEN
+RAISE EXCEPTION 'DNS failover table {{TABLE}} is missing from schema %', schema_name;
+END IF;
+
+SELECT array_agg(a.attnum::smallint ORDER BY requested.ordinality)
+INTO expected_columns
+FROM unnest(expected_column_names) WITH ORDINALITY AS requested(attname, ordinality)
+JOIN pg_attribute a ON a.attrelid = table_relation
+AND a.attname = requested.attname
+AND a.attnum > 0
+AND NOT a.attisdropped;
+IF cardinality(expected_columns) IS DISTINCT FROM cardinality(expected_column_names) THEN
+RAISE EXCEPTION 'DNS failover unique columns are missing from table {{TABLE}} in schema %', schema_name;
+END IF;
+
+IF EXISTS (
+SELECT 1 FROM pg_constraint c
+WHERE c.conrelid = table_relation
+AND c.contype = 'u'
+AND c.conkey IS NOT DISTINCT FROM expected_columns
+) THEN
+RETURN;
+END IF;
+
+SELECT index_class.relname
+INTO existing_index_name
+FROM pg_index i
+JOIN pg_class index_class ON index_class.oid = i.indexrelid
+WHERE i.indrelid = table_relation
+AND i.indisunique
+AND i.indisvalid
+AND i.indpred IS NULL
+AND i.indkey::smallint[] IS NOT DISTINCT FROM expected_columns
+LIMIT 1;
+
+WHILE to_regclass(format('%I.%I', schema_name, candidate_constraint_name)) IS NOT NULL
+OR EXISTS (
+SELECT 1 FROM pg_constraint c
+WHERE c.conrelid = table_relation
+AND c.conname = candidate_constraint_name
+) LOOP
+candidate_suffix := candidate_suffix + 1;
+candidate_constraint_name := format('{{CONSTRAINT}}_%s', candidate_suffix);
+END LOOP;
+
+IF existing_index_name IS NOT NULL THEN
+EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I UNIQUE USING INDEX %I', table_name, candidate_constraint_name, existing_index_name);
+ELSE
+EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I UNIQUE (%s)', table_name, candidate_constraint_name, expected_columns_sql);
+END IF;
+END;
+$dns_failover_unique$;`)
+}
 
 // EnsureDNSFailoverSchema creates the persistent state used by DNS failover.
 // Every statement is safe to execute more than once for eager startup and the
@@ -386,6 +474,12 @@ CHECK (active_incident_type IN ('', 'all_probes_offline', 'probe_disagreement', 
 	}
 
 	for _, constraint := range dnsFailoverConstraints {
+		if uniqueColumns, ok := dnsFailoverUniqueConstraintColumns[constraint.name]; ok {
+			if _, err := db.ExecContext(ctx, dnsFailoverUniqueConstraintMigration(constraint.table, constraint.name, uniqueColumns)); err != nil {
+				return fmt.Errorf("ensure DNS failover constraint %s: %w", constraint.name, err)
+			}
+			continue
+		}
 		stmt := fmt.Sprintf(`DO $dns_failover$
 BEGIN
 ALTER TABLE %s ADD CONSTRAINT %s %s;
@@ -429,6 +523,7 @@ var dnsFailoverConstraints = []struct {
 	name       string
 	definition string
 }{
+	{"v2_dns_probe", "uniq_v2_dns_probe_token_hash", "UNIQUE (token_hash)"},
 	{"v2_dns_probe", "chk_v2_dns_probe_enabled", "CHECK (enabled IN (0, 1))"},
 	{"v2_dns_probe", "chk_v2_dns_probe_prewarm", "CHECK (prewarm_count >= 0)"},
 	{"v2_dns_failover_group", "chk_v2_dns_failover_group_flags", "CHECK (enabled IN (0, 1) AND auto_failback IN (0, 1))"},
@@ -436,16 +531,20 @@ var dnsFailoverConstraints = []struct {
 	{"v2_dns_failover_group", "chk_v2_dns_failover_group_thresholds", "CHECK (failure_threshold > 0 AND success_threshold > 0 AND single_probe_failure_threshold > failure_threshold AND single_probe_success_threshold > success_threshold)"},
 	{"v2_dns_failover_group", "chk_v2_dns_failover_group_dns_values", "CHECK (ttl >= 0 AND mx >= 0 AND (weight IS NULL OR weight >= 0))"},
 	{"v2_dns_failover_group", "chk_v2_dns_failover_group_dns_incident", "CHECK (active_dns_incident_type IN ('', 'dnspod_error', 'dns_state_diverged'))"},
+	{"v2_dns_failover_group", "uniq_v2_dns_failover_group_record", "UNIQUE (domain_id, record_id)"},
 	{"v2_dns_failover_target", "fk_v2_dns_failover_target_group", "FOREIGN KEY (group_id) REFERENCES v2_dns_failover_group(id) ON DELETE CASCADE"},
 	{"v2_dns_failover_target", "chk_v2_dns_failover_target_type", "CHECK (dns_type IN ('A', 'AAAA', 'CNAME'))"},
 	{"v2_dns_failover_target", "chk_v2_dns_failover_target_enabled", "CHECK (enabled IN (0, 1))"},
 	{"v2_dns_failover_target", "chk_v2_dns_failover_target_sort", "CHECK (sort >= 0)"},
 	{"v2_dns_failover_target", "chk_v2_dns_failover_target_port", "CHECK (check_port BETWEEN 1 AND 65535)"},
+	{"v2_dns_failover_target", "uniq_v2_dns_failover_target_sort", "UNIQUE (group_id, sort)"},
 	{"v2_dns_failover_group", "fk_v2_dns_failover_group_current_target", "FOREIGN KEY (id, current_target_id) REFERENCES v2_dns_failover_target(group_id, id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED"},
 	{"v2_dns_failover_group_probe", "fk_v2_dns_failover_group_probe_group", "FOREIGN KEY (group_id) REFERENCES v2_dns_failover_group(id) ON DELETE CASCADE"},
 	{"v2_dns_failover_group_probe", "fk_v2_dns_failover_group_probe_probe", "FOREIGN KEY (probe_id) REFERENCES v2_dns_probe(id) ON DELETE CASCADE"},
+	{"v2_dns_failover_group_probe", "uniq_v2_dns_failover_group_probe", "UNIQUE (group_id, probe_id)"},
 	{"v2_dns_probe_target_state", "fk_v2_dns_probe_target_state_probe", "FOREIGN KEY (probe_id) REFERENCES v2_dns_probe(id) ON DELETE CASCADE"},
 	{"v2_dns_probe_target_state", "fk_v2_dns_probe_target_state_target", "FOREIGN KEY (target_id) REFERENCES v2_dns_failover_target(id) ON DELETE CASCADE"},
+	{"v2_dns_probe_target_state", "uniq_v2_dns_probe_target_state", "UNIQUE (probe_id, target_id)"},
 	{"v2_dns_probe_target_state", "chk_v2_dns_probe_target_state_flags", "CHECK ((last_success IS NULL OR last_success IN (0, 1)) AND warmed_up IN (0, 1))"},
 	{"v2_dns_probe_target_state", "chk_v2_dns_probe_target_state_streaks", "CHECK (consecutive_success >= 0 AND consecutive_failure >= 0)"},
 	{"v2_dns_probe_target_state", "chk_v2_dns_probe_target_state_latency", "CHECK (last_latency_ms IS NULL OR last_latency_ms >= 0)"},
@@ -466,4 +565,14 @@ var dnsFailoverConstraints = []struct {
 	{"v2_dns_failover_event", "fk_v2_dns_failover_event_target", "FOREIGN KEY (target_id) REFERENCES v2_dns_failover_target(id) ON DELETE SET NULL"},
 	{"v2_dns_failover_event", "chk_v2_dns_failover_event_type", "CHECK (btrim(event_type) <> '')"},
 	{"v2_dns_failover_event", "chk_v2_dns_failover_event_notify_attempts", "CHECK (notify_attempts >= 0)"},
+}
+
+var dnsFailoverUniqueConstraintColumns = map[string][]string{
+	"uniq_v2_dns_probe_token_hash":           {"token_hash"},
+	"uniq_v2_dns_failover_group_record":      {"domain_id", "record_id"},
+	"uniq_v2_dns_failover_target_sort":       {"group_id", "sort"},
+	"uniq_v2_dns_failover_group_probe":       {"group_id", "probe_id"},
+	"uniq_v2_dns_probe_target_state":         {"probe_id", "target_id"},
+	"uniq_v2_dns_probe_result_inbox_result":  {"probe_id", "result_id"},
+	"uniq_v2_dns_failover_eval_outbox_group": {"group_id"},
 }

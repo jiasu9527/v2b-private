@@ -155,7 +155,12 @@ func expectDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	mock.ExpectExec(regexp.QuoteMeta(dnsFailoverTargetGroupIDUniqueMigration)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	for _, constraint := range expectedDNSFailoverConstraints {
+	for _, constraint := range dnsFailoverConstraints {
+		if columns, isUnique := dnsFailoverUniqueConstraintColumns[constraint.name]; isUnique {
+			mock.ExpectExec(regexp.QuoteMeta(dnsFailoverUniqueConstraintMigration(constraint.table, constraint.name, columns))).
+				WillReturnResult(sqlmock.NewResult(0, 0))
+			continue
+		}
 		alter := "ALTER TABLE " + constraint.table + " ADD CONSTRAINT " + constraint.name + " " + constraint.definition
 		mock.ExpectExec(`(?s)DO .*` + regexp.QuoteMeta(alter) + `.*duplicate_object`).
 			WillReturnResult(sqlmock.NewResult(0, 0))
@@ -235,6 +240,52 @@ func TestDNSFailoverGenericConstraintsExcludeAtomicInboxTargetFK(t *testing.T) {
 		}
 		if constraint.table == "v2_dns_failover_target" && constraint.name == "uniq_v2_dns_failover_target_group_id" {
 			t.Fatal("target group/id unique key must be managed only by the dedicated catalog-aware migration")
+		}
+	}
+}
+
+func TestDNSFailoverUniqueConstraintMigrationReusesLegacyIndexesWithoutNameCollisions(t *testing.T) {
+	for _, tc := range []struct {
+		table   string
+		name    string
+		columns []string
+	}{
+		{"v2_dns_probe_result_inbox", "uniq_v2_dns_probe_result_inbox_result", []string{"probe_id", "result_id"}},
+		{"v2_dns_probe", "uniq_v2_dns_probe_token_hash", []string{"token_hash"}},
+		{"v2_dns_failover_group_probe", "uniq_v2_dns_failover_group_probe", []string{"group_id", "probe_id"}},
+	} {
+		migration := dnsFailoverUniqueConstraintMigration(tc.table, tc.name, tc.columns)
+		for _, required := range []string{
+			"schema_name := current_schema();",
+			"to_regclass(table_name)",
+			"expected_column_names name[] := ARRAY[",
+			"unnest(expected_column_names)",
+			"c.contype = 'u'",
+			"c.conkey IS NOT DISTINCT FROM expected_columns",
+			"i.indisunique",
+			"i.indisvalid",
+			"i.indpred IS NULL",
+			"i.indkey::smallint[] IS NOT DISTINCT FROM expected_columns",
+			"to_regclass(format('%I.%I', schema_name, candidate_constraint_name)) IS NOT NULL",
+			"UNIQUE USING INDEX %I",
+			"UNIQUE (%s)",
+		} {
+			if !strings.Contains(migration, required) {
+				t.Errorf("%s migration missing %q", tc.name, required)
+			}
+		}
+		for _, column := range tc.columns {
+			if !strings.Contains(migration, "'"+column+"'") {
+				t.Errorf("%s migration missing column %q", tc.name, column)
+			}
+		}
+	}
+}
+
+func TestDNSFailoverGenericConstraintsDelegateEveryUniqueToCatalogAwareMigration(t *testing.T) {
+	for _, constraint := range dnsFailoverConstraints {
+		if strings.HasPrefix(constraint.definition, "UNIQUE (") && len(dnsFailoverUniqueConstraintColumns[constraint.name]) == 0 {
+			t.Errorf("unique constraint %s must declare its ordered columns", constraint.name)
 		}
 	}
 }

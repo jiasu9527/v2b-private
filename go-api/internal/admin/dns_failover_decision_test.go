@@ -134,6 +134,7 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	mock.ExpectExec(`(?s)DO \$dns_failover_target_group_id_unique\$.*c\.conkey IS NOT DISTINCT FROM ARRAY\[group_id_attnum, target_id_attnum\]::smallint\[\].*i\.indisunique.*i\.indisvalid.*i\.indpred IS NULL.*UNIQUE USING INDEX %I.*UNIQUE \(%I, %I\).*\$dns_failover_target_group_id_unique\$;`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	for _, constraint := range []string{
+		"uniq_v2_dns_probe_token_hash",
 		"chk_v2_dns_probe_enabled",
 		"chk_v2_dns_probe_prewarm",
 		"chk_v2_dns_failover_group_flags",
@@ -141,16 +142,20 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		"chk_v2_dns_failover_group_thresholds",
 		"chk_v2_dns_failover_group_dns_values",
 		"chk_v2_dns_failover_group_dns_incident",
+		"uniq_v2_dns_failover_group_record",
 		"fk_v2_dns_failover_target_group",
 		"chk_v2_dns_failover_target_type",
 		"chk_v2_dns_failover_target_enabled",
 		"chk_v2_dns_failover_target_sort",
 		"chk_v2_dns_failover_target_port",
+		"uniq_v2_dns_failover_target_sort",
 		"fk_v2_dns_failover_group_current_target",
 		"fk_v2_dns_failover_group_probe_group",
 		"fk_v2_dns_failover_group_probe_probe",
+		"uniq_v2_dns_failover_group_probe",
 		"fk_v2_dns_probe_target_state_probe",
 		"fk_v2_dns_probe_target_state_target",
+		"uniq_v2_dns_probe_target_state",
 		"chk_v2_dns_probe_target_state_flags",
 		"chk_v2_dns_probe_target_state_streaks",
 		"chk_v2_dns_probe_target_state_latency",
@@ -172,6 +177,11 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		"chk_v2_dns_failover_event_type",
 		"chk_v2_dns_failover_event_notify_attempts",
 	} {
+		if len(constraint) >= 5 && constraint[:5] == "uniq_" {
+			mock.ExpectExec(`(?s)DO \$dns_failover_unique\$.*candidate_constraint_name text := '` + constraint + `'`).
+				WillReturnResult(sqlmock.NewResult(0, 0))
+			continue
+		}
 		mock.ExpectExec(`(?s)DO .*ADD CONSTRAINT ` + constraint).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
