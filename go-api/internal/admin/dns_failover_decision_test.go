@@ -89,9 +89,7 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	}
 	mock.ExpectExec(`ALTER TABLE v2_dns_probe_target_state ADD COLUMN IF NOT EXISTS last_resolved_ip`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`ALTER TABLE v2_dns_probe_result_inbox ALTER COLUMN target_id DROP NOT NULL`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`ALTER TABLE v2_dns_probe_result_inbox DROP CONSTRAINT IF EXISTS fk_v2_dns_probe_result_inbox_target`).
+	mock.ExpectExec(`(?s)DO \$dns_probe_inbox_fk\$.*ALTER TABLE v2_dns_probe_result_inbox ALTER COLUMN target_id DROP NOT NULL.*SELECT c.confdeltype.*IF current_delete_action IS NULL THEN.*ELSIF current_delete_action <> 'n' THEN.*\$dns_probe_inbox_fk\$;`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	for _, constraint := range []string{
 		"chk_v2_dns_probe_enabled",
@@ -115,7 +113,6 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		"chk_v2_dns_probe_target_state_streaks",
 		"chk_v2_dns_probe_target_state_latency",
 		"fk_v2_dns_probe_result_inbox_probe",
-		"fk_v2_dns_probe_result_inbox_target",
 		"uniq_v2_dns_probe_result_inbox_result",
 		"chk_v2_dns_probe_result_inbox_result_id",
 		"fk_v2_dns_failover_event_group",

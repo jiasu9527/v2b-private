@@ -190,12 +190,13 @@ WHERE gp.probe_id = $1 AND g.enabled = 1`, probeID).Scan(&configuredOffline)
 
 	now := time.Now().Unix()
 	reconnected := lastHeartbeat.Valid && now-lastHeartbeat.Int64 > offlineSec
-	if reconnected {
+	needsReset := !lastHeartbeat.Valid || reconnected
+	if needsReset {
 		if _, err := tx.ExecContext(ctx, `UPDATE v2_dns_probe SET version = $2, arch = $3, public_ip = $4, last_heartbeat_at = $5, prewarm_count = 0, updated_at = $5 WHERE id = $1`, probeID, request.Version, request.Arch, request.PublicIP, now); err != nil {
-			return DNSProbeHeartbeatResult{}, fmt.Errorf("update reconnected DNS probe heartbeat: %w", err)
+			return DNSProbeHeartbeatResult{}, fmt.Errorf("update reset DNS probe heartbeat: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE v2_dns_probe_target_state SET warmed_up = 0, consecutive_success = 0, consecutive_failure = 0, updated_at = $2 WHERE probe_id = $1`, probeID, now); err != nil {
-			return DNSProbeHeartbeatResult{}, fmt.Errorf("reset reconnected DNS probe state: %w", err)
+			return DNSProbeHeartbeatResult{}, fmt.Errorf("reset DNS probe state: %w", err)
 		}
 		prewarmCount = 0
 	} else {

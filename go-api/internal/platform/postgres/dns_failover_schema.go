@@ -132,11 +132,36 @@ PRIMARY KEY (id)
 	if _, err := db.ExecContext(ctx, `ALTER TABLE v2_dns_probe_target_state ADD COLUMN IF NOT EXISTS last_resolved_ip varchar(128) NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("ensure DNS failover state columns: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, `ALTER TABLE v2_dns_probe_result_inbox ALTER COLUMN target_id DROP NOT NULL`); err != nil {
-		return fmt.Errorf("make DNS probe result tombstone target nullable: %w", err)
-	}
-	if _, err := db.ExecContext(ctx, `ALTER TABLE v2_dns_probe_result_inbox DROP CONSTRAINT IF EXISTS fk_v2_dns_probe_result_inbox_target`); err != nil {
-		return fmt.Errorf("replace DNS probe result tombstone target constraint: %w", err)
+	// Keep the nullable-column change and FK inspection/replacement in one
+	// PostgreSQL statement so an error cannot leave the inbox without its FK.
+	// sqlmock verifies all three branches structurally; empty DB, legacy CASCADE,
+	// and already-correct SET NULL branches remain real-PostgreSQL checks for Task 9.
+	if _, err := db.ExecContext(ctx, `DO $dns_probe_inbox_fk$
+DECLARE
+current_delete_action "char";
+BEGIN
+ALTER TABLE v2_dns_probe_result_inbox ALTER COLUMN target_id DROP NOT NULL;
+
+SELECT c.confdeltype
+INTO current_delete_action
+FROM pg_constraint c
+WHERE c.conrelid = 'v2_dns_probe_result_inbox'::regclass
+AND c.conname = 'fk_v2_dns_probe_result_inbox_target';
+
+IF current_delete_action IS NULL THEN
+ALTER TABLE v2_dns_probe_result_inbox
+ADD CONSTRAINT fk_v2_dns_probe_result_inbox_target
+FOREIGN KEY (target_id) REFERENCES v2_dns_failover_target(id) ON DELETE SET NULL;
+ELSIF current_delete_action <> 'n' THEN
+ALTER TABLE v2_dns_probe_result_inbox
+DROP CONSTRAINT fk_v2_dns_probe_result_inbox_target;
+ALTER TABLE v2_dns_probe_result_inbox
+ADD CONSTRAINT fk_v2_dns_probe_result_inbox_target
+FOREIGN KEY (target_id) REFERENCES v2_dns_failover_target(id) ON DELETE SET NULL;
+END IF;
+END;
+$dns_probe_inbox_fk$;`); err != nil {
+		return fmt.Errorf("atomically ensure DNS probe result tombstone target constraint: %w", err)
 	}
 
 	for _, constraint := range dnsFailoverConstraints {
@@ -198,7 +223,6 @@ var dnsFailoverConstraints = []struct {
 	{"v2_dns_probe_target_state", "chk_v2_dns_probe_target_state_streaks", "CHECK (consecutive_success >= 0 AND consecutive_failure >= 0)"},
 	{"v2_dns_probe_target_state", "chk_v2_dns_probe_target_state_latency", "CHECK (last_latency_ms IS NULL OR last_latency_ms >= 0)"},
 	{"v2_dns_probe_result_inbox", "fk_v2_dns_probe_result_inbox_probe", "FOREIGN KEY (probe_id) REFERENCES v2_dns_probe(id) ON DELETE CASCADE"},
-	{"v2_dns_probe_result_inbox", "fk_v2_dns_probe_result_inbox_target", "FOREIGN KEY (target_id) REFERENCES v2_dns_failover_target(id) ON DELETE SET NULL"},
 	{"v2_dns_probe_result_inbox", "uniq_v2_dns_probe_result_inbox_result", "UNIQUE (probe_id, result_id)"},
 	{"v2_dns_probe_result_inbox", "chk_v2_dns_probe_result_inbox_result_id", "CHECK (btrim(result_id) <> '')"},
 	{"v2_dns_failover_event", "fk_v2_dns_failover_event_group", "FOREIGN KEY (group_id) REFERENCES v2_dns_failover_group(id) ON DELETE CASCADE"},

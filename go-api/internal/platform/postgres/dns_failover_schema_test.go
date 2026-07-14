@@ -47,9 +47,7 @@ func expectDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	}
 	mock.ExpectExec(`ALTER TABLE v2_dns_probe_target_state ADD COLUMN IF NOT EXISTS last_resolved_ip varchar\(128\) NOT NULL DEFAULT ''`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`ALTER TABLE v2_dns_probe_result_inbox ALTER COLUMN target_id DROP NOT NULL`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`ALTER TABLE v2_dns_probe_result_inbox DROP CONSTRAINT IF EXISTS fk_v2_dns_probe_result_inbox_target`).
+	mock.ExpectExec(`(?s)DO \$dns_probe_inbox_fk\$.*ALTER TABLE v2_dns_probe_result_inbox ALTER COLUMN target_id DROP NOT NULL.*SELECT c.confdeltype.*FROM pg_constraint c.*c.conrelid = 'v2_dns_probe_result_inbox'::regclass.*c.conname = 'fk_v2_dns_probe_result_inbox_target'.*IF current_delete_action IS NULL THEN.*ADD CONSTRAINT fk_v2_dns_probe_result_inbox_target FOREIGN KEY \(target_id\) REFERENCES v2_dns_failover_target\(id\) ON DELETE SET NULL.*ELSIF current_delete_action <> 'n' THEN.*DROP CONSTRAINT fk_v2_dns_probe_result_inbox_target.*ADD CONSTRAINT fk_v2_dns_probe_result_inbox_target FOREIGN KEY \(target_id\) REFERENCES v2_dns_failover_target\(id\) ON DELETE SET NULL.*END IF;.*END;.*\$dns_probe_inbox_fk\$;`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	for _, constraint := range expectedDNSFailoverConstraints {
@@ -101,11 +99,18 @@ var expectedDNSFailoverConstraints = []struct {
 	{"v2_dns_probe_target_state", "chk_v2_dns_probe_target_state_streaks", "CHECK (consecutive_success >= 0 AND consecutive_failure >= 0)"},
 	{"v2_dns_probe_target_state", "chk_v2_dns_probe_target_state_latency", "CHECK (last_latency_ms IS NULL OR last_latency_ms >= 0)"},
 	{"v2_dns_probe_result_inbox", "fk_v2_dns_probe_result_inbox_probe", "FOREIGN KEY (probe_id) REFERENCES v2_dns_probe(id) ON DELETE CASCADE"},
-	{"v2_dns_probe_result_inbox", "fk_v2_dns_probe_result_inbox_target", "FOREIGN KEY (target_id) REFERENCES v2_dns_failover_target(id) ON DELETE SET NULL"},
 	{"v2_dns_probe_result_inbox", "uniq_v2_dns_probe_result_inbox_result", "UNIQUE (probe_id, result_id)"},
 	{"v2_dns_probe_result_inbox", "chk_v2_dns_probe_result_inbox_result_id", "CHECK (btrim(result_id) <> '')"},
 	{"v2_dns_failover_event", "fk_v2_dns_failover_event_group", "FOREIGN KEY (group_id) REFERENCES v2_dns_failover_group(id) ON DELETE CASCADE"},
 	{"v2_dns_failover_event", "fk_v2_dns_failover_event_probe", "FOREIGN KEY (probe_id) REFERENCES v2_dns_probe(id) ON DELETE SET NULL"},
 	{"v2_dns_failover_event", "fk_v2_dns_failover_event_target", "FOREIGN KEY (target_id) REFERENCES v2_dns_failover_target(id) ON DELETE SET NULL"},
 	{"v2_dns_failover_event", "chk_v2_dns_failover_event_type", "CHECK (btrim(event_type) <> '')"},
+}
+
+func TestDNSFailoverGenericConstraintsExcludeAtomicInboxTargetFK(t *testing.T) {
+	for _, constraint := range dnsFailoverConstraints {
+		if constraint.table == "v2_dns_probe_result_inbox" && constraint.name == "fk_v2_dns_probe_result_inbox_target" {
+			t.Fatal("inbox target FK must be managed only by the atomic conditional migration")
+		}
+	}
 }
