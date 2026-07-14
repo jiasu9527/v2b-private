@@ -804,6 +804,12 @@ type fakeAdminService struct {
 	dnspodTypes                   dnspod.DescribeRecordTypeResult
 	dnspodLines                   dnspod.DescribeRecordLineListResult
 	dnspodMutation                dnspod.RecordMutationResult
+	dnsFailoverSettings           admin.DNSFailoverSettings
+	dnsProbes                     []admin.DNSProbeRecord
+	dnsProbeCreate                admin.DNSProbeCreateResult
+	dnsRules                      []admin.DNSFailoverRuleRecord
+	dnsRule                       admin.DNSFailoverRuleRecord
+	dnsEvents                     admin.DNSFailoverEventListResult
 	hostUpdateResult              admin.ManagedServerHostUpdateResult
 	configData                    map[string]any
 	themes                        map[string]any
@@ -915,6 +921,16 @@ type fakeAdminService struct {
 	lastDNSPodStatusDomainID      int64
 	lastDNSPodStatusID            int64
 	lastDNSPodStatus              string
+	lastDNSFailoverSettingsSave   admin.DNSFailoverSettingsSaveRequest
+	lastDNSProbeCreate            admin.DNSProbeCreateRequest
+	lastDNSProbeID                int64
+	lastDNSProbeEnabled           bool
+	lastDNSRuleSave               admin.DNSFailoverRuleSaveRequest
+	lastDNSRuleID                 int64
+	lastDNSRuleEnabled            bool
+	lastDNSManualGroupID          int64
+	lastDNSManualTargetID         int64
+	lastDNSEvents                 admin.DNSFailoverEventListRequest
 	lastConfigKey                 string
 	lastConfigSave                map[string]any
 	lastWebhookToken              string
@@ -1280,51 +1296,60 @@ func (f *fakeAdminService) SetDNSPodRecordStatus(_ context.Context, domain strin
 }
 
 func (f *fakeAdminService) GetDNSFailoverSettings(_ context.Context) (admin.DNSFailoverSettings, error) {
-	return admin.DNSFailoverSettings{}, f.err
+	return f.dnsFailoverSettings, f.err
 }
 
-func (f *fakeAdminService) SaveDNSFailoverSettings(_ context.Context, _ admin.DNSFailoverSettingsSaveRequest) (admin.DNSFailoverSettings, error) {
-	return admin.DNSFailoverSettings{}, f.err
+func (f *fakeAdminService) SaveDNSFailoverSettings(_ context.Context, request admin.DNSFailoverSettingsSaveRequest) (admin.DNSFailoverSettings, error) {
+	f.lastDNSFailoverSettingsSave = request
+	return f.dnsFailoverSettings, f.err
 }
 
 func (f *fakeAdminService) ListDNSProbes(_ context.Context) ([]admin.DNSProbeRecord, error) {
-	return nil, f.err
+	return f.dnsProbes, f.err
 }
 
-func (f *fakeAdminService) CreateDNSProbe(_ context.Context, _ admin.DNSProbeCreateRequest) (admin.DNSProbeCreateResult, error) {
-	return admin.DNSProbeCreateResult{}, f.err
+func (f *fakeAdminService) CreateDNSProbe(_ context.Context, request admin.DNSProbeCreateRequest) (admin.DNSProbeCreateResult, error) {
+	f.lastDNSProbeCreate = request
+	return f.dnsProbeCreate, f.err
 }
 
-func (f *fakeAdminService) SetDNSProbeEnabled(_ context.Context, _ int64, _ bool) (bool, error) {
+func (f *fakeAdminService) SetDNSProbeEnabled(_ context.Context, id int64, enabled bool) (bool, error) {
+	f.lastDNSProbeID, f.lastDNSProbeEnabled = id, enabled
 	return true, f.err
 }
 
 func (f *fakeAdminService) ListDNSFailoverRules(_ context.Context) ([]admin.DNSFailoverRuleRecord, error) {
-	return nil, f.err
+	return f.dnsRules, f.err
 }
 
-func (f *fakeAdminService) GetDNSFailoverRule(_ context.Context, _ int64) (admin.DNSFailoverRuleRecord, error) {
-	return admin.DNSFailoverRuleRecord{}, f.err
+func (f *fakeAdminService) GetDNSFailoverRule(_ context.Context, id int64) (admin.DNSFailoverRuleRecord, error) {
+	f.lastDNSRuleID = id
+	return f.dnsRule, f.err
 }
 
-func (f *fakeAdminService) SaveDNSFailoverRule(_ context.Context, _ admin.DNSFailoverRuleSaveRequest) (admin.DNSFailoverRuleRecord, error) {
-	return admin.DNSFailoverRuleRecord{}, f.err
+func (f *fakeAdminService) SaveDNSFailoverRule(_ context.Context, request admin.DNSFailoverRuleSaveRequest) (admin.DNSFailoverRuleRecord, error) {
+	f.lastDNSRuleSave = request
+	return f.dnsRule, f.err
 }
 
-func (f *fakeAdminService) DeleteDNSFailoverRule(_ context.Context, _ int64) (bool, error) {
+func (f *fakeAdminService) DeleteDNSFailoverRule(_ context.Context, id int64) (bool, error) {
+	f.lastDNSRuleID = id
 	return true, f.err
 }
 
-func (f *fakeAdminService) SetDNSFailoverRuleEnabled(_ context.Context, _ int64, _ bool) (bool, error) {
+func (f *fakeAdminService) SetDNSFailoverRuleEnabled(_ context.Context, id int64, enabled bool) (bool, error) {
+	f.lastDNSRuleID, f.lastDNSRuleEnabled = id, enabled
 	return true, f.err
 }
 
-func (f *fakeAdminService) ManualSwitchDNSFailoverTarget(_ context.Context, _, _ int64) error {
+func (f *fakeAdminService) ManualSwitchDNSFailoverTarget(_ context.Context, groupID, targetID int64) error {
+	f.lastDNSManualGroupID, f.lastDNSManualTargetID = groupID, targetID
 	return f.err
 }
 
-func (f *fakeAdminService) ListDNSFailoverEvents(_ context.Context, _ admin.DNSFailoverEventListRequest) (admin.DNSFailoverEventListResult, error) {
-	return admin.DNSFailoverEventListResult{}, f.err
+func (f *fakeAdminService) ListDNSFailoverEvents(_ context.Context, request admin.DNSFailoverEventListRequest) (admin.DNSFailoverEventListResult, error) {
+	f.lastDNSEvents = request
+	return f.dnsEvents, f.err
 }
 
 func (f *fakeAdminService) FetchConfig(_ context.Context, key string) (map[string]any, error) {

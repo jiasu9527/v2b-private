@@ -798,6 +798,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminDNSPodRecordStatus(w, r, state.session, state.admin) {
 				return
 			}
+		case strings.HasPrefix(r.URL.Path, adminPrefix+"/dns-failover/"):
+			if handleAdminDNSFailover(w, r, state.session, state.admin, strings.TrimPrefix(r.URL.Path, adminPrefix+"/dns-failover/")) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/subscribe-guard/stats":
 			if handleAdminSubscribeGuardStats(w, r, cfg, state.session, state.node, state.user, state.admin) {
 				return
