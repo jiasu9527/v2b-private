@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"database/sql/driver"
 	"encoding/base64"
 	"encoding/hex"
@@ -65,6 +66,14 @@ func TestDNSFailoverSettingsValidateNormalizeAndPersistProbeAPIURL(t *testing.T)
 	}
 	if persisted[dnsProbeAPIURLKey] != "http://127.0.0.1:8080" {
 		t.Fatalf("persisted dns_probe_api_url = %#v", persisted[dnsProbeAPIURLKey])
+	}
+}
+
+func TestDNSFailoverSettingsRejectInvalidText(t *testing.T) {
+	for _, value := range []string{"https://probe.example.com/\x00path", string([]byte{'h', 't', 't', 'p', 's', ':', '/', '/', 0xff})} {
+		if _, err := normalizeDNSProbeAPIURL(value); err == nil || !strings.Contains(err.Error(), "无效字符") {
+			t.Fatalf("normalizeDNSProbeAPIURL(%q) error = %v, want invalid-text rejection", value, err)
+		}
 	}
 }
 
@@ -138,6 +147,21 @@ func TestDNSFailoverProbeSecretIsReturnedOnceAndOnlyHashIsStored(t *testing.T) {
 	}
 }
 
+func TestDNSFailoverProbeNameRejectsInvalidTextAndControlCharacters(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+
+	for _, name := range []string{string([]byte{'b', 'a', 'd', 0xff}), "bad\x00name", "bad\nname", "bad\u001bname"} {
+		if _, err := service.CreateDNSProbe(context.Background(), DNSProbeCreateRequest{Name: name}); err == nil || !strings.Contains(err.Error(), "无效字符") {
+			t.Fatalf("CreateDNSProbe(%q) error = %v, want invalid-text rejection", name, err)
+		}
+	}
+}
+
 func TestDNSFailoverProbeListAndRevoke(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -169,6 +193,44 @@ func TestDNSFailoverProbeListAndRevoke(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	if ok, err := service.SetDNSProbeEnabled(context.Background(), 3, true); err != nil || !ok {
 		t.Fatalf("SetDNSProbeEnabled enable = %v, %v", ok, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverRowsAffectedErrorIsNotReportedAsMissing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	dbErr := errors.New("rows affected unavailable")
+
+	mock.ExpectExec(`UPDATE v2_dns_probe SET enabled = \$2, updated_at = \$3 WHERE id = \$1`).
+		WithArgs(int64(3), int64(0), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewErrorResult(dbErr))
+	if ok, err := service.SetDNSProbeEnabled(context.Background(), 3, false); err == nil || ok || !errors.Is(err, dbErr) || strings.Contains(err.Error(), "不存在") {
+		t.Fatalf("SetDNSProbeEnabled RowsAffected error = %v, %v, want wrapped database error distinct from not found", ok, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverListProbeQueryErrorIsWrapped(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	dbErr := errors.New("probe query failed")
+
+	mock.ExpectQuery(`SELECT id, name, enabled, version, arch, public_ip, last_heartbeat_at, prewarm_count, created_at, updated_at\s+FROM v2_dns_probe`).WillReturnError(dbErr)
+	if _, err := service.ListDNSProbes(context.Background()); err == nil || !errors.Is(err, dbErr) || !strings.Contains(err.Error(), "探针列表") {
+		t.Fatalf("ListDNSProbes error = %v, want wrapped database error", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -314,6 +376,33 @@ func TestDNSFailoverRuleValidationRejectsOversizedDNSPodRecordFieldsByRuneCount(
 	}
 }
 
+func TestDNSFailoverRuleValidationRejectsInvalidTextAndControlCharacters(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*DNSFailoverRuleSaveRequest)
+	}{
+		{name: "rule name invalid UTF-8", mutate: func(request *DNSFailoverRuleSaveRequest) { request.Name = string([]byte{'b', 'a', 'd', 0xff}) }},
+		{name: "rule name NUL", mutate: func(request *DNSFailoverRuleSaveRequest) { request.Name = "bad\x00name" }},
+		{name: "rule name control", mutate: func(request *DNSFailoverRuleSaveRequest) { request.Name = "bad\nname" }},
+		{name: "subdomain control", mutate: func(request *DNSFailoverRuleSaveRequest) { request.Subdomain = "bad\tname" }},
+		{name: "record line ID control", mutate: func(request *DNSFailoverRuleSaveRequest) { request.RecordLineID = "line\u001bid" }},
+		{name: "record line name control", mutate: func(request *DNSFailoverRuleSaveRequest) { request.RecordLineName = "line\u007fname" }},
+		{name: "target name control", mutate: func(request *DNSFailoverRuleSaveRequest) { request.Targets[0].Name = "target\nname" }},
+		{name: "target value invalid UTF-8", mutate: func(request *DNSFailoverRuleSaveRequest) {
+			request.Targets[0].DNSValue = string([]byte{'b', 'a', 'd', 0xff})
+		}},
+		{name: "check host NUL", mutate: func(request *DNSFailoverRuleSaveRequest) { request.Targets[0].CheckHost = "host\x00.example.com" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := validDNSFailoverRuleSaveRequest()
+			test.mutate(&request)
+			if err := normalizeDNSFailoverRuleSaveRequest(&request); err == nil || !strings.Contains(err.Error(), "无效字符") {
+				t.Fatalf("normalize error = %v, want invalid-text rejection", err)
+			}
+		})
+	}
+}
+
 func TestDNSFailoverTargetValueUsesStrictIPTextVersions(t *testing.T) {
 	for _, value := range []string{"::ffff:192.0.2.1", "::ffff:c000:201"} {
 		if normalized, err := normalizeDNSFailoverTargetValue("A", value); err == nil {
@@ -401,6 +490,24 @@ func expectDNSFailoverCreateRuleStart(mock sqlmock.Sqlmock) {
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(4)))
 	mock.ExpectQuery(`INSERT INTO v2_dns_failover_group .*RETURNING id, created_at, updated_at`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "updated_at"}).AddRow(int64(50), int64(100), int64(100)))
+}
+
+func TestDNSFailoverSaveRulePreservesBeginError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	dbErr := errors.New("begin failed")
+
+	mock.ExpectBegin().WillReturnError(dbErr)
+	if _, err := service.SaveDNSFailoverRule(context.Background(), dnsFailoverSingleTargetCreateRequest()); err == nil || !errors.Is(err, dbErr) || !strings.Contains(err.Error(), "保存故障转移规则") {
+		t.Fatalf("SaveDNSFailoverRule begin error = %v, want wrapped database error", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
 }
 
 func TestDNSFailoverCreateRuleRollsBackAndPreservesTargetWriteError(t *testing.T) {
@@ -501,8 +608,10 @@ func TestDNSFailoverRuleListAndDetailIncludeSortedTargetsAndProbeBindings(t *tes
 	defer db.Close()
 	service := &DBService{db: db, dnsFailoverSchemaOK: true}
 
+	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT .* FROM v2_dns_failover_group ORDER BY id ASC`).WillReturnRows(dnsFailoverGroupRows())
 	expectDNSFailoverRuleRelations(mock)
+	mock.ExpectCommit()
 	rules, err := service.ListDNSFailoverRules(context.Background())
 	if err != nil {
 		t.Fatalf("ListDNSFailoverRules: %v", err)
@@ -511,14 +620,98 @@ func TestDNSFailoverRuleListAndDetailIncludeSortedTargetsAndProbeBindings(t *tes
 		t.Fatalf("unexpected rules: %#v", rules)
 	}
 
+	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT .* FROM v2_dns_failover_group WHERE id = \$1 ORDER BY id ASC`).WithArgs(int64(50)).WillReturnRows(dnsFailoverGroupRows())
 	expectDNSFailoverRuleRelations(mock)
+	mock.ExpectCommit()
 	rule, err := service.GetDNSFailoverRule(context.Background(), 50)
 	if err != nil {
 		t.Fatalf("GetDNSFailoverRule: %v", err)
 	}
 	if rule.ID != 50 || rule.CurrentTargetID == nil || *rule.CurrentTargetID != 71 || rule.Weight == nil || *rule.Weight != 10 {
 		t.Fatalf("unexpected rule detail: %#v", rule)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverReadTxOptionsAreReadOnlyRepeatableRead(t *testing.T) {
+	options := dnsFailoverReadTxOptions()
+	if options == nil || !options.ReadOnly || options.Isolation != sql.LevelRepeatableRead {
+		t.Fatalf("DNS failover read tx options = %#v, want read-only repeatable-read", options)
+	}
+}
+
+func TestDNSFailoverRuleSnapshotRollsBackOnRelationReadError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	dbErr := errors.New("target relation read failed")
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT .* FROM v2_dns_failover_group ORDER BY id ASC`).WillReturnRows(dnsFailoverGroupRows())
+	mock.ExpectQuery(`SELECT id, group_id, sort, name, dns_type, dns_value, check_host, check_port, enabled, created_at, updated_at\s+FROM v2_dns_failover_target`).WillReturnError(dbErr)
+	mock.ExpectRollback()
+
+	if _, err := service.ListDNSFailoverRules(context.Background()); err == nil || !errors.Is(err, dbErr) {
+		t.Fatalf("ListDNSFailoverRules error = %v, want wrapped relation error", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverRuleSnapshotPreservesCommitError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	dbErr := errors.New("snapshot commit failed")
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT .* FROM v2_dns_failover_group ORDER BY id ASC`).WillReturnRows(sqlmock.NewRows([]string{
+		"id", "name", "domain_id", "domain", "record_id", "subdomain", "record_line_id", "record_line_name", "ttl", "mx", "weight", "current_target_id",
+		"enabled", "auto_failback", "check_interval_sec", "tcp_timeout_ms", "failure_threshold", "success_threshold", "single_probe_failure_threshold",
+		"single_probe_success_threshold", "probe_offline_sec", "cooldown_sec", "last_switch_at", "last_switch_reason", "created_at", "updated_at",
+	}))
+	mock.ExpectCommit().WillReturnError(dbErr)
+
+	if _, err := service.ListDNSFailoverRules(context.Background()); err == nil || !errors.Is(err, dbErr) || !strings.Contains(err.Error(), "完成读取") {
+		t.Fatalf("ListDNSFailoverRules commit error = %v, want wrapped commit error", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverRuleListKeepsEmptyTargetsAndProbeIDsAsArrays(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT .* FROM v2_dns_failover_group ORDER BY id ASC`).WillReturnRows(dnsFailoverGroupRows())
+	mock.ExpectQuery(`SELECT id, group_id, sort, name, dns_type, dns_value, check_host, check_port, enabled, created_at, updated_at\s+FROM v2_dns_failover_target`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "group_id", "sort", "name", "dns_type", "dns_value", "check_host", "check_port", "enabled", "created_at", "updated_at"}))
+	mock.ExpectQuery(`SELECT group_id, probe_id\s+FROM v2_dns_failover_group_probe`).
+		WillReturnRows(sqlmock.NewRows([]string{"group_id", "probe_id"}))
+	mock.ExpectCommit()
+
+	rules, err := service.ListDNSFailoverRules(context.Background())
+	if err != nil {
+		t.Fatalf("ListDNSFailoverRules: %v", err)
+	}
+	if len(rules) != 1 || rules[0].Targets == nil || rules[0].ProbeIDs == nil || len(rules[0].Targets) != 0 || len(rules[0].ProbeIDs) != 0 {
+		t.Fatalf("empty rule relations must stay JSON arrays: %#v", rules)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -538,9 +731,9 @@ func dnsFailoverUpdateRequestKeepingCurrent() DNSFailoverRuleSaveRequest {
 }
 
 func expectDNSFailoverUpdateLocks(mock sqlmock.Sqlmock) {
-	mock.ExpectQuery(`SELECT current_target_id, created_at FROM v2_dns_failover_group WHERE id = \$1 FOR UPDATE`).
+	mock.ExpectQuery(`SELECT current_target_id, last_switch_at, last_switch_reason, created_at FROM v2_dns_failover_group WHERE id = \$1 FOR UPDATE`).
 		WithArgs(int64(50)).
-		WillReturnRows(sqlmock.NewRows([]string{"current_target_id", "created_at"}).AddRow(int64(71), int64(100)))
+		WillReturnRows(sqlmock.NewRows([]string{"current_target_id", "last_switch_at", "last_switch_reason", "created_at"}).AddRow(int64(71), int64(95), "manual switch", int64(100)))
 	mock.ExpectQuery(`SELECT id, sort, dns_type, dns_value, check_host, check_port, enabled, created_at FROM v2_dns_failover_target WHERE group_id = \$1 ORDER BY id ASC FOR UPDATE`).
 		WithArgs(int64(50)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "sort", "dns_type", "dns_value", "check_host", "check_port", "enabled", "created_at"}).
@@ -648,8 +841,51 @@ func TestDNSFailoverUpdateRuleAllowsCurrentTargetSortAndNameAndPreservesCreatedA
 	if err != nil {
 		t.Fatalf("SaveDNSFailoverRule update: %v", err)
 	}
-	if updated.CurrentTargetID == nil || *updated.CurrentTargetID != 71 || updated.CreatedAt != 100 || len(updated.Targets) != 2 || updated.Targets[0].CreatedAt != 110 || updated.Targets[1].CreatedAt != 120 {
+	if updated.CurrentTargetID == nil || *updated.CurrentTargetID != 71 || updated.LastSwitchAt == nil || *updated.LastSwitchAt != 95 || updated.LastSwitchReason != "manual switch" || updated.CreatedAt != 100 || len(updated.Targets) != 2 || updated.Targets[0].CreatedAt != 110 || updated.Targets[1].CreatedAt != 120 {
 		t.Fatalf("unexpected updated rule: %#v", updated)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverUpdateRuleReplacesNonCurrentTargetWhenCriticalFieldsChange(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+
+	request := dnsFailoverUpdateRequestKeepingCurrent()
+	request.Targets[1].DNSValue = "new-backup.example.com"
+	request.Targets[1].CheckHost = "new-backup.example.com"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id FROM v2_dns_probe WHERE enabled = 1 AND id IN \(\$1\) ORDER BY id ASC FOR SHARE`).WithArgs(int64(4)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(4)))
+	expectDNSFailoverUpdateLocks(mock)
+	mock.ExpectExec(`UPDATE v2_dns_failover_group SET name = \$2,.*updated_at = \$22 WHERE id = \$1`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE v2_dns_failover_target SET sort = sort \+ \$2, updated_at = \$3 WHERE group_id = \$1`).WithArgs(int64(50), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec(`UPDATE v2_dns_failover_target SET sort = \$3, name = \$4, dns_type = \$5, dns_value = \$6, check_host = \$7, check_port = \$8, enabled = \$9, updated_at = \$10 WHERE group_id = \$1 AND id = \$2`).
+		WithArgs(int64(50), int64(71), int64(15), "当前 IPv6", "AAAA", "2001:db8::1", "2001:db8::1", int64(443), int64(1), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`INSERT INTO v2_dns_failover_target .*RETURNING id, created_at, updated_at`).
+		WithArgs(int64(50), int64(20), "备用域名", "CNAME", "new-backup.example.com", "new-backup.example.com", int64(443), int64(1), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "updated_at"}).AddRow(int64(73), int64(130), int64(130)))
+	mock.ExpectExec(`DELETE FROM v2_dns_failover_target WHERE group_id = \$1 AND id IN \(\$2\)`).WithArgs(int64(50), int64(72)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_dns_failover_group_probe WHERE group_id = \$1`).WithArgs(int64(50)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO v2_dns_failover_group_probe \(group_id, probe_id, created_at, updated_at\) VALUES \(\$1, \$2, \$3, \$4\)`).WithArgs(int64(50), int64(4), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	updated, err := service.SaveDNSFailoverRule(context.Background(), request)
+	if err != nil {
+		t.Fatalf("SaveDNSFailoverRule update: %v", err)
+	}
+	if len(updated.Targets) != 2 || updated.Targets[1].ID != 73 || updated.Targets[1].DNSValue != "new-backup.example.com" {
+		t.Fatalf("critical target update must return replacement target: %#v", updated.Targets)
+	}
+	if updated.CurrentTargetID == nil || *updated.CurrentTargetID != 71 {
+		t.Fatalf("replacement changed current target: %#v", updated.CurrentTargetID)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -841,6 +1077,28 @@ func TestDNSFailoverEventListNormalizesInvalidPagination(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverEventPageCapsCurrentAtTenThousand(t *testing.T) {
+	current, pageSize := normalizeDNSFailoverEventPage(1_000_000, 25)
+	if current != 10_000 || pageSize != 25 {
+		t.Fatalf("normalized page = (%d, %d), want (10000, 25)", current, pageSize)
+	}
+}
+
+func TestDNSFailoverEventTypeRejectsInvalidTextAndControlCharacters(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+
+	for _, eventType := range []string{string([]byte{'b', 'a', 'd', 0xff}), "fail\x00over", "fail\nover"} {
+		if _, err := service.ListDNSFailoverEvents(context.Background(), DNSFailoverEventListRequest{EventType: eventType}); err == nil || !strings.Contains(err.Error(), "无效字符") {
+			t.Fatalf("ListDNSFailoverEvents(%q) error = %v, want invalid-text rejection", eventType, err)
+		}
 	}
 }
 

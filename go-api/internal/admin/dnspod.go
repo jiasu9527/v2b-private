@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -102,76 +103,81 @@ func (s *DBService) GetDNSPodConfig(_ context.Context) (DNSPodConfigStatus, erro
 }
 
 func (s *DBService) SaveDNSPodConfig(ctx context.Context, request DNSPodConfigSaveRequest) (DNSPodConfigStatus, error) {
-	cfg, err := loadAdminConfigStore(adminConfigPath())
-	if err != nil {
-		return DNSPodConfigStatus{}, err
-	}
-	if request.Clear {
-		delete(cfg.values, dnspodSecretIDKey)
-		delete(cfg.values, dnspodSecretKeyKey)
-		delete(cfg.values, dnspodEditionKey)
-		delete(cfg.values, dnspodAuthTypeKey)
-		delete(cfg.values, dnspodAPITokenKey)
-		cfg.order = removeConfigKeys(cfg.order, dnspodSecretIDKey, dnspodSecretKeyKey, dnspodEditionKey, dnspodAuthTypeKey, dnspodAPITokenKey)
-	} else {
-		authType := normalizeDNSPodAuthType(request.AuthType, request.APIToken)
-		if strings.TrimSpace(request.AuthType) == "" && strings.TrimSpace(request.APIToken) == "" {
-			authType = normalizeDNSPodAuthType(cfg.stringValue(dnspodAuthTypeKey, ""), cfg.stringValue(dnspodAPITokenKey, ""))
-		}
-		credentials := dnspodCredentials{
-			Edition: normalizeDNSPodEdition(request.Edition), AuthType: authType, Source: "config",
-		}
-		if credentials.AuthType == dnspod.AuthTypeToken {
-			credentials.APIToken = strings.TrimSpace(request.APIToken)
-			if credentials.APIToken == "" {
-				credentials.APIToken = cfg.stringValue(dnspodAPITokenKey, "")
-			}
-			credentials.Edition = dnspod.EditionInternational
-		} else {
-			credentials.SecretID = strings.TrimSpace(request.SecretID)
-			credentials.SecretKey = strings.TrimSpace(request.SecretKey)
-			if credentials.SecretID == "" {
-				credentials.SecretID = cfg.stringValue(dnspodSecretIDKey, "")
-			}
-			if credentials.SecretKey == "" {
-				credentials.SecretKey = cfg.stringValue(dnspodSecretKeyKey, "")
-			}
-		}
-		edition := normalizeDNSPodEdition(request.Edition)
-		if strings.TrimSpace(request.Edition) == "" {
-			edition = normalizeDNSPodEdition(cfg.stringValue(dnspodEditionKey, ""))
-		}
-		if credentials.AuthType == dnspod.AuthTypeTC3 {
-			credentials.Edition = edition
-		}
-		if err := validateDNSPodCredentials(credentials); err != nil {
-			return DNSPodConfigStatus{}, err
-		}
-		if request.Verify {
-			if err := s.testDNSPodCredentials(ctx, credentials); err != nil {
-				return DNSPodConfigStatus{}, err
-			}
-		}
-		cfg.values[dnspodEditionKey] = phpConfigValue{kind: phpConfigScalar, scalar: credentials.Edition}
-		cfg.values[dnspodAuthTypeKey] = phpConfigValue{kind: phpConfigScalar, scalar: credentials.AuthType}
-		keys := []string{dnspodEditionKey, dnspodAuthTypeKey}
-		if credentials.AuthType == dnspod.AuthTypeToken {
+	var mutationErr error
+	err := updateAdminConfigStore(adminConfigPath(), func(cfg *phpConfigFile) error {
+		if request.Clear {
 			delete(cfg.values, dnspodSecretIDKey)
 			delete(cfg.values, dnspodSecretKeyKey)
-			cfg.order = removeConfigKeys(cfg.order, dnspodSecretIDKey, dnspodSecretKeyKey)
-			cfg.values[dnspodAPITokenKey] = phpConfigValue{kind: phpConfigScalar, scalar: credentials.APIToken}
-			keys = append(keys, dnspodAPITokenKey)
-		} else {
+			delete(cfg.values, dnspodEditionKey)
+			delete(cfg.values, dnspodAuthTypeKey)
 			delete(cfg.values, dnspodAPITokenKey)
-			cfg.order = removeConfigKeys(cfg.order, dnspodAPITokenKey)
-			cfg.values[dnspodSecretIDKey] = phpConfigValue{kind: phpConfigScalar, scalar: credentials.SecretID}
-			cfg.values[dnspodSecretKeyKey] = phpConfigValue{kind: phpConfigScalar, scalar: credentials.SecretKey}
-			keys = append(keys, dnspodSecretIDKey, dnspodSecretKeyKey)
+			cfg.order = removeConfigKeys(cfg.order, dnspodSecretIDKey, dnspodSecretKeyKey, dnspodEditionKey, dnspodAuthTypeKey, dnspodAPITokenKey)
+		} else {
+			authType := normalizeDNSPodAuthType(request.AuthType, request.APIToken)
+			if strings.TrimSpace(request.AuthType) == "" && strings.TrimSpace(request.APIToken) == "" {
+				authType = normalizeDNSPodAuthType(cfg.stringValue(dnspodAuthTypeKey, ""), cfg.stringValue(dnspodAPITokenKey, ""))
+			}
+			credentials := dnspodCredentials{
+				Edition: normalizeDNSPodEdition(request.Edition), AuthType: authType, Source: "config",
+			}
+			if credentials.AuthType == dnspod.AuthTypeToken {
+				credentials.APIToken = strings.TrimSpace(request.APIToken)
+				if credentials.APIToken == "" {
+					credentials.APIToken = cfg.stringValue(dnspodAPITokenKey, "")
+				}
+				credentials.Edition = dnspod.EditionInternational
+			} else {
+				credentials.SecretID = strings.TrimSpace(request.SecretID)
+				credentials.SecretKey = strings.TrimSpace(request.SecretKey)
+				if credentials.SecretID == "" {
+					credentials.SecretID = cfg.stringValue(dnspodSecretIDKey, "")
+				}
+				if credentials.SecretKey == "" {
+					credentials.SecretKey = cfg.stringValue(dnspodSecretKeyKey, "")
+				}
+			}
+			edition := normalizeDNSPodEdition(request.Edition)
+			if strings.TrimSpace(request.Edition) == "" {
+				edition = normalizeDNSPodEdition(cfg.stringValue(dnspodEditionKey, ""))
+			}
+			if credentials.AuthType == dnspod.AuthTypeTC3 {
+				credentials.Edition = edition
+			}
+			if err := validateDNSPodCredentials(credentials); err != nil {
+				mutationErr = err
+				return err
+			}
+			if request.Verify {
+				if err := s.testDNSPodCredentials(ctx, credentials); err != nil {
+					mutationErr = err
+					return err
+				}
+			}
+			cfg.values[dnspodEditionKey] = phpConfigValue{kind: phpConfigScalar, scalar: credentials.Edition}
+			cfg.values[dnspodAuthTypeKey] = phpConfigValue{kind: phpConfigScalar, scalar: credentials.AuthType}
+			keys := []string{dnspodEditionKey, dnspodAuthTypeKey}
+			if credentials.AuthType == dnspod.AuthTypeToken {
+				delete(cfg.values, dnspodSecretIDKey)
+				delete(cfg.values, dnspodSecretKeyKey)
+				cfg.order = removeConfigKeys(cfg.order, dnspodSecretIDKey, dnspodSecretKeyKey)
+				cfg.values[dnspodAPITokenKey] = phpConfigValue{kind: phpConfigScalar, scalar: credentials.APIToken}
+				keys = append(keys, dnspodAPITokenKey)
+			} else {
+				delete(cfg.values, dnspodAPITokenKey)
+				cfg.order = removeConfigKeys(cfg.order, dnspodAPITokenKey)
+				cfg.values[dnspodSecretIDKey] = phpConfigValue{kind: phpConfigScalar, scalar: credentials.SecretID}
+				cfg.values[dnspodSecretKeyKey] = phpConfigValue{kind: phpConfigScalar, scalar: credentials.SecretKey}
+				keys = append(keys, dnspodSecretIDKey, dnspodSecretKeyKey)
+			}
+			cfg.order = appendMissingConfigKeys(cfg.order, sortedMissingKeys(cfg, keys...), cfg.values)
 		}
-		cfg.order = appendMissingConfigKeys(cfg.order, sortedMissingKeys(cfg, keys...), cfg.values)
-	}
-	if err := writeJSONConfigFile(adminConfigPath(), cfg); err != nil {
-		return DNSPodConfigStatus{}, errors.New("保存 DNSPod 配置失败")
+		return nil
+	})
+	if err != nil {
+		if mutationErr != nil {
+			return DNSPodConfigStatus{}, mutationErr
+		}
+		return DNSPodConfigStatus{}, fmt.Errorf("保存 DNSPod 配置失败: %w", err)
 	}
 	return s.GetDNSPodConfig(ctx)
 }

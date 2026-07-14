@@ -8,9 +8,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	cfgpkg "forest/go-api/internal/config"
 )
+
+var adminConfigUpdateMu sync.Mutex
 
 func loadAdminConfigStore(path string) (*phpConfigFile, error) {
 	cfg, err := loadJSONConfigFile(path)
@@ -94,13 +97,67 @@ func configValueToJSON(value phpConfigValue) any {
 }
 
 func writeJSONConfigFile(path string, cfg *phpConfigFile) error {
+	adminConfigUpdateMu.Lock()
+	defer adminConfigUpdateMu.Unlock()
+	return writeJSONConfigFileAtomic(path, cfg)
+}
+
+func updateAdminConfigStore(path string, mutate func(*phpConfigFile) error) error {
+	adminConfigUpdateMu.Lock()
+	defer adminConfigUpdateMu.Unlock()
+
+	cfg, err := loadAdminConfigStore(path)
+	if err != nil {
+		return err
+	}
+	if err := mutate(cfg); err != nil {
+		return err
+	}
+	return writeJSONConfigFileAtomic(path, cfg)
+}
+
+func createAdminConfigStoreIfMissing(path string, cfg *phpConfigFile) (bool, error) {
+	adminConfigUpdateMu.Lock()
+	defer adminConfigUpdateMu.Unlock()
+
+	if fileExists(path) {
+		return false, nil
+	}
+	if err := writeJSONConfigFileAtomic(path, cfg); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func writeJSONConfigFileAtomic(path string, cfg *phpConfigFile) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, []byte(cfg.marshalJSON()), 0o600); err != nil {
+	temp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
 		return err
 	}
-	return os.Chmod(path, 0o600)
+	tempPath := temp.Name()
+	defer func() {
+		_ = temp.Close()
+		_ = os.Remove(tempPath)
+	}()
+	if err := temp.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := temp.Write([]byte(cfg.marshalJSON())); err != nil {
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	return nil
 }
 
 func fileExists(path string) bool {
@@ -126,10 +183,13 @@ func MigrateLegacyConfig(sourceRoot, targetRoot string) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		if err := writeJSONConfigFile(targetAdminPath, cfg); err != nil {
+		created, err := createAdminConfigStoreIfMissing(targetAdminPath, cfg)
+		if err != nil {
 			return 0, err
 		}
-		migratedConfig = 1
+		if created {
+			migratedConfig = 1
+		}
 	}
 
 	return migratedConfig, nil

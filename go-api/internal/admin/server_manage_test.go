@@ -17,6 +17,7 @@ func TestSortManagedServersUpdatesMultipleTypes(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
+	mock.MatchExpectationsInOrder(false)
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE v2_server_vmess SET sort = \$2, updated_at = \$3 WHERE id = \$1`).

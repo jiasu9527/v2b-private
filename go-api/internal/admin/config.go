@@ -230,34 +230,36 @@ func (s *DBService) FetchConfig(_ context.Context, key string) (map[string]any, 
 }
 
 func (s *DBService) SaveConfig(_ context.Context, values map[string]any) (bool, error) {
-	cfg, err := loadAdminConfigStore(adminConfigPath())
-	if err != nil {
-		return false, err
-	}
-
-	newKeys := make([]string, 0)
-	for key, value := range values {
-		key = strings.TrimSpace(key)
-		if key == "" || key == "auth_data" {
-			continue
+	var mutationErr error
+	if err := updateAdminConfigStore(adminConfigPath(), func(cfg *phpConfigFile) error {
+		newKeys := make([]string, 0)
+		for key, value := range values {
+			key = strings.TrimSpace(key)
+			if key == "" || key == "auth_data" {
+				continue
+			}
+			normalized, err := normalizeConfigValue(value)
+			if err != nil {
+				mutationErr = errors.New("参数错误")
+				return mutationErr
+			}
+			if err := validateConfigValue(key, normalized); err != nil {
+				mutationErr = err
+				return err
+			}
+			if _, exists := cfg.values[key]; !exists {
+				newKeys = append(newKeys, key)
+			}
+			cfg.values[key] = normalized
 		}
-		normalized, err := normalizeConfigValue(value)
-		if err != nil {
-			return false, errors.New("参数错误")
+		sort.Strings(newKeys)
+		cfg.order = appendMissingConfigKeys(cfg.order, newKeys, cfg.values)
+		return nil
+	}); err != nil {
+		if mutationErr != nil {
+			return false, mutationErr
 		}
-		if err := validateConfigValue(key, normalized); err != nil {
-			return false, err
-		}
-		if _, exists := cfg.values[key]; !exists {
-			newKeys = append(newKeys, key)
-		}
-		cfg.values[key] = normalized
-	}
-	sort.Strings(newKeys)
-	cfg.order = appendMissingConfigKeys(cfg.order, newKeys, cfg.values)
-
-	if err := writeJSONConfigFile(adminConfigPath(), cfg); err != nil {
-		return false, errors.New("修改失败")
+		return false, fmt.Errorf("修改失败: %w", err)
 	}
 	if s.runtime != nil {
 		s.runtime.Reload()

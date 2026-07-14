@@ -53,13 +53,16 @@ func expectDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	}
 
 	for _, index := range []string{
-		"idx_v2_dns_probe_enabled_heartbeat",
-		"idx_v2_dns_failover_group_enabled",
-		"idx_v2_dns_failover_target_group_sort",
-		"idx_v2_dns_failover_group_probe_probe",
-		"idx_v2_dns_probe_target_state_target",
-		"idx_v2_dns_probe_result_inbox_target",
-		"idx_v2_dns_failover_event_group_created",
+		`idx_v2_dns_probe_enabled_heartbeat ON v2_dns_probe\(enabled, last_heartbeat_at\)`,
+		`idx_v2_dns_failover_group_enabled ON v2_dns_failover_group\(enabled\)`,
+		`idx_v2_dns_failover_target_group_sort ON v2_dns_failover_target\(group_id, enabled, sort\)`,
+		`idx_v2_dns_failover_group_probe_probe ON v2_dns_failover_group_probe\(probe_id\)`,
+		`idx_v2_dns_probe_target_state_target ON v2_dns_probe_target_state\(target_id\)`,
+		`idx_v2_dns_probe_result_inbox_target ON v2_dns_probe_result_inbox\(target_id\)`,
+		`idx_v2_dns_failover_event_created_id ON v2_dns_failover_event\(created_at DESC, id DESC\)`,
+		`idx_v2_dns_failover_event_group_created_id ON v2_dns_failover_event\(group_id, created_at DESC, id DESC\)`,
+		`idx_v2_dns_failover_event_type_created_id ON v2_dns_failover_event\(event_type, created_at DESC, id DESC\)`,
+		`idx_v2_dns_failover_event_group_type_created_id ON v2_dns_failover_event\(group_id, event_type, created_at DESC, id DESC\)`,
 	} {
 		mock.ExpectExec(`CREATE INDEX IF NOT EXISTS ` + index).
 			WillReturnResult(sqlmock.NewResult(0, 0))

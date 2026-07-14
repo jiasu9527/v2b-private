@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const dnsProbeAPIURLKey = "dns_probe_api_url"
@@ -22,7 +24,7 @@ const dnsProbeAPIURLKey = "dns_probe_api_url"
 const (
 	dnsFailoverEventDefaultPageSize int64 = 20
 	dnsFailoverEventMaxPageSize     int64 = 100
-	dnsFailoverEventMaxCurrent      int64 = 1_000_000
+	dnsFailoverEventMaxCurrent      int64 = 10_000
 	maxPostgresInteger              int64 = 1<<31 - 1
 )
 
@@ -168,7 +170,7 @@ type DNSFailoverEventListResult struct {
 func (s *DBService) GetDNSFailoverSettings(_ context.Context) (DNSFailoverSettings, error) {
 	cfg, err := loadAdminConfigStore(adminConfigPath())
 	if err != nil {
-		return DNSFailoverSettings{}, errors.New("读取 DNS 故障转移设置失败")
+		return DNSFailoverSettings{}, fmt.Errorf("读取 DNS 故障转移设置失败: %w", err)
 	}
 	return DNSFailoverSettings{ProbeAPIURL: strings.TrimRight(strings.TrimSpace(cfg.stringValue(dnsProbeAPIURLKey, "")), "/")}, nil
 }
@@ -178,19 +180,20 @@ func (s *DBService) SaveDNSFailoverSettings(ctx context.Context, request DNSFail
 	if err != nil {
 		return DNSFailoverSettings{}, err
 	}
-	cfg, err := loadAdminConfigStore(adminConfigPath())
-	if err != nil {
-		return DNSFailoverSettings{}, errors.New("读取 DNS 故障转移设置失败")
+	if err := updateAdminConfigStore(adminConfigPath(), func(cfg *phpConfigFile) error {
+		cfg.values[dnsProbeAPIURLKey] = phpConfigValue{kind: phpConfigScalar, scalar: probeAPIURL}
+		cfg.order = appendMissingConfigKeys(cfg.order, []string{dnsProbeAPIURLKey}, cfg.values)
+		return nil
+	}); err != nil {
+		return DNSFailoverSettings{}, fmt.Errorf("保存 DNS 故障转移设置失败: %w", err)
 	}
-	cfg.values[dnsProbeAPIURLKey] = phpConfigValue{kind: phpConfigScalar, scalar: probeAPIURL}
-	cfg.order = appendMissingConfigKeys(cfg.order, []string{dnsProbeAPIURLKey}, cfg.values)
-	if err := writeJSONConfigFile(adminConfigPath(), cfg); err != nil {
-		return DNSFailoverSettings{}, errors.New("保存 DNS 故障转移设置失败")
-	}
-	return s.GetDNSFailoverSettings(ctx)
+	return DNSFailoverSettings{ProbeAPIURL: probeAPIURL}, nil
 }
 
 func normalizeDNSProbeAPIURL(value string) (string, error) {
+	if err := validateDNSFailoverIdentifierText("探针接入地址", value); err != nil {
+		return "", err
+	}
 	value = strings.TrimRight(strings.TrimSpace(value), "/")
 	if value == "" {
 		return "", nil
@@ -225,7 +228,7 @@ func (s *DBService) ListDNSProbes(ctx context.Context) ([]DNSProbeRecord, error)
 FROM v2_dns_probe
 ORDER BY id ASC`)
 	if err != nil {
-		return nil, errors.New("读取探针列表失败")
+		return nil, fmt.Errorf("读取探针列表失败: %w", err)
 	}
 	defer rows.Close()
 
@@ -248,7 +251,7 @@ ORDER BY id ASC`)
 			&probe.CreatedAt,
 			&probe.UpdatedAt,
 		); err != nil {
-			return nil, errors.New("读取探针列表失败")
+			return nil, fmt.Errorf("读取探针列表失败: %w", err)
 		}
 		probe.Enabled = enabled != 0
 		if lastHeartbeat.Valid {
@@ -258,13 +261,16 @@ ORDER BY id ASC`)
 		result = append(result, probe)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("读取探针列表失败")
+		return nil, fmt.Errorf("读取探针列表失败: %w", err)
 	}
 	return result, nil
 }
 
 func (s *DBService) CreateDNSProbe(ctx context.Context, request DNSProbeCreateRequest) (DNSProbeCreateResult, error) {
 	if err := s.ensureDNSFailoverSchema(ctx); err != nil {
+		return DNSProbeCreateResult{}, err
+	}
+	if err := validateDNSFailoverIdentifierText("探针名称", request.Name); err != nil {
 		return DNSProbeCreateResult{}, err
 	}
 	name := strings.TrimSpace(request.Name)
@@ -277,7 +283,7 @@ func (s *DBService) CreateDNSProbe(ctx context.Context, request DNSProbeCreateRe
 
 	random := make([]byte, 32)
 	if _, err := rand.Read(random); err != nil {
-		return DNSProbeCreateResult{}, errors.New("生成探针密钥失败")
+		return DNSProbeCreateResult{}, fmt.Errorf("生成探针密钥失败: %w", err)
 	}
 	secret := base64.RawURLEncoding.EncodeToString(random)
 	hash := sha256.Sum256([]byte(secret))
@@ -301,10 +307,13 @@ func (s *DBService) SetDNSProbeEnabled(ctx context.Context, id int64, enabled bo
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE v2_dns_probe SET enabled = $2, updated_at = $3 WHERE id = $1`, id, boolToInt64(enabled), time.Now().Unix())
 	if err != nil {
-		return false, errors.New("更新探针状态失败")
+		return false, fmt.Errorf("更新探针状态失败: %w", err)
 	}
 	affected, err := result.RowsAffected()
-	if err != nil || affected == 0 {
+	if err != nil {
+		return false, fmt.Errorf("读取探针状态更新结果失败: %w", err)
+	}
+	if affected == 0 {
 		return false, errors.New("探针不存在")
 	}
 	return true, nil
@@ -314,7 +323,7 @@ func (s *DBService) ListDNSFailoverRules(ctx context.Context) ([]DNSFailoverRule
 	if err := s.ensureDNSFailoverSchema(ctx); err != nil {
 		return nil, err
 	}
-	return s.listDNSFailoverRules(ctx, nil)
+	return s.readDNSFailoverRulesSnapshot(ctx, nil)
 }
 
 func (s *DBService) GetDNSFailoverRule(ctx context.Context, id int64) (DNSFailoverRuleRecord, error) {
@@ -324,7 +333,7 @@ func (s *DBService) GetDNSFailoverRule(ctx context.Context, id int64) (DNSFailov
 	if id <= 0 {
 		return DNSFailoverRuleRecord{}, errors.New("故障转移规则 ID 无效")
 	}
-	rules, err := s.listDNSFailoverRules(ctx, &id)
+	rules, err := s.readDNSFailoverRulesSnapshot(ctx, &id)
 	if err != nil {
 		return DNSFailoverRuleRecord{}, err
 	}
@@ -334,7 +343,31 @@ func (s *DBService) GetDNSFailoverRule(ctx context.Context, id int64) (DNSFailov
 	return rules[0], nil
 }
 
-func (s *DBService) listDNSFailoverRules(ctx context.Context, id *int64) ([]DNSFailoverRuleRecord, error) {
+type dnsFailoverQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func dnsFailoverReadTxOptions() *sql.TxOptions {
+	return &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}
+}
+
+func (s *DBService) readDNSFailoverRulesSnapshot(ctx context.Context, id *int64) ([]DNSFailoverRuleRecord, error) {
+	tx, err := s.db.BeginTx(ctx, dnsFailoverReadTxOptions())
+	if err != nil {
+		return nil, fmt.Errorf("开始读取故障转移规则失败: %w", err)
+	}
+	defer tx.Rollback()
+	rules, err := s.listDNSFailoverRules(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("完成读取故障转移规则失败: %w", err)
+	}
+	return rules, nil
+}
+
+func (s *DBService) listDNSFailoverRules(ctx context.Context, queryer dnsFailoverQueryer, id *int64) ([]DNSFailoverRuleRecord, error) {
 	query := `SELECT id, name, domain_id, domain, record_id, subdomain, record_line_id, record_line_name, ttl, mx, weight, current_target_id,
 enabled, auto_failback, check_interval_sec, tcp_timeout_ms, failure_threshold, success_threshold, single_probe_failure_threshold,
 single_probe_success_threshold, probe_offline_sec, cooldown_sec, last_switch_at, last_switch_reason, created_at, updated_at
@@ -346,9 +379,9 @@ FROM v2_dns_failover_group`
 	}
 	query += ` ORDER BY id ASC`
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := queryer.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, errors.New("读取故障转移规则失败")
+		return nil, fmt.Errorf("读取故障转移规则失败: %w", err)
 	}
 	defer rows.Close()
 
@@ -391,7 +424,7 @@ FROM v2_dns_failover_group`
 			&rule.CreatedAt,
 			&rule.UpdatedAt,
 		); err != nil {
-			return nil, errors.New("读取故障转移规则失败")
+			return nil, fmt.Errorf("读取故障转移规则失败: %w", err)
 		}
 		rule.Enabled = enabled != 0
 		rule.AutoFailback = autoFailback != 0
@@ -404,36 +437,40 @@ FROM v2_dns_failover_group`
 		groupIDs = append(groupIDs, rule.ID)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("读取故障转移规则失败")
+		return nil, fmt.Errorf("读取故障转移规则失败: %w", err)
 	}
 	if len(groupIDs) == 0 {
 		return result, nil
 	}
 
-	targets, err := s.loadDNSFailoverTargets(ctx, groupIDs)
+	targets, err := s.loadDNSFailoverTargets(ctx, queryer, groupIDs)
 	if err != nil {
 		return nil, err
 	}
-	probeIDs, err := s.loadDNSFailoverProbeBindings(ctx, groupIDs)
+	probeIDs, err := s.loadDNSFailoverProbeBindings(ctx, queryer, groupIDs)
 	if err != nil {
 		return nil, err
 	}
 	for index := range result {
-		result[index].Targets = targets[result[index].ID]
-		result[index].ProbeIDs = probeIDs[result[index].ID]
+		if values, ok := targets[result[index].ID]; ok {
+			result[index].Targets = values
+		}
+		if values, ok := probeIDs[result[index].ID]; ok {
+			result[index].ProbeIDs = values
+		}
 	}
 	return result, nil
 }
 
-func (s *DBService) loadDNSFailoverTargets(ctx context.Context, groupIDs []int64) (map[int64][]DNSFailoverTargetRecord, error) {
+func (s *DBService) loadDNSFailoverTargets(ctx context.Context, queryer dnsFailoverQueryer, groupIDs []int64) (map[int64][]DNSFailoverTargetRecord, error) {
 	result := make(map[int64][]DNSFailoverTargetRecord, len(groupIDs))
 	placeholders, args := dnsFailoverPlaceholders(1, groupIDs)
-	rows, err := s.db.QueryContext(ctx, `SELECT id, group_id, sort, name, dns_type, dns_value, check_host, check_port, enabled, created_at, updated_at
+	rows, err := queryer.QueryContext(ctx, `SELECT id, group_id, sort, name, dns_type, dns_value, check_host, check_port, enabled, created_at, updated_at
 FROM v2_dns_failover_target
 WHERE group_id IN (`+placeholders+`)
-ORDER BY group_id ASC, sort ASC, id ASC`, args...)
+	ORDER BY group_id ASC, sort ASC, id ASC`, args...)
 	if err != nil {
-		return nil, errors.New("读取故障转移目标失败")
+		return nil, fmt.Errorf("读取故障转移目标失败: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -452,37 +489,37 @@ ORDER BY group_id ASC, sort ASC, id ASC`, args...)
 			&target.CreatedAt,
 			&target.UpdatedAt,
 		); err != nil {
-			return nil, errors.New("读取故障转移目标失败")
+			return nil, fmt.Errorf("读取故障转移目标失败: %w", err)
 		}
 		target.Enabled = enabled != 0
 		result[target.GroupID] = append(result[target.GroupID], target)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("读取故障转移目标失败")
+		return nil, fmt.Errorf("读取故障转移目标失败: %w", err)
 	}
 	return result, nil
 }
 
-func (s *DBService) loadDNSFailoverProbeBindings(ctx context.Context, groupIDs []int64) (map[int64][]int64, error) {
+func (s *DBService) loadDNSFailoverProbeBindings(ctx context.Context, queryer dnsFailoverQueryer, groupIDs []int64) (map[int64][]int64, error) {
 	result := make(map[int64][]int64, len(groupIDs))
 	placeholders, args := dnsFailoverPlaceholders(1, groupIDs)
-	rows, err := s.db.QueryContext(ctx, `SELECT group_id, probe_id
+	rows, err := queryer.QueryContext(ctx, `SELECT group_id, probe_id
 FROM v2_dns_failover_group_probe
 WHERE group_id IN (`+placeholders+`)
-ORDER BY group_id ASC, probe_id ASC`, args...)
+	ORDER BY group_id ASC, probe_id ASC`, args...)
 	if err != nil {
-		return nil, errors.New("读取规则探针绑定失败")
+		return nil, fmt.Errorf("读取规则探针绑定失败: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var groupID, probeID int64
 		if err := rows.Scan(&groupID, &probeID); err != nil {
-			return nil, errors.New("读取规则探针绑定失败")
+			return nil, fmt.Errorf("读取规则探针绑定失败: %w", err)
 		}
 		result[groupID] = append(result[groupID], probeID)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("读取规则探针绑定失败")
+		return nil, fmt.Errorf("读取规则探针绑定失败: %w", err)
 	}
 	return result, nil
 }
@@ -497,7 +534,7 @@ func (s *DBService) SaveDNSFailoverRule(ctx context.Context, request DNSFailover
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return DNSFailoverRuleRecord{}, errors.New("保存故障转移规则失败")
+		return DNSFailoverRuleRecord{}, fmt.Errorf("保存故障转移规则失败: %w", err)
 	}
 	defer tx.Rollback()
 	if err := validateDNSFailoverProbeBindings(ctx, tx, request.ProbeIDs); err != nil {
@@ -517,7 +554,7 @@ func (s *DBService) SaveDNSFailoverRule(ctx context.Context, request DNSFailover
 		return DNSFailoverRuleRecord{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return DNSFailoverRuleRecord{}, errors.New("保存故障转移规则失败")
+		return DNSFailoverRuleRecord{}, fmt.Errorf("保存故障转移规则失败: %w", err)
 	}
 	rule.ProbeIDs = append([]int64(nil), request.ProbeIDs...)
 	return rule, nil
@@ -555,7 +592,7 @@ RETURNING id, created_at, updated_at`,
 		now,
 		now,
 	).Scan(&rule.ID, &rule.CreatedAt, &rule.UpdatedAt); err != nil {
-		return DNSFailoverRuleRecord{}, errors.New("创建故障转移规则失败")
+		return DNSFailoverRuleRecord{}, fmt.Errorf("创建故障转移规则失败: %w", err)
 	}
 
 	rule.Targets = make([]DNSFailoverTargetRecord, 0, len(request.Targets))
@@ -584,14 +621,16 @@ RETURNING id, created_at, updated_at`,
 func updateDNSFailoverRule(ctx context.Context, tx *sql.Tx, request DNSFailoverRuleSaveRequest) (DNSFailoverRuleRecord, error) {
 	groupID := *request.ID
 	var (
-		currentTarget  sql.NullInt64
-		groupCreatedAt int64
+		currentTarget    sql.NullInt64
+		lastSwitchAt     sql.NullInt64
+		lastSwitchReason string
+		groupCreatedAt   int64
 	)
-	if err := tx.QueryRowContext(ctx, `SELECT current_target_id, created_at FROM v2_dns_failover_group WHERE id = $1 FOR UPDATE`, groupID).Scan(&currentTarget, &groupCreatedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT current_target_id, last_switch_at, last_switch_reason, created_at FROM v2_dns_failover_group WHERE id = $1 FOR UPDATE`, groupID).Scan(&currentTarget, &lastSwitchAt, &lastSwitchReason, &groupCreatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return DNSFailoverRuleRecord{}, errors.New("故障转移规则不存在")
 		}
-		return DNSFailoverRuleRecord{}, errors.New("读取故障转移规则失败")
+		return DNSFailoverRuleRecord{}, fmt.Errorf("读取故障转移规则失败: %w", err)
 	}
 
 	existingTargets, maxExistingSort, err := lockDNSFailoverTargets(ctx, tx, groupID)
@@ -639,10 +678,13 @@ WHERE id = $1`,
 		now,
 	)
 	if err != nil {
-		return DNSFailoverRuleRecord{}, errors.New("更新故障转移规则失败")
+		return DNSFailoverRuleRecord{}, fmt.Errorf("更新故障转移规则失败: %w", err)
 	}
 	affected, err := result.RowsAffected()
-	if err != nil || affected == 0 {
+	if err != nil {
+		return DNSFailoverRuleRecord{}, fmt.Errorf("读取故障转移规则更新结果失败: %w", err)
+	}
+	if affected == 0 {
 		return DNSFailoverRuleRecord{}, errors.New("故障转移规则不存在")
 	}
 
@@ -653,12 +695,14 @@ WHERE id = $1`,
 			return DNSFailoverRuleRecord{}, errors.New("目标排序值过大，无法安全更新")
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE v2_dns_failover_target SET sort = sort + $2, updated_at = $3 WHERE group_id = $1`, groupID, offset, now); err != nil {
-			return DNSFailoverRuleRecord{}, errors.New("更新目标排序失败")
+			return DNSFailoverRuleRecord{}, fmt.Errorf("更新目标排序失败: %w", err)
 		}
 	}
 
 	rule := dnsFailoverRuleFromSaveRequest(request)
 	rule.ID = groupID
+	rule.LastSwitchAt = dnsNullInt64Pointer(lastSwitchAt)
+	rule.LastSwitchReason = lastSwitchReason
 	rule.Targets = make([]DNSFailoverTargetRecord, 0, len(request.Targets))
 	keptIDs := make(map[int64]struct{}, len(request.Targets))
 	var firstEnabledID int64
@@ -667,6 +711,10 @@ WHERE id = $1`,
 		var target DNSFailoverTargetRecord
 		if item.ID == 0 {
 			target, err = insertDNSFailoverTarget(ctx, tx, groupID, item, now)
+		} else if item.ID != currentTarget.Int64 && dnsFailoverTargetCriticalFieldsChanged(existingTargets[item.ID], item) {
+			replacement := item
+			replacement.ID = 0
+			target, err = insertDNSFailoverTarget(ctx, tx, groupID, replacement, now)
 		} else {
 			target, err = updateDNSFailoverTarget(ctx, tx, groupID, item, existingTargets[item.ID], now)
 			keptIDs[item.ID] = struct{}{}
@@ -726,10 +774,17 @@ type dnsFailoverExistingTarget struct {
 	CreatedAt int64
 }
 
+func dnsFailoverTargetCriticalFieldsChanged(existing dnsFailoverExistingTarget, requested DNSFailoverTargetSaveRequest) bool {
+	return existing.DNSType != requested.DNSType ||
+		existing.DNSValue != requested.DNSValue ||
+		existing.CheckHost != requested.CheckHost ||
+		existing.CheckPort != requested.CheckPort
+}
+
 func lockDNSFailoverTargets(ctx context.Context, tx *sql.Tx, groupID int64) (map[int64]dnsFailoverExistingTarget, int64, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT id, sort, dns_type, dns_value, check_host, check_port, enabled, created_at FROM v2_dns_failover_target WHERE group_id = $1 ORDER BY id ASC FOR UPDATE`, groupID)
 	if err != nil {
-		return nil, 0, errors.New("读取故障转移目标失败")
+		return nil, 0, fmt.Errorf("读取故障转移目标失败: %w", err)
 	}
 	defer rows.Close()
 	result := make(map[int64]dnsFailoverExistingTarget)
@@ -741,7 +796,7 @@ func lockDNSFailoverTargets(ctx context.Context, tx *sql.Tx, groupID int64) (map
 			enabled int64
 		)
 		if err := rows.Scan(&id, &target.Sort, &target.DNSType, &target.DNSValue, &target.CheckHost, &target.CheckPort, &enabled, &target.CreatedAt); err != nil {
-			return nil, 0, errors.New("读取故障转移目标失败")
+			return nil, 0, fmt.Errorf("读取故障转移目标失败: %w", err)
 		}
 		target.Enabled = enabled != 0
 		result[id] = target
@@ -750,7 +805,7 @@ func lockDNSFailoverTargets(ctx context.Context, tx *sql.Tx, groupID int64) (map
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, errors.New("读取故障转移目标失败")
+		return nil, 0, fmt.Errorf("读取故障转移目标失败: %w", err)
 	}
 	return result, maxSort, nil
 }
@@ -816,7 +871,10 @@ func updateDNSFailoverTarget(ctx context.Context, tx *sql.Tx, groupID int64, req
 		return DNSFailoverTargetRecord{}, fmt.Errorf("更新故障转移目标失败: %w", err)
 	}
 	affected, err := result.RowsAffected()
-	if err != nil || affected == 0 {
+	if err != nil {
+		return DNSFailoverTargetRecord{}, fmt.Errorf("读取故障转移目标更新结果失败: %w", err)
+	}
+	if affected == 0 {
 		return DNSFailoverTargetRecord{}, errors.New("故障转移目标不存在")
 	}
 	target := dnsFailoverTargetFromSaveRequest(groupID, request)
@@ -832,7 +890,10 @@ func setDNSFailoverCurrentTarget(ctx context.Context, tx *sql.Tx, groupID, targe
 		return fmt.Errorf("更新当前故障转移目标失败: %w", err)
 	}
 	affected, err := result.RowsAffected()
-	if err != nil || affected == 0 {
+	if err != nil {
+		return fmt.Errorf("读取当前故障转移目标更新结果失败: %w", err)
+	}
+	if affected == 0 {
 		return errors.New("故障转移规则不存在")
 	}
 	return nil
@@ -842,19 +903,19 @@ func validateDNSFailoverProbeBindings(ctx context.Context, tx *sql.Tx, probeIDs 
 	placeholders, args := dnsFailoverPlaceholders(1, probeIDs)
 	rows, err := tx.QueryContext(ctx, `SELECT id FROM v2_dns_probe WHERE enabled = 1 AND id IN (`+placeholders+`) ORDER BY id ASC FOR SHARE`, args...)
 	if err != nil {
-		return errors.New("校验绑定探针失败")
+		return fmt.Errorf("校验绑定探针失败: %w", err)
 	}
 	defer rows.Close()
 	found := make([]int64, 0, len(probeIDs))
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
-			return errors.New("校验绑定探针失败")
+			return fmt.Errorf("校验绑定探针失败: %w", err)
 		}
 		found = append(found, id)
 	}
 	if err := rows.Err(); err != nil {
-		return errors.New("校验绑定探针失败")
+		return fmt.Errorf("校验绑定探针失败: %w", err)
 	}
 	if len(found) != len(probeIDs) {
 		return errors.New("绑定的探针不存在或已被吊销，请重新选择")
@@ -891,7 +952,7 @@ func (s *DBService) DeleteDNSFailoverRule(ctx context.Context, id int64) (bool, 
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, errors.New("删除故障转移规则失败")
+		return false, fmt.Errorf("删除故障转移规则失败: %w", err)
 	}
 	defer tx.Rollback()
 	var enabled int64
@@ -899,7 +960,7 @@ func (s *DBService) DeleteDNSFailoverRule(ctx context.Context, id int64) (bool, 
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, errors.New("故障转移规则不存在")
 		}
-		return false, errors.New("读取故障转移规则状态失败")
+		return false, fmt.Errorf("读取故障转移规则状态失败: %w", err)
 	}
 	if enabled != 0 {
 		return false, errors.New("规则仍处于启用状态，请先停用后再删除")
@@ -909,11 +970,14 @@ func (s *DBService) DeleteDNSFailoverRule(ctx context.Context, id int64) (bool, 
 		return false, fmt.Errorf("删除故障转移规则失败: %w", err)
 	}
 	affected, err := result.RowsAffected()
-	if err != nil || affected == 0 {
+	if err != nil {
+		return false, fmt.Errorf("读取故障转移规则删除结果失败: %w", err)
+	}
+	if affected == 0 {
 		return false, errors.New("故障转移规则不存在")
 	}
 	if err := tx.Commit(); err != nil {
-		return false, errors.New("删除故障转移规则失败")
+		return false, fmt.Errorf("删除故障转移规则失败: %w", err)
 	}
 	return true, nil
 }
@@ -927,10 +991,13 @@ func (s *DBService) SetDNSFailoverRuleEnabled(ctx context.Context, id int64, ena
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE v2_dns_failover_group SET enabled = $2, updated_at = $3 WHERE id = $1`, id, boolToInt64(enabled), time.Now().Unix())
 	if err != nil {
-		return false, errors.New("更新故障转移规则状态失败")
+		return false, fmt.Errorf("更新故障转移规则状态失败: %w", err)
 	}
 	affected, err := result.RowsAffected()
-	if err != nil || affected == 0 {
+	if err != nil {
+		return false, fmt.Errorf("读取故障转移规则状态更新结果失败: %w", err)
+	}
+	if affected == 0 {
 		return false, errors.New("故障转移规则不存在")
 	}
 	return true, nil
@@ -945,6 +1012,9 @@ func (s *DBService) ListDNSFailoverEvents(ctx context.Context, request DNSFailov
 	}
 
 	current, pageSize := normalizeDNSFailoverEventPage(request.Current, request.PageSize)
+	if err := validateDNSFailoverIdentifierText("事件类型", request.EventType); err != nil {
+		return DNSFailoverEventListResult{}, err
+	}
 	eventType := strings.TrimSpace(request.EventType)
 	conditions := make([]string, 0, 2)
 	filterArgs := make([]any, 0, 2)
@@ -1033,12 +1103,45 @@ func normalizeDNSFailoverEventPage(current, pageSize int64) (int64, int64) {
 	return current, pageSize
 }
 
+func validateDNSFailoverText(field, value string) error {
+	if !utf8.ValidString(value) || strings.IndexByte(value, 0) >= 0 {
+		return fmt.Errorf("%s包含无效字符", field)
+	}
+	return nil
+}
+
+func validateDNSFailoverIdentifierText(field, value string) error {
+	if err := validateDNSFailoverText(field, value); err != nil {
+		return err
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return fmt.Errorf("%s包含无效字符", field)
+		}
+	}
+	return nil
+}
+
 func normalizeDNSFailoverRuleSaveRequest(request *DNSFailoverRuleSaveRequest) error {
 	if request == nil {
 		return errors.New("故障转移规则参数不能为空")
 	}
 	if request.ID != nil && *request.ID <= 0 {
 		return errors.New("故障转移规则 ID 无效")
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "规则名称", value: request.Name},
+		{name: "DNSPod 域名", value: request.Domain},
+		{name: "DNSPod 主机记录", value: request.Subdomain},
+		{name: "DNSPod 线路 ID", value: request.RecordLineID},
+		{name: "DNSPod 线路名称", value: request.RecordLineName},
+	} {
+		if err := validateDNSFailoverIdentifierText(field.name, field.value); err != nil {
+			return err
+		}
 	}
 	request.Name = strings.TrimSpace(request.Name)
 	if request.Name == "" {
@@ -1117,6 +1220,19 @@ func normalizeDNSFailoverRuleSaveRequest(request *DNSFailoverRuleSaveRequest) er
 	enabledTargets := 0
 	for index := range request.Targets {
 		target := &request.Targets[index]
+		for _, field := range []struct {
+			name  string
+			value string
+		}{
+			{name: "目标名称", value: target.Name},
+			{name: "目标 DNS 类型", value: target.DNSType},
+			{name: "目标 DNS 值", value: target.DNSValue},
+			{name: "目标检测主机", value: target.CheckHost},
+		} {
+			if err := validateDNSFailoverIdentifierText(field.name, field.value); err != nil {
+				return err
+			}
+		}
 		if target.ID < 0 {
 			return errors.New("目标 ID 无效")
 		}

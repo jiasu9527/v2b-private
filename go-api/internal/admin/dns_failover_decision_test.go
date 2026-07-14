@@ -127,7 +127,10 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		"idx_v2_dns_failover_group_probe_probe",
 		"idx_v2_dns_probe_target_state_target",
 		"idx_v2_dns_probe_result_inbox_target",
-		"idx_v2_dns_failover_event_group_created",
+		"idx_v2_dns_failover_event_created_id",
+		"idx_v2_dns_failover_event_group_created_id",
+		"idx_v2_dns_failover_event_type_created_id",
+		"idx_v2_dns_failover_event_group_type_created_id",
 	} {
 		mock.ExpectExec(`CREATE INDEX IF NOT EXISTS ` + index).
 			WillReturnResult(sqlmock.NewResult(0, 0))

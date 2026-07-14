@@ -149,7 +149,10 @@ $dns_failover$;`, constraint.table, constraint.name, constraint.definition)
 		`CREATE INDEX IF NOT EXISTS idx_v2_dns_failover_group_probe_probe ON v2_dns_failover_group_probe(probe_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_dns_probe_target_state_target ON v2_dns_probe_target_state(target_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_dns_probe_result_inbox_target ON v2_dns_probe_result_inbox(target_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_dns_failover_event_group_created ON v2_dns_failover_event(group_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_dns_failover_event_created_id ON v2_dns_failover_event(created_at DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_dns_failover_event_group_created_id ON v2_dns_failover_event(group_id, created_at DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_dns_failover_event_type_created_id ON v2_dns_failover_event(event_type, created_at DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_dns_failover_event_group_type_created_id ON v2_dns_failover_event(group_id, event_type, created_at DESC, id DESC)`,
 	} {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("ensure DNS failover index: %w", err)
