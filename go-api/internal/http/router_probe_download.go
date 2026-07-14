@@ -25,11 +25,7 @@ func handleProbeInstall(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid probe installation parameters", http.StatusBadRequest)
 		return
 	}
-	scheme := "https"
-	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") == "http" {
-		scheme = "http"
-	}
-	downloadBase := scheme + "://" + r.Host + "/api/v1/probe/download/linux"
+	downloadBase := strings.TrimRight(apiURL, "/") + "/api/v1/probe/download/linux"
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	fmt.Fprintf(w, probeInstallScript, shellQuote(apiURL), shellQuote(token), interval, shellQuote(downloadBase))

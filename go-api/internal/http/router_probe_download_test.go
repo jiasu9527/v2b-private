@@ -13,7 +13,7 @@ import (
 
 func TestRouterProbeInstallRendersValidatedScript(t *testing.T) {
 	router := NewRouter(config.Config{ProbeStorageDir: t.TempDir()})
-	req := httptest.NewRequest(http.MethodGet, "https://panel.example.com/api/v1/probe/install.sh?api_url=https%3A%2F%2Fpanel.example.com&token=probe_token-1&interval=45", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://internal-upstream.example/api/v1/probe/install.sh?api_url=https%3A%2F%2Fprobe-public.example.com&token=probe_token-1&interval=45", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -27,10 +27,13 @@ func TestRouterProbeInstallRendersValidatedScript(t *testing.T) {
 		t.Fatalf("unexpected cache control %q", got)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"https://panel.example.com", "probe_token-1", "INTERVAL=45", "https://panel.example.com/api/v1/probe/download/linux"} {
+	for _, want := range []string{"https://probe-public.example.com", "probe_token-1", "INTERVAL=45", "https://probe-public.example.com/api/v1/probe/download/linux"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("script missing %q: %s", want, body)
 		}
+	}
+	if strings.Contains(body, "internal-upstream.example") {
+		t.Fatalf("script leaked reverse-proxy upstream host into DOWNLOAD_BASE: %s", body)
 	}
 
 	bad := httptest.NewRequest(http.MethodGet, "/api/v1/probe/install.sh?api_url=file%3A%2F%2F%2Ftmp%2Fx&token=$(id)", nil)
