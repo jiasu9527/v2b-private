@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -42,6 +43,7 @@ type routerState struct {
 	payment           payment.Service
 	admin             admin.Service
 	dnsProbe          admin.DNSProbeService
+	dnsProbeIP        probeRequestIPResolver
 	node              nodeapi.Service
 	jobs              queue.Enqueuer
 	telegram          telegramWebhookService
@@ -137,6 +139,7 @@ func WithClientEntryRemoteResolver(resolver clientEntryRemoteResolver) Option {
 func NewRouter(cfg config.Config, options ...Option) http.Handler {
 	state := &routerState{
 		clientEntryRemote: newHTTPClientEntryRemoteResolver(),
+		dnsProbeIP:        newProbeRequestIPResolver(cfg.ProbeTrustedProxyCIDRs),
 	}
 	for _, option := range options {
 		option(state)
@@ -209,7 +212,7 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 				return
 			}
 		case r.URL.Path == "/api/v1/probe/heartbeat":
-			handleDNSProbeHeartbeat(w, r, state.dnsProbe)
+			handleDNSProbeHeartbeat(w, r, state.dnsProbe, state.dnsProbeIP)
 			return
 		case r.URL.Path == "/api/v1/probe/tasks":
 			handleDNSProbeTasks(w, r, state.dnsProbe)
@@ -6636,7 +6639,21 @@ func handleAdminError(w http.ResponseWriter, err error) bool {
 }
 
 func requestIP(r *http.Request) string {
-	return normalizedRequestIP(r)
+	for _, header := range []string{"X-Forwarded-For", "X-Real-IP"} {
+		value := strings.TrimSpace(r.Header.Get(header))
+		if value == "" {
+			continue
+		}
+		first := strings.TrimSpace(strings.Split(value, ",")[0])
+		if first != "" {
+			return first
+		}
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err == nil && host != "" {
+		return host
+	}
+	return strings.TrimSpace(r.RemoteAddr)
 }
 
 func jsonNumberToInt64Pointer(value *json.Number) (*int64, error) {

@@ -62,6 +62,9 @@ func main() {
 		userService = userDBService
 		paymentService = payment.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig)
 		adminDBService := admin.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
+		if err := initializeDNSFailoverBeforeServe(ctx, adminDBService); err != nil {
+			log.Fatalf("initialize DNS failover schema: %v", err)
+		}
 		telegramService = telegramService.WithUserResolver(userDBService.ResolveClientUserID).WithAdminService(adminDBService)
 		adminService = adminDBService
 		nodeService = nodeapi.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig)
@@ -107,6 +110,17 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("listen and serve: %v", err)
 	}
+}
+
+type dnsFailoverSchemaInitializer interface {
+	InitializeDNSFailoverSchema(context.Context) error
+}
+
+func initializeDNSFailoverBeforeServe(ctx context.Context, initializer dnsFailoverSchemaInitializer) error {
+	if initializer == nil {
+		return nil
+	}
+	return initializer.InitializeDNSFailoverSchema(ctx)
 }
 
 func dbReadyCheck(db *sql.DB) func(context.Context) error {

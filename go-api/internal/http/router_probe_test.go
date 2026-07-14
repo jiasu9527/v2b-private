@@ -96,6 +96,9 @@ func TestProbeBearerAuthenticationIsStrictAndUniform(t *testing.T) {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 			}
 			if test.wantStatus == http.StatusUnauthorized {
+				if response.Header().Get("WWW-Authenticate") != "Bearer" {
+					t.Fatalf("WWW-Authenticate = %q", response.Header().Get("WWW-Authenticate"))
+				}
 				if unauthorizedBody == "" {
 					unauthorizedBody = response.Body.String()
 				}
@@ -109,7 +112,7 @@ func TestProbeBearerAuthenticationIsStrictAndUniform(t *testing.T) {
 
 func TestProbeHeartbeatUsesCanonicalTrustedProxyIPAndRejectsTrailingJSON(t *testing.T) {
 	service := &fakeDNSProbeService{heartbeatResult: admin.DNSProbeHeartbeatResult{PrewarmCount: 1}}
-	router := NewRouter(config.Config{}, WithDNSProbeService(service))
+	router := NewRouter(config.Config{ProbeTrustedProxyCIDRs: []string{"192.0.2.0/24"}}, WithDNSProbeService(service))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/probe/heartbeat", strings.NewReader(`{"version":"v1.2.3","arch":"amd64"}`))
 	req.Header.Set("Authorization", "Bearer good-secret")
@@ -131,6 +134,7 @@ func TestProbeHeartbeatUsesCanonicalTrustedProxyIPAndRejectsTrailingJSON(t *test
 	} {
 		request := httptest.NewRequest(http.MethodPost, "/api/v1/probe/heartbeat", strings.NewReader(body))
 		request.Header.Set("Authorization", "Bearer good-secret")
+		request.Header.Set("Content-Type", "application/json")
 		request.RemoteAddr = "203.0.113.7:1234"
 		badResponse := httptest.NewRecorder()
 		router.ServeHTTP(badResponse, request)
@@ -161,6 +165,7 @@ func TestProbeTasksAndResultsPublicRoutesUseJSONEnvelope(t *testing.T) {
 	resultsBody := `{"results":[{"result_id":"r1","target_id":11,"success":true,"latency_ms":17,"error":"","resolved_ip":"203.0.113.11"}]}`
 	resultsRequest := httptest.NewRequest(http.MethodPost, "/api/v1/probe/results", strings.NewReader(resultsBody))
 	resultsRequest.Header.Set("Authorization", "Bearer good-secret")
+	resultsRequest.Header.Set("Content-Type", "application/json; charset=utf-8")
 	resultsResponse := httptest.NewRecorder()
 	router.ServeHTTP(resultsResponse, resultsRequest)
 	if resultsResponse.Code != http.StatusOK || !strings.Contains(resultsResponse.Body.String(), `"accepted":1`) {
@@ -185,24 +190,41 @@ func TestProbeResultsRejectMalformedTrailingOversizedAndBatchLimit(t *testing.T)
 		batchItems[index] = `{"result_id":"r` + strconv.Itoa(index+1) + `","target_id":11,"success":false,"latency_ms":null}`
 	}
 	tests := []struct {
-		name string
-		body string
+		name       string
+		body       string
+		wantStatus int
 	}{
-		{name: "malformed", body: `{"results":[`},
-		{name: "trailing", body: `{"results":[]} {}`},
-		{name: "oversized", body: `{"results":[],"padding":"` + strings.Repeat("x", (1<<20)+1) + `"}`},
-		{name: "batch limit", body: `{"results":[` + strings.Join(batchItems, ",") + `]}`},
+		{name: "malformed", body: `{"results":[`, wantStatus: http.StatusBadRequest},
+		{name: "trailing", body: `{"results":[]} {}`, wantStatus: http.StatusBadRequest},
+		{name: "oversized", body: `{"results":[],"padding":"` + strings.Repeat("x", (1<<20)+1) + `"}`, wantStatus: http.StatusRequestEntityTooLarge},
+		{name: "batch limit", body: `{"results":[` + strings.Join(batchItems, ",") + `]}`, wantStatus: http.StatusBadRequest},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/probe/results", strings.NewReader(test.body))
 			request.Header.Set("Authorization", "Bearer good-secret")
+			request.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, request)
-			if response.Code != http.StatusBadRequest {
+			if response.Code != test.wantStatus {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestProbePOSTRoutesRequireJSONContentType(t *testing.T) {
+	service := &fakeDNSProbeService{}
+	router := NewRouter(config.Config{}, WithDNSProbeService(service))
+	for _, path := range []string{"/api/v1/probe/heartbeat", "/api/v1/probe/results"} {
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+		request.Header.Set("Authorization", "Bearer good-secret")
+		request.Header.Set("Content-Type", "text/plain")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusUnsupportedMediaType {
+			t.Fatalf("%s status = %d, body = %s", path, response.Code, response.Body.String())
+		}
 	}
 }
 
@@ -232,6 +254,7 @@ func TestProbeResultsHeartbeatRequiredIsConflictNotServerError(t *testing.T) {
 	router := NewRouter(config.Config{}, WithDNSProbeService(service))
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/probe/results", strings.NewReader(`{"results":[]}`))
 	request.Header.Set("Authorization", "Bearer good-secret")
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 
 	router.ServeHTTP(response, request)
@@ -247,21 +270,23 @@ func TestProbeResultsHeartbeatRequiredIsConflictNotServerError(t *testing.T) {
 	}
 }
 
-func TestProbeRequestIPPriorityAndValidation(t *testing.T) {
+func TestProbeRequestIPRequiresTrustedSocketPeer(t *testing.T) {
 	tests := []struct {
 		name       string
+		trusted    []string
 		cf         string
 		forwarded  string
 		realIP     string
 		remoteAddr string
 		want       string
 	}{
-		{name: "cloudflare first", cf: "2001:0db8::8", forwarded: "203.0.113.9, 10.0.0.2", remoteAddr: "10.0.0.1:80", want: "2001:db8::8"},
-		{name: "forwarded first item", forwarded: "203.0.113.9, not-an-ip", remoteAddr: "10.0.0.1:80", want: "203.0.113.9"},
-		{name: "invalid forwarded first item rejects whole header", forwarded: "invalid, 203.0.113.9", realIP: "198.51.100.5", remoteAddr: "10.0.0.1:80", want: "198.51.100.5"},
-		{name: "invalid headers do not hide remote", cf: "invalid", forwarded: "also-invalid", remoteAddr: "198.51.100.7:443", want: "198.51.100.7"},
-		{name: "ipv6 remote", remoteAddr: "[2001:0db8::9]:443", want: "2001:db8::9"},
-		{name: "invalid all", cf: "invalid", forwarded: "invalid", remoteAddr: "not-an-ip", want: ""},
+		{name: "trusted cloudflare first", trusted: []string{"10.0.0.0/8"}, cf: "2001:0db8::8", forwarded: "203.0.113.9, 10.0.0.2", remoteAddr: "10.0.0.1:80", want: "2001:db8::8"},
+		{name: "trusted forwarded first item", trusted: []string{"10.0.0.0/8"}, forwarded: "203.0.113.9, not-an-ip", remoteAddr: "10.0.0.1:80", want: "203.0.113.9"},
+		{name: "invalid forwarded first item rejects whole header", trusted: []string{"10.0.0.0/8"}, forwarded: "invalid, 203.0.113.9", realIP: "198.51.100.5", remoteAddr: "10.0.0.1:80", want: "198.51.100.5"},
+		{name: "untrusted public peer ignores spoofed cloudflare", trusted: []string{"10.0.0.0/8"}, cf: "203.0.113.8", forwarded: "203.0.113.9", remoteAddr: "198.51.100.7:443", want: "198.51.100.7"},
+		{name: "trusted ipv6 proxy", trusted: []string{"2001:db8:1::/48"}, cf: "2001:db8:2::8", remoteAddr: "[2001:db8:1::7]:443", want: "2001:db8:2::8"},
+		{name: "invalid CIDR ignored", trusted: []string{"not-a-cidr"}, cf: "203.0.113.8", remoteAddr: "10.0.0.1:80", want: "10.0.0.1"},
+		{name: "invalid peer", trusted: []string{"127.0.0.0/8"}, cf: "203.0.113.8", remoteAddr: "not-an-ip", want: ""},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -270,9 +295,20 @@ func TestProbeRequestIPPriorityAndValidation(t *testing.T) {
 			request.Header.Set("X-Forwarded-For", test.forwarded)
 			request.Header.Set("X-Real-IP", test.realIP)
 			request.RemoteAddr = test.remoteAddr
-			if got := requestIP(request); got != test.want {
-				t.Fatalf("requestIP = %q, want %q", got, test.want)
+			resolver := newProbeRequestIPResolver(test.trusted)
+			if got := resolver.Resolve(request); got != test.want {
+				t.Fatalf("probe request IP = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestGlobalRequestIPKeepsLegacyBehaviorSeparateFromProbeTrust(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.RemoteAddr = "198.51.100.7:443"
+	request.Header.Set("CF-Connecting-IP", "203.0.113.8")
+	request.Header.Set("X-Forwarded-For", "203.0.113.9, 10.0.0.2")
+	if got := requestIP(request); got != "203.0.113.9" {
+		t.Fatalf("global requestIP = %q, want legacy XFF behavior", got)
 	}
 }

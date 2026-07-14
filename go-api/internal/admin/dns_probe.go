@@ -6,8 +6,10 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/netip"
 	"sort"
 	"strings"
@@ -80,6 +82,20 @@ type dnsProbeStateValues struct {
 	FailureStreak int64
 }
 
+type dnsProbeStateBatchRow struct {
+	TargetID       int64  `json:"target_id"`
+	LastSuccess    int64  `json:"last_success"`
+	LatencyMS      *int64 `json:"latency_ms"`
+	LastError      string `json:"last_error"`
+	ResolvedIP     string `json:"resolved_ip"`
+	InitialSuccess int64  `json:"initial_success"`
+	InitialFailure int64  `json:"initial_failure"`
+}
+
+type dnsFailoverOutboxBatchRow struct {
+	GroupID int64 `json:"group_id"`
+}
+
 type DNSProbeService interface {
 	AuthenticateDNSProbe(ctx context.Context, rawSecret string) (DNSProbeIdentity, error)
 	HeartbeatDNSProbe(ctx context.Context, probeID int64, request DNSProbeHeartbeatRequest) (DNSProbeHeartbeatResult, error)
@@ -88,9 +104,9 @@ type DNSProbeService interface {
 }
 
 type DNSFailoverEvaluationRequester interface {
-	// RequestDNSFailoverEvaluation must hand the IDs to a durable/retryable
-	// mechanism. Result ingestion calls it only after commit and deliberately
-	// does not turn requester failures into probe retries.
+	// RequestDNSFailoverEvaluation is a best-effort post-commit wake hint. The
+	// transactionally persisted evaluation outbox is the durable source of work,
+	// so requester failures must not turn into probe retries.
 	RequestDNSFailoverEvaluation(ctx context.Context, groupIDs []int64) error
 }
 
@@ -109,40 +125,34 @@ func (s *DBService) AuthenticateDNSProbe(ctx context.Context, rawSecret string) 
 		return DNSProbeIdentity{}, err
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT id, token_hash FROM v2_dns_probe WHERE enabled = 1 ORDER BY id ASC`)
-	if err != nil {
-		return DNSProbeIdentity{}, fmt.Errorf("authenticate DNS probe: %w", err)
-	}
-	defer rows.Close()
-
 	want := sha256.Sum256([]byte(rawSecret))
-	var matchedID int64
-	for rows.Next() {
-		var (
-			probeID  int64
-			tokenHex string
-		)
-		if err := rows.Scan(&probeID, &tokenHex); err != nil {
-			return DNSProbeIdentity{}, fmt.Errorf("authenticate DNS probe: %w", err)
-		}
-		stored, err := hex.DecodeString(tokenHex)
-		if err != nil || len(stored) != sha256.Size {
-			continue
-		}
-		if subtle.ConstantTimeCompare(want[:], stored) == 1 {
-			matchedID = probeID
-		}
-	}
-	if err := rows.Err(); err != nil {
+	wantHex := hex.EncodeToString(want[:])
+	var (
+		probeID  int64
+		tokenHex string
+	)
+	err := s.db.QueryRowContext(ctx, `SELECT id, token_hash FROM v2_dns_probe WHERE token_hash = $1 AND enabled = 1 LIMIT 1`, wantHex).Scan(&probeID, &tokenHex)
+	rowExists := err == nil
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return DNSProbeIdentity{}, fmt.Errorf("authenticate DNS probe: %w", err)
 	}
-	if matchedID <= 0 {
+
+	dummy := [sha256.Size]byte{}
+	candidate := dummy[:]
+	decoded, decodeErr := hex.DecodeString(tokenHex)
+	validHash := decodeErr == nil && len(decoded) == sha256.Size
+	if rowExists && validHash {
+		candidate = decoded
+	}
+	matched := subtle.ConstantTimeCompare(want[:], candidate)
+	if !rowExists || !validHash || matched != 1 || probeID <= 0 {
 		return DNSProbeIdentity{}, ErrDNSProbeUnauthorized
 	}
-	return DNSProbeIdentity{ID: matchedID}, nil
+	return DNSProbeIdentity{ID: probeID}, nil
 }
 
 func (s *DBService) HeartbeatDNSProbe(ctx context.Context, probeID int64, request DNSProbeHeartbeatRequest) (DNSProbeHeartbeatResult, error) {
+	requestNow := time.Now().Unix()
 	if err := normalizeDNSProbeHeartbeatRequest(&request); err != nil {
 		return DNSProbeHeartbeatResult{}, err
 	}
@@ -188,9 +198,9 @@ WHERE gp.probe_id = $1 AND g.enabled = 1`, probeID).Scan(&configuredOffline)
 	}
 	offlineSec := dnsProbeOfflineThreshold(configuredOffline)
 
-	now := time.Now().Unix()
-	reconnected := lastHeartbeat.Valid && now-lastHeartbeat.Int64 > offlineSec
-	needsReset := !lastHeartbeat.Valid || reconnected
+	now := requestNow
+	needsReset := !dnsProbeHeartbeatFresh(lastHeartbeat, now, offlineSec)
+	reconnected := lastHeartbeat.Valid && lastHeartbeat.Int64 >= 0 && lastHeartbeat.Int64 <= now && needsReset
 	if needsReset {
 		if _, err := tx.ExecContext(ctx, `UPDATE v2_dns_probe SET version = $2, arch = $3, public_ip = $4, last_heartbeat_at = $5, prewarm_count = 0, updated_at = $5 WHERE id = $1`, probeID, request.Version, request.Arch, request.PublicIP, now); err != nil {
 			return DNSProbeHeartbeatResult{}, fmt.Errorf("update reset DNS probe heartbeat: %w", err)
@@ -276,6 +286,7 @@ ORDER BY g.id ASC, t.sort ASC, t.id ASC`, probeID)
 }
 
 func (s *DBService) ReportDNSProbeResults(ctx context.Context, probeID int64, request DNSProbeResultsRequest) (DNSProbeReportResult, error) {
+	requestNow := time.Now().Unix()
 	if probeID <= 0 {
 		return DNSProbeReportResult{}, ErrDNSProbeUnauthorized
 	}
@@ -319,8 +330,8 @@ WHERE gp.probe_id = $1 AND g.enabled = 1`, probeID).Scan(&configuredOffline)
 		return DNSProbeReportResult{}, fmt.Errorf("load DNS probe offline threshold: %w", err)
 	}
 	offlineSec := dnsProbeOfflineThreshold(configuredOffline)
-	now := time.Now().Unix()
-	if !lastHeartbeat.Valid || now-lastHeartbeat.Int64 > offlineSec {
+	now := requestNow
+	if !dnsProbeHeartbeatFresh(lastHeartbeat, now, offlineSec) {
 		return DNSProbeReportResult{}, ErrDNSProbeHeartbeatRequired
 	}
 	if prewarmCount < 0 {
@@ -330,17 +341,75 @@ WHERE gp.probe_id = $1 AND g.enabled = 1`, probeID).Scan(&configuredOffline)
 		prewarmCount = 3
 	}
 
-	rows, err := tx.QueryContext(ctx, `SELECT t.id, t.group_id
-FROM v2_dns_failover_group_probe gp
-JOIN v2_dns_failover_group g ON g.id = gp.group_id
-JOIN v2_dns_failover_target t ON t.group_id = g.id
+	requestJSON, err := marshalDNSProbeBatch(request.Results)
+	if err != nil {
+		return DNSProbeReportResult{}, fmt.Errorf("encode DNS probe result IDs: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT i.result_id
+FROM v2_dns_probe_result_inbox i
+JOIN jsonb_to_recordset($2::jsonb) AS requested(result_id text)
+ON requested.result_id = i.result_id
+WHERE i.probe_id = $1
+GROUP BY i.result_id`, probeID, requestJSON)
+	if err != nil {
+		return DNSProbeReportResult{}, fmt.Errorf("load existing DNS probe result IDs: %w", err)
+	}
+	existingResultIDs := make(map[string]struct{})
+	for rows.Next() {
+		var resultID string
+		if err := rows.Scan(&resultID); err != nil {
+			_ = rows.Close()
+			return DNSProbeReportResult{}, fmt.Errorf("load existing DNS probe result IDs: %w", err)
+		}
+		existingResultIDs[resultID] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return DNSProbeReportResult{}, fmt.Errorf("load existing DNS probe result IDs: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return DNSProbeReportResult{}, fmt.Errorf("close existing DNS probe result IDs: %w", err)
+	}
+
+	resultSummary := DNSProbeReportResult{PrewarmCount: prewarmCount, GroupIDs: make([]int64, 0)}
+	newResults := make([]DNSProbeResult, 0, len(request.Results))
+	seenNewResultIDs := make(map[string]struct{}, len(request.Results))
+	for _, result := range request.Results {
+		if _, duplicate := existingResultIDs[result.ResultID]; duplicate {
+			resultSummary.Duplicates++
+			continue
+		}
+		if _, duplicate := seenNewResultIDs[result.ResultID]; duplicate {
+			resultSummary.Duplicates++
+			continue
+		}
+		seenNewResultIDs[result.ResultID] = struct{}{}
+		newResults = append(newResults, result)
+	}
+	if len(newResults) == 0 {
+		if err := tx.Commit(); err != nil {
+			return DNSProbeReportResult{}, fmt.Errorf("commit duplicate DNS probe result report: %w", err)
+		}
+		committed = true
+		return resultSummary, nil
+	}
+
+	newJSON, err := marshalDNSProbeBatch(newResults)
+	if err != nil {
+		return DNSProbeReportResult{}, fmt.Errorf("encode new DNS probe results: %w", err)
+	}
+	rows, err = tx.QueryContext(ctx, `SELECT requested.target_id, t.group_id
+FROM jsonb_to_recordset($2::jsonb) AS requested(target_id bigint)
+JOIN v2_dns_failover_target t ON t.id = requested.target_id
+JOIN v2_dns_failover_group g ON g.id = t.group_id
+JOIN v2_dns_failover_group_probe gp ON gp.group_id = g.id
 WHERE gp.probe_id = $1 AND g.enabled = 1 AND t.enabled = 1
-ORDER BY t.id ASC
-FOR SHARE OF gp, g, t`, probeID)
+ORDER BY requested.target_id ASC
+FOR SHARE OF gp, g, t`, probeID, newJSON)
 	if err != nil {
 		return DNSProbeReportResult{}, fmt.Errorf("load allowed DNS probe targets: %w", err)
 	}
-	allowedTargets := make(map[int64]int64)
+	allowedTargets := make(map[int64]int64, len(newResults))
 	for rows.Next() {
 		var targetID, groupID int64
 		if err := rows.Scan(&targetID, &groupID); err != nil {
@@ -356,33 +425,69 @@ FOR SHARE OF gp, g, t`, probeID)
 	if err := rows.Close(); err != nil {
 		return DNSProbeReportResult{}, fmt.Errorf("close allowed DNS probe targets: %w", err)
 	}
-	for index, result := range request.Results {
+	for index, result := range newResults {
 		if _, ok := allowedTargets[result.TargetID]; !ok {
 			return DNSProbeReportResult{}, fmt.Errorf("%w: result %d: target_id is invalid", ErrDNSProbeInvalidRequest, index)
 		}
 	}
 
-	resultSummary := DNSProbeReportResult{PrewarmCount: prewarmCount, GroupIDs: make([]int64, 0)}
-	seenResultIDs := make(map[string]struct{}, len(request.Results))
+	rows, err = tx.QueryContext(ctx, `INSERT INTO v2_dns_probe_result_inbox (probe_id, target_id, result_id, created_at)
+SELECT $1, requested.target_id, requested.result_id, $3
+FROM jsonb_to_recordset($2::jsonb) AS requested(result_id text, target_id bigint)
+ON CONFLICT (probe_id, result_id) DO NOTHING
+RETURNING result_id, target_id`, probeID, newJSON, now)
+	if err != nil {
+		return DNSProbeReportResult{}, fmt.Errorf("batch insert DNS probe result inbox: %w", err)
+	}
+	acceptedIDs := make(map[string]int64, len(newResults))
+	for rows.Next() {
+		var resultID string
+		var targetID int64
+		if err := rows.Scan(&resultID, &targetID); err != nil {
+			_ = rows.Close()
+			return DNSProbeReportResult{}, fmt.Errorf("read accepted DNS probe result inbox: %w", err)
+		}
+		acceptedIDs[resultID] = targetID
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return DNSProbeReportResult{}, fmt.Errorf("read accepted DNS probe result inbox: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return DNSProbeReportResult{}, fmt.Errorf("close accepted DNS probe result inbox: %w", err)
+	}
+
+	acceptedResults := make([]DNSProbeResult, 0, len(acceptedIDs))
+	stateRows := make([]dnsProbeStateBatchRow, 0, len(acceptedIDs))
 	affectedGroups := make(map[int64]struct{})
-	for _, result := range request.Results {
-		if _, seen := seenResultIDs[result.ResultID]; seen {
+	for _, result := range newResults {
+		if _, accepted := acceptedIDs[result.ResultID]; !accepted {
 			resultSummary.Duplicates++
 			continue
 		}
-		seenResultIDs[result.ResultID] = struct{}{}
-
-		var inboxID int64
-		err := tx.QueryRowContext(ctx, `INSERT INTO v2_dns_probe_result_inbox (probe_id, target_id, result_id, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT (probe_id, result_id) DO NOTHING RETURNING id`, probeID, result.TargetID, result.ResultID, now).Scan(&inboxID)
-		if errors.Is(err, sql.ErrNoRows) {
-			resultSummary.Duplicates++
-			continue
-		}
-		if err != nil {
-			return DNSProbeReportResult{}, fmt.Errorf("insert DNS probe result inbox: %w", err)
-		}
-
 		stateValues := dnsProbeStateWriteValues(result)
+		latency := result.LatencyMS
+		if stateValues.Success == 0 {
+			latency = nil
+		}
+		stateRows = append(stateRows, dnsProbeStateBatchRow{
+			TargetID:       result.TargetID,
+			LastSuccess:    stateValues.Success,
+			LatencyMS:      latency,
+			LastError:      stateValues.Error,
+			ResolvedIP:     result.ResolvedIP,
+			InitialSuccess: stateValues.SuccessStreak,
+			InitialFailure: stateValues.FailureStreak,
+		})
+		acceptedResults = append(acceptedResults, result)
+		affectedGroups[allowedTargets[result.TargetID]] = struct{}{}
+	}
+
+	if len(acceptedResults) > 0 {
+		stateJSON, err := marshalDNSProbeBatch(stateRows)
+		if err != nil {
+			return DNSProbeReportResult{}, fmt.Errorf("encode DNS probe state batch: %w", err)
+		}
 		warmedUp := int64(0)
 		if prewarmCount >= 3 {
 			warmedUp = 1
@@ -390,23 +495,31 @@ FOR SHARE OF gp, g, t`, probeID)
 		_, err = tx.ExecContext(ctx, `INSERT INTO v2_dns_probe_target_state (
 probe_id, target_id, last_success, last_latency_ms, last_error, last_resolved_ip,
 consecutive_success, consecutive_failure, last_reported_at, warmed_up, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $9, $9)
+) SELECT $1, requested.target_id, requested.last_success, requested.latency_ms, requested.last_error, requested.resolved_ip,
+requested.initial_success, requested.initial_failure, $3, $4, $3, $3
+FROM jsonb_to_recordset($2::jsonb) AS requested(
+target_id bigint, last_success smallint, latency_ms integer, last_error text, resolved_ip text,
+initial_success integer, initial_failure integer
+)
 ON CONFLICT (probe_id, target_id) DO UPDATE SET
 last_success = EXCLUDED.last_success,
 last_latency_ms = EXCLUDED.last_latency_ms,
 last_error = EXCLUDED.last_error,
 last_resolved_ip = EXCLUDED.last_resolved_ip,
-consecutive_success = CASE WHEN EXCLUDED.last_success = 1 THEN v2_dns_probe_target_state.consecutive_success + 1 ELSE 0 END,
-consecutive_failure = CASE WHEN EXCLUDED.last_success = 0 THEN v2_dns_probe_target_state.consecutive_failure + 1 ELSE 0 END,
+consecutive_success = CASE WHEN EXCLUDED.last_success = 1 THEN
+CASE WHEN v2_dns_probe_target_state.consecutive_success >= 2147483647 THEN 2147483647 ELSE v2_dns_probe_target_state.consecutive_success + 1 END
+ELSE 0 END,
+consecutive_failure = CASE WHEN EXCLUDED.last_success = 0 THEN
+CASE WHEN v2_dns_probe_target_state.consecutive_failure >= 2147483647 THEN 2147483647 ELSE v2_dns_probe_target_state.consecutive_failure + 1 END
+ELSE 0 END,
 last_reported_at = EXCLUDED.last_reported_at,
 warmed_up = CASE WHEN EXCLUDED.warmed_up = 1 THEN 1 ELSE v2_dns_probe_target_state.warmed_up END,
-updated_at = EXCLUDED.updated_at`, probeID, result.TargetID, stateValues.Success, stateValues.Latency, stateValues.Error, result.ResolvedIP, stateValues.SuccessStreak, stateValues.FailureStreak, now, warmedUp)
+updated_at = EXCLUDED.updated_at`, probeID, stateJSON, now, warmedUp)
 		if err != nil {
-			return DNSProbeReportResult{}, fmt.Errorf("upsert DNS probe target state: %w", err)
+			return DNSProbeReportResult{}, fmt.Errorf("batch upsert DNS probe target state: %w", err)
 		}
-		resultSummary.Accepted++
-		affectedGroups[allowedTargets[result.TargetID]] = struct{}{}
 	}
+	resultSummary.Accepted = len(acceptedResults)
 
 	if resultSummary.Accepted > 0 && prewarmCount < 3 {
 		prewarmCount++
@@ -424,15 +537,71 @@ updated_at = EXCLUDED.updated_at`, probeID, result.TargetID, stateValues.Success
 		resultSummary.GroupIDs = append(resultSummary.GroupIDs, groupID)
 	}
 	sort.Slice(resultSummary.GroupIDs, func(i, j int) bool { return resultSummary.GroupIDs[i] < resultSummary.GroupIDs[j] })
+	if len(resultSummary.GroupIDs) > 0 {
+		outboxRows := make([]dnsFailoverOutboxBatchRow, 0, len(resultSummary.GroupIDs))
+		for _, groupID := range resultSummary.GroupIDs {
+			outboxRows = append(outboxRows, dnsFailoverOutboxBatchRow{GroupID: groupID})
+		}
+		outboxJSON, err := marshalDNSProbeBatch(outboxRows)
+		if err != nil {
+			return DNSProbeReportResult{}, fmt.Errorf("encode DNS failover evaluation outbox: %w", err)
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO v2_dns_failover_eval_outbox (
+group_id, requested_at, attempts, next_attempt_at, last_error, created_at, updated_at
+) SELECT requested.group_id, $2, 0, $2, '', $2, $2
+FROM jsonb_to_recordset($1::jsonb) AS requested(group_id bigint)
+ON CONFLICT (group_id) DO UPDATE SET
+requested_at = EXCLUDED.requested_at,
+attempts = 0,
+next_attempt_at = EXCLUDED.next_attempt_at,
+last_error = '',
+updated_at = EXCLUDED.updated_at`, outboxJSON, now)
+		if err != nil {
+			return DNSProbeReportResult{}, fmt.Errorf("persist DNS failover evaluation outbox: %w", err)
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		return DNSProbeReportResult{}, fmt.Errorf("commit DNS probe result report: %w", err)
 	}
 	committed = true
 	if s.dnsFailoverEvaluator != nil && len(resultSummary.GroupIDs) > 0 {
-		_ = s.dnsFailoverEvaluator.RequestDNSFailoverEvaluation(ctx, append([]int64(nil), resultSummary.GroupIDs...))
+		requestDNSFailoverEvaluationWake(ctx, s.dnsFailoverEvaluator, resultSummary.GroupIDs)
 	}
 	return resultSummary, nil
+}
+
+func marshalDNSProbeBatch(value any) (string, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func dnsProbeHeartbeatFresh(lastHeartbeat sql.NullInt64, now, offlineSec int64) bool {
+	if !lastHeartbeat.Valid || offlineSec <= 0 || lastHeartbeat.Int64 < 0 || lastHeartbeat.Int64 > now {
+		return false
+	}
+	const minInt64 = int64(-1 << 63)
+	cutoff := minInt64
+	if now >= minInt64+offlineSec {
+		cutoff = now - offlineSec
+	}
+	return lastHeartbeat.Int64 >= cutoff
+}
+
+func requestDNSFailoverEvaluationWake(ctx context.Context, requester DNSFailoverEvaluationRequester, groupIDs []int64) {
+	wakeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Printf("DNS failover evaluation wake panic: %v", recovered)
+		}
+	}()
+	if err := requester.RequestDNSFailoverEvaluation(wakeCtx, append([]int64(nil), groupIDs...)); err != nil {
+		log.Printf("DNS failover evaluation wake failed: %v", err)
+	}
 }
 
 func dnsProbeStateWriteValues(result DNSProbeResult) dnsProbeStateValues {
@@ -472,6 +641,7 @@ func normalizeDNSProbeResultsRequest(request *DNSProbeResultsRequest) error {
 	if len(request.Results) > maxDNSProbeResultBatch {
 		return fmt.Errorf("%w: results batch exceeds %d", ErrDNSProbeInvalidRequest, maxDNSProbeResultBatch)
 	}
+	seenTargetIDs := make(map[int64]struct{}, len(request.Results))
 	for index := range request.Results {
 		result := &request.Results[index]
 		if err := validateDNSFailoverIdentifierText("result_id", result.ResultID); err != nil {
@@ -483,6 +653,10 @@ func normalizeDNSProbeResultsRequest(request *DNSProbeResultsRequest) error {
 		if result.TargetID <= 0 {
 			return fmt.Errorf("%w: result %d: target_id is invalid", ErrDNSProbeInvalidRequest, index)
 		}
+		if _, exists := seenTargetIDs[result.TargetID]; exists {
+			return fmt.Errorf("%w: result %d: duplicate target_id", ErrDNSProbeInvalidRequest, index)
+		}
+		seenTargetIDs[result.TargetID] = struct{}{}
 		if result.Success == nil {
 			return fmt.Errorf("%w: result %d: success is required", ErrDNSProbeInvalidRequest, index)
 		}

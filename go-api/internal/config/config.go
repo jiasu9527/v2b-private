@@ -84,6 +84,7 @@ type Config struct {
 	AndroidVersion                     string
 	AndroidDownloadURL                 string
 	PostgresDSN                        string
+	ProbeTrustedProxyCIDRs             []string
 	QueueWorkers                       int
 	AppKey                             string
 	AccessLogEnabled                   bool
@@ -232,6 +233,7 @@ func Load() Config {
 		AndroidVersion:                     managedString("ANDROID_VERSION", "android_version", ""),
 		AndroidDownloadURL:                 managedString("ANDROID_DOWNLOAD_URL", "android_download_url", ""),
 		PostgresDSN:                        os.Getenv("POSTGRES_DSN"),
+		ProbeTrustedProxyCIDRs:             getEnvList("PROBE_TRUSTED_PROXY_CIDRS", []string{"127.0.0.0/8", "::1/128"}),
 		QueueWorkers:                       int(getEnvInt64("QUEUE_WORKERS", 4)),
 		AppKey:                             os.Getenv("APP_KEY"),
 		AccessLogEnabled:                   getEnvBool("ACCESS_LOG_ENABLE", false),

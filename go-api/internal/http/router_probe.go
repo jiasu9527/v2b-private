@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/netip"
@@ -25,7 +26,11 @@ func WithDNSProbeService(service admin.DNSProbeService) Option {
 	}
 }
 
-func handleDNSProbeHeartbeat(w http.ResponseWriter, r *http.Request, service admin.DNSProbeService) {
+type probeRequestIPResolver struct {
+	trusted []netip.Prefix
+}
+
+func handleDNSProbeHeartbeat(w http.ResponseWriter, r *http.Request, service admin.DNSProbeService, resolver probeRequestIPResolver) {
 	if !requireDNSProbeMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -33,12 +38,15 @@ func handleDNSProbeHeartbeat(w http.ResponseWriter, r *http.Request, service adm
 	if !ok {
 		return
 	}
-	var request admin.DNSProbeHeartbeatRequest
-	if err := decodeDNSProbeJSON(w, r, maxDNSProbeHeartbeatBody, &request); err != nil {
-		writeDNSProbeBadRequest(w)
+	if !requireDNSProbeJSONContentType(w, r) {
 		return
 	}
-	request.PublicIP = normalizedRequestIP(r)
+	var request admin.DNSProbeHeartbeatRequest
+	if err := decodeDNSProbeJSON(w, r, maxDNSProbeHeartbeatBody, &request); err != nil {
+		writeDNSProbeDecodeError(w, err)
+		return
+	}
+	request.PublicIP = resolver.Resolve(r)
 	if request.PublicIP == "" {
 		writeDNSProbeBadRequest(w)
 		return
@@ -78,8 +86,15 @@ func handleDNSProbeResults(w http.ResponseWriter, r *http.Request, service admin
 	if !ok {
 		return
 	}
+	if !requireDNSProbeJSONContentType(w, r) {
+		return
+	}
 	var request admin.DNSProbeResultsRequest
-	if err := decodeDNSProbeJSON(w, r, maxDNSProbeResultsBody, &request); err != nil || request.Results == nil || len(request.Results) > maxDNSProbeResultsBatch {
+	if err := decodeDNSProbeJSON(w, r, maxDNSProbeResultsBody, &request); err != nil {
+		writeDNSProbeDecodeError(w, err)
+		return
+	}
+	if request.Results == nil || len(request.Results) > maxDNSProbeResultsBatch {
 		writeDNSProbeBadRequest(w)
 		return
 	}
@@ -155,7 +170,26 @@ func decodeDNSProbeJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, 
 }
 
 func writeDNSProbeUnauthorized(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", "Bearer")
 	writeJSON(w, http.StatusUnauthorized, map[string]any{"message": "unauthorized"})
+}
+
+func requireDNSProbeJSONContentType(w http.ResponseWriter, r *http.Request) bool {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || !strings.EqualFold(mediaType, "application/json") {
+		writeJSON(w, http.StatusUnsupportedMediaType, map[string]any{"message": "Content-Type 必须是 application/json"})
+		return false
+	}
+	return true
+}
+
+func writeDNSProbeDecodeError(w http.ResponseWriter, err error) {
+	var maxBytesError *http.MaxBytesError
+	if errors.As(err, &maxBytesError) {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"message": "探针请求体过大"})
+		return
+	}
+	writeDNSProbeBadRequest(w)
 }
 
 func writeDNSProbeBadRequest(w http.ResponseWriter) {
@@ -177,14 +211,45 @@ func writeDNSProbeServiceError(w http.ResponseWriter, err error) {
 	}
 }
 
-// normalizedRequestIP trusts the deployment's reverse-proxy headers in this
-// order: Cloudflare, X-Forwarded-For, X-Real-IP, then the socket peer. Invalid
-// header values are ignored instead of masking a valid lower-priority source.
-// Only the first X-Forwarded-For item is a client candidate; if it is invalid,
-// later proxy entries are not considered.
-func normalizedRequestIP(r *http.Request) string {
+func newProbeRequestIPResolver(values []string) probeRequestIPResolver {
+	if len(values) == 0 {
+		values = []string{"127.0.0.0/8", "::1/128"}
+	}
+	resolver := probeRequestIPResolver{trusted: make([]netip.Prefix, 0, len(values))}
+	for _, value := range values {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(value))
+		if err != nil {
+			continue
+		}
+		resolver.trusted = append(resolver.trusted, prefix.Masked())
+	}
+	return resolver
+}
+
+// Resolve trusts Cloudflare/XFF/X-Real-IP only when the socket peer belongs to
+// an explicitly configured proxy prefix. XFF contributes only its first item.
+func (resolver probeRequestIPResolver) Resolve(r *http.Request) string {
 	if r == nil {
 		return ""
+	}
+	remote := strings.TrimSpace(r.RemoteAddr)
+	if host, _, err := net.SplitHostPort(remote); err == nil {
+		remote = host
+	}
+	peerText := canonicalDNSProbeIP(remote)
+	if peerText == "" {
+		return ""
+	}
+	peer, _ := netip.ParseAddr(peerText)
+	trustedPeer := false
+	for _, prefix := range resolver.trusted {
+		if prefix.Contains(peer) {
+			trustedPeer = true
+			break
+		}
+	}
+	if !trustedPeer {
+		return peerText
 	}
 	if ip := canonicalDNSProbeIP(r.Header.Get("CF-Connecting-IP")); ip != "" {
 		return ip
@@ -197,11 +262,7 @@ func normalizedRequestIP(r *http.Request) string {
 	if ip := canonicalDNSProbeIP(r.Header.Get("X-Real-IP")); ip != "" {
 		return ip
 	}
-	remote := strings.TrimSpace(r.RemoteAddr)
-	if host, _, err := net.SplitHostPort(remote); err == nil {
-		remote = host
-	}
-	return canonicalDNSProbeIP(remote)
+	return peerText
 }
 
 func canonicalDNSProbeIP(value string) string {

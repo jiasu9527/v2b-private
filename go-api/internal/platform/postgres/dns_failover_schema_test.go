@@ -40,6 +40,7 @@ func expectDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		`CREATE TABLE IF NOT EXISTS v2_dns_failover_group_probe`,
 		`(?s)CREATE TABLE IF NOT EXISTS v2_dns_probe_target_state.*target_id BIGINT NOT NULL.*last_resolved_ip varchar\(128\) NOT NULL DEFAULT ''`,
 		`(?s)CREATE TABLE IF NOT EXISTS v2_dns_probe_result_inbox.*target_id BIGINT DEFAULT NULL.*result_id varchar\(128\) NOT NULL.*CONSTRAINT uniq_v2_dns_probe_result_inbox_result UNIQUE \(probe_id, result_id\)`,
+		`(?s)CREATE TABLE IF NOT EXISTS v2_dns_failover_eval_outbox.*group_id BIGINT NOT NULL.*requested_at BIGINT NOT NULL.*attempts INTEGER NOT NULL DEFAULT 0.*next_attempt_at BIGINT NOT NULL.*last_error text NOT NULL DEFAULT ''.*CONSTRAINT uniq_v2_dns_failover_eval_outbox_group UNIQUE \(group_id\)`,
 		`CREATE TABLE IF NOT EXISTS v2_dns_failover_event`,
 	} {
 		mock.ExpectExec(pattern).
@@ -47,7 +48,7 @@ func expectDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	}
 	mock.ExpectExec(`ALTER TABLE v2_dns_probe_target_state ADD COLUMN IF NOT EXISTS last_resolved_ip varchar\(128\) NOT NULL DEFAULT ''`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`(?s)DO \$dns_probe_inbox_fk\$.*ALTER TABLE v2_dns_probe_result_inbox ALTER COLUMN target_id DROP NOT NULL.*SELECT c.confdeltype.*FROM pg_constraint c.*c.conrelid = 'v2_dns_probe_result_inbox'::regclass.*c.conname = 'fk_v2_dns_probe_result_inbox_target'.*IF current_delete_action IS NULL THEN.*ADD CONSTRAINT fk_v2_dns_probe_result_inbox_target FOREIGN KEY \(target_id\) REFERENCES v2_dns_failover_target\(id\) ON DELETE SET NULL.*ELSIF current_delete_action <> 'n' THEN.*DROP CONSTRAINT fk_v2_dns_probe_result_inbox_target.*ADD CONSTRAINT fk_v2_dns_probe_result_inbox_target FOREIGN KEY \(target_id\) REFERENCES v2_dns_failover_target\(id\) ON DELETE SET NULL.*END IF;.*END;.*\$dns_probe_inbox_fk\$;`).
+	mock.ExpectExec(`(?s)DO \$dns_probe_inbox_fk\$.*SELECT a.attnotnull.*FROM pg_attribute a.*a.attrelid = 'public.v2_dns_probe_result_inbox'::regclass.*a.attname = 'target_id'.*IF target_is_not_null THEN.*ALTER TABLE public.v2_dns_probe_result_inbox ALTER COLUMN target_id DROP NOT NULL.*END IF;.*SELECT c.contype, c.confdeltype.*FROM pg_constraint c.*c.conrelid = 'public.v2_dns_probe_result_inbox'::regclass.*c.conname = 'fk_v2_dns_probe_result_inbox_target'.*IF current_constraint_type IS NULL THEN.*ALTER TABLE public.v2_dns_probe_result_inbox ADD CONSTRAINT fk_v2_dns_probe_result_inbox_target FOREIGN KEY \(target_id\) REFERENCES public.v2_dns_failover_target\(id\) ON DELETE SET NULL.*ELSIF current_constraint_type <> 'f' OR current_delete_action <> 'n' THEN.*ALTER TABLE public.v2_dns_probe_result_inbox DROP CONSTRAINT fk_v2_dns_probe_result_inbox_target.*ALTER TABLE public.v2_dns_probe_result_inbox ADD CONSTRAINT fk_v2_dns_probe_result_inbox_target FOREIGN KEY \(target_id\) REFERENCES public.v2_dns_failover_target\(id\) ON DELETE SET NULL.*END IF;.*END;.*\$dns_probe_inbox_fk\$;`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	for _, constraint := range expectedDNSFailoverConstraints {
@@ -63,6 +64,8 @@ func expectDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		`idx_v2_dns_failover_group_probe_probe ON v2_dns_failover_group_probe\(probe_id\)`,
 		`idx_v2_dns_probe_target_state_target ON v2_dns_probe_target_state\(target_id\)`,
 		`idx_v2_dns_probe_result_inbox_target ON v2_dns_probe_result_inbox\(target_id\)`,
+		`idx_v2_dns_probe_result_inbox_created ON v2_dns_probe_result_inbox\(created_at\)`,
+		`idx_v2_dns_failover_eval_outbox_due ON v2_dns_failover_eval_outbox\(next_attempt_at, requested_at\)`,
 		`idx_v2_dns_failover_event_created_id ON v2_dns_failover_event\(created_at DESC, id DESC\)`,
 		`idx_v2_dns_failover_event_group_created_id ON v2_dns_failover_event\(group_id, created_at DESC, id DESC\)`,
 		`idx_v2_dns_failover_event_type_created_id ON v2_dns_failover_event\(event_type, created_at DESC, id DESC\)`,
@@ -101,6 +104,9 @@ var expectedDNSFailoverConstraints = []struct {
 	{"v2_dns_probe_result_inbox", "fk_v2_dns_probe_result_inbox_probe", "FOREIGN KEY (probe_id) REFERENCES v2_dns_probe(id) ON DELETE CASCADE"},
 	{"v2_dns_probe_result_inbox", "uniq_v2_dns_probe_result_inbox_result", "UNIQUE (probe_id, result_id)"},
 	{"v2_dns_probe_result_inbox", "chk_v2_dns_probe_result_inbox_result_id", "CHECK (btrim(result_id) <> '')"},
+	{"v2_dns_failover_eval_outbox", "fk_v2_dns_failover_eval_outbox_group", "FOREIGN KEY (group_id) REFERENCES v2_dns_failover_group(id) ON DELETE CASCADE"},
+	{"v2_dns_failover_eval_outbox", "uniq_v2_dns_failover_eval_outbox_group", "UNIQUE (group_id)"},
+	{"v2_dns_failover_eval_outbox", "chk_v2_dns_failover_eval_outbox_attempts", "CHECK (attempts >= 0)"},
 	{"v2_dns_failover_event", "fk_v2_dns_failover_event_group", "FOREIGN KEY (group_id) REFERENCES v2_dns_failover_group(id) ON DELETE CASCADE"},
 	{"v2_dns_failover_event", "fk_v2_dns_failover_event_probe", "FOREIGN KEY (probe_id) REFERENCES v2_dns_probe(id) ON DELETE SET NULL"},
 	{"v2_dns_failover_event", "fk_v2_dns_failover_event_target", "FOREIGN KEY (target_id) REFERENCES v2_dns_failover_target(id) ON DELETE SET NULL"},

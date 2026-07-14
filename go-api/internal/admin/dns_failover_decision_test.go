@@ -74,6 +74,30 @@ func TestEnsureDNSFailoverSchemaSerializesConcurrentInitialization(t *testing.T)
 	}
 }
 
+func TestInitializeDNSFailoverSchemaEagerlyMarksServiceReady(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	expectAdminDNSFailoverSchema(mock)
+
+	service := &DBService{db: db}
+	if err := service.InitializeDNSFailoverSchema(context.Background()); err != nil {
+		t.Fatalf("InitializeDNSFailoverSchema: %v", err)
+	}
+	// Public-request lazy fallback must observe the eager ready flag and issue
+	// no second DDL sequence.
+	if err := service.ensureDNSFailoverSchema(context.Background()); err != nil {
+		t.Fatalf("ready fallback: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	for _, table := range []string{
 		"v2_dns_probe",
@@ -82,6 +106,7 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		"v2_dns_failover_group_probe",
 		"v2_dns_probe_target_state",
 		"v2_dns_probe_result_inbox",
+		"v2_dns_failover_eval_outbox",
 		"v2_dns_failover_event",
 	} {
 		mock.ExpectExec(`CREATE TABLE IF NOT EXISTS ` + table).
@@ -89,7 +114,7 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	}
 	mock.ExpectExec(`ALTER TABLE v2_dns_probe_target_state ADD COLUMN IF NOT EXISTS last_resolved_ip`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`(?s)DO \$dns_probe_inbox_fk\$.*ALTER TABLE v2_dns_probe_result_inbox ALTER COLUMN target_id DROP NOT NULL.*SELECT c.confdeltype.*IF current_delete_action IS NULL THEN.*ELSIF current_delete_action <> 'n' THEN.*\$dns_probe_inbox_fk\$;`).
+	mock.ExpectExec(`(?s)DO \$dns_probe_inbox_fk\$.*SELECT a.attnotnull.*IF target_is_not_null THEN.*ALTER TABLE public.v2_dns_probe_result_inbox ALTER COLUMN target_id DROP NOT NULL.*SELECT c.contype, c.confdeltype.*IF current_constraint_type IS NULL THEN.*REFERENCES public.v2_dns_failover_target\(id\) ON DELETE SET NULL.*ELSIF current_constraint_type <> 'f' OR current_delete_action <> 'n' THEN.*\$dns_probe_inbox_fk\$;`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	for _, constraint := range []string{
 		"chk_v2_dns_probe_enabled",
@@ -115,6 +140,9 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		"fk_v2_dns_probe_result_inbox_probe",
 		"uniq_v2_dns_probe_result_inbox_result",
 		"chk_v2_dns_probe_result_inbox_result_id",
+		"fk_v2_dns_failover_eval_outbox_group",
+		"uniq_v2_dns_failover_eval_outbox_group",
+		"chk_v2_dns_failover_eval_outbox_attempts",
 		"fk_v2_dns_failover_event_group",
 		"fk_v2_dns_failover_event_probe",
 		"fk_v2_dns_failover_event_target",
@@ -130,6 +158,8 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		"idx_v2_dns_failover_group_probe_probe",
 		"idx_v2_dns_probe_target_state_target",
 		"idx_v2_dns_probe_result_inbox_target",
+		"idx_v2_dns_probe_result_inbox_created",
+		"idx_v2_dns_failover_eval_outbox_due",
 		"idx_v2_dns_failover_event_created_id",
 		"idx_v2_dns_failover_event_group_created_id",
 		"idx_v2_dns_failover_event_type_created_id",

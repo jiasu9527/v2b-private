@@ -14,6 +14,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("POSTGRES_DSN", "")
 	t.Setenv("ACCESS_LOG_ENABLE", "")
 	t.Setenv("SLOW_REQUEST_LOG_THRESHOLD_MS", "")
+	t.Setenv("PROBE_TRUSTED_PROXY_CIDRS", "")
 
 	cfg := Load()
 
@@ -32,6 +33,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.SlowRequestLogThreshold != 500*time.Millisecond {
 		t.Fatalf("expected default slow request threshold 500ms, got %s", cfg.SlowRequestLogThreshold)
 	}
+	if len(cfg.ProbeTrustedProxyCIDRs) != 2 || cfg.ProbeTrustedProxyCIDRs[0] != "127.0.0.0/8" || cfg.ProbeTrustedProxyCIDRs[1] != "::1/128" {
+		t.Fatalf("default probe trusted proxy CIDRs = %#v", cfg.ProbeTrustedProxyCIDRs)
+	}
 }
 
 func TestLoadEnvOverrides(t *testing.T) {
@@ -40,6 +44,7 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("POSTGRES_DSN", "postgres://user:pass@127.0.0.1:5432/app")
 	t.Setenv("ACCESS_LOG_ENABLE", "1")
 	t.Setenv("SLOW_REQUEST_LOG_THRESHOLD_MS", "250")
+	t.Setenv("PROBE_TRUSTED_PROXY_CIDRS", "10.0.0.0/8, 2001:db8:1::/48")
 
 	cfg := Load()
 
@@ -57,6 +62,9 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 	if cfg.SlowRequestLogThreshold != 250*time.Millisecond {
 		t.Fatalf("expected slow request threshold 250ms, got %s", cfg.SlowRequestLogThreshold)
+	}
+	if len(cfg.ProbeTrustedProxyCIDRs) != 2 || cfg.ProbeTrustedProxyCIDRs[0] != "10.0.0.0/8" || cfg.ProbeTrustedProxyCIDRs[1] != "2001:db8:1::/48" {
+		t.Fatalf("probe trusted proxy CIDRs = %#v", cfg.ProbeTrustedProxyCIDRs)
 	}
 }
 

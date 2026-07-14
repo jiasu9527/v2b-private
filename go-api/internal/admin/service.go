@@ -472,6 +472,13 @@ func (s *DBService) ensureDNSFailoverSchema(ctx context.Context) error {
 	return nil
 }
 
+// InitializeDNSFailoverSchema eagerly prepares probe/failover persistence.
+// Production startup calls this before serving public probe requests; the
+// per-method ensure path remains as a defensive fallback for tests and tools.
+func (s *DBService) InitializeDNSFailoverSchema(ctx context.Context) error {
+	return s.ensureDNSFailoverSchema(ctx)
+}
+
 func (s *DBService) WithQueueRuntime(jobs queue.Enqueuer) *DBService {
 	s.jobs = jobs
 	return s
