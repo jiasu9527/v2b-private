@@ -68,8 +68,15 @@ func main() {
 		if err := initializeDNSFailoverBeforeServe(ctx, adminDBService); err != nil {
 			log.Fatalf("initialize DNS failover schema: %v", err)
 		}
-		adminDBService.WithDNSFailoverNotifier(telegramService).WithDNSFailoverEvaluationRequester(adminDBService)
+		adminDBService.WithDNSFailoverNotifier(dnsFailoverNotifierForTelegram(telegramService)).WithDNSFailoverEvaluationRequester(adminDBService)
 		startDNSFailoverAutomationAfterSchema(ctx, adminDBService)
+		defer func() {
+			stopCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+			defer cancel()
+			if err := stopDNSFailoverAutomationBeforeDependencies(stopCtx, adminDBService); err != nil {
+				log.Printf("stop DNS failover automation: %v", err)
+			}
+		}()
 		telegramService = telegramService.WithUserResolver(userDBService.ResolveClientUserID).WithAdminService(adminDBService)
 		adminService = adminDBService
 		nodeService = nodeapi.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig)
@@ -129,6 +136,10 @@ type dnsFailoverAutomationStarter interface {
 	StartDNSFailoverAutomation(context.Context)
 }
 
+type dnsFailoverAutomationStopper interface {
+	StopDNSFailoverAutomation(context.Context) error
+}
+
 func initializeDNSFailoverBeforeServe(ctx context.Context, initializer dnsFailoverSchemaInitializer) error {
 	if initializer == nil {
 		return nil
@@ -140,6 +151,20 @@ func startDNSFailoverAutomationAfterSchema(ctx context.Context, starter dnsFailo
 	if starter != nil {
 		starter.StartDNSFailoverAutomation(ctx)
 	}
+}
+
+func stopDNSFailoverAutomationBeforeDependencies(ctx context.Context, stopper dnsFailoverAutomationStopper) error {
+	if stopper == nil {
+		return nil
+	}
+	return stopper.StopDNSFailoverAutomation(ctx)
+}
+
+func dnsFailoverNotifierForTelegram(service *telegram.Service) admin.DNSFailoverNotifier {
+	if service == nil {
+		return nil
+	}
+	return service.DirectNotifier()
 }
 
 func dbReadyCheck(db *sql.DB) func(context.Context) error {

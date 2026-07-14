@@ -547,15 +547,16 @@ updated_at = EXCLUDED.updated_at`, probeID, stateJSON, now, warmedUp)
 			return DNSProbeReportResult{}, fmt.Errorf("encode DNS failover evaluation outbox: %w", err)
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO v2_dns_failover_eval_outbox (
-group_id, requested_at, attempts, next_attempt_at, last_error, created_at, updated_at
-) SELECT requested.group_id, $2, 0, $2, '', $2, $2
+group_id, operation, target_id, source_target_id, requested_at, attempts, next_attempt_at, last_error, created_at, updated_at
+) SELECT requested.group_id, 'evaluate', NULL, NULL, $2, 0, $2, '', $2, $2
 FROM jsonb_to_recordset($1::jsonb) AS requested(group_id bigint)
 ON CONFLICT (group_id) DO UPDATE SET
 requested_at = EXCLUDED.requested_at,
 attempts = 0,
 next_attempt_at = EXCLUDED.next_attempt_at,
 last_error = '',
-updated_at = EXCLUDED.updated_at`, outboxJSON, now)
+updated_at = EXCLUDED.updated_at
+WHERE v2_dns_failover_eval_outbox.operation = 'evaluate'`, outboxJSON, now)
 		if err != nil {
 			return DNSProbeReportResult{}, fmt.Errorf("persist DNS failover evaluation outbox: %w", err)
 		}

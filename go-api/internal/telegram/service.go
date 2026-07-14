@@ -21,6 +21,14 @@ type ticketReplyService interface {
 	ReplyTicket(ctx context.Context, req admin.TicketReplyRequest) (bool, error)
 }
 
+var ErrDirectNotifierUnavailable = errors.New("telegram direct notifier unavailable")
+
+// DirectNotifier is the synchronous delivery adapter used by durable workers.
+// Unlike Service.NotifyAdmins, it never hands delivery to the in-memory queue.
+type DirectNotifier struct {
+	service *Service
+}
+
 type Service struct {
 	cfg               config.Config
 	runtime           *config.RuntimeState
@@ -66,6 +74,35 @@ func (s *Service) WithUserResolver(fn func(context.Context, string) (int64, erro
 func (s *Service) WithAdminService(service ticketReplyService) *Service {
 	s.adminService = service
 	return s
+}
+
+func (s *Service) DirectNotifier() *DirectNotifier {
+	return &DirectNotifier{service: s}
+}
+
+func (n *DirectNotifier) NotifyAdmins(ctx context.Context, message string, includeStaff bool) error {
+	if n == nil || n.service == nil {
+		return ErrDirectNotifierUnavailable
+	}
+	s := n.service
+	cfg := s.currentConfig()
+	if !cfg.TelegramBotEnable || strings.TrimSpace(cfg.TelegramBotToken) == "" {
+		return ErrDirectNotifierUnavailable
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return nil
+	}
+	ids, err := s.resolveRecipients(ctx, includeStaff)
+	if err != nil {
+		return err
+	}
+	for _, chatID := range ids {
+		if err := s.sendMessage(ctx, chatID, message); err != nil {
+			return fmt.Errorf("send direct telegram notification to %d: %w", chatID, err)
+		}
+	}
+	return nil
 }
 
 func (s *Service) currentConfig() config.Config {

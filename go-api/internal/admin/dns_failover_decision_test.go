@@ -116,6 +116,10 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`ALTER TABLE v2_dns_failover_group ADD COLUMN IF NOT EXISTS last_evaluated_at`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	for range 5 {
+		mock.ExpectExec(`ALTER TABLE v2_dns_failover_(group|eval_outbox) ADD COLUMN IF NOT EXISTS`).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
 	mock.ExpectExec(`(?s)DO \$dns_probe_inbox_fk\$.*schema_name := current_schema\(\).*format\('%I.%I', schema_name, 'v2_dns_probe_result_inbox'\).*format\('%I.%I', schema_name, 'v2_dns_failover_target'\).*to_regclass\(inbox_table\).*to_regclass\(target_table\).*a.attrelid = inbox_relation.*a.attrelid = target_relation.*EXECUTE format\('ALTER TABLE %s ALTER COLUMN %I DROP NOT NULL'.*SELECT c.contype, c.confdeltype, c.confrelid, c.conkey, c.confkey.*current_referenced_relation IS DISTINCT FROM target_relation.*current_source_columns IS DISTINCT FROM ARRAY\[inbox_target_attnum\]::smallint\[\].*current_referenced_columns IS DISTINCT FROM ARRAY\[target_id_attnum\]::smallint\[\].*EXECUTE format\('ALTER TABLE %s DROP CONSTRAINT %I'.*EXECUTE format\('ALTER TABLE %s ADD CONSTRAINT %I FOREIGN KEY \(%I\) REFERENCES %s\(%I\) ON DELETE SET NULL'.*\$dns_probe_inbox_fk\$;`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	for _, constraint := range []string{
@@ -125,6 +129,7 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		"chk_v2_dns_failover_group_timing",
 		"chk_v2_dns_failover_group_thresholds",
 		"chk_v2_dns_failover_group_dns_values",
+		"chk_v2_dns_failover_group_incident",
 		"fk_v2_dns_failover_target_group",
 		"uniq_v2_dns_failover_target_group_id",
 		"chk_v2_dns_failover_target_type",
@@ -145,6 +150,8 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		"fk_v2_dns_failover_eval_outbox_group",
 		"uniq_v2_dns_failover_eval_outbox_group",
 		"chk_v2_dns_failover_eval_outbox_attempts",
+		"chk_v2_dns_failover_eval_outbox_operation",
+		"chk_v2_dns_failover_eval_outbox_target",
 		"fk_v2_dns_failover_event_group",
 		"fk_v2_dns_failover_event_probe",
 		"fk_v2_dns_failover_event_target",
@@ -163,6 +170,7 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		"idx_v2_dns_probe_result_inbox_target",
 		"idx_v2_dns_probe_result_inbox_created",
 		"idx_v2_dns_failover_eval_outbox_due",
+		"idx_v2_dns_failover_eval_outbox_operation_due",
 		"idx_v2_dns_failover_event_created_id",
 		"idx_v2_dns_failover_event_group_created_id",
 		"idx_v2_dns_failover_event_type_created_id",

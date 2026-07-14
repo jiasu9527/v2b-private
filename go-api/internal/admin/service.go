@@ -431,15 +431,20 @@ type DBService struct {
 	dnsFailoverAPI            dnspodAPI
 	dnsFailoverTickInterval   time.Duration
 	dnsFailoverCycle          func(context.Context) error
+	dnsFailoverLogf           func(string, ...any)
 
-	clientEntryEnsureOnce sync.Once
-	clientEntryEnsureErr  error
-	dnsFailoverEnsureMu   sync.Mutex
-	dnsFailoverSchemaOK   bool
-	dnsFailoverWakeMu     sync.Mutex
-	dnsFailoverWakeQueued bool
-	dnsFailoverStartOnce  sync.Once
-	dnsFailoverWorkerWG   sync.WaitGroup
+	clientEntryEnsureOnce   sync.Once
+	clientEntryEnsureErr    error
+	dnsFailoverEnsureMu     sync.Mutex
+	dnsFailoverSchemaOK     bool
+	dnsFailoverWakeMu       sync.Mutex
+	dnsFailoverWakeQueued   bool
+	dnsFailoverStopping     bool
+	dnsFailoverStartOnce    sync.Once
+	dnsFailoverWorkerCtx    context.Context
+	dnsFailoverWorkerCancel context.CancelFunc
+	dnsFailoverWorkerWG     sync.WaitGroup
+	dnsFailoverJobWG        sync.WaitGroup
 }
 
 type paymentRow struct {

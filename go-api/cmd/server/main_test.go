@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"forest/go-api/internal/admin"
 	"forest/go-api/internal/config"
+	"forest/go-api/internal/telegram"
 )
 
 type fakeDNSFailoverSchemaInitializer struct {
@@ -14,14 +16,28 @@ type fakeDNSFailoverSchemaInitializer struct {
 	err    error
 }
 
+func TestDNSFailoverNotifierForTelegramUsesDirectAdapter(t *testing.T) {
+	service := telegram.NewService(config.Config{TelegramBotEnable: true, TelegramBotToken: "test-token"}, nil)
+	var notifier admin.DNSFailoverNotifier = dnsFailoverNotifierForTelegram(service)
+	if _, ok := notifier.(*telegram.DirectNotifier); !ok {
+		t.Fatalf("notifier type = %T, want *telegram.DirectNotifier", notifier)
+	}
+}
+
 type fakeDNSFailoverAutomationStarter struct {
-	called bool
-	ctx    context.Context
+	called  bool
+	ctx     context.Context
+	stopped bool
 }
 
 func (starter *fakeDNSFailoverAutomationStarter) StartDNSFailoverAutomation(ctx context.Context) {
 	starter.called = true
 	starter.ctx = ctx
+}
+
+func (starter *fakeDNSFailoverAutomationStarter) StopDNSFailoverAutomation(context.Context) error {
+	starter.stopped = true
+	return nil
 }
 
 func TestValidateServerConfigRejectsInvalidProbeTrustedProxyCIDR(t *testing.T) {
@@ -58,5 +74,15 @@ func TestStartDNSFailoverAutomationAfterSchemaStartsConfiguredWorker(t *testing.
 
 	if !starter.called || starter.ctx != ctx {
 		t.Fatalf("starter was not called with server context: %#v", starter)
+	}
+}
+
+func TestStopDNSFailoverAutomationBeforeDependenciesWaitsForWorker(t *testing.T) {
+	starter := &fakeDNSFailoverAutomationStarter{}
+	if err := stopDNSFailoverAutomationBeforeDependencies(context.Background(), starter); err != nil {
+		t.Fatalf("stop DNS failover automation: %v", err)
+	}
+	if !starter.stopped {
+		t.Fatal("DNS failover automation was not stopped")
 	}
 }
