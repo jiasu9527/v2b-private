@@ -18,6 +18,7 @@ import (
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/dnspod"
 	"forest/go-api/internal/payment"
+	platformpostgres "forest/go-api/internal/platform/postgres"
 	"forest/go-api/internal/queue"
 	"forest/go-api/internal/session"
 )
@@ -414,6 +415,8 @@ type DBService struct {
 
 	clientEntryEnsureOnce sync.Once
 	clientEntryEnsureErr  error
+	dnsFailoverEnsureOnce sync.Once
+	dnsFailoverEnsureErr  error
 }
 
 type paymentRow struct {
@@ -438,6 +441,18 @@ func NewDBService(cfg config.Config, db *sql.DB, orders ...orderRuntime) *DBServ
 		runtime = orders[0]
 	}
 	return &DBService{cfg: cfg, db: db, orders: runtime}
+}
+
+func (s *DBService) ensureDNSFailoverSchema(ctx context.Context) error {
+	if s.db == nil {
+		return ErrUnavailable
+	}
+	s.dnsFailoverEnsureOnce.Do(func() {
+		if err := platformpostgres.EnsureDNSFailoverSchema(ctx, s.db); err != nil {
+			s.dnsFailoverEnsureErr = fmt.Errorf("ensure DNS failover schema: %w", err)
+		}
+	})
+	return s.dnsFailoverEnsureErr
 }
 
 func (s *DBService) WithQueueRuntime(jobs queue.Enqueuer) *DBService {
