@@ -23,8 +23,9 @@ const (
 )
 
 var (
-	ErrDNSProbeUnauthorized   = errors.New("dns probe unauthorized")
-	ErrDNSProbeInvalidRequest = errors.New("invalid dns probe request")
+	ErrDNSProbeUnauthorized      = errors.New("dns probe unauthorized")
+	ErrDNSProbeInvalidRequest    = errors.New("invalid dns probe request")
+	ErrDNSProbeHeartbeatRequired = errors.New("dns probe heartbeat required")
 )
 
 type DNSProbeIdentity struct {
@@ -69,6 +70,14 @@ type DNSProbeReportResult struct {
 	Duplicates   int     `json:"duplicates"`
 	PrewarmCount int64   `json:"prewarm_count"`
 	GroupIDs     []int64 `json:"group_ids"`
+}
+
+type dnsProbeStateValues struct {
+	Success       int64
+	Latency       any
+	Error         string
+	SuccessStreak int64
+	FailureStreak int64
 }
 
 type DNSProbeService interface {
@@ -169,7 +178,6 @@ func (s *DBService) HeartbeatDNSProbe(ctx context.Context, probeID int64, reques
 		return DNSProbeHeartbeatResult{}, fmt.Errorf("load DNS probe heartbeat state: %w", err)
 	}
 
-	offlineSec := defaultProbeOfflineSec
 	var configuredOffline sql.NullInt64
 	err = tx.QueryRowContext(ctx, `SELECT MIN(g.probe_offline_sec)
 FROM v2_dns_failover_group_probe gp
@@ -178,9 +186,7 @@ WHERE gp.probe_id = $1 AND g.enabled = 1`, probeID).Scan(&configuredOffline)
 	if err != nil {
 		return DNSProbeHeartbeatResult{}, fmt.Errorf("load DNS probe offline threshold: %w", err)
 	}
-	if configuredOffline.Valid && configuredOffline.Int64 > 0 {
-		offlineSec = configuredOffline.Int64
-	}
+	offlineSec := dnsProbeOfflineThreshold(configuredOffline)
 
 	now := time.Now().Unix()
 	reconnected := lastHeartbeat.Valid && now-lastHeartbeat.Int64 > offlineSec
@@ -290,13 +296,31 @@ func (s *DBService) ReportDNSProbeResults(ctx context.Context, probeID int64, re
 		}
 	}()
 
-	var enabled, prewarmCount int64
-	err = tx.QueryRowContext(ctx, `SELECT enabled, prewarm_count FROM v2_dns_probe WHERE id = $1 FOR UPDATE`, probeID).Scan(&enabled, &prewarmCount)
+	var (
+		enabled       int64
+		lastHeartbeat sql.NullInt64
+		prewarmCount  int64
+	)
+	err = tx.QueryRowContext(ctx, `SELECT enabled, last_heartbeat_at, prewarm_count FROM v2_dns_probe WHERE id = $1 FOR UPDATE`, probeID).Scan(&enabled, &lastHeartbeat, &prewarmCount)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && enabled != 1) {
 		return DNSProbeReportResult{}, ErrDNSProbeUnauthorized
 	}
 	if err != nil {
 		return DNSProbeReportResult{}, fmt.Errorf("load DNS probe report state: %w", err)
+	}
+
+	var configuredOffline sql.NullInt64
+	err = tx.QueryRowContext(ctx, `SELECT MIN(g.probe_offline_sec)
+FROM v2_dns_failover_group_probe gp
+JOIN v2_dns_failover_group g ON g.id = gp.group_id
+WHERE gp.probe_id = $1 AND g.enabled = 1`, probeID).Scan(&configuredOffline)
+	if err != nil {
+		return DNSProbeReportResult{}, fmt.Errorf("load DNS probe offline threshold: %w", err)
+	}
+	offlineSec := dnsProbeOfflineThreshold(configuredOffline)
+	now := time.Now().Unix()
+	if !lastHeartbeat.Valid || now-lastHeartbeat.Int64 > offlineSec {
+		return DNSProbeReportResult{}, ErrDNSProbeHeartbeatRequired
 	}
 	if prewarmCount < 0 {
 		prewarmCount = 0
@@ -337,7 +361,6 @@ FOR SHARE OF gp, g, t`, probeID)
 		}
 	}
 
-	now := time.Now().Unix()
 	resultSummary := DNSProbeReportResult{PrewarmCount: prewarmCount, GroupIDs: make([]int64, 0)}
 	seenResultIDs := make(map[string]struct{}, len(request.Results))
 	affectedGroups := make(map[int64]struct{})
@@ -358,18 +381,7 @@ FOR SHARE OF gp, g, t`, probeID)
 			return DNSProbeReportResult{}, fmt.Errorf("insert DNS probe result inbox: %w", err)
 		}
 
-		success := int64(0)
-		successStreak := int64(0)
-		failureStreak := int64(1)
-		if *result.Success {
-			success = 1
-			successStreak = 1
-			failureStreak = 0
-		}
-		var latency any
-		if result.LatencyMS != nil {
-			latency = *result.LatencyMS
-		}
+		stateValues := dnsProbeStateWriteValues(result)
 		warmedUp := int64(0)
 		if prewarmCount >= 3 {
 			warmedUp = 1
@@ -387,7 +399,7 @@ consecutive_success = CASE WHEN EXCLUDED.last_success = 1 THEN v2_dns_probe_targ
 consecutive_failure = CASE WHEN EXCLUDED.last_success = 0 THEN v2_dns_probe_target_state.consecutive_failure + 1 ELSE 0 END,
 last_reported_at = EXCLUDED.last_reported_at,
 warmed_up = CASE WHEN EXCLUDED.warmed_up = 1 THEN 1 ELSE v2_dns_probe_target_state.warmed_up END,
-updated_at = EXCLUDED.updated_at`, probeID, result.TargetID, success, latency, result.Error, result.ResolvedIP, successStreak, failureStreak, now, warmedUp)
+updated_at = EXCLUDED.updated_at`, probeID, result.TargetID, stateValues.Success, stateValues.Latency, stateValues.Error, result.ResolvedIP, stateValues.SuccessStreak, stateValues.FailureStreak, now, warmedUp)
 		if err != nil {
 			return DNSProbeReportResult{}, fmt.Errorf("upsert DNS probe target state: %w", err)
 		}
@@ -422,6 +434,36 @@ updated_at = EXCLUDED.updated_at`, probeID, result.TargetID, success, latency, r
 	return resultSummary, nil
 }
 
+func dnsProbeStateWriteValues(result DNSProbeResult) dnsProbeStateValues {
+	if result.Success != nil && *result.Success {
+		var latency any
+		if result.LatencyMS != nil {
+			latency = *result.LatencyMS
+		}
+		return dnsProbeStateValues{
+			Success:       1,
+			Latency:       latency,
+			Error:         "",
+			SuccessStreak: 1,
+			FailureStreak: 0,
+		}
+	}
+	return dnsProbeStateValues{
+		Success:       0,
+		Latency:       nil,
+		Error:         result.Error,
+		SuccessStreak: 0,
+		FailureStreak: 1,
+	}
+}
+
+func dnsProbeOfflineThreshold(configured sql.NullInt64) int64 {
+	if configured.Valid && configured.Int64 > 0 {
+		return configured.Int64
+	}
+	return defaultProbeOfflineSec
+}
+
 func normalizeDNSProbeResultsRequest(request *DNSProbeResultsRequest) error {
 	if request == nil || request.Results == nil {
 		return fmt.Errorf("%w: results array is required", ErrDNSProbeInvalidRequest)
@@ -443,17 +485,30 @@ func normalizeDNSProbeResultsRequest(request *DNSProbeResultsRequest) error {
 		if result.Success == nil {
 			return fmt.Errorf("%w: result %d: success is required", ErrDNSProbeInvalidRequest, index)
 		}
-		if *result.Success && result.LatencyMS == nil {
-			return fmt.Errorf("%w: result %d: successful result requires latency_ms", ErrDNSProbeInvalidRequest, index)
-		}
 		if result.LatencyMS != nil && (*result.LatencyMS < 0 || *result.LatencyMS > maxDNSProbeLatencyMS) {
 			return fmt.Errorf("%w: result %d: latency_ms is invalid", ErrDNSProbeInvalidRequest, index)
 		}
-		if err := validateDNSFailoverText("error", result.Error); err != nil {
+		if err := validateDNSFailoverIdentifierText("error", result.Error); err != nil {
 			return fmt.Errorf("%w: result %d: %s", ErrDNSProbeInvalidRequest, index, err)
 		}
+		result.Error = strings.TrimSpace(result.Error)
 		if len([]rune(result.Error)) > maxDNSProbeResultError {
 			return fmt.Errorf("%w: result %d: error is too long", ErrDNSProbeInvalidRequest, index)
+		}
+		if *result.Success {
+			if result.LatencyMS == nil {
+				return fmt.Errorf("%w: result %d: successful result requires latency_ms", ErrDNSProbeInvalidRequest, index)
+			}
+			if result.Error != "" {
+				return fmt.Errorf("%w: result %d: successful result cannot include error", ErrDNSProbeInvalidRequest, index)
+			}
+		} else {
+			if result.LatencyMS != nil {
+				return fmt.Errorf("%w: result %d: failed result cannot include latency_ms", ErrDNSProbeInvalidRequest, index)
+			}
+			if result.Error == "" {
+				return fmt.Errorf("%w: result %d: failed result requires error", ErrDNSProbeInvalidRequest, index)
+			}
 		}
 		result.ResolvedIP = strings.TrimSpace(result.ResolvedIP)
 		if result.ResolvedIP != "" {

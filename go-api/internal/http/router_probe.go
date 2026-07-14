@@ -166,6 +166,8 @@ func writeDNSProbeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, admin.ErrDNSProbeUnauthorized):
 		writeDNSProbeUnauthorized(w)
+	case errors.Is(err, admin.ErrDNSProbeHeartbeatRequired):
+		writeJSON(w, http.StatusConflict, map[string]any{"message": "探针需要先发送心跳"})
 	case errors.Is(err, admin.ErrDNSProbeInvalidRequest):
 		writeDNSProbeBadRequest(w)
 	case errors.Is(err, admin.ErrUnavailable):
@@ -178,6 +180,8 @@ func writeDNSProbeServiceError(w http.ResponseWriter, err error) {
 // normalizedRequestIP trusts the deployment's reverse-proxy headers in this
 // order: Cloudflare, X-Forwarded-For, X-Real-IP, then the socket peer. Invalid
 // header values are ignored instead of masking a valid lower-priority source.
+// Only the first X-Forwarded-For item is a client candidate; if it is invalid,
+// later proxy entries are not considered.
 func normalizedRequestIP(r *http.Request) string {
 	if r == nil {
 		return ""
@@ -185,8 +189,8 @@ func normalizedRequestIP(r *http.Request) string {
 	if ip := canonicalDNSProbeIP(r.Header.Get("CF-Connecting-IP")); ip != "" {
 		return ip
 	}
-	for _, candidate := range strings.Split(r.Header.Get("X-Forwarded-For"), ",") {
-		if ip := canonicalDNSProbeIP(candidate); ip != "" {
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
+		if ip := canonicalDNSProbeIP(strings.SplitN(forwarded, ",", 2)[0]); ip != "" {
 			return ip
 		}
 	}

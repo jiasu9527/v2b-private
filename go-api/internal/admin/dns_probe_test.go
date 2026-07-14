@@ -218,6 +218,62 @@ func TestDNSProbeHeartbeatRejectsDisabledProbeAndInvalidMetadata(t *testing.T) {
 	}
 }
 
+func TestDNSProbeOfflineThresholdUsesSafeDefaultAndConfiguredMinimum(t *testing.T) {
+	if got := dnsProbeOfflineThreshold(sql.NullInt64{}); got != defaultProbeOfflineSec {
+		t.Fatalf("NULL threshold = %d, want default %d", got, defaultProbeOfflineSec)
+	}
+	if got := dnsProbeOfflineThreshold(sql.NullInt64{Int64: 30, Valid: true}); got != 30 {
+		t.Fatalf("configured MIN threshold = %d, want 30", got)
+	}
+}
+
+func TestDNSProbeHeartbeatOfflineThresholdNullDefaultAndMinimumBinding(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		lastHeartbeat int64
+		minimum       any
+		wantReconnect bool
+	}{
+		{name: "no bindings uses safe default", lastHeartbeat: time.Now().Add(-80 * time.Second).Unix(), minimum: nil, wantReconnect: false},
+		{name: "multiple bindings use SQL minimum", lastHeartbeat: time.Now().Add(-40 * time.Second).Unix(), minimum: int64(30), wantReconnect: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("sqlmock: %v", err)
+			}
+			defer db.Close()
+			service := &DBService{db: db, dnsFailoverSchemaOK: true}
+
+			mock.ExpectBegin()
+			mock.ExpectQuery(`SELECT enabled, last_heartbeat_at, prewarm_count FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
+				WithArgs(int64(7)).
+				WillReturnRows(sqlmock.NewRows([]string{"enabled", "last_heartbeat_at", "prewarm_count"}).AddRow(int64(1), test.lastHeartbeat, int64(2)))
+			mock.ExpectQuery(`(?s)SELECT MIN\(g.probe_offline_sec\).*FROM v2_dns_failover_group_probe gp.*WHERE gp.probe_id = \$1 AND g.enabled = 1`).
+				WithArgs(int64(7)).
+				WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(test.minimum))
+			if test.wantReconnect {
+				mock.ExpectExec(`UPDATE v2_dns_probe SET .*prewarm_count = 0.*WHERE id = \$1`).WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec(`UPDATE v2_dns_probe_target_state SET warmed_up = 0, consecutive_success = 0, consecutive_failure = 0`).WillReturnResult(sqlmock.NewResult(0, 2))
+			} else {
+				mock.ExpectExec(`UPDATE v2_dns_probe SET version = \$2, arch = \$3, public_ip = \$4, last_heartbeat_at = \$5, updated_at = \$5 WHERE id = \$1`).WillReturnResult(sqlmock.NewResult(0, 1))
+			}
+			mock.ExpectCommit()
+
+			result, err := service.HeartbeatDNSProbe(context.Background(), 7, DNSProbeHeartbeatRequest{Version: "v1", Arch: "amd64", PublicIP: "203.0.113.7"})
+			if err != nil {
+				t.Fatalf("HeartbeatDNSProbe: %v", err)
+			}
+			if result.Reconnected != test.wantReconnect {
+				t.Fatalf("result = %#v, want reconnect %v", result, test.wantReconnect)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("sql expectations: %v", err)
+			}
+		})
+	}
+}
+
 func TestDNSProbeTasksReturnOnlyBoundEnabledGroupsAndTargetsInStableOrder(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -318,6 +374,63 @@ func TestDNSProbeResultsRejectMalformedBatchBeforeDatabaseWrites(t *testing.T) {
 	}
 }
 
+func TestDNSProbeResultsEnforceSuccessFailureFieldMatrix(t *testing.T) {
+	trueValue := true
+	falseValue := false
+	latency := int64(12)
+	tests := []struct {
+		name   string
+		result DNSProbeResult
+	}{
+		{name: "success cannot include error", result: DNSProbeResult{ResultID: "r1", TargetID: 11, Success: &trueValue, LatencyMS: &latency, Error: "unexpected"}},
+		{name: "failure cannot include latency", result: DNSProbeResult{ResultID: "r1", TargetID: 11, Success: &falseValue, LatencyMS: &latency, Error: "timeout"}},
+		{name: "failure requires error", result: DNSProbeResult{ResultID: "r1", TargetID: 11, Success: &falseValue}},
+		{name: "failure rejects whitespace error", result: DNSProbeResult{ResultID: "r1", TargetID: 11, Success: &falseValue, Error: "  "}},
+		{name: "failure rejects control characters", result: DNSProbeResult{ResultID: "r1", TargetID: 11, Success: &falseValue, Error: "timeout\nretry"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := DNSProbeResultsRequest{Results: []DNSProbeResult{test.result}}
+			if err := normalizeDNSProbeResultsRequest(&request); !errors.Is(err, ErrDNSProbeInvalidRequest) {
+				t.Fatalf("error = %v, want ErrDNSProbeInvalidRequest", err)
+			}
+		})
+	}
+}
+
+func TestDNSProbeResultsNormalizeAllowedSuccessFailureFields(t *testing.T) {
+	trueValue := true
+	falseValue := false
+	latency := int64(12)
+	request := DNSProbeResultsRequest{Results: []DNSProbeResult{
+		{ResultID: "success", TargetID: 11, Success: &trueValue, LatencyMS: &latency, Error: "  ", ResolvedIP: "2001:0db8::11"},
+		{ResultID: "failure", TargetID: 12, Success: &falseValue, Error: "  timeout  ", ResolvedIP: "203.0.113.12"},
+	}}
+	if err := normalizeDNSProbeResultsRequest(&request); err != nil {
+		t.Fatalf("normalizeDNSProbeResultsRequest: %v", err)
+	}
+	if request.Results[0].Error != "" || request.Results[0].ResolvedIP != "2001:db8::11" {
+		t.Fatalf("normalized success = %#v", request.Results[0])
+	}
+	if request.Results[1].LatencyMS != nil || request.Results[1].Error != "timeout" || request.Results[1].ResolvedIP != "203.0.113.12" {
+		t.Fatalf("normalized failure = %#v", request.Results[1])
+	}
+}
+
+func TestDNSProbeStateWriteValuesDefensivelyClearContradictoryFields(t *testing.T) {
+	trueValue := true
+	falseValue := false
+	latency := int64(12)
+	success := dnsProbeStateWriteValues(DNSProbeResult{Success: &trueValue, LatencyMS: &latency, Error: "must-clear"})
+	if success.Success != 1 || success.Latency != int64(12) || success.Error != "" || success.SuccessStreak != 1 || success.FailureStreak != 0 {
+		t.Fatalf("success values = %#v", success)
+	}
+	failure := dnsProbeStateWriteValues(DNSProbeResult{Success: &falseValue, LatencyMS: &latency, Error: "timeout"})
+	if failure.Success != 0 || failure.Latency != nil || failure.Error != "timeout" || failure.SuccessStreak != 0 || failure.FailureStreak != 1 {
+		t.Fatalf("failure values = %#v", failure)
+	}
+}
+
 type recordingDNSFailoverEvaluationRequester struct {
 	calls  [][]int64
 	err    error
@@ -342,9 +455,12 @@ func TestDNSProbeResultsUpdateStreaksWarmAfterThirdRoundAndEvaluateDeduplicatedG
 	service := (&DBService{db: db, dnsFailoverSchemaOK: true}).WithDNSFailoverEvaluationRequester(evaluator)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT enabled, prewarm_count FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
+	mock.ExpectQuery(`SELECT enabled, last_heartbeat_at, prewarm_count FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
 		WithArgs(int64(7)).
-		WillReturnRows(sqlmock.NewRows([]string{"enabled", "prewarm_count"}).AddRow(int64(1), int64(2)))
+		WillReturnRows(sqlmock.NewRows([]string{"enabled", "last_heartbeat_at", "prewarm_count"}).AddRow(int64(1), time.Now().Unix(), int64(2)))
+	mock.ExpectQuery(`SELECT MIN\(g.probe_offline_sec\).*WHERE gp.probe_id = \$1 AND g.enabled = 1`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(int64(90)))
 	mock.ExpectQuery(`(?s)SELECT t.id, t.group_id.*FROM v2_dns_failover_group_probe gp.*JOIN v2_dns_failover_group g ON g.id = gp.group_id.*JOIN v2_dns_failover_target t ON t.group_id = g.id.*WHERE gp.probe_id = \$1 AND g.enabled = 1 AND t.enabled = 1.*ORDER BY t.id ASC.*FOR SHARE`).
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"target_id", "group_id"}).
@@ -444,6 +560,51 @@ func TestDNSProbeResultsCrossRequestReplayIsIdempotentAndEvaluatorFailureDoesNot
 	}
 }
 
+func TestDNSProbeResultsSameResultIDDifferentTargetRemainsDuplicate(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	evaluator := &recordingDNSFailoverEvaluationRequester{}
+	service := (&DBService{db: db, dnsFailoverSchemaOK: true}).WithDNSFailoverEvaluationRequester(evaluator)
+
+	expectDNSProbeReportStart(mock, 7, 3, sqlmock.NewRows([]string{"target_id", "group_id"}).AddRow(int64(11), int64(4)))
+	expectAcceptedDNSProbeResult(mock, 7, 11, "stable-result-id", 1, int64(25), "", "203.0.113.11", 1, 0, 1)
+	mock.ExpectCommit()
+
+	// The original target may have been replaced between requests. The inbox
+	// tombstone is keyed only by probe/result ID, so the new target must not
+	// resurrect the already accepted result.
+	expectDNSProbeReportStart(mock, 7, 3, sqlmock.NewRows([]string{"target_id", "group_id"}).AddRow(int64(22), int64(5)))
+	mock.ExpectQuery(`INSERT INTO v2_dns_probe_result_inbox .* ON CONFLICT \(probe_id, result_id\) DO NOTHING RETURNING id`).
+		WithArgs(int64(7), int64(22), "stable-result-id", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectCommit()
+
+	trueValue := true
+	falseValue := false
+	latency := int64(25)
+	first, err := service.ReportDNSProbeResults(context.Background(), 7, DNSProbeResultsRequest{Results: []DNSProbeResult{{
+		ResultID: "stable-result-id", TargetID: 11, Success: &trueValue, LatencyMS: &latency, ResolvedIP: "203.0.113.11",
+	}}})
+	if err != nil || first.Accepted != 1 {
+		t.Fatalf("first report = %#v, %v", first, err)
+	}
+	second, err := service.ReportDNSProbeResults(context.Background(), 7, DNSProbeResultsRequest{Results: []DNSProbeResult{{
+		ResultID: "stable-result-id", TargetID: 22, Success: &falseValue, Error: "timeout",
+	}}})
+	if err != nil || second.Accepted != 0 || second.Duplicates != 1 || len(second.GroupIDs) != 0 {
+		t.Fatalf("second report = %#v, %v", second, err)
+	}
+	if len(evaluator.calls) != 1 || evaluator.calls[0][0] != 4 {
+		t.Fatalf("evaluator calls = %#v", evaluator.calls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestDNSProbeResultsRejectUnboundTargetWithoutInboxWrite(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -456,7 +617,9 @@ func TestDNSProbeResultsRejectUnboundTargetWithoutInboxWrite(t *testing.T) {
 
 	falseValue := false
 	_, err = service.ReportDNSProbeResults(context.Background(), 7, DNSProbeResultsRequest{Results: []DNSProbeResult{{
-		ResultID: "foreign-target", TargetID: 99, Success: &falseValue, Error: "timeout",
+		ResultID: "valid-first", TargetID: 11, Success: &falseValue, Error: "timeout",
+	}, {
+		ResultID: "foreign-target-later", TargetID: 99, Success: &falseValue, Error: "timeout",
 	}}})
 	if !errors.Is(err, ErrDNSProbeInvalidRequest) || errors.Is(err, ErrDNSProbeUnauthorized) {
 		t.Fatalf("error = %v, want ordinary invalid request", err)
@@ -474,17 +637,22 @@ func TestDNSProbeResultsRollBackInboxAndSkipEvaluatorWhenStateWriteFails(t *test
 	defer db.Close()
 	evaluator := &recordingDNSFailoverEvaluationRequester{}
 	service := (&DBService{db: db, dnsFailoverSchemaOK: true}).WithDNSFailoverEvaluationRequester(evaluator)
-	expectDNSProbeReportStart(mock, 7, 3, sqlmock.NewRows([]string{"target_id", "group_id"}).AddRow(int64(11), int64(4)))
+	expectDNSProbeReportStart(mock, 7, 3, sqlmock.NewRows([]string{"target_id", "group_id"}).AddRow(int64(11), int64(4)).AddRow(int64(12), int64(4)))
+	expectAcceptedDNSProbeResult(mock, 7, 11, "first-result-rolls-back", 1, int64(10), "", "", 1, 0, 1)
 	mock.ExpectQuery(`INSERT INTO v2_dns_probe_result_inbox .*RETURNING id`).
-		WithArgs(int64(7), int64(11), "rollback-result", sqlmock.AnyArg()).
+		WithArgs(int64(7), int64(12), "second-result-fails", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(101)))
 	stateErr := errors.New("state write failed")
 	mock.ExpectExec(`(?s)INSERT INTO v2_dns_probe_target_state.*ON CONFLICT`).WillReturnError(stateErr)
 	mock.ExpectRollback()
 
+	trueValue := true
 	falseValue := false
+	latency := int64(10)
 	if _, err := service.ReportDNSProbeResults(context.Background(), 7, DNSProbeResultsRequest{Results: []DNSProbeResult{{
-		ResultID: "rollback-result", TargetID: 11, Success: &falseValue, Error: "timeout",
+		ResultID: "first-result-rolls-back", TargetID: 11, Success: &trueValue, LatencyMS: &latency,
+	}, {
+		ResultID: "second-result-fails", TargetID: 12, Success: &falseValue, Error: "timeout",
 	}}}); err == nil || !errors.Is(err, stateErr) {
 		t.Fatalf("error = %v, want state write failure", err)
 	}
@@ -498,10 +666,118 @@ func TestDNSProbeResultsRollBackInboxAndSkipEvaluatorWhenStateWriteFails(t *test
 
 func expectDNSProbeReportStart(mock sqlmock.Sqlmock, probeID, prewarm int64, allowedRows *sqlmock.Rows) {
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT enabled, prewarm_count FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
+	mock.ExpectQuery(`SELECT enabled, last_heartbeat_at, prewarm_count FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
 		WithArgs(probeID).
-		WillReturnRows(sqlmock.NewRows([]string{"enabled", "prewarm_count"}).AddRow(int64(1), prewarm))
+		WillReturnRows(sqlmock.NewRows([]string{"enabled", "last_heartbeat_at", "prewarm_count"}).AddRow(int64(1), time.Now().Unix(), prewarm))
+	mock.ExpectQuery(`SELECT MIN\(g.probe_offline_sec\).*WHERE gp.probe_id = \$1 AND g.enabled = 1`).
+		WithArgs(probeID).
+		WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(int64(90)))
 	mock.ExpectQuery(`(?s)SELECT t.id, t.group_id.*FROM v2_dns_failover_group_probe gp.*WHERE gp.probe_id = \$1 AND g.enabled = 1 AND t.enabled = 1.*FOR SHARE`).
 		WithArgs(probeID).
 		WillReturnRows(allowedRows)
+}
+
+func TestDNSProbeResultsRequireFreshHeartbeatBeforeAnyWrites(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		lastHeartbeat any
+	}{
+		{name: "never heartbeated", lastHeartbeat: nil},
+		{name: "stale heartbeat", lastHeartbeat: time.Now().Add(-2 * time.Minute).Unix()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("sqlmock: %v", err)
+			}
+			defer db.Close()
+			evaluator := &recordingDNSFailoverEvaluationRequester{}
+			service := (&DBService{db: db, dnsFailoverSchemaOK: true}).WithDNSFailoverEvaluationRequester(evaluator)
+
+			mock.ExpectBegin()
+			mock.ExpectQuery(`SELECT enabled, last_heartbeat_at, prewarm_count FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
+				WithArgs(int64(7)).
+				WillReturnRows(sqlmock.NewRows([]string{"enabled", "last_heartbeat_at", "prewarm_count"}).AddRow(int64(1), test.lastHeartbeat, int64(3)))
+			mock.ExpectQuery(`SELECT MIN\(g.probe_offline_sec\).*WHERE gp.probe_id = \$1 AND g.enabled = 1`).
+				WithArgs(int64(7)).
+				WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(int64(90)))
+			mock.ExpectRollback()
+
+			falseValue := false
+			_, err = service.ReportDNSProbeResults(context.Background(), 7, DNSProbeResultsRequest{Results: []DNSProbeResult{{
+				ResultID: "heartbeat-required", TargetID: 11, Success: &falseValue, Error: "timeout",
+			}}})
+			if !errors.Is(err, ErrDNSProbeHeartbeatRequired) {
+				t.Fatalf("error = %v, want ErrDNSProbeHeartbeatRequired", err)
+			}
+			if len(evaluator.calls) != 0 {
+				t.Fatalf("evaluator called without fresh heartbeat: %#v", evaluator.calls)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("sql expectations: %v", err)
+			}
+		})
+	}
+}
+
+func TestDNSProbeStaleResultsThenHeartbeatResetStartsFirstPrewarmRound(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	evaluator := &recordingDNSFailoverEvaluationRequester{}
+	service := (&DBService{db: db, dnsFailoverSchemaOK: true}).WithDNSFailoverEvaluationRequester(evaluator)
+	staleAt := time.Now().Add(-2 * time.Minute).Unix()
+
+	// A stale report is rejected before target lookup or inbox writes.
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT enabled, last_heartbeat_at, prewarm_count FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"enabled", "last_heartbeat_at", "prewarm_count"}).AddRow(int64(1), staleAt, int64(3)))
+	mock.ExpectQuery(`SELECT MIN\(g.probe_offline_sec\).*WHERE gp.probe_id = \$1 AND g.enabled = 1`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(int64(90)))
+	mock.ExpectRollback()
+
+	// Heartbeat owns reconnect detection and resets old decision state.
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT enabled, last_heartbeat_at, prewarm_count FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"enabled", "last_heartbeat_at", "prewarm_count"}).AddRow(int64(1), staleAt, int64(3)))
+	mock.ExpectQuery(`SELECT MIN\(g.probe_offline_sec\).*WHERE gp.probe_id = \$1 AND g.enabled = 1`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(int64(90)))
+	mock.ExpectExec(`UPDATE v2_dns_probe SET .*prewarm_count = 0.*WHERE id = \$1`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE v2_dns_probe_target_state SET warmed_up = 0, consecutive_success = 0, consecutive_failure = 0`).WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectCommit()
+
+	// The first new result after that reset is prewarm round one.
+	expectDNSProbeReportStart(mock, 7, 0, sqlmock.NewRows([]string{"target_id", "group_id"}).AddRow(int64(11), int64(4)))
+	expectAcceptedDNSProbeResult(mock, 7, 11, "after-heartbeat", 1, int64(25), "", "203.0.113.11", 1, 0, 0)
+	mock.ExpectExec(`UPDATE v2_dns_probe SET prewarm_count = \$2, updated_at = \$3 WHERE id = \$1`).
+		WithArgs(int64(7), int64(1), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	trueValue := true
+	latency := int64(25)
+	request := DNSProbeResultsRequest{Results: []DNSProbeResult{{ResultID: "after-heartbeat", TargetID: 11, Success: &trueValue, LatencyMS: &latency, ResolvedIP: "203.0.113.11"}}}
+	if _, err := service.ReportDNSProbeResults(context.Background(), 7, request); !errors.Is(err, ErrDNSProbeHeartbeatRequired) {
+		t.Fatalf("stale report error = %v", err)
+	}
+	heartbeat, err := service.HeartbeatDNSProbe(context.Background(), 7, DNSProbeHeartbeatRequest{Version: "v1", Arch: "amd64", PublicIP: "203.0.113.7"})
+	if err != nil || !heartbeat.Reconnected || heartbeat.PrewarmCount != 0 {
+		t.Fatalf("heartbeat = %#v, %v", heartbeat, err)
+	}
+	report, err := service.ReportDNSProbeResults(context.Background(), 7, request)
+	if err != nil || report.Accepted != 1 || report.PrewarmCount != 1 {
+		t.Fatalf("report = %#v, %v", report, err)
+	}
+	if len(evaluator.calls) != 1 || evaluator.calls[0][0] != 4 {
+		t.Fatalf("evaluator calls = %#v", evaluator.calls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
 }

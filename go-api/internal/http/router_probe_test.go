@@ -227,16 +227,38 @@ func TestProbeRoutesRejectWrongMethods(t *testing.T) {
 	}
 }
 
+func TestProbeResultsHeartbeatRequiredIsConflictNotServerError(t *testing.T) {
+	service := &fakeDNSProbeService{reportErr: admin.ErrDNSProbeHeartbeatRequired}
+	router := NewRouter(config.Config{}, WithDNSProbeService(service))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/probe/results", strings.NewReader(`{"results":[]}`))
+	request.Header.Set("Authorization", "Bearer good-secret")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "心跳") {
+		t.Fatalf("heartbeat-required response is not actionable: %s", response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "good-secret") || strings.Contains(response.Body.String(), "probe 7") {
+		t.Fatalf("response leaked credential or probe identity: %s", response.Body.String())
+	}
+}
+
 func TestProbeRequestIPPriorityAndValidation(t *testing.T) {
 	tests := []struct {
 		name       string
 		cf         string
 		forwarded  string
+		realIP     string
 		remoteAddr string
 		want       string
 	}{
 		{name: "cloudflare first", cf: "2001:0db8::8", forwarded: "203.0.113.9, 10.0.0.2", remoteAddr: "10.0.0.1:80", want: "2001:db8::8"},
 		{name: "forwarded first item", forwarded: "203.0.113.9, not-an-ip", remoteAddr: "10.0.0.1:80", want: "203.0.113.9"},
+		{name: "invalid forwarded first item rejects whole header", forwarded: "invalid, 203.0.113.9", realIP: "198.51.100.5", remoteAddr: "10.0.0.1:80", want: "198.51.100.5"},
 		{name: "invalid headers do not hide remote", cf: "invalid", forwarded: "also-invalid", remoteAddr: "198.51.100.7:443", want: "198.51.100.7"},
 		{name: "ipv6 remote", remoteAddr: "[2001:0db8::9]:443", want: "2001:db8::9"},
 		{name: "invalid all", cf: "invalid", forwarded: "invalid", remoteAddr: "not-an-ip", want: ""},
@@ -246,6 +268,7 @@ func TestProbeRequestIPPriorityAndValidation(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "/", nil)
 			request.Header.Set("CF-Connecting-IP", test.cf)
 			request.Header.Set("X-Forwarded-For", test.forwarded)
+			request.Header.Set("X-Real-IP", test.realIP)
 			request.RemoteAddr = test.remoteAddr
 			if got := requestIP(request); got != test.want {
 				t.Fatalf("requestIP = %q, want %q", got, test.want)
