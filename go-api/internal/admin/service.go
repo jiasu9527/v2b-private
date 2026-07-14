@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"forest/go-api/internal/config"
+	"forest/go-api/internal/dnspod"
 	"forest/go-api/internal/payment"
 	"forest/go-api/internal/queue"
 	"forest/go-api/internal/session"
@@ -335,6 +336,16 @@ type Service interface {
 	DeleteManagedServer(ctx context.Context, serverType string, id int64) (bool, error)
 	UpdateManagedServer(ctx context.Context, serverType string, id int64, values map[string]any) (bool, error)
 	CopyManagedServer(ctx context.Context, serverType string, id int64) (bool, error)
+	GetDNSPodConfig(ctx context.Context) (DNSPodConfigStatus, error)
+	SaveDNSPodConfig(ctx context.Context, req DNSPodConfigSaveRequest) (DNSPodConfigStatus, error)
+	TestDNSPodConfig(ctx context.Context, secretID, secretKey string) error
+	ListDNSPodDomains(ctx context.Context, req DNSPodDomainListRequest) (dnspod.DescribeDomainListResult, error)
+	ListDNSPodRecords(ctx context.Context, req DNSPodRecordListRequest) (dnspod.DescribeRecordListResult, error)
+	ListDNSPodRecordTypes(ctx context.Context, domainGrade string) (dnspod.DescribeRecordTypeResult, error)
+	ListDNSPodRecordLines(ctx context.Context, domain, domainGrade, recordType string) (dnspod.DescribeRecordLineListResult, error)
+	SaveDNSPodRecord(ctx context.Context, req DNSPodRecordSaveRequest) (dnspod.RecordMutationResult, error)
+	DeleteDNSPodRecord(ctx context.Context, domain string, recordID int64) error
+	SetDNSPodRecordStatus(ctx context.Context, domain string, recordID int64, status string) error
 	FetchConfig(ctx context.Context, key string) (map[string]any, error)
 	SaveConfig(ctx context.Context, values map[string]any) (bool, error)
 	ListThemes(ctx context.Context) (map[string]any, error)
@@ -390,14 +401,15 @@ type Service interface {
 }
 
 type DBService struct {
-	cfg        config.Config
-	runtime    *config.RuntimeState
-	db         *sql.DB
-	orders     orderRuntime
-	jobs       queue.Enqueuer
-	authCache  *session.AuthCache
-	mailSender func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error
-	sleep      func(context.Context, time.Duration) error
+	cfg                 config.Config
+	runtime             *config.RuntimeState
+	db                  *sql.DB
+	orders              orderRuntime
+	jobs                queue.Enqueuer
+	authCache           *session.AuthCache
+	mailSender          func(host string, port int, encryption, username, password, from, fromName, to, subject, body string) error
+	sleep               func(context.Context, time.Duration) error
+	dnspodClientFactory func(secretID, secretKey string) dnspodAPI
 
 	clientEntryEnsureOnce sync.Once
 	clientEntryEnsureErr  error
