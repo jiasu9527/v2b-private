@@ -980,6 +980,29 @@ build() {
   cd "${GO_DIR}"
   GOPROXY="${GOPROXY:-https://goproxy.cn,direct}" "${GO_BIN}" mod tidy
   "${GO_BIN}" build -o "${BIN_PATH}" ./cmd/server
+  build_probe
+}
+
+build_probe() {
+  ensure_go
+  local probe_dir="${ROOT_DIR}/storage/probe"
+  local arch output
+  mkdir -p "${probe_dir}"
+  cd "${GO_DIR}"
+  for arch in amd64 arm64; do
+    output="${probe_dir}/forest-probe-linux-${arch}"
+    GOOS=linux GOARCH="${arch}" "${GO_BIN}" build -o "${output}" ./cmd/probe
+    write_sha256 "${output}" > "${output}.sha256"
+  done
+}
+
+write_sha256() {
+  local path="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "${path}"
+    return
+  fi
+  shasum -a 256 "${path}"
 }
 
 systemctl_available() {
@@ -2266,6 +2289,7 @@ usage() {
   ./scripts/appctl update
   ./scripts/appctl cleanup
   ./scripts/appctl build
+  ./scripts/appctl build-probe
   ./scripts/appctl migrate-config [legacy-config-root]
   ./scripts/appctl migrate-mysql
   ./scripts/appctl merge-mysql
@@ -2307,6 +2331,7 @@ case "${action}" in
   update) cmd_update ;;
   cleanup) cmd_cleanup ;;
   build) build ;;
+  build-probe) build_probe ;;
   migrate-config) shift; cmd_migrate_config "$@" ;;
   migrate-mysql) shift; cmd_migrate_mysql "$@" ;;
   merge-mysql) shift; cmd_merge_mysql "$@" ;;

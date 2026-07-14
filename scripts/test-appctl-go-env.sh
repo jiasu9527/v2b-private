@@ -18,6 +18,15 @@ set -euo pipefail
   printf 'GOMODCACHE=%s\n' "${GOMODCACHE:-}"
   printf 'GOCACHE=%s\n' "${GOCACHE:-}"
 } >> "${GO_LOG}"
+if [[ "${1:-}" == "build" ]]; then
+  for ((i = 1; i <= $#; i++)); do
+    if [[ "${!i}" == "-o" ]]; then
+      j=$((i + 1))
+      mkdir -p "$(dirname "${!j}")"
+      printf 'fake binary\n' > "${!j}"
+    fi
+  done
+fi
 exit 0
 EOF
 chmod +x "${TMP_DIR}/fake-go"

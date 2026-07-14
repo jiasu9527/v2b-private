@@ -27,3 +27,5 @@ go-api/run/
 .local/
 .legacy-config-backup.*
 analysis/admin-bundle/
+/storage/probe/*
+!/storage/probe/.gitignore

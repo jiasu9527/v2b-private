@@ -204,6 +204,12 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 		adminPrefix := "/api/v1/" + strings.Trim(strings.TrimSpace(cfg.AdminPath), "/")
 
 		switch {
+		case r.URL.Path == "/probe/install.sh":
+			handleProbeInstall(w, r)
+			return
+		case strings.HasPrefix(r.URL.Path, "/probe/download/"):
+			handleProbeDownload(w, r, cfg)
+			return
 		case r.URL.Path == "/healthz", r.URL.Path == "/readyz", r.URL.Path == "/api/_meta/runtime", r.URL.Path == "/monitor/api/stats":
 			mux.ServeHTTP(w, r)
 			return
