@@ -110,6 +110,22 @@ func TestLegacyClientProvidesDefaultLineWhenProviderReturnsNoLines(t *testing.T)
 	}
 }
 
+func TestLegacyClientMapsArrayShapedRecordLines(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"lines":[{"line_id":"0=0","name":"Default"},{"line_id":"7=0","name":"China Mobile"},{"line_id":"3=0","name":"China Unicom"}]}`))
+	}))
+	defer server.Close()
+
+	client := NewLegacyClient("1,token", WithLegacyEndpoint(server.URL))
+	result, err := client.DescribeRecordLineList(context.Background(), DescribeRecordLineListRequest{Domain: "example.com", DomainGrade: "DP_Free"})
+	if err != nil {
+		t.Fatalf("DescribeRecordLineList: %v", err)
+	}
+	if len(result.Lines) != 3 || result.Lines[0].LineID != "0=0" || result.Lines[1].LineName != "China Mobile" || result.Lines[2].LineID != "3=0" {
+		t.Fatalf("unexpected array-shaped lines: %#v", result.Lines)
+	}
+}
+
 func TestLegacyClientCreatesRecordAndReturnsActionableError(t *testing.T) {
 	call := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

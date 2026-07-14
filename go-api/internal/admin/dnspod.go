@@ -254,7 +254,7 @@ func (s *DBService) ListDNSPodRecordTypes(ctx context.Context, domainGrade strin
 	return client.DescribeRecordType(ctx, dnspod.DescribeRecordTypeRequest{DomainGrade: domainGrade})
 }
 
-func (s *DBService) ListDNSPodRecordLines(ctx context.Context, domain, domainGrade, recordType string) (dnspod.DescribeRecordLineListResult, error) {
+func (s *DBService) ListDNSPodRecordLines(ctx context.Context, domain string, domainID int64, domainGrade, recordType string) (dnspod.DescribeRecordLineListResult, error) {
 	domain = strings.TrimSpace(domain)
 	domainGrade = strings.TrimSpace(domainGrade)
 	recordType = strings.ToUpper(strings.TrimSpace(recordType))
@@ -269,7 +269,7 @@ func (s *DBService) ListDNSPodRecordLines(ctx context.Context, domain, domainGra
 		return dnspod.DescribeRecordLineListResult{}, err
 	}
 	return client.DescribeRecordLineList(ctx, dnspod.DescribeRecordLineListRequest{
-		Domain: domain, DomainGrade: domainGrade, RecordType: recordType,
+		Domain: domain, DomainID: domainID, DomainGrade: domainGrade, RecordType: recordType,
 	})
 }
 

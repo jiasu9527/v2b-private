@@ -225,22 +225,90 @@ func (c *LegacyClient) DescribeRecordLineList(ctx context.Context, request Descr
 	if err != nil {
 		return DescribeRecordLineListResult{}, err
 	}
-	lineMap, _ := payload["lines"].(map[string]any)
-	keys := sortedLegacyKeys(lineMap)
-	lines := make([]RecordLine, 0, len(keys))
-	for _, key := range keys {
-		row, _ := lineMap[key].(map[string]any)
-		line := RecordLine{LineID: key, LineName: legacyString(row["name"]), Useful: true}
-		subAreas, _ := row["sub_area"].(map[string]any)
-		for _, subKey := range sortedLegacyKeys(subAreas) {
-			line.SubGroup = append(line.SubGroup, RecordLine{LineID: subKey, LineName: legacyString(subAreas[subKey]), Useful: true})
-		}
-		lines = append(lines, line)
+	lines := parseLegacyRecordLines(payload["lines"])
+	if len(lines) == 0 {
+		lines = parseLegacyRecordLines(payload["LineList"])
+	}
+	if len(lines) == 0 {
+		lines = parseLegacyRecordLines(payload["line_list"])
 	}
 	if len(lines) == 0 {
 		lines = append(lines, RecordLine{LineID: "default", LineName: "Default", Useful: true})
 	}
 	return DescribeRecordLineListResult{Lines: lines}, nil
+}
+
+func parseLegacyRecordLines(raw any) []RecordLine {
+	switch values := raw.(type) {
+	case map[string]any:
+		keys := sortedLegacyKeys(values)
+		lines := make([]RecordLine, 0, len(keys))
+		for _, key := range keys {
+			row, isObject := values[key].(map[string]any)
+			if !isObject {
+				lines = append(lines, RecordLine{LineID: key, LineName: legacyString(values[key]), Useful: true})
+				continue
+			}
+			line := RecordLine{LineID: key, LineName: legacyObjectString(row, "name", "line", "LineName"), Useful: true}
+			line.SubGroup = parseLegacyRecordLineChildren(row["sub_area"])
+			if len(line.SubGroup) == 0 {
+				line.SubGroup = parseLegacyRecordLines(row["SubGroup"])
+			}
+			lines = append(lines, line)
+		}
+		return lines
+	case []any:
+		lines := make([]RecordLine, 0, len(values))
+		for _, value := range values {
+			row, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			lineID := legacyObjectString(row, "line_id", "LineId", "id", "value")
+			lineName := legacyObjectString(row, "name", "line", "LineName", "label")
+			if lineID == "" {
+				lineID = lineName
+			}
+			if lineName == "" {
+				lineName = lineID
+			}
+			if lineID == "" {
+				continue
+			}
+			line := RecordLine{LineID: lineID, LineName: lineName, Useful: true}
+			line.SubGroup = parseLegacyRecordLineChildren(row["sub_area"])
+			if len(line.SubGroup) == 0 {
+				line.SubGroup = parseLegacyRecordLines(row["SubGroup"])
+			}
+			lines = append(lines, line)
+		}
+		return lines
+	default:
+		return nil
+	}
+}
+
+func parseLegacyRecordLineChildren(raw any) []RecordLine {
+	values, ok := raw.(map[string]any)
+	if !ok {
+		return parseLegacyRecordLines(raw)
+	}
+	children := make([]RecordLine, 0, len(values))
+	for _, key := range sortedLegacyKeys(values) {
+		children = append(children, RecordLine{LineID: key, LineName: legacyString(values[key]), Useful: true})
+	}
+	return children
+}
+
+func legacyObjectString(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := values[key]; ok {
+			if result := strings.TrimSpace(legacyString(value)); result != "" {
+				return result
+			}
+		}
+	}
+	return ""
 }
 
 func (c *LegacyClient) CreateRecord(ctx context.Context, request RecordMutationRequest) (RecordMutationResult, error) {

@@ -56,6 +56,7 @@ func TestRouterAdminDNSPodDomainAndRecordLists(t *testing.T) {
 	service := &fakeAdminService{
 		dnspodDomains: dnspod.DescribeDomainListResult{Domains: []dnspod.Domain{{DomainID: 7, Name: "example.com", Grade: "DP_FREE"}}, Total: 1},
 		dnspodRecords: dnspod.DescribeRecordListResult{Records: []dnspod.Record{{RecordID: 8, Name: "www", Type: "A", Value: "192.0.2.1"}}, Total: 1},
+		dnspodLines:   dnspod.DescribeRecordLineListResult{Lines: []dnspod.RecordLine{{LineID: "default", LineName: "Default"}}},
 	}
 	router, _ := newDNSPodAdminRouter(service)
 
@@ -71,6 +72,13 @@ func TestRouterAdminDNSPodDomainAndRecordLists(t *testing.T) {
 	router.ServeHTTP(recordRec, recordReq)
 	if recordRec.Code != http.StatusOK || service.lastDNSPodRecordList.Domain != "example.com" || service.lastDNSPodRecordList.DomainID != 7 || service.lastDNSPodRecordList.RecordType != "A" || !strings.Contains(recordRec.Body.String(), `"192.0.2.1"`) {
 		t.Fatalf("unexpected record response=%d %s request=%#v", recordRec.Code, recordRec.Body.String(), service.lastDNSPodRecordList)
+	}
+
+	lineReq := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/dns/record/lines?auth_data=jwt-admin&domain=example.com&domain_id=7&domain_grade=DP_Free&record_type=A", nil)
+	lineRec := httptest.NewRecorder()
+	router.ServeHTTP(lineRec, lineReq)
+	if lineRec.Code != http.StatusOK || service.lastDNSPodRecordList.DomainID != 7 || !strings.Contains(lineRec.Body.String(), `"LineId":"default"`) {
+		t.Fatalf("unexpected line response=%d %s request=%#v", lineRec.Code, lineRec.Body.String(), service.lastDNSPodRecordList)
 	}
 }
 

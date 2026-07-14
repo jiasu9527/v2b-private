@@ -1226,8 +1226,9 @@ func (f *fakeAdminService) ListDNSPodRecordTypes(_ context.Context, domainGrade 
 	return f.dnspodTypes, f.err
 }
 
-func (f *fakeAdminService) ListDNSPodRecordLines(_ context.Context, domain, domainGrade, recordType string) (dnspod.DescribeRecordLineListResult, error) {
+func (f *fakeAdminService) ListDNSPodRecordLines(_ context.Context, domain string, domainID int64, domainGrade, recordType string) (dnspod.DescribeRecordLineListResult, error) {
 	f.lastDNSPodRecordList.Domain = domain
+	f.lastDNSPodRecordList.DomainID = domainID
 	f.lastDNSPodRecordList.RecordLine = domainGrade
 	f.lastDNSPodRecordList.RecordType = recordType
 	return f.dnspodLines, f.err

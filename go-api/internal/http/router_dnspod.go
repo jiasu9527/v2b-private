@@ -156,7 +156,12 @@ func handleAdminDNSPodRecordLines(w http.ResponseWriter, r *http.Request, sessio
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "域名和记录类型不能为空"})
 		return true
 	}
-	result, err := service.ListDNSPodRecordLines(r.Context(), inputs["domain"], inputs["domain_grade"], inputs["record_type"])
+	domainID, valid := optionalDNSPodInt(inputs["domain_id"])
+	if !valid {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "域名 ID 无效"})
+		return true
+	}
+	result, err := service.ListDNSPodRecordLines(r.Context(), inputs["domain"], domainID, inputs["domain_grade"], inputs["record_type"])
 	if err != nil {
 		return handleAdminError(w, err)
 	}

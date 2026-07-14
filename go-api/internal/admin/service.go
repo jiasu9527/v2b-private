@@ -342,7 +342,7 @@ type Service interface {
 	ListDNSPodDomains(ctx context.Context, req DNSPodDomainListRequest) (dnspod.DescribeDomainListResult, error)
 	ListDNSPodRecords(ctx context.Context, req DNSPodRecordListRequest) (dnspod.DescribeRecordListResult, error)
 	ListDNSPodRecordTypes(ctx context.Context, domainGrade string) (dnspod.DescribeRecordTypeResult, error)
-	ListDNSPodRecordLines(ctx context.Context, domain, domainGrade, recordType string) (dnspod.DescribeRecordLineListResult, error)
+	ListDNSPodRecordLines(ctx context.Context, domain string, domainID int64, domainGrade, recordType string) (dnspod.DescribeRecordLineListResult, error)
 	SaveDNSPodRecord(ctx context.Context, req DNSPodRecordSaveRequest) (dnspod.RecordMutationResult, error)
 	DeleteDNSPodRecord(ctx context.Context, domain string, domainID, recordID int64) error
 	SetDNSPodRecordStatus(ctx context.Context, domain string, domainID, recordID int64, status string) error

@@ -171,6 +171,26 @@ function flattenLines(lines: any[], prefix = ''): LineOption[] {
   return result.filter((item, index, all) => all.findIndex((other) => other.value === item.value) === index);
 }
 
+function existingRecordLineOptions(records: RecordRow[], authType?: string): LineOption[] {
+  return records.map((record) => {
+    const lineName = String(record.line || '').trim();
+    const lineId = String(record.lineId || '').trim();
+    const normalizedName = lineName.toLowerCase();
+    let value = lineId;
+    if (!value || value === '0' || (authType === 'token' && value === '0=0')) {
+      if (normalizedName === 'default' || normalizedName === '默认') value = authType === 'token' ? 'default' : '0=0';
+      else if (/^[a-z]{2}$/i.test(lineName)) value = lineName.toUpperCase();
+      else value = lineName;
+    }
+    return { label: localizeDNSPodLine(lineName, value), value, lineName };
+  }).filter((item) => item.value && item.lineName)
+    .filter((item, index, all) => all.findIndex((other) => other.value === item.value) === index);
+}
+
+function mergeLineOptions(...groups: LineOption[][]) {
+  return groups.flat().filter((item, index, all) => all.findIndex((other) => other.value === item.value) === index);
+}
+
 function statusTag(status: string, enabledText = '正常') {
   const normalized = String(status || '').toUpperCase();
   if (['ENABLE', 'ENABLED', 'DNSDONE', 'NORMAL'].includes(normalized)) return <Tag color="success">{enabledText}</Tag>;
@@ -278,23 +298,27 @@ export default function DNSPodPage() {
     try {
       const response = await apiGet('/dns/record/lines', {
         domain: selectedDomain.name,
+        domain_id: selectedDomain.id,
         domain_grade: selectedDomain.grade,
         record_type: recordType,
       });
       const loadedOptions = flattenLines(response.data || []);
-      const options = loadedOptions.length ? loadedOptions : [defaultLine];
+      const options = mergeLineOptions(loadedOptions.length ? loadedOptions : [defaultLine], existingRecordLineOptions(records, config.auth_type));
       setLineOptions(options);
       let selected = currentLineId || recordForm.getFieldValue('record_line_id');
-      if (!selected && currentLineName) {
+      if ((!selected || !options.some((item) => item.value === selected)) && currentLineName) {
         const normalizedLine = currentLineName.trim().toLowerCase();
         selected = options.find((item) => item.lineName.trim().toLowerCase() === normalizedLine || item.label.trim().toLowerCase() === normalizedLine)?.value;
       }
       if (!selected || !options.some((item) => item.value === selected)) selected = options[0]?.value;
       if (selected) recordForm.setFieldValue('record_line_id', selected);
     } catch (error: any) {
-      setLineOptions([defaultLine]);
-      recordForm.setFieldValue('record_line_id', defaultLine.value);
-      message.warning(`${error.message || '加载解析线路失败'}，已使用默认线路`);
+      const fallbackOptions = mergeLineOptions([defaultLine], existingRecordLineOptions(records, config.auth_type));
+      setLineOptions(fallbackOptions);
+      const normalizedLine = currentLineName.trim().toLowerCase();
+      const selected = fallbackOptions.find((item) => item.lineName.trim().toLowerCase() === normalizedLine)?.value || defaultLine.value;
+      recordForm.setFieldValue('record_line_id', selected);
+      message.warning(`${error.message || '加载解析线路失败'}，已保留默认及现有线路选项`);
     } finally {
       setLinesLoading(false);
     }
