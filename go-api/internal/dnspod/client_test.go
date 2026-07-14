@@ -70,6 +70,26 @@ func TestClientReturnsDNSPodAPIError(t *testing.T) {
 	}
 }
 
+func TestClientTranslatesEnglishCredentialErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"Response":{"Error":{"Code":"AuthFailure.SecretIdNotFound","Message":"The SecretId is not found, please ensure that your SecretId is correct."},"RequestId":"req-english"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("bad-id", "bad-key", WithEndpoint(server.URL))
+	_, err := client.DescribeDomainList(context.Background(), DescribeDomainListRequest{Limit: 1})
+	if err == nil {
+		t.Fatal("expected API error")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "DNSPod SecretId 不存在") ||
+		!strings.Contains(message, "腾讯云 API 密钥") ||
+		!strings.Contains(message, "AuthFailure.SecretIdNotFound") ||
+		!strings.Contains(message, "req-english") {
+		t.Fatalf("expected actionable Chinese DNSPod error, got %q", message)
+	}
+}
+
 func TestClientHonorsCancelledContext(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()

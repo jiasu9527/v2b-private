@@ -78,14 +78,38 @@ func (e *APIError) Error() string {
 	if e == nil {
 		return "DNSPod 请求失败"
 	}
-	parts := []string{strings.TrimSpace(e.Message)}
+	message := dnspodAPIErrorMessage(e.Code, e.Message)
+	parts := []string{message}
 	if strings.TrimSpace(e.Code) != "" {
-		parts = append(parts, "code="+e.Code)
+		parts = append(parts, "错误码="+e.Code)
 	}
 	if strings.TrimSpace(e.RequestID) != "" {
-		parts = append(parts, "request_id="+e.RequestID)
+		parts = append(parts, "请求ID="+e.RequestID)
 	}
 	return strings.Join(parts, " ")
+}
+
+func dnspodAPIErrorMessage(code, providerMessage string) string {
+	code = strings.TrimSpace(code)
+	switch code {
+	case "AuthFailure.SecretIdNotFound", "AuthFailure.InvalidSecretId":
+		return "DNSPod SecretId 不存在，请确认填写的是腾讯云 API 密钥管理中的 SecretId"
+	case "AuthFailure.SignatureFailure":
+		return "DNSPod 签名验证失败，请确认 SecretKey 与 SecretId 匹配且没有多余空格"
+	case "AuthFailure.UnauthorizedOperation", "UnauthorizedOperation":
+		return "当前腾讯云 API 密钥没有 DNSPod 操作权限，请为所属用户授权 DNSPod 权限"
+	case "AuthFailure.TokenFailure":
+		return "DNSPod 临时凭证无效或已经过期"
+	case "AuthFailure.SignatureExpire":
+		return "DNSPod 请求时间校验失败，请检查服务器时间是否准确"
+	case "RequestLimitExceeded":
+		return "DNSPod API 请求过于频繁，请稍后重试"
+	}
+	providerMessage = strings.TrimSpace(providerMessage)
+	if providerMessage == "" {
+		return "DNSPod API 返回错误"
+	}
+	return "DNSPod API 返回错误：" + providerMessage
 }
 
 type responseMeta struct {
@@ -122,7 +146,7 @@ func (c *Client) call(ctx context.Context, action string, payload any, result an
 
 	response, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("DNSPod request failed: %w", err)
+		return fmt.Errorf("DNSPod 请求失败：%w", err)
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
@@ -130,7 +154,7 @@ func (c *Client) call(ctx context.Context, action string, payload any, result an
 		return fmt.Errorf("read DNSPod response: %w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("DNSPod HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(raw)))
+		return fmt.Errorf("DNSPod 接口返回 HTTP %d：%s", response.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	var envelope struct {
 		Response json.RawMessage `json:"Response"`
