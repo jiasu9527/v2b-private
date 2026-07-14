@@ -15,6 +15,7 @@ import (
 
 	"forest/go-api/internal/admin"
 	"forest/go-api/internal/config"
+	"forest/go-api/internal/dnspod"
 	"forest/go-api/internal/guest"
 	"forest/go-api/internal/passport"
 	"forest/go-api/internal/payment"
@@ -772,6 +773,12 @@ type fakeAdminService struct {
 	clientEntryUserPolicies       []admin.ClientEntryUserPolicyRecord
 	serverRoutes                  []admin.ServerRouteRecord
 	managedServers                []map[string]any
+	dnspodConfig                  admin.DNSPodConfigStatus
+	dnspodDomains                 dnspod.DescribeDomainListResult
+	dnspodRecords                 dnspod.DescribeRecordListResult
+	dnspodTypes                   dnspod.DescribeRecordTypeResult
+	dnspodLines                   dnspod.DescribeRecordLineListResult
+	dnspodMutation                dnspod.RecordMutationResult
 	hostUpdateResult              admin.ManagedServerHostUpdateResult
 	configData                    map[string]any
 	themes                        map[string]any
@@ -872,6 +879,15 @@ type fakeAdminService struct {
 	lastNodeUpdate                map[string]any
 	lastNodeCopyType              string
 	lastNodeCopyID                int64
+	lastDNSPodConfigSave          admin.DNSPodConfigSaveRequest
+	lastDNSPodDomainList          admin.DNSPodDomainListRequest
+	lastDNSPodRecordList          admin.DNSPodRecordListRequest
+	lastDNSPodRecordSave          admin.DNSPodRecordSaveRequest
+	lastDNSPodDeleteDomain        string
+	lastDNSPodDeleteID            int64
+	lastDNSPodStatusDomain        string
+	lastDNSPodStatusID            int64
+	lastDNSPodStatus              string
 	lastConfigKey                 string
 	lastConfigSave                map[string]any
 	lastWebhookToken              string
@@ -1177,6 +1193,61 @@ func (f *fakeAdminService) CopyManagedServer(_ context.Context, serverType strin
 	f.lastNodeCopyType = serverType
 	f.lastNodeCopyID = id
 	return true, f.err
+}
+
+func (f *fakeAdminService) GetDNSPodConfig(_ context.Context) (admin.DNSPodConfigStatus, error) {
+	return f.dnspodConfig, f.err
+}
+
+func (f *fakeAdminService) SaveDNSPodConfig(_ context.Context, req admin.DNSPodConfigSaveRequest) (admin.DNSPodConfigStatus, error) {
+	f.lastDNSPodConfigSave = req
+	return f.dnspodConfig, f.err
+}
+
+func (f *fakeAdminService) TestDNSPodConfig(_ context.Context, secretID, secretKey string) error {
+	f.lastDNSPodConfigSave.SecretID = secretID
+	f.lastDNSPodConfigSave.SecretKey = secretKey
+	return f.err
+}
+
+func (f *fakeAdminService) ListDNSPodDomains(_ context.Context, req admin.DNSPodDomainListRequest) (dnspod.DescribeDomainListResult, error) {
+	f.lastDNSPodDomainList = req
+	return f.dnspodDomains, f.err
+}
+
+func (f *fakeAdminService) ListDNSPodRecords(_ context.Context, req admin.DNSPodRecordListRequest) (dnspod.DescribeRecordListResult, error) {
+	f.lastDNSPodRecordList = req
+	return f.dnspodRecords, f.err
+}
+
+func (f *fakeAdminService) ListDNSPodRecordTypes(_ context.Context, domainGrade string) (dnspod.DescribeRecordTypeResult, error) {
+	f.lastDNSPodRecordList.RecordType = domainGrade
+	return f.dnspodTypes, f.err
+}
+
+func (f *fakeAdminService) ListDNSPodRecordLines(_ context.Context, domain, domainGrade, recordType string) (dnspod.DescribeRecordLineListResult, error) {
+	f.lastDNSPodRecordList.Domain = domain
+	f.lastDNSPodRecordList.RecordLine = domainGrade
+	f.lastDNSPodRecordList.RecordType = recordType
+	return f.dnspodLines, f.err
+}
+
+func (f *fakeAdminService) SaveDNSPodRecord(_ context.Context, req admin.DNSPodRecordSaveRequest) (dnspod.RecordMutationResult, error) {
+	f.lastDNSPodRecordSave = req
+	return f.dnspodMutation, f.err
+}
+
+func (f *fakeAdminService) DeleteDNSPodRecord(_ context.Context, domain string, recordID int64) error {
+	f.lastDNSPodDeleteDomain = domain
+	f.lastDNSPodDeleteID = recordID
+	return f.err
+}
+
+func (f *fakeAdminService) SetDNSPodRecordStatus(_ context.Context, domain string, recordID int64, status string) error {
+	f.lastDNSPodStatusDomain = domain
+	f.lastDNSPodStatusID = recordID
+	f.lastDNSPodStatus = status
+	return f.err
 }
 
 func (f *fakeAdminService) FetchConfig(_ context.Context, key string) (map[string]any, error) {

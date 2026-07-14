@@ -737,6 +737,46 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminConfigTestSendMail(w, r, state.session, state.admin) {
 				return
 			}
+		case r.URL.Path == adminPrefix+"/dns/config":
+			if handleAdminDNSPodConfig(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/config/save":
+			if handleAdminDNSPodConfigSave(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/config/test":
+			if handleAdminDNSPodConfigTest(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/domain/list":
+			if handleAdminDNSPodDomainList(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/record/list":
+			if handleAdminDNSPodRecordList(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/record/types":
+			if handleAdminDNSPodRecordTypes(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/record/lines":
+			if handleAdminDNSPodRecordLines(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/record/save":
+			if handleAdminDNSPodRecordSave(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/record/delete":
+			if handleAdminDNSPodRecordDelete(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/dns/record/status":
+			if handleAdminDNSPodRecordStatus(w, r, state.session, state.admin) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/subscribe-guard/stats":
 			if handleAdminSubscribeGuardStats(w, r, cfg, state.session, state.node, state.user, state.admin) {
 				return
