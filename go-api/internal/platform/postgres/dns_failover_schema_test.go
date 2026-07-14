@@ -38,6 +38,43 @@ func TestDNSFailoverInboxTargetFKMigrationUsesCurrentSchemaAndValidatesExactFK(t
 	}
 }
 
+func TestDNSFailoverTargetGroupIDUniqueMigrationReusesLegacyNamedUniqueIndex(t *testing.T) {
+	migration := dnsFailoverTargetGroupIDUniqueMigration
+	for _, required := range []string{
+		"schema_name := current_schema();",
+		"target_table := format('%I.%I', schema_name, 'v2_dns_failover_target');",
+		"target_relation := to_regclass(target_table);",
+		"c.conkey IS NOT DISTINCT FROM ARRAY[group_id_attnum, target_id_attnum]::smallint[]",
+		"i.indisunique",
+		"i.indisvalid",
+		"i.indpred IS NULL",
+		"i.indkey::smallint[] IS NOT DISTINCT FROM ARRAY[group_id_attnum, target_id_attnum]::smallint[]",
+		"ALTER TABLE %s ADD CONSTRAINT %I UNIQUE USING INDEX %I",
+	} {
+		if !strings.Contains(migration, required) {
+			t.Errorf("migration missing %q", required)
+		}
+	}
+	if strings.Contains(migration, "uniq_v2_dns_failover_target_group_id', 'group_id'") {
+		t.Fatal("migration must not attempt to create a constraint with the legacy index name")
+	}
+}
+
+func TestDNSFailoverTargetGroupIDUniqueMigrationCreatesConstraintOnFreshSchema(t *testing.T) {
+	migration := dnsFailoverTargetGroupIDUniqueMigration
+	for _, required := range []string{
+		"IF existing_index_name IS NOT NULL THEN",
+		"UNIQUE USING INDEX %I",
+		"ELSE",
+		"UNIQUE (%I, %I)",
+		"group_id", "id",
+	} {
+		if !strings.Contains(migration, required) {
+			t.Errorf("fresh-schema migration missing %q", required)
+		}
+	}
+}
+
 func TestEnsureDNSFailoverSchemaCreatesTablesAndIndexesIdempotently(t *testing.T) {
 	t.Parallel()
 
@@ -115,6 +152,8 @@ func expectDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta(dnsProbeInboxTargetFKMigration)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(dnsFailoverTargetGroupIDUniqueMigration)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	for _, constraint := range expectedDNSFailoverConstraints {
 		alter := "ALTER TABLE " + constraint.table + " ADD CONSTRAINT " + constraint.name + " " + constraint.definition
@@ -158,7 +197,6 @@ var expectedDNSFailoverConstraints = []struct {
 	{"v2_dns_failover_group", "chk_v2_dns_failover_group_dns_values", "CHECK (ttl >= 0 AND mx >= 0 AND (weight IS NULL OR weight >= 0))"},
 	{"v2_dns_failover_group", "chk_v2_dns_failover_group_dns_incident", "CHECK (active_dns_incident_type IN ('', 'dnspod_error', 'dns_state_diverged'))"},
 	{"v2_dns_failover_target", "fk_v2_dns_failover_target_group", "FOREIGN KEY (group_id) REFERENCES v2_dns_failover_group(id) ON DELETE CASCADE"},
-	{"v2_dns_failover_target", "uniq_v2_dns_failover_target_group_id", "UNIQUE (group_id, id)"},
 	{"v2_dns_failover_target", "chk_v2_dns_failover_target_type", "CHECK (dns_type IN ('A', 'AAAA', 'CNAME'))"},
 	{"v2_dns_failover_target", "chk_v2_dns_failover_target_enabled", "CHECK (enabled IN (0, 1))"},
 	{"v2_dns_failover_target", "chk_v2_dns_failover_target_sort", "CHECK (sort >= 0)"},
@@ -194,6 +232,9 @@ func TestDNSFailoverGenericConstraintsExcludeAtomicInboxTargetFK(t *testing.T) {
 	for _, constraint := range dnsFailoverConstraints {
 		if constraint.table == "v2_dns_probe_result_inbox" && constraint.name == "fk_v2_dns_probe_result_inbox_target" {
 			t.Fatal("inbox target FK must be managed only by the atomic conditional migration")
+		}
+		if constraint.table == "v2_dns_failover_target" && constraint.name == "uniq_v2_dns_failover_target_group_id" {
+			t.Fatal("target group/id unique key must be managed only by the dedicated catalog-aware migration")
 		}
 	}
 }

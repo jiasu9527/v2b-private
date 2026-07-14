@@ -131,6 +131,8 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	}
 	mock.ExpectExec(`(?s)DO \$dns_probe_inbox_fk\$.*schema_name := current_schema\(\).*format\('%I.%I', schema_name, 'v2_dns_probe_result_inbox'\).*format\('%I.%I', schema_name, 'v2_dns_failover_target'\).*to_regclass\(inbox_table\).*to_regclass\(target_table\).*a.attrelid = inbox_relation.*a.attrelid = target_relation.*EXECUTE format\('ALTER TABLE %s ALTER COLUMN %I DROP NOT NULL'.*SELECT c.contype, c.confdeltype, c.confrelid, c.conkey, c.confkey.*current_referenced_relation IS DISTINCT FROM target_relation.*current_source_columns IS DISTINCT FROM ARRAY\[inbox_target_attnum\]::smallint\[\].*current_referenced_columns IS DISTINCT FROM ARRAY\[target_id_attnum\]::smallint\[\].*EXECUTE format\('ALTER TABLE %s DROP CONSTRAINT %I'.*EXECUTE format\('ALTER TABLE %s ADD CONSTRAINT %I FOREIGN KEY \(%I\) REFERENCES %s\(%I\) ON DELETE SET NULL'.*\$dns_probe_inbox_fk\$;`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`(?s)DO \$dns_failover_target_group_id_unique\$.*c\.conkey IS NOT DISTINCT FROM ARRAY\[group_id_attnum, target_id_attnum\]::smallint\[\].*i\.indisunique.*i\.indisvalid.*i\.indpred IS NULL.*UNIQUE USING INDEX %I.*UNIQUE \(%I, %I\).*\$dns_failover_target_group_id_unique\$;`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	for _, constraint := range []string{
 		"chk_v2_dns_probe_enabled",
 		"chk_v2_dns_probe_prewarm",
@@ -140,7 +142,6 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		"chk_v2_dns_failover_group_dns_values",
 		"chk_v2_dns_failover_group_dns_incident",
 		"fk_v2_dns_failover_target_group",
-		"uniq_v2_dns_failover_target_group_id",
 		"chk_v2_dns_failover_target_type",
 		"chk_v2_dns_failover_target_enabled",
 		"chk_v2_dns_failover_target_sort",

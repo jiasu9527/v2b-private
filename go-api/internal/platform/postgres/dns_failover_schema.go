@@ -79,6 +79,88 @@ END IF;
 END;
 $dns_probe_inbox_fk$;`
 
+const dnsFailoverTargetGroupIDUniqueMigration = `DO $dns_failover_target_group_id_unique$
+DECLARE
+schema_name text;
+target_table text;
+target_relation oid;
+group_id_attnum smallint;
+target_id_attnum smallint;
+current_constraint_columns smallint[];
+existing_index_name name;
+unique_constraint_name name := 'uq_v2_dns_failover_target_group_id';
+unique_constraint_suffix integer := 0;
+BEGIN
+schema_name := current_schema();
+IF schema_name IS NULL THEN
+RAISE EXCEPTION 'DNS failover schema is not present in search_path';
+END IF;
+
+target_table := format('%I.%I', schema_name, 'v2_dns_failover_target');
+target_relation := to_regclass(target_table);
+IF target_relation IS NULL THEN
+RAISE EXCEPTION 'DNS failover target table is missing from schema %', schema_name;
+END IF;
+
+SELECT a.attnum
+INTO group_id_attnum
+FROM pg_attribute a
+WHERE a.attrelid = target_relation
+AND a.attname = 'group_id'
+AND NOT a.attisdropped;
+
+SELECT a.attnum
+INTO target_id_attnum
+FROM pg_attribute a
+WHERE a.attrelid = target_relation
+AND a.attname = 'id'
+AND NOT a.attisdropped;
+
+IF group_id_attnum IS NULL OR target_id_attnum IS NULL THEN
+RAISE EXCEPTION 'DNS failover target key columns are missing from schema %', schema_name;
+END IF;
+
+SELECT c.conkey
+INTO current_constraint_columns
+FROM pg_constraint c
+WHERE c.conrelid = target_relation
+AND c.contype = 'u'
+AND c.conkey IS NOT DISTINCT FROM ARRAY[group_id_attnum, target_id_attnum]::smallint[];
+
+IF current_constraint_columns IS NOT NULL THEN
+RETURN;
+END IF;
+
+SELECT index_class.relname
+INTO existing_index_name
+FROM pg_index i
+JOIN pg_class index_class ON index_class.oid = i.indexrelid
+WHERE i.indrelid = target_relation
+AND i.indisunique
+AND i.indisvalid
+AND i.indpred IS NULL
+AND i.indkey::smallint[] IS NOT DISTINCT FROM ARRAY[group_id_attnum, target_id_attnum]::smallint[]
+LIMIT 1;
+
+WHILE EXISTS (
+SELECT 1
+FROM pg_constraint c
+WHERE c.conrelid = target_relation
+AND c.conname = unique_constraint_name
+)
+OR to_regclass(format('%I.%I', schema_name, unique_constraint_name)) IS NOT NULL LOOP
+unique_constraint_suffix := unique_constraint_suffix + 1;
+unique_constraint_name := format('uq_v2_dns_failover_target_group_id_%s', unique_constraint_suffix);
+END LOOP;
+
+IF existing_index_name IS NOT NULL THEN
+EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I UNIQUE USING INDEX %I', target_table, unique_constraint_name, existing_index_name);
+ELSE
+EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I UNIQUE (%I, %I)', target_table, unique_constraint_name, 'group_id', 'id');
+END IF;
+END;
+$dns_failover_target_group_id_unique$;`
+
 // EnsureDNSFailoverSchema creates the persistent state used by DNS failover.
 // Every statement is safe to execute more than once for eager startup and the
 // defensive lazy fallback without coordinating across processes.
@@ -299,6 +381,9 @@ CHECK (active_incident_type IN ('', 'all_probes_offline', 'probe_disagreement', 
 	if _, err := db.ExecContext(ctx, dnsProbeInboxTargetFKMigration); err != nil {
 		return fmt.Errorf("atomically ensure DNS probe result tombstone target constraint: %w", err)
 	}
+	if _, err := db.ExecContext(ctx, dnsFailoverTargetGroupIDUniqueMigration); err != nil {
+		return fmt.Errorf("ensure DNS failover target group/id unique constraint: %w", err)
+	}
 
 	for _, constraint := range dnsFailoverConstraints {
 		stmt := fmt.Sprintf(`DO $dns_failover$
@@ -352,7 +437,6 @@ var dnsFailoverConstraints = []struct {
 	{"v2_dns_failover_group", "chk_v2_dns_failover_group_dns_values", "CHECK (ttl >= 0 AND mx >= 0 AND (weight IS NULL OR weight >= 0))"},
 	{"v2_dns_failover_group", "chk_v2_dns_failover_group_dns_incident", "CHECK (active_dns_incident_type IN ('', 'dnspod_error', 'dns_state_diverged'))"},
 	{"v2_dns_failover_target", "fk_v2_dns_failover_target_group", "FOREIGN KEY (group_id) REFERENCES v2_dns_failover_group(id) ON DELETE CASCADE"},
-	{"v2_dns_failover_target", "uniq_v2_dns_failover_target_group_id", "UNIQUE (group_id, id)"},
 	{"v2_dns_failover_target", "chk_v2_dns_failover_target_type", "CHECK (dns_type IN ('A', 'AAAA', 'CNAME'))"},
 	{"v2_dns_failover_target", "chk_v2_dns_failover_target_enabled", "CHECK (enabled IN (0, 1))"},
 	{"v2_dns_failover_target", "chk_v2_dns_failover_target_sort", "CHECK (sort >= 0)"},
