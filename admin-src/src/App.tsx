@@ -28,6 +28,7 @@ import ClientEntryPage from './pages/ClientEntryPage';
 import ClientEntryUserPolicyPage from './pages/ClientEntryUserPolicyPage';
 import SubscribeGuardPage from './pages/SubscribeGuardPage';
 import DNSPodPage from './pages/DNSPodPage';
+import DNSFailoverPage from './pages/DNSFailoverPage';
 import { checkLogin, clearAuth, getAdminUserInfo, getAuth, getCurrentUserInfo, getSettings, pathAdminSegment, setAdminUserInfo } from './lib/api';
 
 const { Header, Sider, Content } = Layout;
@@ -51,6 +52,7 @@ const menu = [
   { type: 'item', key: '/server/client-entry', icon: <ClusterOutlined />, label: '客户端入口' },
   { type: 'item', key: '/server/client-entry-user-policy', icon: <ClusterOutlined />, label: '用户入口分配' },
   { type: 'item', key: '/dns', icon: <GlobalOutlined />, label: '域名解析' },
+  { type: 'item', key: '/dns-failover', icon: <GlobalOutlined />, label: '备用监控' },
   { type: 'heading', key: 'finance-heading', label: '财务' },
   { type: 'item', key: '/plan', icon: <AppstoreOutlined />, label: '订阅管理' },
   { type: 'item', key: '/order', icon: <ShoppingCartOutlined />, label: '订单管理' },
@@ -90,6 +92,7 @@ function Page({ path }: { path: string }) {
   if (route === '/server/client-entry') return <ClientEntryPage />;
   if (route === '/server/client-entry-user-policy') return <ClientEntryUserPolicyPage />;
   if (route === '/dns') return <DNSPodPage />;
+  if (route === '/dns-failover') return <DNSFailoverPage />;
   if (route === '/config/system') return <ConfigPage />;
   if (route === '/config/payment') return <PaymentPage />;
   if (route === '/config/subscribe-guard') return <SubscribeGuardPage />;

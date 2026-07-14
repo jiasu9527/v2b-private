@@ -133,6 +133,18 @@ export async function apiGet(path: string, params: AnyRecord = {}) {
   return parseResponse(res);
 }
 
+export async function apiWrite(method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body: AnyRecord = {}) {
+  // Strict JSON admin endpoints authenticate from the query string, so auth_data is not added to their decoded payload.
+  const auth = getAuth();
+  const suffix = auth ? `${path.includes('?') ? '&' : '?'}auth_data=${encodeURIComponent(auth)}` : '';
+  const res = await fetch(`/api/v1/${getAdminPath()}${path}${suffix}`, { method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: method === 'DELETE' ? undefined : JSON.stringify(body) });
+  return parseResponse(res);
+}
+export const apiJsonPost = (path: string, body: AnyRecord = {}) => apiWrite('POST', path, body);
+export const apiPut = (path: string, body: AnyRecord = {}) => apiWrite('PUT', path, body);
+export const apiPatch = (path: string, body: AnyRecord = {}) => apiWrite('PATCH', path, body);
+export const apiDelete = (path: string) => apiWrite('DELETE', path);
+
 export async function apiPost(path: string, body: AnyRecord = {}, options: { form?: boolean; keepEmpty?: boolean; raw?: boolean } = {}) {
   const payload = { ...body, auth_data: body.auth_data ?? getAuth() };
   const init: RequestInit = {
