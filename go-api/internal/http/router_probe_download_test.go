@@ -35,6 +35,9 @@ func TestRouterProbeInstallRendersValidatedScript(t *testing.T) {
 	if strings.Contains(body, "internal-upstream.example") {
 		t.Fatalf("script leaked reverse-proxy upstream host into DOWNLOAD_BASE: %s", body)
 	}
+	if !strings.Contains(body, `"interval":%s`) || strings.Contains(body, `"interval":"%ss"`) {
+		t.Fatalf("script must persist interval as JSON seconds number: %s", body)
+	}
 
 	bad := httptest.NewRequest(http.MethodGet, "/api/v1/probe/install.sh?api_url=file%3A%2F%2F%2Ftmp%2Fx&token=$(id)", nil)
 	badRec := httptest.NewRecorder()

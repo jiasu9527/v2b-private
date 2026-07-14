@@ -102,7 +102,7 @@ ACTUAL_SHA=$(sha256sum "$TMP_DIR/$ARTIFACT" | awk '{print $1}')
 install -d -m 0755 "$INSTALL_DIR" "$CONFIG_DIR"
 install -m 0755 "$TMP_DIR/$ARTIFACT" "$INSTALL_DIR/forest-probe"
 umask 077
-printf '{"api_url":"%%s","token":"%%s","interval":"%%ss"}\n' "$API_URL" "$TOKEN" "$INTERVAL" > "$CONFIG_DIR/config.json"
+printf '{"api_url":"%%s","token":"%%s","interval":%%s}\n' "$API_URL" "$TOKEN" "$INTERVAL" > "$CONFIG_DIR/config.json"
 chmod 0600 "$CONFIG_DIR/config.json"
 cat > /etc/systemd/system/forest-probe.service <<'UNIT'
 [Unit]

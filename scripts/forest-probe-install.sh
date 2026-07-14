@@ -38,7 +38,7 @@ actual_sha="$(sha256sum "${TMP_DIR}/${artifact}" | awk '{print $1}')"
 install -d -m 0755 "${INSTALL_DIR}" "${CONFIG_DIR}" "${SYSTEMD_DIR}"
 install -m 0755 "${TMP_DIR}/${artifact}" "${INSTALL_DIR}/forest-probe"
 umask 077
-printf '{"api_url":"%s","token":"%s","interval":"%ss"}\n' "${API_URL}" "${TOKEN}" "${INTERVAL}" > "${CONFIG_DIR}/config.json"
+printf '{"api_url":"%s","token":"%s","interval":%s}\n' "${API_URL}" "${TOKEN}" "${INTERVAL}" > "${CONFIG_DIR}/config.json"
 chmod 0600 "${CONFIG_DIR}/config.json"
 cat > "${SYSTEMD_DIR}/forest-probe.service" <<'UNIT'
 [Unit]
