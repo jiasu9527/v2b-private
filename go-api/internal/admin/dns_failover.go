@@ -18,6 +18,12 @@ import (
 
 const dnsProbeAPIURLKey = "dns_probe_api_url"
 
+const (
+	dnsFailoverEventDefaultPageSize int64 = 20
+	dnsFailoverEventMaxPageSize     int64 = 100
+	dnsFailoverEventMaxCurrent      int64 = 1_000_000
+)
+
 type DNSFailoverSettings struct {
 	ProbeAPIURL string `json:"dns_probe_api_url"`
 }
@@ -128,6 +134,33 @@ type DNSFailoverRuleSaveRequest struct {
 	CooldownSec                 int64
 	Targets                     []DNSFailoverTargetSaveRequest
 	ProbeIDs                    []int64
+}
+
+type DNSFailoverEventRecord struct {
+	ID         int64  `json:"id"`
+	GroupID    int64  `json:"group_id"`
+	ProbeID    *int64 `json:"probe_id"`
+	TargetID   *int64 `json:"target_id"`
+	EventType  string `json:"event_type"`
+	Message    string `json:"message"`
+	Details    string `json:"details"`
+	DedupeKey  string `json:"dedupe_key"`
+	NotifiedAt *int64 `json:"notified_at"`
+	CreatedAt  int64  `json:"created_at"`
+}
+
+type DNSFailoverEventListRequest struct {
+	GroupID   *int64
+	EventType string
+	Current   int64
+	PageSize  int64
+}
+
+type DNSFailoverEventListResult struct {
+	Data     []DNSFailoverEventRecord `json:"data"`
+	Total    int64                    `json:"total"`
+	Current  int64                    `json:"current"`
+	PageSize int64                    `json:"page_size"`
 }
 
 func (s *DBService) GetDNSFailoverSettings(_ context.Context) (DNSFailoverSettings, error) {
@@ -842,6 +875,103 @@ func (s *DBService) SetDNSFailoverRuleEnabled(ctx context.Context, id int64, ena
 		return false, errors.New("故障转移规则不存在")
 	}
 	return true, nil
+}
+
+func (s *DBService) ListDNSFailoverEvents(ctx context.Context, request DNSFailoverEventListRequest) (DNSFailoverEventListResult, error) {
+	if err := s.ensureDNSFailoverSchema(ctx); err != nil {
+		return DNSFailoverEventListResult{}, err
+	}
+	if request.GroupID != nil && *request.GroupID <= 0 {
+		return DNSFailoverEventListResult{}, errors.New("故障转移规则 ID 无效")
+	}
+
+	current, pageSize := normalizeDNSFailoverEventPage(request.Current, request.PageSize)
+	eventType := strings.TrimSpace(request.EventType)
+	conditions := make([]string, 0, 2)
+	filterArgs := make([]any, 0, 2)
+	if request.GroupID != nil {
+		filterArgs = append(filterArgs, *request.GroupID)
+		conditions = append(conditions, fmt.Sprintf("group_id = $%d", len(filterArgs)))
+	}
+	if eventType != "" {
+		filterArgs = append(filterArgs, eventType)
+		conditions = append(conditions, fmt.Sprintf("event_type = $%d", len(filterArgs)))
+	}
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	result := DNSFailoverEventListResult{
+		Data:     []DNSFailoverEventRecord{},
+		Current:  current,
+		PageSize: pageSize,
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_dns_failover_event`+whereClause, filterArgs...).Scan(&result.Total); err != nil {
+		return DNSFailoverEventListResult{}, errors.New("读取故障转移事件总数失败")
+	}
+
+	queryArgs := append([]any(nil), filterArgs...)
+	limitPlaceholder := len(queryArgs) + 1
+	queryArgs = append(queryArgs, pageSize)
+	offsetPlaceholder := len(queryArgs) + 1
+	queryArgs = append(queryArgs, (current-1)*pageSize)
+	query := `SELECT id, group_id, probe_id, target_id, event_type, message, details, dedupe_key, notified_at, created_at
+FROM v2_dns_failover_event` + whereClause + `
+ORDER BY created_at DESC, id DESC
+LIMIT $` + fmt.Sprint(limitPlaceholder) + ` OFFSET $` + fmt.Sprint(offsetPlaceholder)
+	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return DNSFailoverEventListResult{}, errors.New("读取故障转移事件失败")
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			event      DNSFailoverEventRecord
+			probeID    sql.NullInt64
+			targetID   sql.NullInt64
+			notifiedAt sql.NullInt64
+		)
+		if err := rows.Scan(
+			&event.ID,
+			&event.GroupID,
+			&probeID,
+			&targetID,
+			&event.EventType,
+			&event.Message,
+			&event.Details,
+			&event.DedupeKey,
+			&notifiedAt,
+			&event.CreatedAt,
+		); err != nil {
+			return DNSFailoverEventListResult{}, errors.New("读取故障转移事件失败")
+		}
+		event.ProbeID = dnsNullInt64Pointer(probeID)
+		event.TargetID = dnsNullInt64Pointer(targetID)
+		event.NotifiedAt = dnsNullInt64Pointer(notifiedAt)
+		result.Data = append(result.Data, event)
+	}
+	if err := rows.Err(); err != nil {
+		return DNSFailoverEventListResult{}, errors.New("读取故障转移事件失败")
+	}
+	return result, nil
+}
+
+func normalizeDNSFailoverEventPage(current, pageSize int64) (int64, int64) {
+	if current < 1 {
+		current = 1
+	}
+	if current > dnsFailoverEventMaxCurrent {
+		current = dnsFailoverEventMaxCurrent
+	}
+	if pageSize < 1 {
+		pageSize = dnsFailoverEventDefaultPageSize
+	}
+	if pageSize > dnsFailoverEventMaxPageSize {
+		pageSize = dnsFailoverEventMaxPageSize
+	}
+	return current, pageSize
 }
 
 func normalizeDNSFailoverRuleSaveRequest(request *DNSFailoverRuleSaveRequest) error {

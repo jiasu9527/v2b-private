@@ -357,6 +357,7 @@ type Service interface {
 	SaveDNSFailoverRule(ctx context.Context, req DNSFailoverRuleSaveRequest) (DNSFailoverRuleRecord, error)
 	DeleteDNSFailoverRule(ctx context.Context, id int64) (bool, error)
 	SetDNSFailoverRuleEnabled(ctx context.Context, id int64, enabled bool) (bool, error)
+	ListDNSFailoverEvents(ctx context.Context, req DNSFailoverEventListRequest) (DNSFailoverEventListResult, error)
 	FetchConfig(ctx context.Context, key string) (map[string]any, error)
 	SaveConfig(ctx context.Context, values map[string]any) (bool, error)
 	ListThemes(ctx context.Context) (map[string]any, error)

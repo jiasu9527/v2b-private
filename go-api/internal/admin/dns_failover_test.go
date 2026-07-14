@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -436,6 +437,117 @@ func TestDNSFailoverRuleDeleteAndToggle(t *testing.T) {
 	mock.ExpectExec(`DELETE FROM v2_dns_failover_group WHERE id = \$1`).WithArgs(int64(50)).WillReturnResult(sqlmock.NewResult(0, 1))
 	if ok, err := service.DeleteDNSFailoverRule(context.Background(), 50); err != nil || !ok {
 		t.Fatalf("DeleteDNSFailoverRule = %v, %v", ok, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverEventListPaginatesWithoutFiltersAndScansNullableFields(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM v2_dns_failover_event`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(42)))
+	mock.ExpectQuery(`SELECT id, group_id, probe_id, target_id, event_type, message, details, dedupe_key, notified_at, created_at\s+FROM v2_dns_failover_event\s+ORDER BY created_at DESC, id DESC\s+LIMIT \$1 OFFSET \$2`).
+		WithArgs(int64(25), int64(25)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "group_id", "probe_id", "target_id", "event_type", "message", "details", "dedupe_key", "notified_at", "created_at"}).
+			AddRow(int64(8), int64(50), nil, int64(71), "failover", "已切换", `{"from":70,"to":71}`, "switch:50:71", nil, int64(200)).
+			AddRow(int64(7), int64(50), int64(4), nil, "probe_offline", "探针离线", `{}`, "probe:4:offline", int64(190), int64(190)))
+
+	result, err := service.ListDNSFailoverEvents(context.Background(), DNSFailoverEventListRequest{Current: 2, PageSize: 25})
+	if err != nil {
+		t.Fatalf("ListDNSFailoverEvents: %v", err)
+	}
+	if result.Total != 42 || result.Current != 2 || result.PageSize != 25 || len(result.Data) != 2 {
+		t.Fatalf("unexpected event list result: %#v", result)
+	}
+	if result.Data[0].ProbeID != nil || result.Data[0].TargetID == nil || *result.Data[0].TargetID != 71 || result.Data[0].NotifiedAt != nil {
+		t.Fatalf("unexpected nullable fields in first event: %#v", result.Data[0])
+	}
+	if result.Data[1].ProbeID == nil || *result.Data[1].ProbeID != 4 || result.Data[1].TargetID != nil || result.Data[1].NotifiedAt == nil || *result.Data[1].NotifiedAt != 190 {
+		t.Fatalf("unexpected nullable fields in second event: %#v", result.Data[1])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverEventListFiltersByGroupAndTrimmedEventType(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	groupID := int64(50)
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM v2_dns_failover_event WHERE group_id = \$1 AND event_type = \$2`).
+		WithArgs(groupID, "failover").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	mock.ExpectQuery(`SELECT id, group_id, probe_id, target_id, event_type, message, details, dedupe_key, notified_at, created_at\s+FROM v2_dns_failover_event WHERE group_id = \$1 AND event_type = \$2\s+ORDER BY created_at DESC, id DESC\s+LIMIT \$3 OFFSET \$4`).
+		WithArgs(groupID, "failover", int64(10), int64(20)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "group_id", "probe_id", "target_id", "event_type", "message", "details", "dedupe_key", "notified_at", "created_at"}).
+			AddRow(int64(8), groupID, nil, int64(71), "failover", "已切换", `{}`, "switch", nil, int64(200)))
+
+	result, err := service.ListDNSFailoverEvents(context.Background(), DNSFailoverEventListRequest{
+		GroupID:   &groupID,
+		EventType: "  failover  ",
+		Current:   3,
+		PageSize:  10,
+	})
+	if err != nil {
+		t.Fatalf("ListDNSFailoverEvents filtered: %v", err)
+	}
+	if result.Total != 1 || len(result.Data) != 1 || result.Data[0].EventType != "failover" {
+		t.Fatalf("unexpected filtered events: %#v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverEventListNormalizesInvalidPagination(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM v2_dns_failover_event`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(0)))
+	mock.ExpectQuery(`SELECT id, group_id, probe_id, target_id, event_type, message, details, dedupe_key, notified_at, created_at\s+FROM v2_dns_failover_event\s+ORDER BY created_at DESC, id DESC\s+LIMIT \$1 OFFSET \$2`).
+		WithArgs(int64(100), int64(0)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "group_id", "probe_id", "target_id", "event_type", "message", "details", "dedupe_key", "notified_at", "created_at"}))
+
+	result, err := service.ListDNSFailoverEvents(context.Background(), DNSFailoverEventListRequest{Current: -3, PageSize: 1000})
+	if err != nil {
+		t.Fatalf("ListDNSFailoverEvents normalized page: %v", err)
+	}
+	if result.Current != 1 || result.PageSize != 100 || result.Total != 0 || len(result.Data) != 0 {
+		t.Fatalf("unexpected normalized result: %#v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDNSFailoverEventListReturnsQueryError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM v2_dns_failover_event`).WillReturnError(errors.New("database unavailable"))
+	if _, err := service.ListDNSFailoverEvents(context.Background(), DNSFailoverEventListRequest{}); err == nil || !strings.Contains(err.Error(), "事件") {
+		t.Fatalf("ListDNSFailoverEvents error = %v, want actionable Chinese query error", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
