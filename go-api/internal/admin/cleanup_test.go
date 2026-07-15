@@ -93,13 +93,13 @@ func TestCleanupRetentionDeletesConfiguredHistoryAndExpiredRows(t *testing.T) {
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM v2_dns_failover_log WHERE created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM v2_dns_failover_log`).
-		WithArgs(cleanupCutoffDays(7), int64(dnsFailoverCleanupBatchSize)).
+		WithArgs(cleanupCutoffDays(3), int64(dnsFailoverCleanupBatchSize)).
 		WillReturnResult(sqlmock.NewResult(0, 70))
 	mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM v2_dns_probe_result_inbox WHERE created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM v2_dns_probe_result_inbox`).
-		WithArgs(cleanupCutoffDays(7), int64(dnsFailoverCleanupBatchSize)).
+		WithArgs(cleanupCutoffDays(3), int64(dnsFailoverCleanupBatchSize)).
 		WillReturnResult(sqlmock.NewResult(0, 20))
 	mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM v2_dns_failover_event WHERE notified_at IS NOT NULL AND created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM v2_dns_failover_event`).
-		WithArgs(cleanupCutoffDays(90), int64(dnsFailoverCleanupBatchSize)).
+		WithArgs(cleanupCutoffDays(3), int64(dnsFailoverCleanupBatchSize)).
 		WillReturnResult(sqlmock.NewResult(0, 4))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO v2_runtime_kv (k, v, expire_at, created_at, updated_at)
 VALUES ($1, $2, 0, $3, $3)
@@ -134,13 +134,13 @@ func TestCleanupRetentionDeletesExpirableRowsEvenWithoutKeepDays(t *testing.T) {
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM v2_dns_failover_log WHERE created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM v2_dns_failover_log`).
-		WithArgs(cleanupCutoffDays(7), int64(dnsFailoverCleanupBatchSize)).
+		WithArgs(cleanupCutoffDays(3), int64(dnsFailoverCleanupBatchSize)).
 		WillReturnResult(sqlmock.NewResult(0, 70))
 	mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM v2_dns_probe_result_inbox WHERE created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM v2_dns_probe_result_inbox`).
-		WithArgs(cleanupCutoffDays(7), int64(dnsFailoverCleanupBatchSize)).
+		WithArgs(cleanupCutoffDays(3), int64(dnsFailoverCleanupBatchSize)).
 		WillReturnResult(sqlmock.NewResult(0, 20))
 	mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM v2_dns_failover_event WHERE notified_at IS NOT NULL AND created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM v2_dns_failover_event`).
-		WithArgs(cleanupCutoffDays(90), int64(dnsFailoverCleanupBatchSize)).
+		WithArgs(cleanupCutoffDays(3), int64(dnsFailoverCleanupBatchSize)).
 		WillReturnResult(sqlmock.NewResult(0, 4))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO v2_runtime_kv (k, v, expire_at, created_at, updated_at)
 VALUES ($1, $2, 0, $3, $3)

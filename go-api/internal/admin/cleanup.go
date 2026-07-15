@@ -10,9 +10,9 @@ import (
 
 const (
 	cleanupLastCheckKey               = "MAINTENANCE_CLEANUP_LAST_AT_"
-	dnsFailoverLogKeepDays      int64 = 7
-	dnsProbeResultInboxKeepDays int64 = 7
-	dnsFailoverEventKeepDays    int64 = 90
+	dnsFailoverLogKeepDays      int64 = 3
+	dnsProbeResultInboxKeepDays int64 = 3
+	dnsFailoverEventKeepDays    int64 = 3
 	dnsFailoverCleanupBatchSize       = 5000
 )
 
