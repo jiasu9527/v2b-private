@@ -235,7 +235,7 @@ func Load() Config {
 		AndroidVersion:                     managedString("ANDROID_VERSION", "android_version", ""),
 		AndroidDownloadURL:                 managedString("ANDROID_DOWNLOAD_URL", "android_download_url", ""),
 		PostgresDSN:                        os.Getenv("POSTGRES_DSN"),
-		ProbeTrustedProxyCIDRs:             getEnvList("PROBE_TRUSTED_PROXY_CIDRS", []string{"127.0.0.0/8", "::1/128"}),
+		ProbeTrustedProxyCIDRs:             getEnvList("PROBE_TRUSTED_PROXY_CIDRS", DefaultProbeTrustedProxyCIDRs()),
 		ProbeStorageDir:                    getEnv("PROBE_STORAGE_DIR", "../storage/probe"),
 		QueueWorkers:                       int(getEnvInt64("QUEUE_WORKERS", 4)),
 		AppKey:                             os.Getenv("APP_KEY"),
@@ -295,6 +295,21 @@ func Load() Config {
 	}
 
 	return cfg
+}
+
+// DefaultProbeTrustedProxyCIDRs covers the loopback and private address ranges
+// used by same-host nginx, container bridges and private load balancers. Public
+// socket peers still need an explicit PROBE_TRUSTED_PROXY_CIDRS entry before
+// their forwarding headers are accepted.
+func DefaultProbeTrustedProxyCIDRs() []string {
+	return []string{
+		"127.0.0.0/8",
+		"::1/128",
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"fc00::/7",
+	}
 }
 
 // ValidateProbeTrustedProxyCIDRs rejects unsafe startup configuration before

@@ -281,6 +281,7 @@ func TestProbeRequestIPRequiresTrustedSocketPeer(t *testing.T) {
 		want       string
 	}{
 		{name: "trusted cloudflare first", trusted: []string{"10.0.0.0/8"}, cf: "2001:0db8::8", forwarded: "203.0.113.9, 10.0.0.2", remoteAddr: "10.0.0.1:80", want: "2001:db8::8"},
+		{name: "default docker bridge proxy", forwarded: "210.16.170.148, 172.18.0.1", remoteAddr: "172.18.0.1:80", want: "210.16.170.148"},
 		{name: "trusted forwarded first item", trusted: []string{"10.0.0.0/8"}, forwarded: "203.0.113.9, not-an-ip", remoteAddr: "10.0.0.1:80", want: "203.0.113.9"},
 		{name: "invalid forwarded first item rejects whole header", trusted: []string{"10.0.0.0/8"}, forwarded: "invalid, 203.0.113.9", realIP: "198.51.100.5", remoteAddr: "10.0.0.1:80", want: "198.51.100.5"},
 		{name: "untrusted public peer ignores spoofed cloudflare", trusted: []string{"10.0.0.0/8"}, cf: "203.0.113.8", forwarded: "203.0.113.9", remoteAddr: "198.51.100.7:443", want: "198.51.100.7"},

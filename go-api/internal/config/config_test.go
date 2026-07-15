@@ -34,7 +34,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.SlowRequestLogThreshold != 500*time.Millisecond {
 		t.Fatalf("expected default slow request threshold 500ms, got %s", cfg.SlowRequestLogThreshold)
 	}
-	if len(cfg.ProbeTrustedProxyCIDRs) != 2 || cfg.ProbeTrustedProxyCIDRs[0] != "127.0.0.0/8" || cfg.ProbeTrustedProxyCIDRs[1] != "::1/128" {
+	wantProbeProxyCIDRs := []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"}
+	if strings.Join(cfg.ProbeTrustedProxyCIDRs, ",") != strings.Join(wantProbeProxyCIDRs, ",") {
 		t.Fatalf("default probe trusted proxy CIDRs = %#v", cfg.ProbeTrustedProxyCIDRs)
 	}
 }

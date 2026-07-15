@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"forest/go-api/internal/admin"
+	"forest/go-api/internal/config"
 )
 
 const (
@@ -213,7 +214,7 @@ func writeDNSProbeServiceError(w http.ResponseWriter, err error) {
 
 func newProbeRequestIPResolver(values []string) probeRequestIPResolver {
 	if len(values) == 0 {
-		values = []string{"127.0.0.0/8", "::1/128"}
+		values = config.DefaultProbeTrustedProxyCIDRs()
 	}
 	resolver := probeRequestIPResolver{trusted: make([]netip.Prefix, 0, len(values))}
 	for _, value := range values {
