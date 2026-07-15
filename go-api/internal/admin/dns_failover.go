@@ -819,7 +819,6 @@ type dnsFailoverExistingTarget struct {
 func dnsFailoverTargetCriticalFieldsChanged(existing dnsFailoverExistingTarget, requested DNSFailoverTargetSaveRequest) bool {
 	return existing.DNSType != requested.DNSType ||
 		existing.DNSValue != requested.DNSValue ||
-		existing.CheckHost != requested.CheckHost ||
 		existing.CheckPort != requested.CheckPort
 }
 
@@ -867,7 +866,7 @@ func validateDNSFailoverCurrentTargetMutation(currentTarget sql.NullInt64, exist
 		if !target.Enabled {
 			return errors.New("不能停用当前目标，请先手动切换到其他目标")
 		}
-		if target.DNSType != existing.DNSType || target.DNSValue != existing.DNSValue || target.CheckHost != existing.CheckHost || target.CheckPort != existing.CheckPort {
+		if target.DNSType != existing.DNSType || target.DNSValue != existing.DNSValue || target.CheckPort != existing.CheckPort {
 			return errors.New("不能修改当前目标的 DNS 或检测关键字段，请先手动切换到其他目标")
 		}
 		return nil

@@ -847,6 +847,31 @@ func TestDNSFailoverUpdateRuleRejectsCurrentTargetCriticalFieldChanges(t *testin
 	}
 }
 
+func TestDNSFailoverCurrentTargetIgnoresLegacyDerivedCheckHost(t *testing.T) {
+	existing := dnsFailoverExistingTarget{
+		DNSType:   "A",
+		DNSValue:  "192.0.2.10",
+		CheckHost: "legacy-check.example.com",
+		CheckPort: 443,
+		Enabled:   true,
+	}
+	requested := DNSFailoverTargetSaveRequest{
+		ID:        71,
+		DNSType:   "A",
+		DNSValue:  "192.0.2.10",
+		CheckHost: "192.0.2.10",
+		CheckPort: 443,
+		Enabled:   true,
+	}
+
+	if dnsFailoverTargetCriticalFieldsChanged(existing, requested) {
+		t.Fatal("a derived check_host difference must not make a target critical-field change")
+	}
+	if err := validateDNSFailoverCurrentTargetMutation(sql.NullInt64{Int64: 71, Valid: true}, map[int64]dnsFailoverExistingTarget{71: existing}, []DNSFailoverTargetSaveRequest{requested}); err != nil {
+		t.Fatalf("legacy check_host must not block an unchanged current target: %v", err)
+	}
+}
+
 func TestDNSFailoverUpdateRuleAllowsCurrentTargetSortAndNameAndPreservesCreatedAt(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
