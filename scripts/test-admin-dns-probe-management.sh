@@ -11,6 +11,11 @@ grep -q 'apiDelete(`${BASE}/probes/${p.id}`)' "$page"
 grep -q 'apiPut(`${BASE}/settings`' "$page"
 grep -q "apiGet('/dns/domain/list'" "$page"
 grep -q "apiGet('/dns/record/list'" "$page"
+grep -q 'buildDNSFailoverRulePayload' "$page"
+if grep -q 'v.targets=v.targets.map((x:Target,i:number)=>({...x,sort:i}))' "$page"; then
+  echo "DNS failover rule save must strip read-only fields returned by the list API" >&2
+  exit 1
+fi
 grep -q 'label="选择 DNSPod 域名"' "$page"
 grep -q 'label="选择解析记录"' "$page"
 grep -q 'failure_threshold:3,success_threshold:6,single_probe_failure_threshold:5,single_probe_success_threshold:8' "$page"
