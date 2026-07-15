@@ -58,12 +58,22 @@ func (e *LegacyAPIError) Error() string {
 		return "DNSPod 国际版 Token API 请求失败"
 	}
 	message := strings.TrimSpace(e.Message)
-	if e.Code == "-1" || strings.Contains(strings.ToLower(message), "token") || strings.Contains(strings.ToLower(message), "login") {
+	switch strings.TrimSpace(e.Code) {
+	case "26":
+		// The legacy international API uses the key returned by Record.Line
+		// (for example, "default" or "asia"). Tencent Cloud TC3 line IDs
+		// such as "10=0" are not valid values for record_line.
+		message = "DNSPod 国际版记录线路无效，请使用 Record.Line 返回的线路名称对应的 key（默认线路为 default），不要填写腾讯云线路 ID"
+	case "-1":
 		message = "DNSPod API Token 鉴权失败，请确认填写的是完整的 ID,Token，且 Token 仍然有效"
-	} else if message == "" {
-		message = "DNSPod 国际版 Token API 返回错误"
-	} else {
-		message = "DNSPod 国际版 Token API 返回错误：" + message
+	default:
+		if strings.Contains(strings.ToLower(message), "token") || strings.Contains(strings.ToLower(message), "login") {
+			message = "DNSPod API Token 鉴权失败，请确认填写的是完整的 ID,Token，且 Token 仍然有效"
+		} else if message == "" {
+			message = "DNSPod 国际版 Token API 返回错误"
+		} else {
+			message = "DNSPod 国际版 Token API 返回错误：" + message
+		}
 	}
 	if strings.TrimSpace(e.Code) != "" {
 		message += " 错误码=" + e.Code
@@ -326,11 +336,15 @@ func (c *LegacyClient) mutateRecord(ctx context.Context, action string, request 
 	if request.DomainID <= 0 {
 		return RecordMutationResult{}, errors.New("DNSPod 国际版 Token API 需要有效的域名 ID")
 	}
+	recordLine, err := c.resolveLegacyRecordLine(ctx, request)
+	if err != nil {
+		return RecordMutationResult{}, err
+	}
 	values := url.Values{
 		"domain_id":   {strconv.FormatInt(request.DomainID, 10)},
 		"sub_domain":  {request.SubDomain},
 		"record_type": {request.RecordType},
-		"record_line": {legacyRecordLine(request.RecordLine, request.RecordLineID)},
+		"record_line": {recordLine},
 		"value":       {request.Value},
 	}
 	if request.RecordID > 0 {
@@ -351,6 +365,173 @@ func (c *LegacyClient) mutateRecord(ctx context.Context, action string, request 
 	}
 	record, _ := payload["record"].(map[string]any)
 	return RecordMutationResult{RecordID: legacyInt64(record["id"])}, nil
+}
+
+// resolveLegacyRecordLine converts the modern RecordLine/RecordLineId pair to
+// the single legacy record_line key required by DNSPod's international Token
+// API. The old API does not support record_line_id; sending a Tencent Cloud
+// line ID (for example, 10=0) as record_line causes error 26.
+func (c *LegacyClient) resolveLegacyRecordLine(ctx context.Context, request RecordMutationRequest) (string, error) {
+	line := strings.TrimSpace(request.RecordLine)
+	lineID := strings.TrimSpace(request.RecordLineID)
+	if key, ok := legacyRecordLineKey(line, lineID); ok {
+		return key, nil
+	}
+
+	lines, err := c.DescribeRecordLineList(ctx, DescribeRecordLineListRequest{
+		Domain: request.Domain, DomainID: request.DomainID, DomainGrade: "DP_Free", RecordType: request.RecordType,
+	})
+	if err != nil {
+		return "", fmt.Errorf("解析 DNSPod 国际版记录线路失败：%w", err)
+	}
+	if key := findLegacyRecordLine(lines.Lines, line, lineID); key != "" {
+		return key, nil
+	}
+	return "", fmt.Errorf("DNSPod 国际版无法识别记录线路（名称=%q，ID=%q），请重新选择国际版线路", line, lineID)
+}
+
+// legacyRecordLineKey handles values that can be converted without another
+// API request. A modern numeric/Tencent line ID is deliberately not returned
+// as a legacy key; it must be resolved against Record.Line first.
+func legacyRecordLineKey(line, lineID string) (string, bool) {
+	line = strings.TrimSpace(line)
+	lineID = strings.TrimSpace(lineID)
+	if isLegacyDefaultLine(line) || (line == "" && isLegacyDefaultLine(lineID)) {
+		return "default", true
+	}
+	if line == "" && lineID == "" {
+		return "default", true
+	}
+	if line != "" && isLikelyLegacyRecordLineKey(line) {
+		return line, true
+	}
+	if lineID != "" && !isModernRecordLineID(lineID) && !isLegacyDefaultLine(lineID) {
+		// A UI fallback can copy the display name into both fields. In that
+		// case query Record.Line instead of sending the display name verbatim.
+		if line == "" || !legacyLineLabelsEqual(line, lineID) || isLikelyLegacyRecordLineKey(lineID) {
+			return lineID, true
+		}
+	}
+	return "", false
+}
+
+func isLikelyLegacyRecordLineKey(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	if value == strings.ToLower(value) {
+		for _, character := range value {
+			if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '_' && character != '-' {
+				return false
+			}
+		}
+		return true
+	}
+	upper := strings.ToUpper(value)
+	if value != upper {
+		return false
+	}
+	runes := []rune(value)
+	if len(runes) != 2 {
+		return false
+	}
+	for _, character := range runes {
+		if character < 'A' || character > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
+func isLegacyDefaultLine(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "default", "默认", "0", "0=0":
+		return true
+	default:
+		return false
+	}
+}
+
+func isModernRecordLineID(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, part := range strings.Split(value, "=") {
+		if part == "" {
+			return false
+		}
+		for _, character := range part {
+			if character < '0' || character > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func findLegacyRecordLine(lines []RecordLine, line, lineID string) string {
+	line = strings.TrimSpace(line)
+	lineID = strings.TrimSpace(lineID)
+	var byName string
+	var visit func([]RecordLine) string
+	visit = func(items []RecordLine) string {
+		for _, item := range items {
+			itemID := strings.TrimSpace(item.LineID)
+			itemKeyUsable := itemID != "" && !isModernRecordLineID(itemID)
+			if lineID != "" && !isModernRecordLineID(lineID) && itemKeyUsable && strings.EqualFold(itemID, lineID) {
+				return itemID
+			}
+			if byName == "" && line != "" && itemKeyUsable && (legacyLineLabelsEqual(item.LineName, line) || legacyLineLabelsEqual(itemID, line)) {
+				byName = itemID
+			}
+			if nested := visit(item.SubGroup); nested != "" {
+				return nested
+			}
+		}
+		return ""
+	}
+	if matched := visit(lines); matched != "" {
+		return matched
+	}
+	return byName
+}
+
+func legacyLineLabelsEqual(left, right string) bool {
+	left = normalizeLegacyLineLabel(left)
+	right = normalizeLegacyLineLabel(right)
+	if left == right {
+		return true
+	}
+	return legacyLineLabelAlias(left) == legacyLineLabelAlias(right)
+}
+
+func normalizeLegacyLineLabel(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.NewReplacer("_", " ", "-", " ", "／", "/").Replace(value)
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func legacyLineLabelAlias(value string) string {
+	switch value {
+	case "默认":
+		return "default"
+	case "全球", "全网", "global", "worldwide":
+		return "global"
+	case "中国", "中国大陆", "china", "mainland", "domestic":
+		return "china"
+	case "中国移动", "移动", "china mobile", "mobile", "cmcc":
+		return "china mobile"
+	case "中国联通", "联通", "china unicom", "unicom", "cucc":
+		return "china unicom"
+	case "中国电信", "电信", "china telecom", "telecom", "ctcc":
+		return "china telecom"
+	case "中国教育网", "教育网", "china education", "china education network", "education", "cernet":
+		return "china education"
+	default:
+		return value
+	}
 }
 
 func (c *LegacyClient) DeleteRecord(ctx context.Context, request DeleteRecordRequest) error {
@@ -401,14 +582,13 @@ func setLegacyDomain(values url.Values, domain string, domainID int64) {
 }
 
 func legacyRecordLine(line, lineID string) string {
-	if strings.TrimSpace(lineID) != "" {
-		return strings.TrimSpace(lineID)
+	if key, ok := legacyRecordLineKey(line, lineID); ok {
+		return key
 	}
-	line = strings.TrimSpace(line)
-	if line == "" || line == "默认" || strings.EqualFold(line, "default") {
-		return "default"
+	if strings.TrimSpace(line) != "" {
+		return strings.TrimSpace(line)
 	}
-	return line
+	return "default"
 }
 
 func legacyString(value any) string {

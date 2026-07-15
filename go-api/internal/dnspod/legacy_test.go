@@ -154,3 +154,107 @@ func TestLegacyClientCreatesRecordAndReturnsActionableError(t *testing.T) {
 		t.Fatalf("expected actionable token error, got %v", err)
 	}
 }
+
+func TestLegacyClientUsesLegacyRecordLineKeyForDefault(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/Record.Modify" {
+			t.Fatalf("unexpected lookup before default mutation: %s", r.URL.Path)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("parse form: %v", err)
+		}
+		if got := r.Form.Get("record_line"); got != "default" {
+			t.Fatalf("legacy mutation record_line = %q, want default; form=%v", got, r.Form)
+		}
+		if got := r.Form.Get("record_line_id"); got != "" {
+			t.Fatalf("legacy mutation must not send unsupported record_line_id, got %q; form=%v", got, r.Form)
+		}
+		_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"record":{"id":"91"}}`))
+	}))
+	defer server.Close()
+
+	client := NewLegacyClient("1,token", WithLegacyEndpoint(server.URL))
+	if _, err := client.ModifyRecord(context.Background(), RecordMutationRequest{
+		DomainID: 6, RecordID: 8, SubDomain: "www", RecordType: "A",
+		RecordLine: "默认", RecordLineID: "10=0", Value: "192.0.2.2",
+	}); err != nil {
+		t.Fatalf("ModifyRecord: %v", err)
+	}
+}
+
+func TestLegacyClientResolvesModernRecordLineIDBeforeMutation(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/Record.Line":
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("parse line form: %v", err)
+			}
+			if got := r.Form.Get("domain_id"); got != "6" {
+				t.Fatalf("line lookup domain_id = %q, want 6", got)
+			}
+			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"lines":{"asia":{"name":"Asia","sub_area":{"JP":"Japan"}}}}`))
+		case "/Record.Modify":
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("parse modify form: %v", err)
+			}
+			if got := r.Form.Get("record_line"); got != "asia" {
+				t.Fatalf("resolved record_line = %q, want asia; form=%v", got, r.Form)
+			}
+			if got := r.Form.Get("record_line_id"); got != "" {
+				t.Fatalf("legacy mutation must not send record_line_id, got %q; form=%v", got, r.Form)
+			}
+			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"record":{"id":"91"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewLegacyClient("1,token", WithLegacyEndpoint(server.URL))
+	if _, err := client.ModifyRecord(context.Background(), RecordMutationRequest{
+		Domain: "example.com", DomainID: 6, RecordID: 8, SubDomain: "www", RecordType: "A",
+		RecordLine: "Asia", RecordLineID: "10=0", Value: "192.0.2.2",
+	}); err != nil {
+		t.Fatalf("ModifyRecord: %v", err)
+	}
+	if got, want := strings.Join(paths, ","), "/Record.Line,/Record.Modify"; got != want {
+		t.Fatalf("request order = %q, want %q", got, want)
+	}
+}
+
+func TestLegacyClientDoesNotSendModernLineIDFromLineLookup(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/Record.Line":
+			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"lines":[{"line_id":"10=0","name":"China Mobile"},{"line_id":"7=0","name":"China Unicom"}]}`))
+		case "/Record.Modify":
+			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"unexpected"},"record":{"id":"91"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewLegacyClient("1,token", WithLegacyEndpoint(server.URL))
+	_, err := client.ModifyRecord(context.Background(), RecordMutationRequest{
+		Domain: "example.com", DomainID: 6, RecordID: 8, SubDomain: "www", RecordType: "A",
+		RecordLine: "China Mobile", RecordLineID: "10=0", Value: "192.0.2.2",
+	})
+	if err == nil || !strings.Contains(err.Error(), "无法识别记录线路") {
+		t.Fatalf("expected an actionable unmappable-line error, got %v", err)
+	}
+	if got, want := strings.Join(paths, ","), "/Record.Line"; got != want {
+		t.Fatalf("request order = %q, want %q", got, want)
+	}
+}
+
+func TestLegacyAPIErrorExplainsIncorrectRecordLine(t *testing.T) {
+	err := (&LegacyAPIError{Code: "26", Message: "Incorrect record line"}).Error()
+	if !strings.Contains(err, "线路无效") || !strings.Contains(err, "Record.Line") || !strings.Contains(err, "线路名称") || !strings.Contains(err, "default") || !strings.Contains(err, "腾讯云线路 ID") {
+		t.Fatalf("incorrect record line error is not actionable: %q", err)
+	}
+}
