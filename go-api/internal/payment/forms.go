@@ -42,6 +42,12 @@ var gatewayForms = map[string]map[string]FormField{
 		"pid": {Label: "PID", Description: "", Type: "input"},
 		"key": {Label: "KEY", Description: "", Type: "input"},
 	},
+	"epaypro": {
+		"url":  {Label: "URL", Description: "", Type: "input"},
+		"pid":  {Label: "PID", Description: "", Type: "input"},
+		"key":  {Label: "KEY", Description: "", Type: "input"},
+		"type": {Label: "TYPE", Description: "支付宝填写 alipay，微信填写 wxpay", Type: "input"},
+	},
 	"EpusdtPay": {
 		"epusdt_pay_url":      {Label: "API 地址", Description: "您的 EpusdtPay API 接口地址(例如: https://epusdt-pay.xxx.com)", Type: "input"},
 		"epusdt_pay_apitoken": {Label: "API Token", Description: "您的 EpusdtPay API Token", Type: "input"},

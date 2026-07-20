@@ -37,6 +37,8 @@ func buildGatewayCheckout(ctx context.Context, client *http.Client, gateway stri
 		return buildCoinbaseCheckout(ctx, client, cfg, order)
 	case "EPay":
 		return buildEPayCheckout(cfg, order), nil
+	case "epaypro":
+		return buildEPayProCheckout(cfg, order), nil
 	case "EpusdtPay":
 		return buildEpusdtCheckout(ctx, client, cfg, order)
 	case "BEasyPaymentUSDT":
@@ -71,6 +73,8 @@ func verifyGatewayNotify(ctx context.Context, client *http.Client, gateway strin
 	case "Coinbase":
 		return verifyCoinbaseNotify(cfg, req)
 	case "EPay":
+		return verifyEPayNotify(cfg, req)
+	case "epaypro":
 		return verifyEPayNotify(cfg, req)
 	case "EpusdtPay":
 		return verifyEpusdtNotify(cfg, req)
@@ -328,6 +332,29 @@ func buildEPayCheckout(cfg map[string]string, order gatewayOrder) CheckoutResult
 		"return_url":   order.ReturnURL,
 		"out_trade_no": order.TradeNo,
 		"pid":          configValue(cfg, "pid"),
+	}
+	sign := md5Hex(decodedQuery(params) + configValue(cfg, "key"))
+	values := url.Values{}
+	for key, value := range params {
+		values.Set(key, value)
+	}
+	values.Set("sign", sign)
+	values.Set("sign_type", "MD5")
+	return CheckoutResult{
+		Type: 1,
+		Data: strings.TrimRight(configValue(cfg, "url"), "/") + "/submit.php?" + values.Encode(),
+	}
+}
+
+func buildEPayProCheckout(cfg map[string]string, order gatewayOrder) CheckoutResult {
+	params := map[string]string{
+		"money":        formatMoney(order.Total),
+		"name":         order.TradeNo,
+		"notify_url":   order.NotifyURL,
+		"return_url":   order.ReturnURL,
+		"out_trade_no": order.TradeNo,
+		"pid":          configValue(cfg, "pid"),
+		"type":         configValue(cfg, "type"),
 	}
 	sign := md5Hex(decodedQuery(params) + configValue(cfg, "key"))
 	values := url.Values{}
