@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/mail"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -29,6 +30,7 @@ type Condition struct {
 
 type Subject struct {
 	UserID           int64
+	Email            string
 	RegistrationDays int64
 	PlanID           int64
 	UA               string
@@ -132,11 +134,43 @@ func normalizeCondition(value Condition) (Condition, error) {
 	switch value.Field {
 	case "user_id", "registration_days", "plan_id":
 		return normalizeNumericCondition(value)
+	case "email":
+		return normalizeEmailCondition(value)
 	case "ua":
 		return normalizeUACondition(value)
 	default:
 		return Condition{}, errors.New("不支持的字段")
 	}
+}
+
+func normalizeEmailCondition(value Condition) (Condition, error) {
+	if value.Operator != "in" || len(value.Values) == 0 {
+		return Condition{}, errors.New("邮箱仅支持指定邮箱匹配，且 values 不能为空")
+	}
+	values := make([]json.RawMessage, 0, len(value.Values))
+	seen := make(map[string]struct{}, len(value.Values))
+	for _, raw := range value.Values {
+		email, err := rawString(raw)
+		if err != nil {
+			return Condition{}, errors.New("values 必须是邮箱字符串数组")
+		}
+		email = strings.ToLower(strings.TrimSpace(email))
+		parsed, err := mail.ParseAddress(email)
+		if err != nil || parsed.Address != email || !strings.Contains(email, "@") {
+			return Condition{}, errors.New("values 包含无效邮箱")
+		}
+		if _, exists := seen[email]; exists {
+			continue
+		}
+		seen[email] = struct{}{}
+		encoded, _ := json.Marshal(email)
+		values = append(values, encoded)
+	}
+	value.Value = nil
+	value.Values = values
+	value.Min = nil
+	value.Max = nil
+	return value, nil
 }
 
 func normalizeOperator(value string) string {
@@ -268,6 +302,8 @@ func matchCondition(value Condition, subject Subject) bool {
 	switch value.Field {
 	case "user_id":
 		return matchNumeric(value, subject.UserID)
+	case "email":
+		return matchEmail(value, subject.Email)
 	case "registration_days":
 		return subject.RegistrationDays >= 0 && matchNumeric(value, subject.RegistrationDays)
 	case "plan_id":
@@ -277,6 +313,20 @@ func matchCondition(value Condition, subject Subject) bool {
 	default:
 		return false
 	}
+}
+
+func matchEmail(condition Condition, actual string) bool {
+	actual = strings.ToLower(strings.TrimSpace(actual))
+	if actual == "" || condition.Operator != "in" {
+		return false
+	}
+	for _, raw := range condition.Values {
+		expected, err := rawString(raw)
+		if err == nil && actual == strings.ToLower(strings.TrimSpace(expected)) {
+			return true
+		}
+	}
+	return false
 }
 
 func matchNumeric(condition Condition, actual int64) bool {

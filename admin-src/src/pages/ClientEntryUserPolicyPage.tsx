@@ -29,7 +29,7 @@ import { apiGet, apiPost } from '../lib/api';
 import { moveItem } from '../lib/drag';
 import { buildVisibleServerOptions, memberKey, splitMemberKey, type ClientEntryServerOption } from './clientEntryHelpers';
 
-type ConditionField = 'user_id' | 'registration_days' | 'ua' | 'plan_id';
+type ConditionField = 'user_id' | 'email' | 'registration_days' | 'ua' | 'plan_id';
 
 type EntryCondition = {
   field: ConditionField;
@@ -44,6 +44,7 @@ type UserOption = { value: number; label: string };
 
 const fieldOptions = [
   { label: '用户 ID', value: 'user_id' },
+  { label: '用户邮箱', value: 'email' },
   { label: '注册天数', value: 'registration_days' },
   { label: 'User-Agent', value: 'ua' },
   { label: '套餐 ID', value: 'plan_id' },
@@ -54,6 +55,7 @@ const operatorOptions: Record<ConditionField, Array<{ label: string; value: stri
     { label: '指定用户', value: 'in' },
     { label: 'ID 范围（含边界）', value: 'between' },
   ],
+  email: [{ label: '指定邮箱', value: 'in' }],
   registration_days: [
     { label: '天数范围（含边界）', value: 'between' },
     { label: '大于', value: 'gt' },
@@ -70,6 +72,7 @@ const operatorOptions: Record<ConditionField, Array<{ label: string; value: stri
 
 const defaultOperator: Record<ConditionField, string> = {
   user_id: 'in',
+  email: 'in',
   registration_days: 'between',
   ua: 'contains_any',
   plan_id: 'between',
@@ -108,11 +111,18 @@ function finiteNumber(value: any) {
 
 function cleanConditions(value: any): EntryCondition[] {
   return parseConditions(Array.isArray(value) ? value : []).map((condition) => {
-    if (condition.operator === 'in') {
+    if (condition.field === 'user_id' && condition.operator === 'in') {
       return {
         field: condition.field,
         operator: condition.operator,
         values: (condition.values || []).map(Number).filter((item) => Number.isFinite(item) && item > 0),
+      };
+    }
+    if (condition.field === 'email' && condition.operator === 'in') {
+      return {
+        field: condition.field,
+        operator: condition.operator,
+        values: (condition.values || []).map((item) => String(item).trim().toLowerCase()).filter(Boolean),
       };
     }
     if (condition.operator === 'between') {
@@ -146,7 +156,7 @@ function validateConditionValues(conditions: EntryCondition[]) {
     const condition = conditions[index];
     const prefix = `第 ${index + 1} 个条件`;
     if (!condition.field || !condition.operator) return `${prefix}不完整`;
-    if (condition.operator === 'in' && !(condition.values || []).length) return `${prefix}至少选择一个用户`;
+    if (condition.operator === 'in' && !(condition.values || []).length) return condition.field === 'email' ? `${prefix}至少填写一个邮箱` : `${prefix}至少选择一个用户`;
     if (condition.operator === 'between') {
       if (condition.min === undefined || condition.max === undefined) return `${prefix}需要填写起始值和结束值`;
       if (Number(condition.min) > Number(condition.max)) return `${prefix}的起始值不能大于结束值`;
@@ -229,6 +239,10 @@ function ConditionEditorRow({
         onSearch={onSearchUsers}
         optionFilterProp="label"
       />
+    </Form.Item>;
+  } else if (field === 'email' && operator === 'in') {
+    valueEditor = <Form.Item name={[name, 'values']} label="邮箱" rules={[{ required: true, message: '请填写至少一个邮箱' }]} style={{ minWidth: 300, flex: 1 }}>
+      <Select mode="tags" tokenSeparators={[',', '，', ';', '；']} placeholder="输入邮箱后回车，可填写多个" />
     </Form.Item>;
   } else if (operator === 'between') {
     const label = field === 'registration_days' ? '天数范围' : field === 'plan_id' ? '套餐 ID 范围' : 'ID 范围';
@@ -421,6 +435,7 @@ function PolicyEditor({
 function conditionSummary(condition: EntryCondition) {
   const values = condition.values || [];
   if (condition.field === 'user_id' && condition.operator === 'in') return `指定用户：${values.map((item) => `#${item}`).join('、') || '未选择'}`;
+  if (condition.field === 'email' && condition.operator === 'in') return `指定邮箱：${values.join('、') || '未填写'}`;
   if (condition.field === 'user_id' && condition.operator === 'between') return `用户 ID：${condition.min} ～ ${condition.max}`;
   if (condition.field === 'registration_days') {
     if (condition.operator === 'between') return `注册天数：${condition.min} ～ ${condition.max} 天`;
@@ -454,6 +469,7 @@ function numericConditionMatches(condition: EntryCondition, actual: any) {
 
 function conditionMatches(condition: EntryCondition, input: any) {
   if (condition.field === 'user_id') return numericConditionMatches(condition, input.user_id);
+  if (condition.field === 'email') return (condition.values || []).some((item) => String(item).trim().toLowerCase() === String(input.email || '').trim().toLowerCase());
   if (condition.field === 'registration_days') return numericConditionMatches(condition, input.registration_days);
   if (condition.field === 'plan_id') return numericConditionMatches(condition, input.plan_id);
   const ua = String(input.ua || '').trim();
@@ -512,6 +528,9 @@ function SimulationModal({
       <Space align="start" wrap style={{ width: '100%' }}>
         <Form.Item name="user_id" label="用户 ID" rules={[{ required: true, message: '请输入用户 ID' }]}>
           <InputNumber min={1} precision={0} style={{ width: 150 }} />
+        </Form.Item>
+        <Form.Item name="email" label="用户邮箱">
+          <Input style={{ width: 260 }} placeholder="可选，用于邮箱规则" />
         </Form.Item>
         <Form.Item name="registration_days" label="注册天数">
           <InputNumber min={0} precision={0} style={{ width: 150 }} placeholder="可选" />

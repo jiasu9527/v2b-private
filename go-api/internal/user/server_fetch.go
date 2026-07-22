@@ -108,6 +108,7 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 
 	servers = applyClientEntryUserPolicies(servers, cliententry.Subject{
 		UserID:           userRow.ID,
+		Email:            userRow.Email,
 		RegistrationDays: serverFetchRegistrationDays(userRow.CreatedAt, now),
 		PlanID:           userRow.PlanID,
 		UA:               ua,

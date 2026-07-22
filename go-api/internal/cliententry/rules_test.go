@@ -51,3 +51,18 @@ func TestNormalizeHostRejectsRetiredDSL(t *testing.T) {
 		}
 	}
 }
+
+func TestEmailConditionIsIndependentFromUserID(t *testing.T) {
+	conditions, err := NormalizeConditions([]Condition{{
+		Field: "email", Operator: "in", Values: []json.RawMessage{json.RawMessage(`"VIP@Example.com"`)},
+	}})
+	if err != nil {
+		t.Fatalf("normalize email condition: %v", err)
+	}
+	if !MatchAll(conditions, Subject{UserID: 99, Email: "vip@example.com"}) {
+		t.Fatal("email condition must match independently from user ID")
+	}
+	if MatchAll(conditions, Subject{UserID: 99, Email: "other@example.com"}) {
+		t.Fatal("email condition must not match another email sharing the same ID-style context")
+	}
+}

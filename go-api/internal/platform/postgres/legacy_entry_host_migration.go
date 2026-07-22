@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -160,7 +159,6 @@ type legacyEntryEmailPolicyPlan struct {
 	PolicyID  int64
 	EntryHost string
 	Emails    []string
-	UserIDs   []int64
 	Disable   bool
 }
 
@@ -236,15 +234,15 @@ PRIMARY KEY (migration_key)
 	nextSort := legacyEntryHostMigrationSortStep
 	for _, plan := range emailPlans {
 		conditionsJSON, err := marshalLegacyEntryConditions([]LegacyEntryRuleCondition{{
-			Field:    "user_id",
+			Field:    "email",
 			Operator: "in",
-			Values:   append([]int64(nil), plan.UserIDs...),
+			Values:   append([]string(nil), plan.Emails...),
 		}})
 		if err != nil {
-			return report, fmt.Errorf("encode legacy policy %d users: %w", plan.PolicyID, err)
+			return report, fmt.Errorf("encode legacy policy %d emails: %w", plan.PolicyID, err)
 		}
 		if _, err := cliententry.DecodeConditions(conditionsJSON); err != nil {
-			return report, fmt.Errorf("validate legacy policy %d users: %w", plan.PolicyID, err)
+			return report, fmt.Errorf("validate legacy policy %d emails: %w", plan.PolicyID, err)
 		}
 		name := fmt.Sprintf("迁移用户入口 #%d", plan.PolicyID)
 		result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
@@ -393,7 +391,9 @@ ORDER BY sort ASC NULLS LAST, id ASC`, "由旧节点地址规则自动迁移；�
 			_ = rows.Close()
 			return report, fmt.Errorf("scan auto-migrated entry rule for grouping: %w", err)
 		}
-		key := strings.Join([]string{value.Remarks, value.Action, value.Conditions, value.EntryHost}, "\x00")
+		// Equal condition/action/entry rules are one user-visible rule even if
+		// their old node host strings had different fallback text.
+		key := strings.Join([]string{value.Action, value.Conditions, value.EntryHost}, "\x00")
 		if _, exists := groups[key]; !exists {
 			order = append(order, key)
 		}
@@ -468,6 +468,87 @@ ON CONFLICT (policy_id, server_type, server_id) DO NOTHING`, canonical.ID, membe
 	return report, nil
 }
 
+// RestoreLegacyEmailPolicyConditions repairs the first structured-rule
+// migration, which incorrectly converted legacy email selectors to user IDs.
+// Email and user-ID are intentionally independent rule fields.  The old
+// migrated policy name is the provenance marker; manually created ID rules
+// are never touched.
+func RestoreLegacyEmailPolicyConditions(ctx context.Context, db *sql.DB) (int64, error) {
+	if db == nil {
+		return 0, errors.New("db is nil")
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin legacy email condition restore: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	type policy struct {
+		ID         int64
+		Conditions string
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id, conditions FROM v2_client_entry_user_policy
+WHERE name LIKE $1
+ORDER BY id ASC`, "迁移用户入口 #%")
+	if err != nil {
+		return 0, fmt.Errorf("query migrated legacy email policies: %w", err)
+	}
+	policies := make([]policy, 0)
+	for rows.Next() {
+		var value policy
+		if err := rows.Scan(&value.ID, &value.Conditions); err != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("scan migrated legacy email policy: %w", err)
+		}
+		policies = append(policies, value)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, fmt.Errorf("iterate migrated legacy email policies: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, fmt.Errorf("close migrated legacy email policies: %w", err)
+	}
+
+	updated := int64(0)
+	now := time.Now().Unix()
+	for _, policy := range policies {
+		conditions, err := cliententry.DecodeConditions(policy.Conditions)
+		if err != nil || len(conditions) != 1 || conditions[0].Field != "user_id" || conditions[0].Operator != "in" {
+			continue
+		}
+		emails := make([]json.RawMessage, 0, len(conditions[0].Values))
+		for _, rawID := range conditions[0].Values {
+			id, err := strconv.ParseInt(strings.TrimSpace(string(rawID)), 10, 64)
+			if err != nil || id <= 0 {
+				emails = nil
+				break
+			}
+			var email string
+			if err := tx.QueryRowContext(ctx, `SELECT lower(trim(email)) FROM v2_user WHERE id = $1`, id).Scan(&email); err != nil || strings.TrimSpace(email) == "" {
+				emails = nil
+				break
+			}
+			encoded, _ := json.Marshal(strings.TrimSpace(email))
+			emails = append(emails, encoded)
+		}
+		if len(emails) == 0 {
+			continue
+		}
+		encoded, err := cliententry.EncodeConditions([]cliententry.Condition{{Field: "email", Operator: "in", Values: emails}})
+		if err != nil {
+			return updated, fmt.Errorf("encode restored legacy email policy %d: %w", policy.ID, err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy SET conditions = $2, updated_at = $3 WHERE id = $1`, policy.ID, encoded, now); err != nil {
+			return updated, fmt.Errorf("restore legacy email policy %d: %w", policy.ID, err)
+		}
+		updated++
+	}
+	if err := tx.Commit(); err != nil {
+		return updated, fmt.Errorf("commit legacy email condition restore: %w", err)
+	}
+	return updated, nil
+}
+
 func dropRetiredClientEntryRuleSchema(ctx context.Context, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS v2_client_entry_user_policy_user`); err != nil {
 		return fmt.Errorf("drop retired client entry policy user map: %w", err)
@@ -507,11 +588,10 @@ func loadLegacyEntryEmailPolicyPlans(ctx context.Context, tx *sql.Tx) ([]legacyE
 		return nil, nil, nil
 	}
 
-	rows, err := tx.QueryContext(ctx, `SELECT pu.policy_id, p.entry_host, trim(pu.email), u.id
+	rows, err := tx.QueryContext(ctx, `SELECT pu.policy_id, p.entry_host, trim(pu.email)
 FROM v2_client_entry_user_policy_user pu
 JOIN v2_client_entry_user_policy p ON p.id = pu.policy_id
-LEFT JOIN v2_user u ON lower(trim(u.email)) = lower(trim(pu.email))
-ORDER BY pu.policy_id ASC, lower(trim(pu.email)) ASC, u.id ASC`)
+ORDER BY pu.policy_id ASC, lower(trim(pu.email)) ASC`)
 	if err != nil {
 		return nil, nil, fmt.Errorf("query legacy client entry policy emails: %w", err)
 	}
@@ -524,8 +604,7 @@ ORDER BY pu.policy_id ASC, lower(trim(pu.email)) ASC, u.id ASC`)
 		var policyID int64
 		var entryHost sql.NullString
 		var email string
-		var userID sql.NullInt64
-		if err := rows.Scan(&policyID, &entryHost, &email, &userID); err != nil {
+		if err := rows.Scan(&policyID, &entryHost, &email); err != nil {
 			return nil, nil, fmt.Errorf("scan legacy client entry policy email: %w", err)
 		}
 		plan := byPolicy[policyID]
@@ -538,18 +617,6 @@ ORDER BY pu.policy_id ASC, lower(trim(pu.email)) ASC, u.id ASC`)
 		if email != "" && !containsFold(plan.Emails, email) {
 			plan.Emails = append(plan.Emails, email)
 		}
-		if !userID.Valid || userID.Int64 <= 0 {
-			issues = append(issues, LegacyEntryHostMigrationIssue{
-				Source:   "policy_user",
-				PolicyID: policyID,
-				Email:    email,
-				Reason:   "旧入口策略邮箱找不到对应用户 ID，无法无损迁移",
-			})
-			continue
-		}
-		if !containsInt64(plan.UserIDs, userID.Int64) {
-			plan.UserIDs = append(plan.UserIDs, userID.Int64)
-		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, fmt.Errorf("iterate legacy client entry policy emails: %w", err)
@@ -558,8 +625,7 @@ ORDER BY pu.policy_id ASC, lower(trim(pu.email)) ASC, u.id ASC`)
 	plans := make([]legacyEntryEmailPolicyPlan, 0, len(order))
 	for _, policyID := range order {
 		plan := byPolicy[policyID]
-		sort.Slice(plan.UserIDs, func(i, j int) bool { return plan.UserIDs[i] < plan.UserIDs[j] })
-		if len(plan.UserIDs) == 0 {
+		if len(plan.Emails) == 0 {
 			continue
 		}
 		if plan.EntryHost == "" {
@@ -672,9 +738,10 @@ func legacyEntryHostRuleGroupKey(plan legacyEntryHostNodePlan, rule legacyEntryH
 	if err != nil {
 		return "", err
 	}
-	// OriginalHost keeps the full condition chain and its original order in the
-	// key.  The remaining fields make accidental collisions impossible.
-	return strings.Join([]string{plan.OriginalHost, strconv.Itoa(sequence), rule.Action, rule.EntryHost, conditions}, "\x00"), nil
+	// A rule is shared by every node with the same effective condition and
+	// result.  Rule order is configured in the dedicated UI after migration;
+	// keeping source-host text here would unnecessarily create one rule/node.
+	return strings.Join([]string{rule.Action, rule.EntryHost, conditions}, "\x00"), nil
 }
 
 func insertMigratedEntryRule(ctx context.Context, tx *sql.Tx, plan legacyEntryHostNodePlan, rule legacyEntryHostRule, sortValue int64, sequence int, members []legacyEntryHostRuleMember, now int64) error {

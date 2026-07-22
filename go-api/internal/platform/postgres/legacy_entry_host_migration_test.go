@@ -87,16 +87,16 @@ func TestLoadLegacyEntryEmailPolicyPlansReportsNestedLegacyDSL(t *testing.T) {
 	mock.ExpectQuery(`SELECT to_regclass\(\$1\) IS NOT NULL`).
 		WithArgs("v2_client_entry_user_policy_user").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
-	mock.ExpectQuery(`SELECT pu.policy_id, p.entry_host, trim\(pu.email\), u.id`).
-		WillReturnRows(sqlmock.NewRows([]string{"policy_id", "entry_host", "email", "id"}).
-			AddRow(int64(7), "vip.example.com", "VIP@example.com", int64(101)).
-			AddRow(int64(8), "new.example.com(D<=30)", "new@example.com", int64(102)))
+	mock.ExpectQuery(`SELECT pu.policy_id, p.entry_host, trim\(pu.email\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"policy_id", "entry_host", "email"}).
+			AddRow(int64(7), "vip.example.com", "VIP@example.com").
+			AddRow(int64(8), "new.example.com(D<=30)", "new@example.com"))
 
 	plans, issues, err := loadLegacyEntryEmailPolicyPlans(context.Background(), tx)
 	if err != nil {
 		t.Fatalf("load legacy email policies: %v", err)
 	}
-	if len(plans) != 2 || plans[0].PolicyID != 7 || len(plans[0].UserIDs) != 1 || plans[0].UserIDs[0] != 101 {
+	if len(plans) != 2 || plans[0].PolicyID != 7 || len(plans[0].Emails) != 1 || plans[0].Emails[0] != "vip@example.com" {
 		t.Fatalf("unexpected converted email plans: %#v", plans)
 	}
 	if len(issues) != 1 || issues[0].PolicyID != 8 || issues[0].Source != "policy_entry_host" {
@@ -261,7 +261,7 @@ func TestParseLegacyEntryHostRejectsValuesInvalidUnderNewRuleContract(t *testing
 	}
 }
 
-func TestGroupLegacyEntryHostRulesCombinesOnlyIdenticalRuleChains(t *testing.T) {
+func TestGroupLegacyEntryHostRulesCombinesIdenticalRulesAcrossNodes(t *testing.T) {
 	clash := legacyEntryHostRule{Action: "override", EntryHost: "clash.example.com", Conditions: []LegacyEntryRuleCondition{{Field: "ua", Operator: "contains_any", Values: []string{"Clash"}}}}
 	newUser := legacyEntryHostRule{Action: "override", EntryHost: "new.example.com", Conditions: []LegacyEntryRuleCondition{{Field: "registration_days", Operator: "lte", Value: int64(30)}}}
 	plans := []legacyEntryHostNodePlan{
@@ -274,14 +274,14 @@ func TestGroupLegacyEntryHostRulesCombinesOnlyIdenticalRuleChains(t *testing.T) 
 	if err != nil {
 		t.Fatalf("group rules: %v", err)
 	}
-	if len(groups) != 3 {
-		t.Fatalf("expected 3 groups, got %#v", groups)
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups, got %#v", groups)
 	}
-	if len(groups[0].Members) != 2 || len(groups[1].Members) != 2 {
-		t.Fatalf("same rule chain must combine both nodes: %#v", groups)
+	if len(groups[0].Members) != 3 || len(groups[1].Members) != 2 {
+		t.Fatalf("identical rules must combine all selected nodes: %#v", groups)
 	}
-	if groups[0].Sequence != 1 || groups[1].Sequence != 2 || len(groups[2].Members) != 1 {
-		t.Fatalf("different rule chain must remain independent: %#v", groups)
+	if groups[0].Sequence != 1 || groups[1].Sequence != 2 {
+		t.Fatalf("rule order must remain stable: %#v", groups)
 	}
 }
 

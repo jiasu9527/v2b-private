@@ -61,6 +61,11 @@ func main() {
 		if !report.AlreadyApplied {
 			log.Printf("migrated legacy client entry rules: servers=%d rewritten=%d rules=%d hidden=%d users=%d", report.ServersScanned, report.ServersRewritten, report.RulesCreated, report.HideRulesCreated, report.LegacyEmailsMapped)
 		}
+		if restored, err := postgres.RestoreLegacyEmailPolicyConditions(ctx, db); err != nil {
+			log.Printf("restore legacy email entry conditions (will retry on next start): %v", err)
+		} else if restored > 0 {
+			log.Printf("restored legacy email entry conditions: policies=%d", restored)
+		}
 		groupingReport, err := postgres.ConsolidateLegacyServerHostEntryRules(ctx, db)
 		if err != nil {
 			// This is a presentation/data-compaction follow-up after the critical
