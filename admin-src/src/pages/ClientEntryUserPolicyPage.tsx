@@ -643,21 +643,32 @@ export default function ClientEntryUserPolicyPage() {
       width: 90,
       render: (_: any, __: any, index: number) => <Space><MenuOutlined className="drag-handle" title="拖动调整匹配顺序" /><span>{index + 1}</span></Space>,
     },
-    { title: '规则名称', dataIndex: 'name', width: 190, render: (value: any, row: any) => value || `规则 #${row.id}` },
+    {
+      title: '规则名称',
+      dataIndex: 'name',
+      width: 210,
+      render: (value: any, row: any) => {
+        const text = String(value || `规则 #${row.id}`);
+        return <span className="client-entry-rule-name" title={text}>{text}</span>;
+      },
+    },
     {
       title: '匹配条件（全部 AND）',
       dataIndex: 'conditions',
-      width: 360,
+      width: 620,
       render: (value: any) => {
         const conditions = parseConditions(value);
         if (!conditions.length) return <Tag>全部用户</Tag>;
-        return <Space wrap size={[0, 4]}>{conditions.map((condition, index) => <Tag key={`${condition.field}-${condition.operator}-${index}`}>{conditionSummary(condition)}</Tag>)}</Space>;
+        return <div className="client-entry-condition-list">{conditions.map((condition, index) => {
+          const text = conditionSummary(condition);
+          return <Tag className="client-entry-condition-tag" title={text} key={`${condition.field}-${condition.operator}-${index}`}>{text}</Tag>;
+        })}</div>;
       },
     },
     {
       title: '命中结果',
       key: 'result',
-      width: 230,
+      width: 250,
       render: (_: any, row: any) => row.action === 'hide'
         ? <Tag color="red">不下发节点</Tag>
         : <Typography.Text code copyable={{ text: String(row.entry_host || '') }}>{row.entry_host || '-'}</Typography.Text>,
@@ -665,7 +676,7 @@ export default function ClientEntryUserPolicyPage() {
     {
       title: '生效节点',
       dataIndex: 'members',
-      width: 230,
+      width: 250,
       render: (value: any) => {
         const members = Array.isArray(value) ? value : [];
         if (!members.length) return '-';
@@ -687,10 +698,10 @@ export default function ClientEntryUserPolicyPage() {
       key: 'action',
       fixed: 'right',
       align: 'right',
-      width: 185,
+      width: 205,
       render: (_: any, row: any) => {
         const copyRow = { ...row, id: undefined, name: `${row.name || `规则 #${row.id}`} - 副本` };
-        return <Space>
+        return <Space className="client-entry-actions" size={10}>
           <PolicyEditor row={row} onDone={load} serverOptions={serverOptions}><a>编辑</a></PolicyEditor>
           <PolicyEditor row={copyRow} onDone={load} serverOptions={serverOptions}><a><CopyOutlined /> 复制</a></PolicyEditor>
           <Popconfirm title="确认删除这条入口规则？" onConfirm={() => drop(row)}><a>删除</a></Popconfirm>
@@ -713,11 +724,11 @@ export default function ClientEntryUserPolicyPage() {
         <Table
           className="forest-table"
           rowKey="id"
-          tableLayout="auto"
+          tableLayout="fixed"
           columns={columns}
           dataSource={rows}
           pagination={false}
-          scroll={{ x: 1550 }}
+          scroll={{ x: 1900 }}
           rowClassName={(row) => `sortable-row ${draggingKey === String(row.id) ? 'dragging-row' : ''}`}
           onRow={(row) => ({
             draggable: true,
