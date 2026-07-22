@@ -250,10 +250,10 @@ func (s *DBService) seedDueDNSFailoverEvaluations(ctx context.Context, now int64
 	_, err := s.db.ExecContext(ctx, `INSERT INTO v2_dns_failover_eval_outbox (
 group_id, operation, target_id, source_target_id, requested_at, attempts, next_attempt_at, last_error, created_at, updated_at
 )
-SELECT g.id, 'evaluate', NULL, NULL, $1, 0, $1, '', $1, $1
+SELECT g.id, 'evaluate', NULL, NULL, $1::BIGINT, 0, $1::BIGINT, '', $1::BIGINT, $1::BIGINT
 FROM v2_dns_failover_group g
 WHERE g.enabled = 1
-  AND (g.last_evaluated_at IS NULL OR g.last_evaluated_at <= $1 - g.check_interval_sec)
+  AND (g.last_evaluated_at IS NULL OR g.last_evaluated_at <= $1::BIGINT - g.check_interval_sec)
 ON CONFLICT (group_id) DO NOTHING`, now)
 	if err != nil {
 		return fmt.Errorf("seed due DNS failover evaluations: %w", err)

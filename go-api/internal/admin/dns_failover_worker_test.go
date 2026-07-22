@@ -699,7 +699,7 @@ func TestDNSFailoverWorkerSeedsOnlyDueEnabledGroupsWithoutResettingPendingRetry(
 	service := &DBService{db: db, dnsFailoverSchemaOK: true}
 	now := int64(1_700_000_100)
 
-	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*operation, target_id, source_target_id.*SELECT g.id, 'evaluate', NULL, NULL, \$1, 0, \$1, '', \$1, \$1.*FROM v2_dns_failover_group g.*g.enabled = 1.*last_evaluated_at IS NULL.*last_evaluated_at <= \$1 - g.check_interval_sec.*ON CONFLICT \(group_id\) DO NOTHING`).
+	mock.ExpectExec(`(?s)INSERT INTO v2_dns_failover_eval_outbox.*operation, target_id, source_target_id.*SELECT g.id, 'evaluate', NULL, NULL, \$1::BIGINT, 0, \$1::BIGINT, '', \$1::BIGINT, \$1::BIGINT.*FROM v2_dns_failover_group g.*g.enabled = 1.*last_evaluated_at IS NULL.*last_evaluated_at <= \$1::BIGINT - g.check_interval_sec.*ON CONFLICT \(group_id\) DO NOTHING`).
 		WithArgs(now).WillReturnResult(sqlmock.NewResult(0, 2))
 	if err := service.seedDueDNSFailoverEvaluations(context.Background(), now); err != nil {
 		t.Fatalf("seed due evaluations: %v", err)

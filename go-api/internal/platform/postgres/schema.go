@@ -128,6 +128,12 @@ CONSTRAINT uniq_v2_client_entry_user_policy_member UNIQUE (policy_id, server_typ
 		if err := ensureLegacyClientEntryPolicyEmailTable(ctx, db); err != nil {
 			return err
 		}
+		// Some old installations have email as NOT NULL without a default.  The
+		// one-time node-host migration inserts new structured rules before it
+		// drops this retired column, so make the legacy placeholder explicit.
+		if _, err := db.ExecContext(ctx, `ALTER TABLE v2_client_entry_user_policy ALTER COLUMN email SET DEFAULT ''`); err != nil {
+			return fmt.Errorf("ensure legacy client entry policy email default: %w", err)
+		}
 		if _, err := db.ExecContext(ctx, `INSERT INTO v2_client_entry_user_policy_user (policy_id, email, created_at, updated_at)
 SELECT id, lower(trim(email)), created_at, updated_at
 FROM v2_client_entry_user_policy
