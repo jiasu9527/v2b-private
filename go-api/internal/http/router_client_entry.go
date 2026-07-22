@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"forest/go-api/internal/admin"
+	"forest/go-api/internal/cliententry"
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/platform/addrutil"
 	"forest/go-api/internal/session"
@@ -1036,11 +1037,12 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		return true
 	}
 	var payload struct {
-		ID        *json.Number `json:"id"`
-		Email     string       `json:"email"`
-		Emails    []string     `json:"emails"`
-		EntryHost string       `json:"entry_host"`
-		Members   []struct {
+		ID         *json.Number            `json:"id"`
+		Name       string                  `json:"name"`
+		Action     string                  `json:"action"`
+		Conditions []cliententry.Condition `json:"conditions"`
+		EntryHost  string                  `json:"entry_host"`
+		Members    []struct {
 			ServerType string       `json:"server_type"`
 			ServerID   *json.Number `json:"server_id"`
 			Sort       *json.Number `json:"sort"`
@@ -1063,8 +1065,15 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 			v := json.Number(raw)
 			payload.ID = &v
 		}
-		payload.Email = strings.TrimSpace(inputs["email"])
+		payload.Name = strings.TrimSpace(inputs["name"])
+		payload.Action = strings.TrimSpace(inputs["action"])
 		payload.EntryHost = strings.TrimSpace(inputs["entry_host"])
+		if raw := strings.TrimSpace(inputs["conditions"]); raw != "" {
+			if err := json.Unmarshal([]byte(raw), &payload.Conditions); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"message": "匹配条件格式无效"})
+				return true
+			}
+		}
 		if len(payload.Members) == 0 {
 			for _, entry := range indexedNestedFieldMap(inputs, "members") {
 				serverType := strings.TrimSpace(entry["server_type"])
@@ -1119,12 +1128,55 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		members = append(members, admin.ClientEntryGroupMemberSaveRequest{ServerType: member.ServerType, ServerID: *serverID, Sort: sortValue})
 	}
 	saved, err := adminService.SaveClientEntryUserPolicy(r.Context(), admin.ClientEntryUserPolicySaveRequest{
-		ID: id, Email: payload.Email, Emails: payload.Emails, EntryHost: payload.EntryHost, Members: members, Enabled: enabled, Remarks: payload.Remarks,
+		ID: id, Name: payload.Name, Action: payload.Action, Conditions: payload.Conditions, EntryHost: payload.EntryHost, Members: members, Enabled: enabled, Remarks: payload.Remarks,
 	})
 	if err != nil {
 		return handleAdminError(w, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": saved})
+	return true
+}
+
+func handleAdminClientEntryUserPolicySort(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+	var payload struct {
+		IDs []json.Number `json:"ids"`
+	}
+	if strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
+		if err := readJSONBody(r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+			return true
+		}
+	} else {
+		inputs, err := readInputs(r)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+			return true
+		}
+		for _, raw := range strings.FieldsFunc(inputs["ids"], func(r rune) bool { return r == ',' || r == ';' || r == '\n' || r == '\r' || r == ' ' || r == '\t' }) {
+			payload.IDs = append(payload.IDs, json.Number(raw))
+		}
+	}
+	ids := make([]int64, 0, len(payload.IDs))
+	for _, raw := range payload.IDs {
+		id, err := strconv.ParseInt(strings.TrimSpace(raw.String()), 10, 64)
+		if err != nil || id <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": "规则顺序无效"})
+			return true
+		}
+		ids = append(ids, id)
+	}
+	sorted, err := adminService.SortClientEntryUserPolicies(r.Context(), ids)
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": sorted})
 	return true
 }
 

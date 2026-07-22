@@ -713,6 +713,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminClientEntryUserPolicySave(w, r, state.session, state.admin) {
 				return
 			}
+		case r.URL.Path == adminPrefix+"/server/client-entry-user-policy/sort":
+			if handleAdminClientEntryUserPolicySort(w, r, state.session, state.admin) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/server/client-entry-user-policy/drop":
 			if handleAdminClientEntryUserPolicyDrop(w, r, state.session, state.admin) {
 				return
@@ -2039,11 +2043,30 @@ func handleUserTelegramGetBotInfo(w http.ResponseWriter, r *http.Request, sessio
 }
 
 func serverFetchETag(data []map[string]any) string {
-	cacheKeys := make([]string, 0, len(data))
-	for _, item := range data {
-		cacheKeys = append(cacheKeys, strings.TrimSpace(fmt.Sprint(item["cache_key"])))
+	// The entry-rule resolver can change the host or hide a node without
+	// touching the node's updated_at/cache_key.  Include its resolved result
+	// in the ETag, but retain the old cache-key-based behavior for unrelated
+	// runtime fields such as a randomly selected port range.
+	type item struct {
+		Type     string `json:"type"`
+		ID       string `json:"id"`
+		CacheKey string `json:"cache_key"`
+		Host     string `json:"host"`
+		Policy   string `json:"client_entry_user_policy"`
+		PolicyID string `json:"client_entry_user_policy_id"`
 	}
-	raw, _ := json.Marshal(cacheKeys)
+	values := make([]item, 0, len(data))
+	for _, server := range data {
+		values = append(values, item{
+			Type:     strings.TrimSpace(fmt.Sprint(server["type"])),
+			ID:       strings.TrimSpace(fmt.Sprint(server["id"])),
+			CacheKey: strings.TrimSpace(fmt.Sprint(server["cache_key"])),
+			Host:     strings.TrimSpace(fmt.Sprint(server["host"])),
+			Policy:   strings.TrimSpace(fmt.Sprint(server["client_entry_user_policy"])),
+			PolicyID: strings.TrimSpace(fmt.Sprint(server["client_entry_user_policy_id"])),
+		})
+	}
+	raw, _ := json.Marshal(values)
 	return fmt.Sprintf("%x", sha1.Sum(raw))
 }
 

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"forest/go-api/internal/cliententry"
 )
 
 var managedServerTypeTable = map[string]string{
@@ -144,6 +146,11 @@ func (s *DBService) UpdateManagedServerHost(ctx context.Context, oldHost, newHos
 	newHost = strings.TrimSpace(newHost)
 	if oldHost == "" || newHost == "" {
 		return ManagedServerHostUpdateResult{}, errors.New("地址不能为空")
+	}
+	var err error
+	newHost, err = cliententry.NormalizeHost(newHost)
+	if err != nil {
+		return ManagedServerHostUpdateResult{}, errors.New("新地址必须是单个域名或 IP；入口规则请在用户入口分配中维护")
 	}
 	if oldHost == newHost {
 		return ManagedServerHostUpdateResult{}, errors.New("原地址和新地址不能相同")

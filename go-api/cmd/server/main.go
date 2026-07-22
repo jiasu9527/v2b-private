@@ -42,6 +42,25 @@ func main() {
 		defer func() {
 			_ = db.Close()
 		}()
+		// The old per-node host DSL is intentionally not evaluated at runtime
+		// anymore.  Upgrade it atomically before any subscription request can be
+		// served, then leave a durable marker so restarts are cheap and idempotent.
+		if err := postgres.EnsureClientEntrySchema(ctx, db); err != nil {
+			log.Fatalf("ensure client entry schema: %v", err)
+		}
+		report, err := postgres.MigrateLegacyServerHostEntryRules(ctx, db)
+		if err != nil {
+			var migrationErr *postgres.LegacyEntryHostMigrationError
+			if errors.As(err, &migrationErr) {
+				for _, issue := range migrationErr.Issues {
+					log.Printf("legacy client entry migration issue: source=%s table=%s type=%s server_id=%d policy_id=%d email=%q host=%q reason=%s", issue.Source, issue.Table, issue.ServerType, issue.ServerID, issue.PolicyID, issue.Email, issue.Host, issue.Reason)
+				}
+			}
+			log.Fatalf("migrate legacy client entry rules: %v", err)
+		}
+		if !report.AlreadyApplied {
+			log.Printf("migrated legacy client entry rules: servers=%d rewritten=%d rules=%d hidden=%d users=%d", report.ServersScanned, report.ServersRewritten, report.RulesCreated, report.HideRulesCreated, report.LegacyEmailsMapped)
+		}
 	}
 
 	var passportService passport.Service

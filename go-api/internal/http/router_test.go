@@ -900,6 +900,7 @@ type fakeAdminService struct {
 	lastClientEntrySave           admin.ClientEntryGroupSaveRequest
 	lastClientEntryDrop           int64
 	lastClientEntryUserPolicySave admin.ClientEntryUserPolicySaveRequest
+	lastClientEntryUserPolicySort []int64
 	lastClientEntryUserPolicyDrop int64
 	lastRouteSave                 admin.ServerRouteSaveRequest
 	lastRouteDrop                 int64
@@ -1125,6 +1126,11 @@ func (f *fakeAdminService) ListClientEntryUserPolicies(_ context.Context) ([]adm
 
 func (f *fakeAdminService) SaveClientEntryUserPolicy(_ context.Context, req admin.ClientEntryUserPolicySaveRequest) (bool, error) {
 	f.lastClientEntryUserPolicySave = req
+	return true, f.err
+}
+
+func (f *fakeAdminService) SortClientEntryUserPolicies(_ context.Context, ids []int64) (bool, error) {
+	f.lastClientEntryUserPolicySort = append([]int64(nil), ids...)
 	return true, f.err
 }
 
@@ -2141,6 +2147,26 @@ func TestRouterUserServerFetchReturnsNotModifiedWhenETagMatches(t *testing.T) {
 	}
 	if strings.TrimSpace(secondRec.Body.String()) != "" {
 		t.Fatalf("expected empty body for 304, got %q", secondRec.Body.String())
+	}
+}
+
+func TestServerFetchETagChangesWhenResolvedEntryHostChanges(t *testing.T) {
+	base := []map[string]any{{"id": int64(1), "type": "vmess", "cache_key": "vmess-1-100-1", "host": "default.example.com"}}
+	overridden := []map[string]any{{"id": int64(1), "type": "vmess", "cache_key": "vmess-1-100-1", "host": "vip.example.com"}}
+	if serverFetchETag(base) == serverFetchETag(overridden) {
+		t.Fatal("resolved entry host must participate in the server-fetch ETag")
+	}
+}
+
+func TestServerFetchETagIgnoresRandomizedPortButTracksEntryRule(t *testing.T) {
+	base := []map[string]any{{"id": int64(1), "type": "vmess", "cache_key": "vmess-1-100-1", "host": "entry.example.com", "port": 12001}}
+	randomPort := []map[string]any{{"id": int64(1), "type": "vmess", "cache_key": "vmess-1-100-1", "host": "entry.example.com", "port": 12002}}
+	if serverFetchETag(base) != serverFetchETag(randomPort) {
+		t.Fatal("randomized port must not invalidate the subscription ETag")
+	}
+	matchedRule := []map[string]any{{"id": int64(1), "type": "vmess", "cache_key": "vmess-1-100-1", "host": "entry.example.com", "client_entry_user_policy": 1, "client_entry_user_policy_id": int64(7)}}
+	if serverFetchETag(base) == serverFetchETag(matchedRule) {
+		t.Fatal("resolved rule metadata must participate in the subscription ETag")
 	}
 }
 
@@ -4240,7 +4266,7 @@ func TestRouterAdminClientEntryGroupSaveEndpointAcceptsLegacyFormPayload(t *test
 	}
 }
 
-func TestRouterAdminClientEntryUserPolicySaveEndpointAcceptsMultipleNodes(t *testing.T) {
+func TestRouterAdminClientEntryUserPolicySaveEndpointAcceptsStructuredRules(t *testing.T) {
 	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
 	adminService := &fakeAdminService{}
 	router := NewRouter(
@@ -4249,7 +4275,7 @@ func TestRouterAdminClientEntryUserPolicySaveEndpointAcceptsMultipleNodes(t *tes
 		WithAdminService(adminService),
 	)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/save", strings.NewReader(`{"auth_data":"jwt-admin","emails":["a@example.com","b@example.com"],"entry_host":"vip-entry.example.com","members":[{"server_type":"vmess","server_id":11},{"server_type":"trojan","server_id":12}],"enabled":1,"remarks":"VIP"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/save", strings.NewReader(`{"auth_data":"jwt-admin","name":"新用户 Clash","action":"override","entry_host":"vip-entry.example.com","conditions":[{"field":"user_id","operator":"in","values":[1001,1002]},{"field":"ua","operator":"contains_any","values":["Clash","Mihomo"]}],"members":[{"server_type":"vmess","server_id":11},{"server_type":"trojan","server_id":12}],"enabled":1,"remarks":"VIP"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -4257,14 +4283,38 @@ func TestRouterAdminClientEntryUserPolicySaveEndpointAcceptsMultipleNodes(t *tes
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if len(adminService.lastClientEntryUserPolicySave.Emails) != 2 || adminService.lastClientEntryUserPolicySave.Emails[0] != "a@example.com" || adminService.lastClientEntryUserPolicySave.Emails[1] != "b@example.com" {
-		t.Fatalf("unexpected emails: %#v", adminService.lastClientEntryUserPolicySave.Emails)
+	if adminService.lastClientEntryUserPolicySave.Name != "新用户 Clash" || adminService.lastClientEntryUserPolicySave.Action != "override" {
+		t.Fatalf("unexpected structured rule: %#v", adminService.lastClientEntryUserPolicySave)
 	}
 	if adminService.lastClientEntryUserPolicySave.EntryHost != "vip-entry.example.com" {
 		t.Fatalf("unexpected entry host: %#v", adminService.lastClientEntryUserPolicySave.EntryHost)
 	}
 	if len(adminService.lastClientEntryUserPolicySave.Members) != 2 || adminService.lastClientEntryUserPolicySave.Members[0].ServerType != "vmess" || adminService.lastClientEntryUserPolicySave.Members[0].ServerID != 11 || adminService.lastClientEntryUserPolicySave.Members[1].ServerType != "trojan" || adminService.lastClientEntryUserPolicySave.Members[1].ServerID != 12 {
 		t.Fatalf("unexpected selected nodes: %#v", adminService.lastClientEntryUserPolicySave.Members)
+	}
+	if len(adminService.lastClientEntryUserPolicySave.Conditions) != 2 || adminService.lastClientEntryUserPolicySave.Conditions[0].Field != "user_id" || adminService.lastClientEntryUserPolicySave.Conditions[1].Operator != "contains_any" {
+		t.Fatalf("unexpected conditions: %#v", adminService.lastClientEntryUserPolicySave.Conditions)
+	}
+}
+
+func TestRouterAdminClientEntryUserPolicySortEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/sort", strings.NewReader(`{"auth_data":"jwt-admin","ids":[8,3,12]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := adminService.lastClientEntryUserPolicySort; len(got) != 3 || got[0] != 8 || got[1] != 3 || got[2] != 12 {
+		t.Fatalf("unexpected sorted ids: %#v", got)
 	}
 }
 

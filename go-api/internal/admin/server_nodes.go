@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"forest/go-api/internal/cliententry"
+
 	"golang.org/x/crypto/cryptobyte"
 	"golang.org/x/crypto/curve25519"
 )
@@ -145,6 +147,9 @@ func (s *DBService) DeleteManagedServer(ctx context.Context, serverType string, 
 	if s.db == nil {
 		return false, ErrUnavailable
 	}
+	if err := s.ensureClientEntrySchema(ctx); err != nil {
+		return false, err
+	}
 
 	def, ok := managedServerDefinitions[strings.TrimSpace(serverType)]
 	if !ok {
@@ -159,12 +164,26 @@ func (s *DBService) DeleteManagedServer(ctx context.Context, serverType string, 
 		return false, errors.New("节点ID不存在")
 	}
 
-	result, err := s.db.ExecContext(ctx, `DELETE FROM `+quoteIdentifier(def.table)+` WHERE id = $1`, id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, errors.New("删除失败")
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy_member WHERE server_type = $1 AND server_id = $2`, strings.TrimSpace(serverType), id); err != nil {
+		return false, errors.New("删除失败")
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_group_member WHERE server_type = $1 AND server_id = $2`, strings.TrimSpace(serverType), id); err != nil {
+		return false, errors.New("删除失败")
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM `+quoteIdentifier(def.table)+` WHERE id = $1`, id)
 	if err != nil {
 		return false, errors.New("删除失败")
 	}
 	affected, err := result.RowsAffected()
 	if err != nil || affected == 0 {
+		return false, errors.New("删除失败")
+	}
+	if err := tx.Commit(); err != nil {
 		return false, errors.New("删除失败")
 	}
 	return true, nil
@@ -449,6 +468,10 @@ func normalizeManagedServerCommon(payload map[string]any, values map[string]any,
 	host, err := requiredStringField(payload, "host", "节点地址不能为空")
 	if err != nil {
 		return "", err
+	}
+	host, err = cliententry.NormalizeHost(host)
+	if err != nil {
+		return "", errors.New("节点地址必须是单个域名或 IP；入口规则请在用户入口分配中维护")
 	}
 	values["host"] = host
 

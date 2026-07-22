@@ -109,6 +109,13 @@ function nonEmpty(value: any) {
   return value !== undefined && value !== null && value !== '';
 }
 
+function hasEntryRuleDSL(value: any) {
+  const text = String(value || '').trim();
+  // Node hosts are now plain addresses. User-Agent/user-id/registration-day
+  // rules belong in the dedicated "用户入口分配" menu instead of host syntax.
+  return /[,，()]/.test(text);
+}
+
 function settingDisplayValue(obj: Record<string, any>, fieldKey: string, aliases: string[] = []) {
   for (const key of [fieldKey, ...aliases]) {
     const value = key.includes('.') || key.includes('[') ? readPath(obj, key) : obj[key];
@@ -629,6 +636,7 @@ export default function ServerManage() {
     const newHost = bulkNewHost.trim();
     if (!oldHost) return message.error('原地址不能为空');
     if (!newHost) return message.error('新地址不能为空');
+    if (hasEntryRuleDSL(newHost)) return message.error('新地址只能填写普通域名或 IP；UA、用户ID、注册天数等规则请到“用户入口分配”维护');
     if (oldHost === newHost) return message.error('新旧地址不能相同');
     const res = await apiPost('/server/manage/updateHost', { old_host: oldHost, new_host: newHost });
     const total = res.data?.updated_total || 0;
@@ -681,7 +689,7 @@ export default function ServerManage() {
       </div>
       {bulkOpen && <div className="bulk-host-editor">
         <Input placeholder="原地址筛选" style={{ width: 220 }} value={bulkOldHost} onChange={(e) => setBulkOldHost(e.target.value)} />
-        <Input placeholder="新地址" style={{ width: 220 }} value={bulkNewHost} onChange={(e) => setBulkNewHost(e.target.value)} onPressEnter={bulkUpdateHost} />
+        <Input placeholder="新普通地址（域名/IP）" style={{ width: 220 }} value={bulkNewHost} onChange={(e) => setBulkNewHost(e.target.value)} onPressEnter={bulkUpdateHost} />
         <Button type="primary" loading={loading} onClick={bulkUpdateHost}>批量修改地址</Button>
         <Button onClick={() => setBulkOpen(false)}>取消</Button>
       </div>}
@@ -724,7 +732,15 @@ export default function ServerManage() {
           <div className="form-col-4"><Form.Item name="rate" label="倍率" rules={[{ required: true }]}><InputNumber addonAfter="x" style={{ width: '100%' }} placeholder="请输入节点倍率" /></Form.Item></div>
           <div className="form-col-24"><Form.Item name="tags" label="节点标签"><Select mode="tags" placeholder="输入后回车添加标签" /></Form.Item></div>
           <div className="form-col-24"><Form.Item name="group_id" label="权限组" rules={[{ required: true }]}><Select mode="multiple" placeholder="请选择权限组" options={groups.map((group) => ({ label: group.name, value: String(group.id) }))} /></Form.Item></div>
-          <div className="form-col-12"><Form.Item name="host" label={currentType === 'v2node' ? '连接地址' : '节点地址'} rules={[{ required: true }]}><Input placeholder={currentType === 'v2node' || currentType === 'anytls' ? '地址或IP' : '请输入连接地址'} /></Form.Item></div>
+          <div className="form-col-12"><Form.Item
+            name="host"
+            label={currentType === 'v2node' ? '连接地址' : '节点地址'}
+            extra="这里只填普通域名或 IP；UA、用户ID、注册天数、套餐等入口规则请到“用户入口分配”菜单维护。"
+            rules={[
+              { required: true },
+              { validator: (_, value) => hasEntryRuleDSL(value) ? Promise.reject(new Error('节点地址不能包含逗号或条件括号，请到“用户入口分配”维护入口规则')) : Promise.resolve() },
+            ]}
+          ><Input placeholder={currentType === 'v2node' || currentType === 'anytls' ? '地址或IP' : '请输入连接地址'} /></Form.Item></div>
           {currentType === 'v2node' && <div className="form-col-12"><Form.Item name="listen_ip" label="监听地址"><Input placeholder="地址或IP默认为0.0.0.0" /></Form.Item></div>}
           <div className="form-col-12"><Form.Item name="port" label="连接端口" rules={[{ required: true }]}><Input placeholder="用户连接端口" /></Form.Item></div>
           <div className="form-col-12"><Form.Item name="server_port" label="服务端端口" rules={[{ required: true }]}><InputNumber style={{ width: '100%' }} placeholder="服务端开放端口" /></Form.Item></div>

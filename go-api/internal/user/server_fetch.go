@@ -11,12 +11,13 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"forest/go-api/internal/cliententry"
 )
 
 type serverFetchUser struct {
@@ -49,15 +50,6 @@ var (
 		{serverType: "anytls", table: "v2_server_anytls", lastCheckKeyPrefix: "SERVER_ANYTLS_LAST_CHECK_AT_", randomizePort: true, inheritCreatedAt: true},
 		{serverType: "v2node", table: "v2_server_v2node", lastCheckKeyPrefix: "SERVER_V2NODE_LAST_CHECK_AT_", inheritCreatedAt: true},
 	}
-
-	serverFetchUAWithRangePattern = regexp.MustCompile(`^(.+?)\(U(.+?)(\d+)-(\d+)\)$`)
-	serverFetchUAPattern          = regexp.MustCompile(`^(.+?)\(U([^)]+)\)$`)
-	serverFetchPlanPattern        = regexp.MustCompile(`^(.+?)\(P(\d+)-(\d+)\)$`)
-	serverFetchDayRangePattern    = regexp.MustCompile(`^(.+?)\(D(\d+)-(\d+)\)$`)
-	serverFetchDayGTPathern       = regexp.MustCompile(`^(.+?)\(D>(\d+)\)$`)
-	serverFetchDayLEPattern       = regexp.MustCompile(`^(.+?)\(D<=(\d+)\)$`)
-	serverFetchDayShortPattern    = regexp.MustCompile(`^(.+?)\(D(\d+)\)$`)
-	serverFetchUserRangePattern   = regexp.MustCompile(`^(.+?)\((\d+)-(\d+)\)$`)
 )
 
 func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map[string]any, error) {
@@ -69,13 +61,13 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 	if err != nil {
 		return nil, err
 	}
-	userPolicies, err := s.loadClientEntryUserPolicies(ctx, userRow.Email)
-	if err != nil {
-		return nil, err
-	}
 	now := time.Now().Unix()
 	if !knowledgeUserAvailable(userRow.Banned, userRow.TransferEnable, userRow.ExpiredAt, now) {
 		return []map[string]any{}, nil
+	}
+	userPolicies, err := s.loadClientEntryUserPolicies(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	servers := make([]map[string]any, 0)
@@ -114,18 +106,15 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 		return mapInt64(servers[i]["id"]) < mapInt64(servers[j]["id"])
 	})
 
-	servers = applyClientEntryUserPolicies(servers, userRow.Email, userPolicies)
+	servers = applyClientEntryUserPolicies(servers, cliententry.Subject{
+		UserID:           userRow.ID,
+		RegistrationDays: serverFetchRegistrationDays(userRow.CreatedAt, now),
+		PlanID:           userRow.PlanID,
+		UA:               ua,
+	}, userPolicies)
 
 	filtered := make([]map[string]any, 0, len(servers))
 	for _, item := range servers {
-		if hostValue, ok := item["host"].(string); ok {
-			host, hostOK := parseServerHostByCondition(hostValue, userRow, ua, now)
-			if !hostOK {
-				continue
-			}
-			item["host"] = host
-		}
-
 		if rawPort, isRange := serverPortRange(item["port"]); isRange {
 			item["mport"] = rawPort
 		} else if port, ok := serverPortInt(item["port"]); ok {
@@ -143,6 +132,13 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 	}
 
 	return filtered, nil
+}
+
+func serverFetchRegistrationDays(createdAt, now int64) int64 {
+	if createdAt <= 0 || now < createdAt {
+		return -1
+	}
+	return (now - createdAt) / 86400
 }
 
 func (s *DBService) loadServerFetchUser(ctx context.Context, userID int64) (serverFetchUser, error) {
@@ -283,180 +279,6 @@ func (s *DBService) serverFetchLastCheckAt(ctx context.Context, prefix string, s
 		return 0, nil
 	}
 	return value, nil
-}
-
-func parseServerHostByCondition(hostConfig string, user serverFetchUser, ua string, now int64) (string, bool) {
-	hostConfig = strings.TrimSpace(hostConfig)
-	if hostConfig == "" {
-		return "", false
-	}
-
-	hosts := strings.Split(hostConfig, ",")
-	defaultHost := ""
-	hasConditional := false
-	registrationDays := int64(-1)
-	if user.CreatedAt > 0 && now > user.CreatedAt {
-		registrationDays = (now - user.CreatedAt) / 86400
-	}
-
-	for _, rawHost := range hosts {
-		host := strings.TrimSpace(rawHost)
-		if host == "" {
-			continue
-		}
-
-		if matches := serverFetchUAWithRangePattern.FindStringSubmatch(host); len(matches) == 5 {
-			hasConditional = true
-			if serverFetchUAHit(matches[2], ua) {
-				minID, _ := strconv.ParseInt(matches[3], 10, 64)
-				maxID, _ := strconv.ParseInt(matches[4], 10, 64)
-				if user.ID >= minID && user.ID <= maxID {
-					return strings.TrimSpace(matches[1]), true
-				}
-			}
-			continue
-		}
-
-		if matches := serverFetchUAPattern.FindStringSubmatch(host); len(matches) == 3 {
-			hasConditional = true
-			if serverFetchUAHit(matches[2], ua) {
-				return strings.TrimSpace(matches[1]), true
-			}
-			continue
-		}
-
-		if matches := serverFetchPlanPattern.FindStringSubmatch(host); len(matches) == 4 {
-			hasConditional = true
-			minPlan, _ := strconv.ParseInt(matches[2], 10, 64)
-			maxPlan, _ := strconv.ParseInt(matches[3], 10, 64)
-			if user.PlanID >= minPlan && user.PlanID <= maxPlan {
-				return strings.TrimSpace(matches[1]), true
-			}
-			continue
-		}
-
-		if matches := serverFetchDayRangePattern.FindStringSubmatch(host); len(matches) == 4 {
-			hasConditional = true
-			if registrationDays >= 0 {
-				minDays, _ := strconv.ParseInt(matches[2], 10, 64)
-				maxDays, _ := strconv.ParseInt(matches[3], 10, 64)
-				if registrationDays >= minDays && registrationDays <= maxDays {
-					return strings.TrimSpace(matches[1]), true
-				}
-			}
-			continue
-		}
-
-		if matches := serverFetchDayGTPathern.FindStringSubmatch(host); len(matches) == 3 {
-			hasConditional = true
-			if registrationDays >= 0 {
-				minDays, _ := strconv.ParseInt(matches[2], 10, 64)
-				if registrationDays > minDays {
-					return strings.TrimSpace(matches[1]), true
-				}
-			}
-			continue
-		}
-
-		if matches := serverFetchDayLEPattern.FindStringSubmatch(host); len(matches) == 3 {
-			hasConditional = true
-			if registrationDays >= 0 {
-				maxDays, _ := strconv.ParseInt(matches[2], 10, 64)
-				if registrationDays <= maxDays {
-					return strings.TrimSpace(matches[1]), true
-				}
-			}
-			continue
-		}
-
-		if matches := serverFetchDayShortPattern.FindStringSubmatch(host); len(matches) == 3 {
-			hasConditional = true
-			if registrationDays >= 0 {
-				maxDays, _ := strconv.ParseInt(matches[2], 10, 64)
-				if registrationDays <= maxDays {
-					return strings.TrimSpace(matches[1]), true
-				}
-			}
-			continue
-		}
-
-		if matches := serverFetchUserRangePattern.FindStringSubmatch(host); len(matches) == 4 {
-			hasConditional = true
-			startID, _ := strconv.ParseInt(matches[2], 10, 64)
-			endID, _ := strconv.ParseInt(matches[3], 10, 64)
-			if user.ID >= startID && user.ID <= endID {
-				return strings.TrimSpace(matches[1]), true
-			}
-			continue
-		}
-
-		defaultHost = host
-	}
-
-	if hasConditional && strings.TrimSpace(defaultHost) == "" {
-		return "", false
-	}
-	defaultHost = strings.TrimSpace(defaultHost)
-	if defaultHost == "" {
-		return "", false
-	}
-	return defaultHost, true
-}
-
-func serverFetchUAHit(rawKeywords, ua string) bool {
-	ua = strings.TrimSpace(ua)
-	hasPositive := false
-	positiveMatched := false
-
-	for _, keyword := range strings.Split(rawKeywords, "|") {
-		keyword = strings.TrimSpace(keyword)
-		keyword = strings.TrimPrefix(strings.TrimPrefix(keyword, "U"), "u")
-		if keyword == "" {
-			continue
-		}
-		if normalized, negated := serverFetchNegatedUAKeyword(keyword); negated {
-			if ua != "" && strings.Contains(strings.ToLower(ua), strings.ToLower(normalized)) {
-				return false
-			}
-			continue
-		}
-		if serverFetchMissingUAKeyword(keyword) {
-			hasPositive = true
-			if strings.TrimSpace(ua) == "" {
-				positiveMatched = true
-			}
-			continue
-		}
-		hasPositive = true
-		if ua != "" && strings.Contains(strings.ToLower(ua), strings.ToLower(keyword)) {
-			positiveMatched = true
-		}
-	}
-	if hasPositive {
-		return positiveMatched
-	}
-	return true
-}
-
-func serverFetchMissingUAKeyword(keyword string) bool {
-	switch strings.ToLower(strings.TrimSpace(keyword)) {
-	case "none", "empty", "blank", "null", "missing", "noua", "no-ua", "no_ua":
-		return true
-	default:
-		return false
-	}
-}
-
-func serverFetchNegatedUAKeyword(keyword string) (string, bool) {
-	trimmed := strings.TrimSpace(keyword)
-	switch {
-	case strings.HasPrefix(trimmed, "!"):
-		return strings.TrimSpace(trimmed[1:]), true
-	case strings.HasPrefix(trimmed, "-"):
-		return strings.TrimSpace(trimmed[1:]), true
-	default:
-		return "", false
-	}
 }
 
 func serverGroupAllowed(groupIDs []int64, userGroupID int64) bool {

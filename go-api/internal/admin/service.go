@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"forest/go-api/internal/cliententry"
+
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/dnspod"
 	"forest/go-api/internal/payment"
@@ -328,6 +330,7 @@ type Service interface {
 	DeleteClientEntryGroup(ctx context.Context, id int64) (bool, error)
 	ListClientEntryUserPolicies(ctx context.Context) ([]ClientEntryUserPolicyRecord, error)
 	SaveClientEntryUserPolicy(ctx context.Context, req ClientEntryUserPolicySaveRequest) (bool, error)
+	SortClientEntryUserPolicies(ctx context.Context, ids []int64) (bool, error)
 	DeleteClientEntryUserPolicy(ctx context.Context, id int64) (bool, error)
 	ListServerRoutes(ctx context.Context) ([]ServerRouteRecord, error)
 	SaveServerRoute(ctx context.Context, req ServerRouteSaveRequest) (bool, error)
@@ -1250,13 +1253,12 @@ func randomAlphaNumeric(length int) (string, error) {
 
 type ClientEntryUserPolicyRecord struct {
 	ID         int64                          `json:"id"`
-	Email      string                         `json:"email,omitempty"`
-	Emails     []string                       `json:"emails,omitempty"`
+	Name       string                         `json:"name"`
+	Sort       int64                          `json:"sort"`
+	Action     string                         `json:"action"`
+	Conditions []cliententry.Condition        `json:"conditions"`
 	Members    []ClientEntryGroupMemberRecord `json:"members,omitempty"`
 	EntryHost  string                         `json:"entry_host"`
-	ServerType string                         `json:"server_type"`
-	ServerID   int64                          `json:"server_id"`
-	ServerName string                         `json:"server_name"`
 	Enabled    int64                          `json:"enabled"`
 	Remarks    string                         `json:"remarks"`
 	CreatedAt  int64                          `json:"created_at,omitempty"`
@@ -1265,12 +1267,11 @@ type ClientEntryUserPolicyRecord struct {
 
 type ClientEntryUserPolicySaveRequest struct {
 	ID         *int64
-	Email      string
-	Emails     []string
+	Name       string
+	Action     string
+	Conditions []cliententry.Condition
 	Members    []ClientEntryGroupMemberSaveRequest
 	EntryHost  string
-	ServerType string
-	ServerID   int64
 	Enabled    *int64
 	Remarks    string
 }

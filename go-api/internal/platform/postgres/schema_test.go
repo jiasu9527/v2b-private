@@ -7,29 +7,18 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestEnsureClientEntrySchemaCreatesMissingTablesAndColumns(t *testing.T) {
-	t.Parallel()
-
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock: %v", err)
+func expectCurrentClientEntrySchema(mock sqlmock.Sqlmock, columnsExist bool) {
+	for _, table := range []string{
+		"v2_client_entry_group",
+		"v2_client_entry_group_member",
+		"v2_client_entry_group_ip",
+		"v2_client_entry_user_policy",
+		"v2_client_entry_user_policy_member",
+	} {
+		mock.ExpectExec(`CREATE TABLE IF NOT EXISTS ` + table).
+			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
-	defer db.Close()
-
-	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_group`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_group_member`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_group_ip`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy_user`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy_member`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	for _, item := range []struct {
+	columns := []struct {
 		table  string
 		column string
 		stmt   string
@@ -42,119 +31,63 @@ func TestEnsureClientEntrySchemaCreatesMissingTablesAndColumns(t *testing.T) {
 		{"v2_client_entry_group", "remote_group_ref", `ALTER TABLE v2_client_entry_group ADD COLUMN remote_group_ref varchar\(255\) NOT NULL DEFAULT ''`},
 		{"v2_client_entry_group", "remote_exclude_names", `ALTER TABLE v2_client_entry_group ADD COLUMN remote_exclude_names text NOT NULL DEFAULT '\[\]'`},
 		{"v2_client_entry_group", "remote_refresh_sec", `ALTER TABLE v2_client_entry_group ADD COLUMN remote_refresh_sec INTEGER NOT NULL DEFAULT 300`},
-		{"v2_client_entry_user_policy", "email", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN email varchar\(255\) NOT NULL DEFAULT ''`},
+		{"v2_client_entry_user_policy", "name", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN name varchar\(255\) NOT NULL DEFAULT ''`},
+		{"v2_client_entry_user_policy", "sort", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN sort INTEGER NOT NULL DEFAULT 0`},
+		{"v2_client_entry_user_policy", "action", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN action varchar\(16\) NOT NULL DEFAULT 'override'`},
+		{"v2_client_entry_user_policy", "conditions", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN conditions text NOT NULL DEFAULT '\[\]'`},
 		{"v2_client_entry_user_policy", "entry_host", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN entry_host varchar\(255\) NOT NULL DEFAULT ''`},
-	} {
+	}
+	for _, column := range columns {
 		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
-			WithArgs(item.table, item.column).
+			WithArgs(column.table, column.column).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(columnsExist))
+		if !columnsExist {
+			mock.ExpectExec(column.stmt).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+	}
+	for _, legacyColumn := range []string{"email", "server_type"} {
+		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+			WithArgs("v2_client_entry_user_policy", legacyColumn).
 			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-		mock.ExpectExec(item.stmt).
-			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
-
-	mock.ExpectExec(`ALTER TABLE v2_client_entry_user_policy ALTER COLUMN entry_group_id SET DEFAULT 0`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`ALTER TABLE v2_client_entry_user_policy ALTER COLUMN server_type SET DEFAULT ''`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`ALTER TABLE v2_client_entry_user_policy ALTER COLUMN server_id SET DEFAULT 0`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_group_member_group ON v2_client_entry_group_member\(entry_group_id\)`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_group_ip_group ON v2_client_entry_group_ip\(entry_group_id\)`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_server ON v2_client_entry_user_policy\(server_type, server_id\)`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_user_email ON v2_client_entry_user_policy_user\(lower\(email\)\)`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_user_policy ON v2_client_entry_user_policy_user\(policy_id\)`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_member_policy ON v2_client_entry_user_policy_member\(policy_id\)`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`INSERT INTO v2_client_entry_user_policy_user`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`INSERT INTO v2_client_entry_user_policy_member`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	if err := EnsureClientEntrySchema(context.Background(), db); err != nil {
-		t.Fatalf("EnsureClientEntrySchema: %v", err)
-	}
-
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("sql expectations: %v", err)
+	for _, index := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_group_member_group ON v2_client_entry_group_member\(entry_group_id\)`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_group_ip_group ON v2_client_entry_group_ip\(entry_group_id\)`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_sort ON v2_client_entry_user_policy\(sort, id\)`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_member_policy ON v2_client_entry_user_policy_member\(policy_id\)`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_member_server ON v2_client_entry_user_policy_member\(server_type, server_id\)`,
+	} {
+		mock.ExpectExec(index).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 }
 
-func TestEnsureClientEntrySchemaSkipsExistingColumns(t *testing.T) {
-	t.Parallel()
-
+func TestEnsureClientEntrySchemaCreatesCurrentTablesAndColumns(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-
-	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_group`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_group_member`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_group_ip`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy_user`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy_member`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	for _, item := range []struct {
-		table  string
-		column string
-	}{
-		{"v2_client_entry_group", "remote_enabled"},
-		{"v2_client_entry_group", "remote_host"},
-		{"v2_client_entry_group", "remote_ssh_port"},
-		{"v2_client_entry_group", "remote_ssh_user"},
-		{"v2_client_entry_group", "remote_ssh_password"},
-		{"v2_client_entry_group", "remote_group_ref"},
-		{"v2_client_entry_group", "remote_exclude_names"},
-		{"v2_client_entry_group", "remote_refresh_sec"},
-		{"v2_client_entry_user_policy", "email"},
-		{"v2_client_entry_user_policy", "entry_host"},
-	} {
-		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
-			WithArgs(item.table, item.column).
-			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
-	}
-
-	mock.ExpectExec(`ALTER TABLE v2_client_entry_user_policy ALTER COLUMN entry_group_id SET DEFAULT 0`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`ALTER TABLE v2_client_entry_user_policy ALTER COLUMN server_type SET DEFAULT ''`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`ALTER TABLE v2_client_entry_user_policy ALTER COLUMN server_id SET DEFAULT 0`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_group_member_group ON v2_client_entry_group_member\(entry_group_id\)`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_group_ip_group ON v2_client_entry_group_ip\(entry_group_id\)`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_server ON v2_client_entry_user_policy\(server_type, server_id\)`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_user_email ON v2_client_entry_user_policy_user\(lower\(email\)\)`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_user_policy ON v2_client_entry_user_policy_user\(policy_id\)`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_member_policy ON v2_client_entry_user_policy_member\(policy_id\)`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`INSERT INTO v2_client_entry_user_policy_user`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`INSERT INTO v2_client_entry_user_policy_member`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectCurrentClientEntrySchema(mock, false)
 
 	if err := EnsureClientEntrySchema(context.Background(), db); err != nil {
 		t.Fatalf("EnsureClientEntrySchema: %v", err)
 	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
 
+func TestEnsureClientEntrySchemaDoesNotCreateRetiredEmailTableOnFreshSchema(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	expectCurrentClientEntrySchema(mock, true)
+
+	if err := EnsureClientEntrySchema(context.Background(), db); err != nil {
+		t.Fatalf("EnsureClientEntrySchema: %v", err)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
 	}

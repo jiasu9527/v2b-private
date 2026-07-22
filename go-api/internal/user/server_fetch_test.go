@@ -3,148 +3,67 @@ package user
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"testing"
-	"time"
 
+	"forest/go-api/internal/cliententry"
 	"forest/go-api/internal/config"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestParseServerHostByConditionMatchesUserAgentAndRange(t *testing.T) {
-	createdAt := time.Now().Add(-10 * 24 * time.Hour).Unix()
-	host, ok := parseServerHostByCondition(
-		"default.example.com,clash.example.com(UClash),range.example.com(1-20)",
-		serverFetchUser{
-			ID:        10,
-			PlanID:    1,
-			CreatedAt: createdAt,
-		},
-		"ClashMeta/1.0",
-		time.Now().Unix(),
-	)
-	if !ok {
-		t.Fatalf("expected host match")
+func TestApplyClientEntryUserPoliciesUsesFirstMatchingRuleAndCanHide(t *testing.T) {
+	servers := []map[string]any{
+		{"id": int64(11), "type": "vmess", "host": "default.example.com"},
+		{"id": int64(12), "type": "trojan", "host": "other.example.com"},
+		{"id": int64(13), "type": "vless", "host": "keep.example.com"},
 	}
-	if host != "clash.example.com" {
-		t.Fatalf("expected clash host, got %q", host)
+	policies := []clientEntryUserPolicy{
+		{
+			ID: 1, Action: cliententry.ActionOverride, EntryHost: "first.example.com",
+			Conditions: []cliententry.Condition{{Field: "ua", Operator: "contains_any", Values: []json.RawMessage{json.RawMessage(`"Clash"`)}}},
+			Members:    []ClientEntryGroupMember{{ServerType: "vmess", ServerID: 11}},
+		},
+		{
+			ID: 2, Action: cliententry.ActionOverride, EntryHost: "later.example.com",
+			Members: []ClientEntryGroupMember{{ServerType: "vmess", ServerID: 11}},
+		},
+		{
+			ID: 3, Action: cliententry.ActionHide,
+			Conditions: []cliententry.Condition{{Field: "plan_id", Operator: "between", Min: json.RawMessage("2"), Max: json.RawMessage("3")}},
+			Members:    []ClientEntryGroupMember{{ServerType: "trojan", ServerID: 12}},
+		},
+		{
+			ID: 4, Action: cliententry.ActionOverride, EntryHost: "new.example.com",
+			Conditions: []cliententry.Condition{
+				{Field: "registration_days", Operator: "lte", Value: json.RawMessage("30")},
+				{Field: "ua", Operator: "excludes_any", Values: []json.RawMessage{json.RawMessage(`"Shadowrocket"`)}},
+			},
+			Members: []ClientEntryGroupMember{{ServerType: "vless", ServerID: 13}},
+		},
+	}
+
+	result := applyClientEntryUserPolicies(servers, cliententry.Subject{UserID: 100, PlanID: 2, RegistrationDays: 8, UA: "ClashMeta/1.0"}, policies)
+	if len(result) != 2 {
+		t.Fatalf("expected hide rule to remove one node, got %#v", result)
+	}
+	if result[0]["host"] != "first.example.com" {
+		t.Fatalf("first matching rule should win, got %#v", result[0]["host"])
+	}
+	if result[1]["host"] != "new.example.com" {
+		t.Fatalf("expected registration/UA rule host, got %#v", result[1]["host"])
 	}
 }
 
-func TestParseServerHostByConditionMatchesPlanAndDays(t *testing.T) {
-	createdAt := time.Now().Add(-40 * 24 * time.Hour).Unix()
-	host, ok := parseServerHostByCondition(
-		"plan.example.com(P2-5),days.example.com(D>30),default.example.com",
-		serverFetchUser{
-			ID:        30,
-			PlanID:    3,
-			CreatedAt: createdAt,
-		},
-		"Mozilla/5.0",
-		time.Now().Unix(),
-	)
-	if !ok {
-		t.Fatalf("expected host match")
+func TestServerFetchRegistrationDaysIncludesNewlyRegisteredUser(t *testing.T) {
+	if got := serverFetchRegistrationDays(100, 100); got != 0 {
+		t.Fatalf("registration days at creation = %d, want 0", got)
 	}
-	if host != "plan.example.com" {
-		t.Fatalf("expected plan host, got %q", host)
+	if got := serverFetchRegistrationDays(100, 101); got != 0 {
+		t.Fatalf("registration days one second later = %d, want 0", got)
 	}
-}
-
-func TestParseServerHostByConditionDropsServerWhenNoConditionMatches(t *testing.T) {
-	createdAt := time.Now().Add(-5 * 24 * time.Hour).Unix()
-	host, ok := parseServerHostByCondition(
-		"locked.example.com(P2-3)",
-		serverFetchUser{
-			ID:        1,
-			PlanID:    1,
-			CreatedAt: createdAt,
-		},
-		"Mozilla/5.0",
-		time.Now().Unix(),
-	)
-	if ok {
-		t.Fatalf("expected no host match, got %q", host)
-	}
-}
-
-func TestParseServerHostByConditionMatchesMissingUserAgent(t *testing.T) {
-	createdAt := time.Now().Add(-5 * 24 * time.Hour).Unix()
-	host, ok := parseServerHostByCondition(
-		"noua.example.com(UNoUA),default.example.com",
-		serverFetchUser{
-			ID:        1,
-			PlanID:    1,
-			CreatedAt: createdAt,
-		},
-		"",
-		time.Now().Unix(),
-	)
-	if !ok {
-		t.Fatalf("expected no-ua host match")
-	}
-	if host != "noua.example.com" {
-		t.Fatalf("expected no-ua host, got %q", host)
-	}
-}
-
-func TestParseServerHostByConditionDoesNotMatchNoUAWhenUserAgentPresent(t *testing.T) {
-	createdAt := time.Now().Add(-5 * 24 * time.Hour).Unix()
-	host, ok := parseServerHostByCondition(
-		"noua.example.com(UNoUA),default.example.com",
-		serverFetchUser{
-			ID:        1,
-			PlanID:    1,
-			CreatedAt: createdAt,
-		},
-		"ClashMeta/1.0",
-		time.Now().Unix(),
-	)
-	if !ok {
-		t.Fatalf("expected default host match")
-	}
-	if host != "default.example.com" {
-		t.Fatalf("expected default host, got %q", host)
-	}
-}
-
-func TestParseServerHostByConditionMatchesWhenUserAgentExcluded(t *testing.T) {
-	createdAt := time.Now().Add(-5 * 24 * time.Hour).Unix()
-	host, ok := parseServerHostByCondition(
-		"nonclash.example.com(U!Clash),default.example.com",
-		serverFetchUser{
-			ID:        1,
-			PlanID:    1,
-			CreatedAt: createdAt,
-		},
-		"Shadowrocket/1.0",
-		time.Now().Unix(),
-	)
-	if !ok {
-		t.Fatalf("expected excluded-ua host match")
-	}
-	if host != "nonclash.example.com" {
-		t.Fatalf("expected excluded-ua host, got %q", host)
-	}
-}
-
-func TestParseServerHostByConditionSkipsWhenExcludedUserAgentMatches(t *testing.T) {
-	createdAt := time.Now().Add(-5 * 24 * time.Hour).Unix()
-	host, ok := parseServerHostByCondition(
-		"nonclash.example.com(U!Clash),default.example.com",
-		serverFetchUser{
-			ID:        1,
-			PlanID:    1,
-			CreatedAt: createdAt,
-		},
-		"ClashMeta/1.0",
-		time.Now().Unix(),
-	)
-	if !ok {
-		t.Fatalf("expected default host match")
-	}
-	if host != "default.example.com" {
-		t.Fatalf("expected default host, got %q", host)
+	if got := serverFetchRegistrationDays(0, 100); got != -1 {
+		t.Fatalf("invalid created_at registration days = %d, want -1", got)
 	}
 }
 
@@ -249,7 +168,7 @@ func TestApplyClientEntryUserPolicyOverridesSelectedNodeHosts(t *testing.T) {
 		},
 	}
 
-	servers = applyClientEntryUserPolicies(servers, "user@example.com", policies)
+	servers = applyClientEntryUserPolicies(servers, cliententry.Subject{UserID: 1}, policies)
 
 	if len(servers) != 3 {
 		t.Fatalf("expected all nodes to remain, got %#v", servers)
@@ -268,7 +187,7 @@ func TestApplyClientEntryUserPolicyOverridesSelectedNodeHosts(t *testing.T) {
 func TestApplyClientEntryUserPolicyKeepsOriginalServersWhenNoPolicy(t *testing.T) {
 	servers := []map[string]any{{"id": int64(11), "type": "vmess", "host": "default.example.com"}}
 
-	result := applyClientEntryUserPolicies(servers, "user@example.com", nil)
+	result := applyClientEntryUserPolicies(servers, cliententry.Subject{UserID: 1}, nil)
 
 	if len(result) != 1 || result[0]["host"] != "default.example.com" {
 		t.Fatalf("expected no policy to keep original servers, got %#v", result)
