@@ -63,9 +63,11 @@ func main() {
 		}
 		groupingReport, err := postgres.ConsolidateLegacyServerHostEntryRules(ctx, db)
 		if err != nil {
-			log.Fatalf("consolidate legacy client entry rules: %v", err)
-		}
-		if !groupingReport.AlreadyApplied {
+			// This is a presentation/data-compaction follow-up after the critical
+			// v1 conversion has committed.  Never take the whole service down if
+			// it needs to retry (for example during a transient DB reconnect).
+			log.Printf("consolidate legacy client entry rules (will retry on next start): %v", err)
+		} else if !groupingReport.AlreadyApplied {
 			log.Printf("consolidated legacy client entry rules: merged=%d members=%d", groupingReport.RulesMerged, groupingReport.MembersConsolidated)
 		}
 	}
