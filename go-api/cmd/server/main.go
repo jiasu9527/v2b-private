@@ -61,6 +61,13 @@ func main() {
 		if !report.AlreadyApplied {
 			log.Printf("migrated legacy client entry rules: servers=%d rewritten=%d rules=%d hidden=%d users=%d", report.ServersScanned, report.ServersRewritten, report.RulesCreated, report.HideRulesCreated, report.LegacyEmailsMapped)
 		}
+		groupingReport, err := postgres.ConsolidateLegacyServerHostEntryRules(ctx, db)
+		if err != nil {
+			log.Fatalf("consolidate legacy client entry rules: %v", err)
+		}
+		if !groupingReport.AlreadyApplied {
+			log.Printf("consolidated legacy client entry rules: merged=%d members=%d", groupingReport.RulesMerged, groupingReport.MembersConsolidated)
+		}
 	}
 
 	var passportService passport.Service

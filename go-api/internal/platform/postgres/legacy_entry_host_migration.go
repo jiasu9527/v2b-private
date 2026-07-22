@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	legacyEntryHostMigrationKey      = "legacy-server-host-dsl-to-entry-rules-v1"
-	legacyEntryHostMigrationLockKey  = int64(0x464f524553544552)
-	legacyEntryHostMigrationSortStep = int64(10)
+	legacyEntryHostMigrationKey         = "legacy-server-host-dsl-to-entry-rules-v1"
+	legacyEntryHostGroupingMigrationKey = "legacy-server-host-dsl-group-rules-v2"
+	legacyEntryHostMigrationLockKey     = int64(0x464f524553544552)
+	legacyEntryHostMigrationSortStep    = int64(10)
 )
 
 var (
@@ -96,6 +97,17 @@ type LegacyEntryHostMigrationError struct {
 	Issues []LegacyEntryHostMigrationIssue
 }
 
+// LegacyEntryHostGroupingReport records the one-time compaction of rules
+// created by the first version of this migration.  It only touches records
+// carrying the automatic-migration remark, never administrator-created rules.
+type LegacyEntryHostGroupingReport struct {
+	MigrationKey        string `json:"migration_key"`
+	AppliedAt           int64  `json:"applied_at"`
+	AlreadyApplied      bool   `json:"-"`
+	RulesMerged         int64  `json:"rules_merged"`
+	MembersConsolidated int64  `json:"members_consolidated"`
+}
+
 func (e *LegacyEntryHostMigrationError) Error() string {
 	if e == nil || len(e.Issues) == 0 {
 		return "legacy entry host migration failed"
@@ -124,6 +136,24 @@ type legacyEntryHostNodePlan struct {
 	ServerName   string
 	OriginalHost string
 	Parsed       legacyEntryHostParseResult
+}
+
+// legacyEntryHostRuleGroup keeps one structured rule for every identical
+// legacy node-address rule chain.  Its members are all nodes that used that
+// same chain, so the migration does not create a separate UI rule per node.
+// The chain fingerprint is deliberately part of the key: two nodes can share
+// an individual condition while using a different rule order, and merging
+// those would change first-match behavior.
+type legacyEntryHostRuleGroup struct {
+	Plan     legacyEntryHostNodePlan
+	Rule     legacyEntryHostRule
+	Sequence int
+	Members  []legacyEntryHostRuleMember
+}
+
+type legacyEntryHostRuleMember struct {
+	ServerType string
+	ServerID   int64
 }
 
 type legacyEntryEmailPolicyPlan struct {
@@ -240,23 +270,22 @@ WHERE id = $6`, name, nextSort, conditionsJSON, now, plan.Disable, plan.PolicyID
 		nextSort += legacyEntryHostMigrationSortStep
 	}
 
-	for _, plan := range nodePlans {
-		for index, rule := range plan.Parsed.Rules {
-			if err := insertMigratedEntryRule(ctx, tx, plan, rule, nextSort, index+1, now); err != nil {
-				return report, err
-			}
-			report.RulesCreated++
-			nextSort += legacyEntryHostMigrationSortStep
+	ruleGroups, err := groupLegacyEntryHostRules(nodePlans)
+	if err != nil {
+		return report, err
+	}
+	for _, group := range ruleGroups {
+		if err := insertMigratedEntryRule(ctx, tx, group.Plan, group.Rule, nextSort, group.Sequence, group.Members, now); err != nil {
+			return report, err
 		}
-		if plan.Parsed.HideWhenUnmatched {
-			hideRule := legacyEntryHostRule{Action: "hide", Conditions: []LegacyEntryRuleCondition{}}
-			if err := insertMigratedEntryRule(ctx, tx, plan, hideRule, nextSort, len(plan.Parsed.Rules)+1, now); err != nil {
-				return report, err
-			}
-			report.RulesCreated++
+		report.RulesCreated++
+		if group.Rule.Action == "hide" {
 			report.HideRulesCreated++
-			nextSort += legacyEntryHostMigrationSortStep
 		}
+		nextSort += legacyEntryHostMigrationSortStep
+	}
+
+	for _, plan := range nodePlans {
 
 		query := fmt.Sprintf(`UPDATE %s SET host = $1, updated_at = $2 WHERE id = $3 AND host = $4`, plan.Source.Table)
 		result, err := tx.ExecContext(ctx, query, plan.Parsed.DefaultHost, now, plan.ServerID, plan.OriginalHost)
@@ -295,6 +324,143 @@ VALUES ($1, $2, $3)`, legacyEntryHostMigrationKey, now, string(reportJSON)); err
 	}
 	if err := tx.Commit(); err != nil {
 		return report, fmt.Errorf("commit legacy entry host migration: %w", err)
+	}
+	return report, nil
+}
+
+// ConsolidateLegacyServerHostEntryRules combines v1 auto-migrated rules that
+// originated from the same full legacy host chain.  A rule may therefore have
+// many node members, exactly as the rule-center UI expects.  The full source
+// chain is used as part of the grouping key to preserve first-match order.
+func ConsolidateLegacyServerHostEntryRules(ctx context.Context, db *sql.DB) (LegacyEntryHostGroupingReport, error) {
+	report := LegacyEntryHostGroupingReport{MigrationKey: legacyEntryHostGroupingMigrationKey}
+	if db == nil {
+		return report, errors.New("db is nil")
+	}
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return report, fmt.Errorf("begin legacy entry rule grouping: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, legacyEntryHostMigrationLockKey); err != nil {
+		return report, fmt.Errorf("lock legacy entry rule grouping: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS v2_client_entry_rule_migration (
+migration_key varchar(128) NOT NULL,
+applied_at INTEGER NOT NULL,
+report text NOT NULL DEFAULT '{}',
+PRIMARY KEY (migration_key)
+)`); err != nil {
+		return report, fmt.Errorf("ensure legacy entry rule grouping marker: %w", err)
+	}
+	var stored string
+	err = tx.QueryRowContext(ctx, `SELECT report FROM v2_client_entry_rule_migration WHERE migration_key = $1`, legacyEntryHostGroupingMigrationKey).Scan(&stored)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal([]byte(stored), &report); err != nil {
+			return report, fmt.Errorf("decode legacy entry rule grouping marker: %w", err)
+		}
+		report.MigrationKey = legacyEntryHostGroupingMigrationKey
+		report.AlreadyApplied = true
+		if err := tx.Commit(); err != nil {
+			return report, fmt.Errorf("commit legacy entry rule grouping marker read: %w", err)
+		}
+		return report, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return report, fmt.Errorf("read legacy entry rule grouping marker: %w", err)
+	}
+
+	type policy struct {
+		ID         int64
+		Sort       int64
+		Action     string
+		Conditions string
+		EntryHost  string
+		Remarks    string
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id, sort, action, conditions, entry_host, remarks
+FROM v2_client_entry_user_policy
+WHERE remarks LIKE $1
+ORDER BY sort ASC NULLS LAST, id ASC`, "由旧节点地址规则自动迁移；原配置:%")
+	if err != nil {
+		return report, fmt.Errorf("query auto-migrated entry rules for grouping: %w", err)
+	}
+	groups := make(map[string][]policy)
+	order := make([]string, 0)
+	for rows.Next() {
+		var value policy
+		if err := rows.Scan(&value.ID, &value.Sort, &value.Action, &value.Conditions, &value.EntryHost, &value.Remarks); err != nil {
+			_ = rows.Close()
+			return report, fmt.Errorf("scan auto-migrated entry rule for grouping: %w", err)
+		}
+		key := strings.Join([]string{value.Remarks, value.Action, value.Conditions, value.EntryHost}, "\x00")
+		if _, exists := groups[key]; !exists {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], value)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return report, fmt.Errorf("iterate auto-migrated entry rules for grouping: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return report, fmt.Errorf("close auto-migrated entry rules for grouping: %w", err)
+	}
+
+	now := time.Now().Unix()
+	for _, key := range order {
+		policies := groups[key]
+		if len(policies) < 2 {
+			continue
+		}
+		canonical := policies[0]
+		for _, duplicate := range policies[1:] {
+			memberRows, err := tx.QueryContext(ctx, `SELECT server_type, server_id FROM v2_client_entry_user_policy_member WHERE policy_id = $1`, duplicate.ID)
+			if err != nil {
+				return report, fmt.Errorf("query members of auto-migrated rule %d: %w", duplicate.ID, err)
+			}
+			for memberRows.Next() {
+				var serverType string
+				var serverID int64
+				if err := memberRows.Scan(&serverType, &serverID); err != nil {
+					_ = memberRows.Close()
+					return report, fmt.Errorf("scan members of auto-migrated rule %d: %w", duplicate.ID, err)
+				}
+				if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_user_policy_member
+(policy_id, server_type, server_id, sort, created_at, updated_at)
+VALUES ($1, $2, $3, NULL, $4, $4)
+ON CONFLICT (policy_id, server_type, server_id) DO NOTHING`, canonical.ID, serverType, serverID, now); err != nil {
+					_ = memberRows.Close()
+					return report, fmt.Errorf("merge member into auto-migrated rule %d: %w", canonical.ID, err)
+				}
+				report.MembersConsolidated++
+			}
+			if err := memberRows.Err(); err != nil {
+				_ = memberRows.Close()
+				return report, fmt.Errorf("iterate members of auto-migrated rule %d: %w", duplicate.ID, err)
+			}
+			if err := memberRows.Close(); err != nil {
+				return report, fmt.Errorf("close members of auto-migrated rule %d: %w", duplicate.ID, err)
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy_member WHERE policy_id = $1`, duplicate.ID); err != nil {
+				return report, fmt.Errorf("delete duplicate auto-migrated rule %d members: %w", duplicate.ID, err)
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy WHERE id = $1`, duplicate.ID); err != nil {
+				return report, fmt.Errorf("delete duplicate auto-migrated rule %d: %w", duplicate.ID, err)
+			}
+			report.RulesMerged++
+		}
+	}
+	report.AppliedAt = now
+	payload, err := json.Marshal(report)
+	if err != nil {
+		return report, fmt.Errorf("encode legacy entry rule grouping report: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_rule_migration (migration_key, applied_at, report) VALUES ($1, $2, $3)`, legacyEntryHostGroupingMigrationKey, now, string(payload)); err != nil {
+		return report, fmt.Errorf("mark legacy entry rule grouping complete: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return report, fmt.Errorf("commit legacy entry rule grouping: %w", err)
 	}
 	return report, nil
 }
@@ -473,7 +639,42 @@ func loadLegacyEntryHostNodePlans(ctx context.Context, tx *sql.Tx, report *Legac
 	return plans, issues, nil
 }
 
-func insertMigratedEntryRule(ctx context.Context, tx *sql.Tx, plan legacyEntryHostNodePlan, rule legacyEntryHostRule, sortValue int64, sequence int, now int64) error {
+func groupLegacyEntryHostRules(plans []legacyEntryHostNodePlan) ([]legacyEntryHostRuleGroup, error) {
+	byKey := make(map[string]int)
+	groups := make([]legacyEntryHostRuleGroup, 0)
+	for _, plan := range plans {
+		rules := append([]legacyEntryHostRule(nil), plan.Parsed.Rules...)
+		if plan.Parsed.HideWhenUnmatched {
+			rules = append(rules, legacyEntryHostRule{Action: "hide", Conditions: []LegacyEntryRuleCondition{}})
+		}
+		for index, rule := range rules {
+			key, err := legacyEntryHostRuleGroupKey(plan, rule, index+1)
+			if err != nil {
+				return nil, err
+			}
+			member := legacyEntryHostRuleMember{ServerType: plan.Source.ServerType, ServerID: plan.ServerID}
+			if existing, ok := byKey[key]; ok {
+				groups[existing].Members = append(groups[existing].Members, member)
+				continue
+			}
+			byKey[key] = len(groups)
+			groups = append(groups, legacyEntryHostRuleGroup{Plan: plan, Rule: rule, Sequence: index + 1, Members: []legacyEntryHostRuleMember{member}})
+		}
+	}
+	return groups, nil
+}
+
+func legacyEntryHostRuleGroupKey(plan legacyEntryHostNodePlan, rule legacyEntryHostRule, sequence int) (string, error) {
+	conditions, err := marshalLegacyEntryConditions(rule.Conditions)
+	if err != nil {
+		return "", err
+	}
+	// OriginalHost keeps the full condition chain and its original order in the
+	// key.  The remaining fields make accidental collisions impossible.
+	return strings.Join([]string{plan.OriginalHost, strconv.Itoa(sequence), rule.Action, rule.EntryHost, conditions}, "\x00"), nil
+}
+
+func insertMigratedEntryRule(ctx context.Context, tx *sql.Tx, plan legacyEntryHostNodePlan, rule legacyEntryHostRule, sortValue int64, sequence int, members []legacyEntryHostRuleMember, now int64) error {
 	conditionsJSON, err := marshalLegacyEntryConditions(rule.Conditions)
 	if err != nil {
 		return fmt.Errorf("encode %s node %d migrated rule: %w", plan.Source.ServerType, plan.ServerID, err)
@@ -481,6 +682,9 @@ func insertMigratedEntryRule(ctx context.Context, tx *sql.Tx, plan legacyEntryHo
 	nodeLabel := plan.ServerName
 	if nodeLabel == "" {
 		nodeLabel = fmt.Sprintf("%s #%d", plan.Source.ServerType, plan.ServerID)
+	}
+	if len(members) > 1 {
+		nodeLabel = fmt.Sprintf("%s 等 %d 个节点", nodeLabel, len(members))
 	}
 	actionLabel := fmt.Sprintf("入口 %d", sequence)
 	if rule.Action == "hide" {
@@ -497,10 +701,12 @@ RETURNING id`, name, sortValue, rule.Action, conditionsJSON, rule.EntryHost, rem
 	if err != nil {
 		return fmt.Errorf("insert %s node %d migrated rule: %w", plan.Source.ServerType, plan.ServerID, err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_user_policy_member
+	for _, member := range members {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_user_policy_member
 (policy_id, server_type, server_id, sort, created_at, updated_at)
-VALUES ($1, $2, $3, NULL, $4, $4)`, policyID, plan.Source.ServerType, plan.ServerID, now); err != nil {
-		return fmt.Errorf("attach migrated rule %d to %s node %d: %w", policyID, plan.Source.ServerType, plan.ServerID, err)
+VALUES ($1, $2, $3, NULL, $4, $4)`, policyID, member.ServerType, member.ServerID, now); err != nil {
+			return fmt.Errorf("attach migrated rule %d to %s node %d: %w", policyID, member.ServerType, member.ServerID, err)
+		}
 	}
 	return nil
 }

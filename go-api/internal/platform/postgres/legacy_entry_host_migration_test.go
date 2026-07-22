@@ -261,6 +261,30 @@ func TestParseLegacyEntryHostRejectsValuesInvalidUnderNewRuleContract(t *testing
 	}
 }
 
+func TestGroupLegacyEntryHostRulesCombinesOnlyIdenticalRuleChains(t *testing.T) {
+	clash := legacyEntryHostRule{Action: "override", EntryHost: "clash.example.com", Conditions: []LegacyEntryRuleCondition{{Field: "ua", Operator: "contains_any", Values: []string{"Clash"}}}}
+	newUser := legacyEntryHostRule{Action: "override", EntryHost: "new.example.com", Conditions: []LegacyEntryRuleCondition{{Field: "registration_days", Operator: "lte", Value: int64(30)}}}
+	plans := []legacyEntryHostNodePlan{
+		{Source: legacyEntryHostServerSource{ServerType: "vmess"}, ServerID: 1, OriginalHost: "default.example.com,clash.example.com(UClash),new.example.com(D<=30)", Parsed: legacyEntryHostParseResult{Rules: []legacyEntryHostRule{clash, newUser}}},
+		{Source: legacyEntryHostServerSource{ServerType: "trojan"}, ServerID: 2, OriginalHost: "default.example.com,clash.example.com(UClash),new.example.com(D<=30)", Parsed: legacyEntryHostParseResult{Rules: []legacyEntryHostRule{clash, newUser}}},
+		{Source: legacyEntryHostServerSource{ServerType: "vless"}, ServerID: 3, OriginalHost: "fallback.example.com,clash.example.com(UClash)", Parsed: legacyEntryHostParseResult{Rules: []legacyEntryHostRule{clash}}},
+	}
+
+	groups, err := groupLegacyEntryHostRules(plans)
+	if err != nil {
+		t.Fatalf("group rules: %v", err)
+	}
+	if len(groups) != 3 {
+		t.Fatalf("expected 3 groups, got %#v", groups)
+	}
+	if len(groups[0].Members) != 2 || len(groups[1].Members) != 2 {
+		t.Fatalf("same rule chain must combine both nodes: %#v", groups)
+	}
+	if groups[0].Sequence != 1 || groups[1].Sequence != 2 || len(groups[2].Members) != 1 {
+		t.Fatalf("different rule chain must remain independent: %#v", groups)
+	}
+}
+
 func resolvedParsedLegacyHost(t *testing.T, parsed legacyEntryHostParseResult, subject cliententry.Subject) (string, bool) {
 	t.Helper()
 	for _, rule := range parsed.Rules {
