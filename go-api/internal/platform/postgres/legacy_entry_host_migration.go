@@ -419,6 +419,7 @@ ORDER BY sort ASC NULLS LAST, id ASC`, "由旧节点地址规则自动迁移；�
 			if err != nil {
 				return report, fmt.Errorf("query members of auto-migrated rule %d: %w", duplicate.ID, err)
 			}
+			members := make([]legacyEntryHostRuleMember, 0)
 			for memberRows.Next() {
 				var serverType string
 				var serverID int64
@@ -426,14 +427,7 @@ ORDER BY sort ASC NULLS LAST, id ASC`, "由旧节点地址规则自动迁移；�
 					_ = memberRows.Close()
 					return report, fmt.Errorf("scan members of auto-migrated rule %d: %w", duplicate.ID, err)
 				}
-				if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_user_policy_member
-(policy_id, server_type, server_id, sort, created_at, updated_at)
-VALUES ($1, $2, $3, NULL, $4, $4)
-ON CONFLICT (policy_id, server_type, server_id) DO NOTHING`, canonical.ID, serverType, serverID, now); err != nil {
-					_ = memberRows.Close()
-					return report, fmt.Errorf("merge member into auto-migrated rule %d: %w", canonical.ID, err)
-				}
-				report.MembersConsolidated++
+				members = append(members, legacyEntryHostRuleMember{ServerType: serverType, ServerID: serverID})
 			}
 			if err := memberRows.Err(); err != nil {
 				_ = memberRows.Close()
@@ -441,6 +435,15 @@ ON CONFLICT (policy_id, server_type, server_id) DO NOTHING`, canonical.ID, serve
 			}
 			if err := memberRows.Close(); err != nil {
 				return report, fmt.Errorf("close members of auto-migrated rule %d: %w", duplicate.ID, err)
+			}
+			for _, member := range members {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_user_policy_member
+(policy_id, server_type, server_id, sort, created_at, updated_at)
+VALUES ($1, $2, $3, NULL, $4, $4)
+ON CONFLICT (policy_id, server_type, server_id) DO NOTHING`, canonical.ID, member.ServerType, member.ServerID, now); err != nil {
+					return report, fmt.Errorf("merge member into auto-migrated rule %d: %w", canonical.ID, err)
+				}
+				report.MembersConsolidated++
 			}
 			if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy_member WHERE policy_id = $1`, duplicate.ID); err != nil {
 				return report, fmt.Errorf("delete duplicate auto-migrated rule %d members: %w", duplicate.ID, err)
