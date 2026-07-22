@@ -192,6 +192,15 @@ PRIMARY KEY (migration_key)
 	if len(issues) > 0 {
 		return report, &LegacyEntryHostMigrationError{Issues: issues}
 	}
+	// Very old deployments created a table-level uniqueness constraint with
+	// this name.  It includes retired columns (notably email), so it rejects
+	// more than one migrated node rule before those columns can be removed.
+	// The new structured rule table deliberately has no equivalent constraint;
+	// rule ordering and node memberships are independent.  Drop it inside the
+	// same migration transaction so a failure rolls this schema change back.
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE v2_client_entry_user_policy DROP CONSTRAINT IF EXISTS uniq_v2_client_entry_user_policy`); err != nil {
+		return report, fmt.Errorf("drop legacy client entry policy uniqueness constraint: %w", err)
+	}
 
 	now := time.Now().Unix()
 	nextSort := legacyEntryHostMigrationSortStep
