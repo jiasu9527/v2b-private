@@ -41,6 +41,7 @@ type EntryCondition = {
 };
 
 type UserOption = { value: number; label: string };
+type EmailOption = { value: string; label: string };
 
 const fieldOptions = [
   { label: '用户 ID', value: 'user_id' },
@@ -199,6 +200,15 @@ function mergeUserOptions(current: UserOption[], next: UserOption[]) {
   return Array.from(map.values());
 }
 
+function mergeEmailOptions(current: EmailOption[], next: EmailOption[]) {
+  const map = new Map<string, EmailOption>();
+  [...current, ...next].forEach((item) => {
+    const value = String(item.value || '').trim().toLowerCase();
+    if (value) map.set(value, { ...item, value });
+  });
+  return Array.from(map.values());
+}
+
 function ConditionEditorRow({
   name,
   remove,
@@ -206,6 +216,9 @@ function ConditionEditorRow({
   userOptions,
   userSearching,
   onSearchUsers,
+  emailOptions,
+  emailSearching,
+  onSearchEmails,
 }: {
   name: number;
   remove: (index: number) => void;
@@ -213,6 +226,9 @@ function ConditionEditorRow({
   userOptions: UserOption[];
   userSearching: boolean;
   onSearchUsers: (keyword: string) => void;
+  emailOptions: EmailOption[];
+  emailSearching: boolean;
+  onSearchEmails: (keyword: string) => void;
 }) {
   const field = (Form.useWatch(['conditions', name, 'field'], form) || 'user_id') as ConditionField;
   const operator = Form.useWatch(['conditions', name, 'operator'], form) || defaultOperator[field];
@@ -242,7 +258,17 @@ function ConditionEditorRow({
     </Form.Item>;
   } else if (field === 'email' && operator === 'in') {
     valueEditor = <Form.Item name={[name, 'values']} label="邮箱" rules={[{ required: true, message: '请填写至少一个邮箱' }]} style={{ minWidth: 300, flex: 1 }}>
-      <Select mode="tags" tokenSeparators={[',', '，', ';', '；']} placeholder="输入邮箱后回车，可填写多个" />
+      <Select
+        mode="tags"
+        showSearch
+        allowClear
+        filterOption={false}
+        loading={emailSearching}
+        options={emailOptions}
+        tokenSeparators={[',', '，', ';', '；']}
+        placeholder="输入邮箱检索用户，也可直接填写"
+        onSearch={onSearchEmails}
+      />
     </Form.Item>;
   } else if (operator === 'between') {
     const label = field === 'registration_days' ? '天数范围' : field === 'plan_id' ? '套餐 ID 范围' : 'ID 范围';
@@ -295,6 +321,8 @@ function PolicyEditor({
   const [saving, setSaving] = useState(false);
   const [userSearching, setUserSearching] = useState(false);
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
+  const [emailSearching, setEmailSearching] = useState(false);
+  const [emailOptions, setEmailOptions] = useState<EmailOption[]>([]);
   const [form] = Form.useForm();
   const action = Form.useWatch('action', form) || 'override';
 
@@ -305,7 +333,13 @@ function PolicyEditor({
       .flatMap((condition) => condition.values || [])
       .map(Number)
       .filter((value) => Number.isFinite(value) && value > 0);
+    const selectedEmails = conditions
+      .filter((condition) => condition.field === 'email' && condition.operator === 'in')
+      .flatMap((condition) => condition.values || [])
+      .map((value) => String(value).trim().toLowerCase())
+      .filter(Boolean);
     setUserOptions(selectedUserIDs.map((value) => ({ value, label: `#${value}` })));
+    setEmailOptions(selectedEmails.map((value) => ({ value, label: value })));
     form.resetFields();
     form.setFieldsValue({
       id: row?.id,
@@ -341,6 +375,29 @@ function PolicyEditor({
       message.error(error?.message || '用户检索失败');
     } finally {
       setUserSearching(false);
+    }
+  };
+
+  const searchEmails = async (keyword: string) => {
+    const value = String(keyword || '').trim();
+    if (!value) return;
+    setEmailSearching(true);
+    try {
+      const res = await apiGet('/user/fetch', {
+        current: 1,
+        pageSize: 20,
+        filter: [{ key: 'email', condition: '模糊', value }],
+      });
+      const list = Array.isArray(res.data) ? res.data : [];
+      const next = list.map((item: any) => {
+        const email = String(item.email || '').trim().toLowerCase();
+        return { value: email, label: `${email}  (#${item.id})` };
+      }).filter((item: EmailOption) => Boolean(item.value));
+      setEmailOptions((current) => mergeEmailOptions(current, next));
+    } catch (error: any) {
+      message.error(error?.message || '用户检索失败');
+    } finally {
+      setEmailSearching(false);
     }
   };
 
@@ -411,6 +468,9 @@ function PolicyEditor({
                 userOptions={userOptions}
                 userSearching={userSearching}
                 onSearchUsers={searchUsers}
+                emailOptions={emailOptions}
+                emailSearching={emailSearching}
+                onSearchEmails={searchEmails}
               />)}
               <Button type="dashed" block icon={<PlusOutlined />} onClick={() => add({ field: 'user_id', operator: 'in', values: [] })}>
                 添加匹配条件
