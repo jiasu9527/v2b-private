@@ -497,7 +497,7 @@ function PolicyEditor({
 function conditionSummary(condition: EntryCondition) {
   const values = condition.values || [];
   if (condition.field === 'user_id' && condition.operator === 'in') return `指定用户：${values.map((item) => `#${item}`).join('、') || '未选择'}`;
-  if (condition.field === 'email' && condition.operator === 'in') return `指定邮箱：${values.join('、') || '未填写'}`;
+  if (condition.field === 'email' && condition.operator === 'in') return `指定邮箱：${values.length} 个`;
   if (condition.field === 'user_id' && condition.operator === 'between') return `用户 ID：${condition.min} ～ ${condition.max}`;
   if (condition.field === 'registration_days') {
     if (condition.operator === 'between') return `注册天数：${condition.min} ～ ${condition.max} 天`;
@@ -514,6 +514,18 @@ function conditionSummary(condition: EntryCondition) {
   }
   if (condition.field === 'plan_id' && condition.operator === 'between') return `套餐 ID：${condition.min} ～ ${condition.max}`;
   return `${condition.field} ${condition.operator}`;
+}
+
+function EmailConditionSummary({ condition }: { condition: EntryCondition }) {
+  const emails = (condition.values || []).map((item) => String(item).trim()).filter(Boolean);
+  const summary = `指定邮箱：${emails.length} 个`;
+  if (emails.length <= 1) return <Tag className="client-entry-condition-tag" title={emails[0] || summary}>{emails[0] ? `指定邮箱：${emails[0]}` : summary}</Tag>;
+  return <details className="client-entry-email-condition">
+    <summary><Tag className="client-entry-condition-tag">{summary}（点击展开）</Tag></summary>
+    <div className="client-entry-condition-list">
+      {emails.map((email) => <Tag className="client-entry-condition-tag" title={email} key={email}>{email}</Tag>)}
+    </div>
+  </details>;
 }
 
 function numericConditionMatches(condition: EntryCondition, actual: any) {
@@ -561,22 +573,55 @@ function SimulationModal({
 }) {
   const [form] = Form.useForm();
   const [result, setResult] = useState<any>(undefined);
+  const [running, setRunning] = useState(false);
+  const [simulationError, setSimulationError] = useState('');
 
   useEffect(() => {
     if (!open) return;
     setResult(undefined);
+    setSimulationError('');
     form.resetFields();
   }, [open]);
 
   const run = async () => {
     const values = await form.validateFields();
-    const selectedMember = values.member;
-    const matched = rows.find((row) => {
-      if (Number(row.enabled) === 0) return false;
-      if (selectedMember && !normalizedMembers(row).includes(selectedMember)) return false;
-      return policyMatches(row, values);
-    });
-    setResult(matched || null);
+    setRunning(true);
+    setSimulationError('');
+    try {
+      const email = String(values.email || '').trim().toLowerCase();
+      const response = await apiGet('/user/fetch', {
+        current: 1,
+        pageSize: 10,
+        filter: [{ key: 'email', condition: '=', value: email }],
+      });
+      const user = (Array.isArray(response.data) ? response.data : []).find((item: any) => String(item.email || '').trim().toLowerCase() === email);
+      if (!user) {
+        setResult(undefined);
+        setSimulationError('没有找到该邮箱对应的用户');
+        return;
+      }
+      const createdAt = finiteNumber(user.created_at);
+      const now = Math.floor(Date.now() / 1000);
+      const subject = {
+        ...values,
+        user_id: finiteNumber(user.id),
+        email: String(user.email || email).trim().toLowerCase(),
+        registration_days: createdAt !== undefined && createdAt > 0 && now >= createdAt ? Math.floor((now - createdAt) / 86400) : -1,
+        plan_id: finiteNumber(user.plan_id) ?? 0,
+      };
+      const selectedMember = values.member;
+      const matched = rows.find((row) => {
+        if (Number(row.enabled) === 0) return false;
+        if (selectedMember && !normalizedMembers(row).includes(selectedMember)) return false;
+        return policyMatches(row, subject);
+      });
+      setResult(matched || null);
+    } catch (error: any) {
+      setResult(undefined);
+      setSimulationError(error?.message || '查询用户失败');
+    } finally {
+      setRunning(false);
+    }
   };
 
   return <Modal title="模拟入口规则匹配" open={open} onCancel={onClose} footer={null} width={720} destroyOnHidden>
@@ -588,17 +633,8 @@ function SimulationModal({
     />
     <Form form={form} layout="vertical">
       <Space align="start" wrap style={{ width: '100%' }}>
-        <Form.Item name="user_id" label="用户 ID" rules={[{ required: true, message: '请输入用户 ID' }]}>
-          <InputNumber min={1} precision={0} style={{ width: 150 }} />
-        </Form.Item>
-        <Form.Item name="email" label="用户邮箱">
-          <Input style={{ width: 260 }} placeholder="可选，用于邮箱规则" />
-        </Form.Item>
-        <Form.Item name="registration_days" label="注册天数">
-          <InputNumber min={0} precision={0} style={{ width: 150 }} placeholder="可选" />
-        </Form.Item>
-        <Form.Item name="plan_id" label="套餐 ID">
-          <InputNumber min={0} precision={0} style={{ width: 150 }} placeholder="可选" />
+        <Form.Item name="email" label="用户邮箱" rules={[{ required: true, type: 'email', message: '请输入有效的用户邮箱' }]}>
+          <Input style={{ width: 320 }} placeholder="输入邮箱后自动读取用户 ID、注册天数和套餐" />
         </Form.Item>
       </Space>
       <Form.Item name="ua" label="User-Agent">
@@ -607,8 +643,9 @@ function SimulationModal({
       <Form.Item name="member" label="生效节点（可选）" tooltip="选择后只模拟对该节点生效的规则；不选则按全部规则匹配。">
         <Select showSearch allowClear options={serverOptions} optionFilterProp="label" placeholder="不限制节点" />
       </Form.Item>
-      <Button type="primary" icon={<PlayCircleOutlined />} onClick={run}>开始模拟</Button>
+      <Button type="primary" icon={<PlayCircleOutlined />} loading={running} onClick={run}>开始模拟</Button>
     </Form>
+    {simulationError && <Alert type="error" showIcon message={simulationError} style={{ marginTop: 16 }} />}
     {result === null && <Alert type="warning" showIcon message="没有命中任何启用规则，将使用节点默认地址。" style={{ marginTop: 16 }} />}
     {result && <Alert
       type={result.action === 'hide' ? 'warning' : 'success'}
@@ -721,8 +758,10 @@ export default function ClientEntryUserPolicyPage() {
       render: (value: any) => {
         const conditions = parseConditions(value);
         if (!conditions.length) return <Tag>全部用户</Tag>;
-        return <div className="client-entry-condition-list">{conditions.map((condition, index) => {
+        const hasEmailList = conditions.some((condition) => condition.field === 'email' && condition.operator === 'in' && (condition.values || []).length > 1);
+        return <div className={`client-entry-condition-list${hasEmailList ? ' client-entry-condition-list--expandable' : ''}`}>{conditions.map((condition, index) => {
           const text = conditionSummary(condition);
+          if (condition.field === 'email' && condition.operator === 'in') return <EmailConditionSummary condition={condition} key={`${condition.field}-${condition.operator}-${index}`} />;
           return <Tag className="client-entry-condition-tag" title={text} key={`${condition.field}-${condition.operator}-${index}`}>{text}</Tag>;
         })}</div>;
       },
