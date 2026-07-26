@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -200,15 +200,6 @@ function mergeUserOptions(current: UserOption[], next: UserOption[]) {
   return Array.from(map.values());
 }
 
-function mergeEmailOptions(current: EmailOption[], next: EmailOption[]) {
-  const map = new Map<string, EmailOption>();
-  [...current, ...next].forEach((item) => {
-    const value = String(item.value || '').trim().toLowerCase();
-    if (value) map.set(value, { ...item, value });
-  });
-  return Array.from(map.values());
-}
-
 function ConditionEditorRow({
   name,
   remove,
@@ -323,6 +314,7 @@ function PolicyEditor({
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [emailSearching, setEmailSearching] = useState(false);
   const [emailOptions, setEmailOptions] = useState<EmailOption[]>([]);
+  const emailSearchSequence = useRef(0);
   const [form] = Form.useForm();
   const action = Form.useWatch('action', form) || 'override';
 
@@ -380,7 +372,11 @@ function PolicyEditor({
 
   const searchEmails = async (keyword: string) => {
     const value = String(keyword || '').trim();
-    if (!value) return;
+    const sequence = ++emailSearchSequence.current;
+    if (!value) {
+      setEmailOptions([]);
+      return;
+    }
     setEmailSearching(true);
     try {
       const res = await apiGet('/user/fetch', {
@@ -391,13 +387,19 @@ function PolicyEditor({
       const list = Array.isArray(res.data) ? res.data : [];
       const next = list.map((item: any) => {
         const email = String(item.email || '').trim().toLowerCase();
-        return { value: email, label: `${email}  (#${item.id})` };
+        return { value: email, label: email };
       }).filter((item: EmailOption) => Boolean(item.value));
-      setEmailOptions((current) => mergeEmailOptions(current, next));
+      const normalizedValue = value.toLowerCase();
+      next.sort((left, right) => {
+        const rank = (email: string) => email === normalizedValue ? 0 : email.startsWith(normalizedValue) ? 1 : 2;
+        return rank(left.value) - rank(right.value) || left.value.localeCompare(right.value);
+      });
+      // Search results must reflect the current text only. Selected tag values remain in the form.
+      if (sequence === emailSearchSequence.current) setEmailOptions(next);
     } catch (error: any) {
-      message.error(error?.message || '用户检索失败');
+      if (sequence === emailSearchSequence.current) message.error(error?.message || '用户检索失败');
     } finally {
-      setEmailSearching(false);
+      if (sequence === emailSearchSequence.current) setEmailSearching(false);
     }
   };
 
