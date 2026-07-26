@@ -256,6 +256,9 @@ function ConditionEditorRow({
         filterOption={false}
         loading={emailSearching}
         options={emailOptions}
+        maxTagCount={2}
+        maxTagPlaceholder={(omittedValues) => `+${omittedValues.length} 个邮箱`}
+        maxTagTextLength={28}
         tokenSeparators={[',', '，', ';', '；']}
         placeholder="输入邮箱检索用户，也可直接填写"
         onSearch={onSearchEmails}
