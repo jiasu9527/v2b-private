@@ -313,17 +313,17 @@ func hasEmailKey(values map[string]struct{}, email string) bool {
 func xboardFingerprint(users []xboardSourceUser, conflicts map[string]struct{}, plans map[int64]xboardTargetPlan) string {
 	h := sha256.New()
 	for _, user := range users {
-		fmt.Fprintf(h, "%d\x00%s\x00%s\x00%s:%t\x00%s:%t\x00%d\x00%d\x00%d\x00%d\x00%d:%t\x00%d\x00%d:%t\x00%d:%t\x00%d\x00%d\x00%d:%t\x00%s:%t\x00%d\x00%d\x00%d\x00%d\n",
-			user.ID, user.Email, user.Password, user.PasswordAlgo.String, user.PasswordAlgo.Valid, user.PasswordSalt.String, user.PasswordSalt.Valid,
-			user.T, user.U, user.D, user.TransferEnable, user.DeviceLimit.Int64, user.DeviceLimit.Valid, user.Banned,
-			user.PlanID.Int64, user.PlanID.Valid, user.SpeedLimit.Int64, user.SpeedLimit.Valid, user.RemindExpire, user.RemindTraffic,
-			user.ExpiredAt.Int64, user.ExpiredAt.Valid, user.Remarks.String, user.Remarks.Valid, user.CreatedAt, user.UpdatedAt, user.IsAdmin, user.IsStaff)
+		// Only fields that change preview eligibility belong in the fingerprint.
+		// Traffic, password, expiry and other live account values can legitimately
+		// change between preview and execution and are re-read at execution time.
+		fmt.Fprintf(h, "%d\x00%s\x00%d:%t\x00%d\x00%d\n",
+			user.ID, user.Email, user.PlanID.Int64, user.PlanID.Valid, user.IsAdmin, user.IsStaff)
 		if hasEmailKey(conflicts, user.Email) {
 			h.Write([]byte("conflict\n"))
 		}
 	}
 	for _, id := range []int64{1, 2, 3, 5} {
-		fmt.Fprintf(h, "plan:%d:%s\n", id, plans[id].Name)
+		fmt.Fprintf(h, "plan:%d:%d\n", id, plans[id].ID)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

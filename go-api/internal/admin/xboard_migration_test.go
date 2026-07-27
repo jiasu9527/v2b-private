@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"database/sql"
 	"regexp"
 	"testing"
 
@@ -56,6 +57,21 @@ func TestScanXBoardMigrationClassifiesUsersBeforeWrite(t *testing.T) {
 	}
 	if err := targetMock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestXBoardFingerprintIgnoresLiveAccountChanges(t *testing.T) {
+	before := []xboardSourceUser{{
+		ID: 8, Email: "live@example.com", Password: "old-hash", U: 10, D: 20,
+		PlanID: sql.NullInt64{Int64: 2, Valid: true}, ExpiredAt: sql.NullInt64{Int64: 100, Valid: true},
+	}}
+	after := []xboardSourceUser{{
+		ID: 8, Email: "live@example.com", Password: "new-hash", U: 999, D: 888,
+		PlanID: sql.NullInt64{Int64: 2, Valid: true}, ExpiredAt: sql.NullInt64{Int64: 200, Valid: true},
+	}}
+	plans := map[int64]xboardTargetPlan{1: {ID: 1}, 2: {ID: 2}, 3: {ID: 3}, 5: {ID: 5}}
+	if got, want := xboardFingerprint(before, nil, plans), xboardFingerprint(after, nil, plans); got != want {
+		t.Fatalf("live account changes invalidated preview: before=%s after=%s", got, want)
 	}
 }
 
