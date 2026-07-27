@@ -625,6 +625,14 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminUserFetch(w, r, state.session, state.admin) {
 				return
 			}
+		case r.URL.Path == adminPrefix+"/migration/xboard/preview":
+			if handleAdminXBoardMigrationPreview(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/migration/xboard/execute":
+			if handleAdminXBoardMigrationExecute(w, r, state.session, state.admin) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/user/getUserInfoById":
 			if handleAdminUserGetInfo(w, r, state.session, state.admin) {
 				return

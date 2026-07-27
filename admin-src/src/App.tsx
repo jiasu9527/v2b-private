@@ -29,6 +29,7 @@ import ClientEntryUserPolicyPage from './pages/ClientEntryUserPolicyPage';
 import SubscribeGuardPage from './pages/SubscribeGuardPage';
 import DNSPodPage from './pages/DNSPodPage';
 import DNSFailoverPage from './pages/DNSFailoverPage';
+import XBoardMigrationPage from './pages/XBoardMigrationPage';
 import { checkLogin, clearAuth, getAdminUserInfo, getAuth, getCurrentUserInfo, getSettings, pathAdminSegment, setAdminUserInfo } from './lib/api';
 
 const { Header, Sider, Content } = Layout;
@@ -61,6 +62,7 @@ const menu = [
   { type: 'item', key: '/invite-campaign', icon: <ShareAltOutlined />, label: '活动任务' },
   { type: 'heading', key: 'user-heading', label: '用户' },
   { type: 'item', key: '/user', icon: <UserOutlined />, label: '用户管理' },
+  { type: 'item', key: '/migration/xboard', icon: <DatabaseOutlined />, label: 'XBoard 用户迁移' },
   { type: 'item', key: '/notice', icon: <BellOutlined />, label: '公告管理' },
   { type: 'item', key: '/ticket', icon: <MessageOutlined />, label: '工单管理' },
   { type: 'item', key: '/knowledge', icon: <QuestionCircleOutlined />, label: '知识库管理' },
@@ -84,6 +86,7 @@ function Page({ path }: { path: string }) {
   const route = path.split('?')[0];
   if (route === '/dashboard') return <Dashboard />;
   if (route === '/user') return <UserPage />;
+  if (route === '/migration/xboard') return <XBoardMigrationPage />;
   if (route === '/plan') return <PlanPage />;
   if (route === '/order') return <OrderPage />;
   if (route === '/server/manage') return <ServerManage />;
