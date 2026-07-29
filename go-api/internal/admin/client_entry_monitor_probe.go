@@ -230,11 +230,11 @@ VALUES ($1, $2, $3, $4, $5, $6, NULL, 0, $7, '', $7)`, snapshot.MonitorID, targe
 		}
 		if validRunID > 0 {
 			_, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_monitor_run_result
-(run_id, target_id, probe_id, target_name, host, port, probe_name, success,
-latency_ms, error, resolved_ip, reported_at, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
-ON CONFLICT (run_id, target_id, probe_id) DO NOTHING`, validRunID, targetID, probeID,
-				snapshot.TargetName, snapshot.Host, snapshot.Port, snapshot.ProbeName,
+	(run_id, policy_id, policy_name, target_id, probe_id, target_name, host, port, probe_name, success,
+	latency_ms, error, resolved_ip, reported_at, created_at)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)
+ON CONFLICT (run_id, target_id, probe_id) DO NOTHING`, validRunID, snapshot.PolicyID, snapshot.PolicyName,
+				targetID, probeID, snapshot.TargetName, snapshot.Host, snapshot.Port, snapshot.ProbeName,
 				boolToInt64(success), latency, errorText, result.ResolvedIP, now)
 			if err != nil {
 				return summary, fmt.Errorf("save client entry monitor run result: %w", err)

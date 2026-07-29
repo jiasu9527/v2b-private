@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -16,6 +17,10 @@ type clientEntryMonitorChatNotifier interface {
 
 type clientEntryMonitorImageNotifier interface {
 	NotifyChatImage(context.Context, int64, []byte, string) error
+}
+
+type clientEntryMonitorProgressNotifier interface {
+	EditChatMessage(context.Context, int64, int64, string) error
 }
 
 type clientEntryMonitorEventNotifier interface {
@@ -55,6 +60,15 @@ WHERE status = 'running' AND started_at < $2`, now, now-int64(clientEntryMonitor
 	}
 	defer releaseDNSFailoverSessionLock(conn, clientEntryMonitorNotificationLockKey)
 	for range limit {
+		processed, err := s.notifyNextClientEntryMonitorProgress(ctx, conn)
+		if err != nil {
+			return err
+		}
+		if !processed {
+			break
+		}
+	}
+	for range limit {
 		processed, err := s.notifyNextClientEntryMonitorEvent(ctx, conn)
 		if err != nil {
 			return err
@@ -73,6 +87,126 @@ WHERE status = 'running' AND started_at < $2`, now, now-int64(clientEntryMonitor
 		}
 	}
 	return nil
+}
+
+// notifyNextClientEntryMonitorProgress edits the original rule picker message
+// whenever a manual run's observable state changes. It is deliberately
+// separate from final report delivery so a temporary edit failure never blocks
+// the durable image notification.
+func (s *DBService) notifyNextClientEntryMonitorProgress(ctx context.Context, conn *sql.Conn) (bool, error) {
+	now := time.Now().Unix()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin client entry progress notification: %w", err)
+	}
+	var (
+		runID       int64
+		chatID      int64
+		messageID   int64
+		requestedBy sql.NullInt64
+		attempts    int
+	)
+	err = tx.QueryRowContext(ctx, `SELECT id, requested_by_user_id, request_chat_id, progress_message_id, progress_attempts
+FROM v2_client_entry_monitor_run
+WHERE request_chat_id IS NOT NULL
+  AND progress_message_id IS NOT NULL
+  AND progress_next_attempt_at <= $1
+  AND (progress_reported_results IS DISTINCT FROM received_results
+       OR progress_reported_status IS DISTINCT FROM status)
+ORDER BY id ASC
+LIMIT 1
+FOR UPDATE SKIP LOCKED`, now).Scan(&runID, &requestedBy, &chatID, &messageID, &attempts)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return false, nil
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return false, fmt.Errorf("claim client entry progress notification: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_monitor_run
+SET progress_attempts = progress_attempts + 1, progress_next_attempt_at = $2, updated_at = $3
+WHERE id = $1`, runID, saturatingUnixAdd(now, dnsFailoverNotificationLease), now); err != nil {
+		_ = tx.Rollback()
+		return false, fmt.Errorf("advance client entry progress attempt: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit client entry progress notification claim: %w", err)
+	}
+
+	authorized, err := s.clientEntryMonitorRunRequesterAuthorized(ctx, requestedBy, chatID)
+	if err != nil {
+		return false, fmt.Errorf("revalidate client entry progress requester: %w", err)
+	}
+	if !authorized {
+		if _, err := conn.ExecContext(ctx, `UPDATE v2_client_entry_monitor_run
+SET progress_message_id = NULL, progress_attempts = 0, progress_next_attempt_at = 0,
+	progress_last_error = '', updated_at = $2
+WHERE id = $1`, runID, time.Now().Unix()); err != nil {
+			return false, fmt.Errorf("consume unauthorized client entry progress notification: %w", err)
+		}
+		return true, nil
+	}
+
+	run, err := s.loadClientEntryMonitorRun(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	notifier, ok := s.dnsFailoverNotifier.(clientEntryMonitorProgressNotifier)
+	if !ok {
+		err = ErrDNSFailoverNotifierUnavailable
+	} else {
+		err = notifier.EditChatMessage(ctx, chatID, messageID, formatClientEntryMonitorProgress(run, run.ExpectedPairs, time.Now()))
+	}
+	if err != nil {
+		finishedAt := time.Now().Unix()
+		if isPermanentClientEntryMonitorProgressError(err) {
+			if _, updateErr := conn.ExecContext(ctx, `UPDATE v2_client_entry_monitor_run
+SET progress_message_id = NULL, progress_attempts = 0, progress_next_attempt_at = 0,
+	progress_last_error = $2, updated_at = $3
+WHERE id = $1`, runID, truncateDNSFailoverError(err), finishedAt); updateErr != nil {
+				return false, fmt.Errorf("consume permanent client entry progress notification failure: %w", updateErr)
+			}
+			return true, nil
+		}
+		next := saturatingUnixAdd(finishedAt, dnsFailoverRetryDelay(attempts))
+		if _, updateErr := conn.ExecContext(ctx, `UPDATE v2_client_entry_monitor_run
+SET progress_next_attempt_at = $2, progress_last_error = $3, updated_at = $4
+WHERE id = $1`, runID, next, truncateDNSFailoverError(err), finishedAt); updateErr != nil {
+			return false, fmt.Errorf("persist client entry progress notification failure: %w", updateErr)
+		}
+		return true, nil
+	}
+	if _, err := conn.ExecContext(ctx, `UPDATE v2_client_entry_monitor_run
+SET progress_reported_results = $2, progress_reported_status = $3,
+progress_attempts = 0, progress_next_attempt_at = 0, progress_last_error = '', updated_at = $4
+WHERE id = $1`, runID, run.ReceivedResults, run.Status, time.Now().Unix()); err != nil {
+		return false, fmt.Errorf("mark client entry progress notified: %w", err)
+	}
+	return true, nil
+}
+
+func isPermanentClientEntryMonitorProgressError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	for _, marker := range []string{
+		"message to edit not found",
+		"message not found",
+		"message can't be edited",
+		"message cant be edited",
+		"message cannot be edited",
+		"bot was blocked",
+		"bot is blocked",
+		"forbidden",
+		"chat not found",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *DBService) notifyNextClientEntryMonitorEvent(ctx context.Context, conn *sql.Conn) (bool, error) {
@@ -120,15 +254,6 @@ SET notify_attempts = notify_attempts + 1, notify_next_attempt_at = $2 WHERE id 
 		return true, nil
 	}
 	chatIDs = uniquePositiveClientEntryMonitorChatIDs(chatIDs)
-	imageNotifier, imageCapable := notifier.(clientEntryMonitorImageNotifier)
-	var imageBytes []byte
-	var imageCaption string
-	if imageCapable {
-		imageBytes, imageCaption, err = renderClientEntryMonitorEventImage(message)
-		if err != nil {
-			imageCapable = false
-		}
-	}
 	deliveries, err := syncClientEntryMonitorEventDeliveries(ctx, conn, eventID, chatIDs, time.Now().Unix())
 	if err != nil {
 		return false, err
@@ -157,12 +282,9 @@ WHERE event_id = $1 AND chat_id = $2 AND delivered_at IS NULL`, eventID, chatID,
 			saturatingUnixAdd(now, dnsFailoverNotificationLease), now); err != nil {
 			return false, fmt.Errorf("claim client entry monitor event recipient: %w", err)
 		}
-		var notifyErr error
-		if imageCapable {
-			notifyErr = imageNotifier.NotifyChatImage(ctx, chatID, imageBytes, imageCaption)
-		} else {
-			notifyErr = notifier.NotifyChat(ctx, chatID, message)
-		}
+		// Availability transitions should stay immediately readable in the chat.
+		// Images are reserved for the final, explicitly requested active run.
+		notifyErr := notifier.NotifyChat(ctx, chatID, message)
 		finishedAt := time.Now().Unix()
 		if notifyErr != nil {
 			next := saturatingUnixAdd(finishedAt, dnsFailoverRetryDelay(delivery.Attempts))
@@ -386,22 +508,34 @@ func (s *DBService) clientEntryMonitorRunRequesterAuthorized(ctx context.Context
 func (s *DBService) loadClientEntryMonitorRun(ctx context.Context, runID int64) (ClientEntryMonitorRun, error) {
 	var run ClientEntryMonitorRun
 	var rawPolicies []byte
+	var rawExpectedPairs []byte
+	var progressMessageID sql.NullInt64
 	var completed sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT id, policy_ids, status, expected_results,
-	received_results, COALESCE(started_at, 0), completed_at, created_at
-FROM v2_client_entry_monitor_run WHERE id = $1`, runID).Scan(&run.ID, &rawPolicies,
-		&run.Status, &run.ExpectedResults, &run.ReceivedResults, &run.StartedAt, &completed, &run.CreatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT id, policy_ids, expected_pairs, status, expected_results,
+	received_results, progress_message_id, progress_reported_results, progress_reported_status,
+	progress_next_attempt_at, progress_last_error, COALESCE(started_at, 0), completed_at, created_at
+FROM v2_client_entry_monitor_run WHERE id = $1`, runID).Scan(&run.ID, &rawPolicies, &rawExpectedPairs,
+		&run.Status, &run.ExpectedResults, &run.ReceivedResults, &progressMessageID, &run.ProgressReportedResults,
+		&run.ProgressReportedStatus, &run.ProgressNextAttemptAt, &run.ProgressLastError, &run.StartedAt, &completed, &run.CreatedAt)
 	if err != nil {
 		return run, fmt.Errorf("load client entry monitor run: %w", err)
 	}
 	run.PolicyIDs = decodeClientEntryMonitorPolicyIDs(rawPolicies)
+	run.ExpectedPairs, err = decodeClientEntryMonitorRunPairs(rawExpectedPairs)
+	if err != nil {
+		return run, err
+	}
 	run.TotalResults = run.ReceivedResults
+	if progressMessageID.Valid {
+		value := progressMessageID.Int64
+		run.ProgressMessageID = &value
+	}
 	if completed.Valid {
 		value := completed.Int64
 		run.CompletedAt = &value
 	}
 	run.Results = make([]ClientEntryMonitorRunResult, 0)
-	rows, err := s.db.QueryContext(ctx, `SELECT result.id, result.target_id, result.target_name,
+	rows, err := s.db.QueryContext(ctx, `SELECT result.id, result.policy_id, result.policy_name, result.target_id, result.target_name,
 result.host, result.port, result.probe_id, result.probe_name, result.success,
 result.latency_ms, result.error, result.resolved_ip, result.reported_at
 	FROM v2_client_entry_monitor_run_result result
@@ -416,7 +550,7 @@ result.latency_ms, result.error, result.resolved_ip, result.reported_at
 		var result ClientEntryMonitorRunResult
 		var success int64
 		var latency sql.NullInt64
-		if err := rows.Scan(&result.ID, &result.TargetID, &result.TargetName,
+		if err := rows.Scan(&result.ID, &result.PolicyID, &result.PolicyName, &result.TargetID, &result.TargetName,
 			&result.Host, &result.Port, &result.ProbeID, &result.ProbeName, &success,
 			&latency, &result.Error, &result.ResolvedIP, &result.ReportedAt); err != nil {
 			return run, fmt.Errorf("scan client entry monitor run result: %w", err)
@@ -431,10 +565,19 @@ result.latency_ms, result.error, result.resolved_ip, result.reported_at
 	if err := rows.Err(); err != nil {
 		return run, fmt.Errorf("iterate client entry monitor run results: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return run, fmt.Errorf("close client entry monitor run results: %w", err)
+	}
 	visible := int64(len(run.Results))
 	if visible > run.TotalResults {
 		run.TotalResults = visible
 	}
 	run.ResultsTruncated = run.TotalResults > visible
+	// The helper accepts a slice so list and single-run loading share one query.
+	statsRun := []ClientEntryMonitorRun{run}
+	if err := s.populateClientEntryMonitorRunResultStats(ctx, statsRun); err != nil {
+		return run, err
+	}
+	run = statsRun[0]
 	return run, nil
 }

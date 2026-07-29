@@ -19,10 +19,11 @@ import (
 var ticketReplyPattern = regexp.MustCompile(`#\s*([0-9]+)`)
 
 const (
-	clientEntryMonitorRunCallback      = "client_entry_monitor:run"
+	clientEntryMonitorRunCallback      = "cem:p:1"
 	clientEntryMonitorRecentCallback   = "client_entry_monitor:recent"
 	clientEntryMonitorRunButtonText    = "一键检测用户入口组"
 	clientEntryMonitorRecentButtonText = "查看近期检测结果"
+	clientEntryMonitorRulesPerPage     = 8
 )
 
 type inlineKeyboardButton struct {
@@ -57,8 +58,16 @@ type webhookCallbackQuery struct {
 	ID        string
 	FromID    int64
 	ChatID    int64
+	MessageID int64
 	Data      string
 	IsPrivate bool
+	IsText    bool
+}
+
+type clientEntryMonitorCallback struct {
+	Page     int
+	PolicyID int64
+	RunAll   bool
 }
 
 func (s *Service) HandleWebhook(ctx context.Context, payload map[string]any) error {
@@ -151,11 +160,14 @@ func (s *Service) handleCallbackQuery(ctx context.Context, callback webhookCallb
 	if !callback.IsPrivate || callback.ChatID != callback.FromID {
 		return nil
 	}
-	if callback.Data != clientEntryMonitorRunCallback && callback.Data != clientEntryMonitorRecentCallback {
+	if callback.Data == clientEntryMonitorRecentCallback {
+		return s.handleMonitorAction(ctx, callback.FromID, callback.ChatID, callback.Data, callback.ID)
+	}
+	monitorCallback, ok := parseClientEntryMonitorCallback(callback.Data)
+	if !ok || callback.MessageID <= 0 {
 		return nil
 	}
-
-	return s.handleMonitorAction(ctx, callback.FromID, callback.ChatID, callback.Data, callback.ID)
+	return s.handleMonitorRuleCallback(ctx, callback, monitorCallback)
 }
 
 func (s *Service) handleMonitorTextAction(ctx context.Context, message webhookMessage, action string) error {
@@ -171,7 +183,117 @@ func (s *Service) handleMonitorTextAction(ctx context.Context, message webhookMe
 	if message.ID > 0 {
 		requestKey = fmt.Sprintf("telegram-message:%d:%d", message.ChatID, message.ID)
 	}
+	if action == clientEntryMonitorRunCallback {
+		return s.handleMonitorRuleTextAction(ctx, message, requestKey)
+	}
 	return s.handleMonitorAction(ctx, message.ChatID, message.ChatID, action, requestKey)
+}
+
+func (s *Service) handleMonitorRuleTextAction(ctx context.Context, message webhookMessage, _ string) error {
+	userID, authorized, err := s.lookupTelegramOperator(ctx, message.ChatID)
+	if err != nil {
+		return err
+	}
+	if !authorized {
+		return s.sendMessage(ctx, message.ChatID, "⛔ 无权限\n仅已绑定 Telegram 的管理员和员工可使用入口检测。")
+	}
+	_ = userID // Authorization is deliberately checked before loading run options.
+	controller, ok := s.entryMonitor.(EntryMonitorRunOptionsController)
+	if !ok {
+		return s.sendMessage(ctx, message.ChatID, "⚠️ 用户入口检测功能暂不可用，请稍后重试。")
+	}
+	menuKey, menuState := s.lockEntryMonitorMenu(message.ChatID, message.ID)
+	retainMenu := false
+	defer func() { s.unlockEntryMonitorMenu(menuKey, menuState, retainMenu) }()
+	if menuState.started {
+		return nil
+	}
+	text, keyboard, err := entryMonitorRulesPage(ctx, controller, 1)
+	if err != nil {
+		return s.sendMessage(ctx, message.ChatID, "❌ 获取入口检测规则失败\n原因："+err.Error())
+	}
+	if err := s.sendMessageMarkup(ctx, message.ChatID, text, keyboard); err != nil {
+		return err
+	}
+	retainMenu = true
+	return nil
+}
+
+func (s *Service) handleMonitorRuleCallback(ctx context.Context, callback webhookCallbackQuery, action clientEntryMonitorCallback) error {
+	userID, authorized, err := s.lookupTelegramOperator(ctx, callback.FromID)
+	if err != nil {
+		return err
+	}
+	if !authorized {
+		if !callback.IsText {
+			return s.sendMessage(ctx, callback.ChatID, "⛔ 无权限\n仅已绑定 Telegram 的管理员和员工可使用入口检测。")
+		}
+		return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID, "⛔ 无权限\n仅已绑定 Telegram 的管理员和员工可使用入口检测。", entryMonitorInlineKeyboard())
+	}
+	controller, ok := s.entryMonitor.(EntryMonitorRunOptionsController)
+	if !ok {
+		if !callback.IsText {
+			return s.sendMessage(ctx, callback.ChatID, "⚠️ 用户入口检测功能暂不可用，请稍后重试。")
+		}
+		return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID, "⚠️ 用户入口检测功能暂不可用，请稍后重试。", entryMonitorInlineKeyboard())
+	}
+	menuKey, menuState := s.lockEntryMonitorMenu(callback.ChatID, callback.MessageID)
+	retainMenu := false
+	defer func() { s.unlockEntryMonitorMenu(menuKey, menuState, retainMenu) }()
+	if menuState.started {
+		return nil
+	}
+	if !callback.IsText {
+		page := action.Page
+		if page <= 0 {
+			page = 1
+		}
+		text, keyboard, pageErr := entryMonitorRulesPage(ctx, controller, page)
+		if pageErr != nil {
+			return s.sendMessage(ctx, callback.ChatID, "❌ 获取入口检测规则失败\n原因："+pageErr.Error())
+		}
+		if err := s.sendMessageMarkup(ctx, callback.ChatID, text, keyboard); err != nil {
+			return err
+		}
+		retainMenu = true
+		return nil
+	}
+	if action.Page > 0 {
+		text, keyboard, pageErr := entryMonitorRulesPage(ctx, controller, action.Page)
+		if pageErr != nil {
+			return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID, "❌ 获取入口检测规则失败\n原因："+pageErr.Error(), entryMonitorInlineKeyboard())
+		}
+		return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID, text, keyboard)
+	}
+
+	options, err := controller.ListClientEntryMonitorRunOptions(ctx)
+	if err != nil {
+		return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID, "❌ 获取入口检测规则失败\n原因："+err.Error(), entryMonitorInlineKeyboard())
+	}
+	policyIDs, groupName := selectedEntryMonitorRuleOptions(options, action)
+	if len(policyIDs) == 0 {
+		return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID, "⚠️ 所选规则组已不可用，请重新选择。", entryMonitorInlineKeyboard())
+	}
+	requestKey := fmt.Sprintf("telegram-callback:%d:%d:%s", callback.ChatID, callback.MessageID, callback.Data)
+	text := fmt.Sprintf("🚀 用户入口主动检测已启动\n规则组：%s\n正在等待全部启用探针返回结果…", groupName)
+	// Clear the picker before waking the durable worker. Otherwise a very fast
+	// first progress edit can race this handler and leave stale rule buttons.
+	if err := s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID, text, entryMonitorEmptyInlineKeyboard()); err != nil {
+		return err
+	}
+	_, err = controller.StartClientEntryMonitorRunForPoliciesWithMessage(ctx, policyIDs, userID, callback.ChatID, callback.MessageID, requestKey)
+	if err != nil {
+		return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID, "❌ 启动检测失败\n原因："+err.Error(), entryMonitorInlineKeyboard())
+	}
+	retainMenu = true
+	return nil
+}
+
+func (s *Service) editMonitorMenu(ctx context.Context, chatID, messageID int64, text string, keyboard any) error {
+	if s.editMessageText == nil {
+		return errors.New("telegram message editor unavailable")
+	}
+	return s.editMessageText(ctx, chatID, messageID, text, keyboard)
 }
 
 func (s *Service) handleMonitorAction(ctx context.Context, telegramID, chatID int64, action, requestKey string) error {
@@ -243,6 +365,114 @@ func entryMonitorInlineKeyboard() inlineKeyboardMarkup {
 		{{Text: clientEntryMonitorRunButtonText, CallbackData: clientEntryMonitorRunCallback}},
 		{{Text: clientEntryMonitorRecentButtonText, CallbackData: clientEntryMonitorRecentCallback}},
 	}}
+}
+
+func entryMonitorEmptyInlineKeyboard() inlineKeyboardMarkup {
+	return inlineKeyboardMarkup{InlineKeyboard: [][]inlineKeyboardButton{}}
+}
+
+func parseClientEntryMonitorCallback(value string) (clientEntryMonitorCallback, bool) {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) != 3 || parts[0] != "cem" {
+		return clientEntryMonitorCallback{}, false
+	}
+	switch parts[1] {
+	case "p":
+		page, err := strconv.Atoi(parts[2])
+		if err != nil || page <= 0 || page > 999 {
+			return clientEntryMonitorCallback{}, false
+		}
+		return clientEntryMonitorCallback{Page: page}, true
+	case "r":
+		if parts[2] == "all" {
+			return clientEntryMonitorCallback{RunAll: true}, true
+		}
+		policyID, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil || policyID <= 0 {
+			return clientEntryMonitorCallback{}, false
+		}
+		return clientEntryMonitorCallback{PolicyID: policyID}, true
+	default:
+		return clientEntryMonitorCallback{}, false
+	}
+}
+
+func entryMonitorRulesPage(ctx context.Context, controller EntryMonitorRunOptionsController, requestedPage int) (string, inlineKeyboardMarkup, error) {
+	options, err := controller.ListClientEntryMonitorRunOptions(ctx)
+	if err != nil {
+		return "", inlineKeyboardMarkup{}, err
+	}
+	if requestedPage <= 0 {
+		requestedPage = 1
+	}
+	totalPages := (len(options) + clientEntryMonitorRulesPerPage - 1) / clientEntryMonitorRulesPerPage
+	if totalPages == 0 {
+		return "📭 暂无可运行的用户入口检测规则。\n请先在后台启用规则组、目标和探针。", entryMonitorInlineKeyboard(), nil
+	}
+	if requestedPage > totalPages {
+		requestedPage = totalPages
+	}
+	start := (requestedPage - 1) * clientEntryMonitorRulesPerPage
+	end := start + clientEntryMonitorRulesPerPage
+	if end > len(options) {
+		end = len(options)
+	}
+	keyboard := inlineKeyboardMarkup{InlineKeyboard: make([][]inlineKeyboardButton, 0, end-start+2)}
+	for _, option := range options[start:end] {
+		name := strings.TrimSpace(option.Name)
+		if name == "" {
+			name = "未命名规则组"
+		}
+		label := fmt.Sprintf("%s · %d 个目标", truncateEntryMonitorButtonText(name, 42), option.TargetCount)
+		keyboard.InlineKeyboard = append(keyboard.InlineKeyboard, []inlineKeyboardButton{{
+			Text: label, CallbackData: fmt.Sprintf("cem:r:%d", option.PolicyID),
+		}})
+	}
+	keyboard.InlineKeyboard = append(keyboard.InlineKeyboard, []inlineKeyboardButton{{
+		Text: fmt.Sprintf("检测全部（%d 组）", len(options)), CallbackData: "cem:r:all",
+	}})
+	if totalPages > 1 {
+		navigation := make([]inlineKeyboardButton, 0, 2)
+		if requestedPage > 1 {
+			navigation = append(navigation, inlineKeyboardButton{Text: "上一页", CallbackData: fmt.Sprintf("cem:p:%d", requestedPage-1)})
+		}
+		if requestedPage < totalPages {
+			navigation = append(navigation, inlineKeyboardButton{Text: "下一页", CallbackData: fmt.Sprintf("cem:p:%d", requestedPage+1)})
+		}
+		keyboard.InlineKeyboard = append(keyboard.InlineKeyboard, navigation)
+	}
+	return fmt.Sprintf("🧭 选择要主动检测的用户入口规则组\n第 %d/%d 页 · 每次检测会让全部启用探针参与。", requestedPage, totalPages), keyboard, nil
+}
+
+func selectedEntryMonitorRuleOptions(options []admin.ClientEntryMonitorRunOption, action clientEntryMonitorCallback) ([]int64, string) {
+	policyIDs := make([]int64, 0, len(options))
+	names := make([]string, 0, len(options))
+	for _, option := range options {
+		if option.PolicyID <= 0 || (!action.RunAll && option.PolicyID != action.PolicyID) {
+			continue
+		}
+		policyIDs = append(policyIDs, option.PolicyID)
+		name := strings.TrimSpace(option.Name)
+		if name == "" {
+			name = "未命名规则组"
+		}
+		names = append(names, name)
+	}
+	if action.RunAll && len(policyIDs) > 0 {
+		return policyIDs, fmt.Sprintf("全部 %d 个规则组", len(policyIDs))
+	}
+	if len(names) == 1 {
+		return policyIDs, names[0]
+	}
+	return policyIDs, ""
+}
+
+func truncateEntryMonitorButtonText(value string, limit int) string {
+	runes := []rune(strings.TrimSpace(value))
+	if limit <= 0 || len(runes) <= limit {
+		return string(runes)
+	}
+	return string(runes[:limit-1]) + "…"
 }
 
 func entryMonitorReplyKeyboard() replyKeyboardMarkup {
@@ -557,6 +787,12 @@ func parseWebhookCallbackQuery(payload map[string]any) (webhookCallbackQuery, bo
 	if !ok {
 		return webhookCallbackQuery{}, false
 	}
+	callback.MessageID, ok = anyToInt64(messagePayload["message_id"])
+	if !ok || callback.MessageID <= 0 {
+		return webhookCallbackQuery{}, false
+	}
+	messageText, _ := messagePayload["text"].(string)
+	callback.IsText = strings.TrimSpace(messageText) != ""
 	callback.IsPrivate = strings.EqualFold(strings.TrimSpace(anyToString(chatPayload["type"])), "private")
 	return callback, true
 }

@@ -20,20 +20,65 @@ const (
 )
 
 type clientEntryMonitorRunPair struct {
-	TargetID      int64 `json:"target_id"`
-	ProbeID       int64 `json:"probe_id"`
-	TargetVersion int64 `json:"target_version"`
+	TargetID      int64  `json:"target_id"`
+	ProbeID       int64  `json:"probe_id"`
+	TargetVersion int64  `json:"target_version"`
+	PolicyID      int64  `json:"policy_id"`
+	PolicyName    string `json:"policy_name"`
+	TargetName    string `json:"target_name"`
+	Host          string `json:"host"`
+	Port          int64  `json:"port"`
+	ProbeName     string `json:"probe_name"`
 }
 
 func (s *DBService) StartClientEntryMonitorRun(ctx context.Context, userID, chatID int64, requestKey string) (int64, error) {
-	return s.startClientEntryMonitorRun(ctx, nil, userID, chatID, requestKey)
+	return s.StartClientEntryMonitorRunForPoliciesWithMessage(ctx, nil, userID, chatID, 0, requestKey)
 }
 
 func (s *DBService) StartClientEntryMonitorRunForPolicies(ctx context.Context, policyIDs []int64, userID, chatID int64) (int64, error) {
-	return s.startClientEntryMonitorRun(ctx, policyIDs, userID, chatID, "")
+	return s.StartClientEntryMonitorRunForPoliciesWithMessage(ctx, policyIDs, userID, chatID, 0, "")
 }
 
-func (s *DBService) startClientEntryMonitorRun(ctx context.Context, policyIDs []int64, userID, chatID int64, requestKey string) (int64, error) {
+// ListClientEntryMonitorRunOptions returns the enabled policy groups that have
+// at least one persisted monitor target and an enabled probe to execute them.
+func (s *DBService) ListClientEntryMonitorRunOptions(ctx context.Context) ([]ClientEntryMonitorRunOption, error) {
+	if s == nil || s.db == nil {
+		return nil, ErrUnavailable
+	}
+	if err := s.ensureDNSFailoverSchema(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT policy.id, policy.name, COUNT(target.id)
+FROM v2_client_entry_user_policy policy
+JOIN v2_client_entry_monitor monitor ON monitor.policy_id = policy.id AND monitor.enabled = 1
+JOIN v2_client_entry_monitor_target target ON target.monitor_id = monitor.id
+WHERE policy.enabled = 1
+  AND EXISTS (SELECT 1 FROM v2_dns_probe probe WHERE probe.enabled = 1)
+GROUP BY policy.id, policy.name, policy.sort
+ORDER BY policy.sort ASC NULLS LAST, policy.id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("query client entry monitor run options: %w", err)
+	}
+	defer rows.Close()
+	options := make([]ClientEntryMonitorRunOption, 0)
+	for rows.Next() {
+		var option ClientEntryMonitorRunOption
+		if err := rows.Scan(&option.PolicyID, &option.Name, &option.TargetCount); err != nil {
+			return nil, fmt.Errorf("scan client entry monitor run option: %w", err)
+		}
+		option.Name = strings.TrimSpace(option.Name)
+		options = append(options, option)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate client entry monitor run options: %w", err)
+	}
+	return options, nil
+}
+
+// StartClientEntryMonitorRunForPoliciesWithMessage starts an idempotent manual
+// run for the selected policy groups. Every enabled probe participates. When a
+// Telegram progress message is available, its ID is retained for later edits.
+func (s *DBService) StartClientEntryMonitorRunForPoliciesWithMessage(ctx context.Context, policyIDs []int64, userID, chatID, messageID int64, requestKey string) (int64, error) {
 	if s == nil || s.db == nil {
 		return 0, ErrUnavailable
 	}
@@ -62,6 +107,15 @@ func (s *DBService) startClientEntryMonitorRun(ctx context.Context, policyIDs []
 		return 0, err
 	}
 	if exists {
+		// A Telegram webhook can be retried after the run has reached a terminal
+		// state. Requeue its stored menu message so the durable worker restores
+		// the real status instead of leaving a transient "started" edit behind.
+		if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_monitor_run
+SET progress_reported_results = -1, progress_reported_status = '',
+progress_attempts = 0, progress_next_attempt_at = $2, progress_last_error = '', updated_at = $2
+WHERE id = $1 AND progress_message_id IS NOT NULL`, existingRunID, time.Now().Unix()); err != nil {
+			return 0, fmt.Errorf("requeue existing client entry monitor progress: %w", err)
+		}
 		if err := tx.Commit(); err != nil {
 			return 0, fmt.Errorf("commit existing client entry monitor run: %w", err)
 		}
@@ -104,7 +158,8 @@ WHERE status = 'running' AND started_at < $2`, now, cutoff); err != nil {
 		return 0, errors.New("暂无已启用的用户入口检测规则")
 	}
 	placeholders, args := clientEntryMonitorIDPlaceholders(policyIDs, 1)
-	rows, err := tx.QueryContext(ctx, `SELECT target.id, probe.id, target.generation
+	rows, err := tx.QueryContext(ctx, `SELECT target.id, probe.id, target.generation,
+	policy.id, policy.name, target.name, target.host, target.port, probe.name
 	FROM v2_client_entry_monitor m
 	JOIN v2_client_entry_user_policy policy ON policy.id = m.policy_id AND policy.enabled = 1
 	JOIN v2_client_entry_monitor_target target ON target.monitor_id = m.id
@@ -117,7 +172,8 @@ WHERE status = 'running' AND started_at < $2`, now, cutoff); err != nil {
 	expectedPairs := make([]clientEntryMonitorRunPair, 0)
 	for rows.Next() {
 		var pair clientEntryMonitorRunPair
-		if err := rows.Scan(&pair.TargetID, &pair.ProbeID, &pair.TargetVersion); err != nil {
+		if err := rows.Scan(&pair.TargetID, &pair.ProbeID, &pair.TargetVersion,
+			&pair.PolicyID, &pair.PolicyName, &pair.TargetName, &pair.Host, &pair.Port, &pair.ProbeName); err != nil {
 			_ = rows.Close()
 			return 0, fmt.Errorf("scan client entry monitor run task: %w", err)
 		}
@@ -147,11 +203,11 @@ WHERE status = 'running' AND started_at < $2`, now, cutoff); err != nil {
 	}
 	var runID int64
 	err = tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_monitor_run
-	(requested_by_user_id, request_chat_id, request_key, policy_ids, expected_pairs, status, expected_results,
-	received_results, started_at, completed_at, notified_at, notify_attempts,
-	notify_next_attempt_at, last_notify_error, created_at, updated_at)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8, $9, NULL, 0, $8, '', $8, $8)
-	RETURNING id`, nullablePositiveInt64(userID), nullablePositiveInt64(chatID), nullableClientEntryMonitorRequestKey(requestKey),
+	(requested_by_user_id, request_chat_id, request_key, progress_message_id, policy_ids, expected_pairs, status, expected_results,
+	received_results, progress_reported_results, progress_reported_status, progress_next_attempt_at, progress_last_error,
+	started_at, completed_at, notified_at, notify_attempts, notify_next_attempt_at, last_notify_error, created_at, updated_at)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, -1, '', $9, '', $9, $10, NULL, 0, $9, '', $9, $9)
+	RETURNING id`, nullablePositiveInt64(userID), nullablePositiveInt64(chatID), nullableClientEntryMonitorRequestKey(requestKey), nullablePositiveInt64(messageID),
 		string(rawPolicies), string(rawExpectedPairs), status, expected, now, completedAt).Scan(&runID)
 	if err != nil {
 		return 0, fmt.Errorf("create client entry monitor run: %w", err)
@@ -294,8 +350,9 @@ func (s *DBService) ListClientEntryMonitorRuns(ctx context.Context, limit int64)
 	if limit > clientEntryMonitorRunMaxList {
 		limit = clientEntryMonitorRunMaxList
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, policy_ids, status, expected_results,
-	received_results, COALESCE(started_at, 0), completed_at, created_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id, policy_ids, expected_pairs, status, expected_results,
+	received_results, progress_message_id, progress_reported_results, progress_reported_status,
+	progress_next_attempt_at, progress_last_error, COALESCE(started_at, 0), completed_at, created_at
 FROM v2_client_entry_monitor_run
 WHERE status = 'running' OR created_at >= $1
 ORDER BY id DESC LIMIT $2`, time.Now().Add(-clientEntryMonitorRetention).Unix(), limit)
@@ -307,14 +364,26 @@ ORDER BY id DESC LIMIT $2`, time.Now().Add(-clientEntryMonitorRetention).Unix(),
 	for rows.Next() {
 		var run ClientEntryMonitorRun
 		var rawPolicies []byte
+		var rawExpectedPairs []byte
+		var progressMessageID sql.NullInt64
 		var completed sql.NullInt64
-		if err := rows.Scan(&run.ID, &rawPolicies, &run.Status, &run.ExpectedResults,
-			&run.ReceivedResults, &run.StartedAt, &completed, &run.CreatedAt); err != nil {
+		if err := rows.Scan(&run.ID, &rawPolicies, &rawExpectedPairs, &run.Status, &run.ExpectedResults,
+			&run.ReceivedResults, &progressMessageID, &run.ProgressReportedResults, &run.ProgressReportedStatus,
+			&run.ProgressNextAttemptAt, &run.ProgressLastError, &run.StartedAt, &completed, &run.CreatedAt); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("scan client entry monitor run: %w", err)
 		}
 		run.PolicyIDs = decodeClientEntryMonitorPolicyIDs(rawPolicies)
+		run.ExpectedPairs, err = decodeClientEntryMonitorRunPairs(rawExpectedPairs)
+		if err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
 		run.TotalResults = run.ReceivedResults
+		if progressMessageID.Valid {
+			value := progressMessageID.Int64
+			run.ProgressMessageID = &value
+		}
 		if completed.Valid {
 			value := completed.Int64
 			run.CompletedAt = &value
@@ -339,14 +408,14 @@ ORDER BY id DESC LIMIT $2`, time.Now().Add(-clientEntryMonitorRetention).Unix(),
 	resultLimitPlaceholder := fmt.Sprintf("$%d", len(args)+1)
 	args = append(args, clientEntryMonitorRunResultListLimit)
 	rows, err = s.db.QueryContext(ctx, `WITH ranked_results AS (
-	SELECT result.id, result.run_id, result.target_id,
+	SELECT result.id, result.run_id, result.policy_id, result.policy_name, result.target_id,
 	result.target_name, result.host, result.port, result.probe_id, result.probe_name, result.success,
 	result.latency_ms, result.error, result.resolved_ip, result.reported_at,
 	ROW_NUMBER() OVER (PARTITION BY result.run_id ORDER BY result.success ASC, result.target_id, result.probe_id) AS result_rank
 	FROM v2_client_entry_monitor_run_result result
 	WHERE result.run_id IN (`+strings.Join(placeholders, ",")+`)
 )
-	SELECT id, run_id, target_id, target_name, host, port, probe_id, probe_name, success,
+	SELECT id, run_id, policy_id, policy_name, target_id, target_name, host, port, probe_id, probe_name, success,
 	latency_ms, error, resolved_ip, reported_at
 	FROM ranked_results
 	WHERE result_rank <= `+resultLimitPlaceholder+`
@@ -359,7 +428,7 @@ ORDER BY id DESC LIMIT $2`, time.Now().Add(-clientEntryMonitorRetention).Unix(),
 		var result ClientEntryMonitorRunResult
 		var success int64
 		var latency sql.NullInt64
-		if err := rows.Scan(&result.ID, &runID, &result.TargetID, &result.TargetName,
+		if err := rows.Scan(&result.ID, &runID, &result.PolicyID, &result.PolicyName, &result.TargetID, &result.TargetName,
 			&result.Host, &result.Port, &result.ProbeID, &result.ProbeName, &success,
 			&latency, &result.Error, &result.ResolvedIP, &result.ReportedAt); err != nil {
 			_ = rows.Close()
@@ -385,6 +454,9 @@ ORDER BY id DESC LIMIT $2`, time.Now().Add(-clientEntryMonitorRetention).Unix(),
 			runs[index].TotalResults = visible
 		}
 		runs[index].ResultsTruncated = runs[index].TotalResults > visible
+	}
+	if err := s.populateClientEntryMonitorRunResultStats(ctx, runs); err != nil {
+		return nil, err
 	}
 	return runs, nil
 }

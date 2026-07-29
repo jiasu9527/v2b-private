@@ -9,17 +9,36 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"forest/go-api/internal/admin"
 	"forest/go-api/internal/config"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
 type fakeEntryMonitorController struct {
-	start       func(context.Context, int64, int64, string) (int64, error)
-	recent      func(context.Context) (string, error)
-	recentImage func(context.Context) ([]byte, string, error)
+	start            func(context.Context, int64, int64, string) (int64, error)
+	startWithMessage func(context.Context, []int64, int64, int64, int64, string) (int64, error)
+	options          []admin.ClientEntryMonitorRunOption
+	recent           func(context.Context) (string, error)
+	recentImage      func(context.Context) ([]byte, string, error)
+}
+
+func (f *fakeEntryMonitorController) ListClientEntryMonitorRunOptions(context.Context) ([]admin.ClientEntryMonitorRunOption, error) {
+	if f == nil {
+		return nil, nil
+	}
+	return f.options, nil
+}
+
+func (f *fakeEntryMonitorController) StartClientEntryMonitorRunForPoliciesWithMessage(ctx context.Context, policyIDs []int64, userID, chatID, messageID int64, requestKey string) (int64, error) {
+	if f == nil || f.startWithMessage == nil {
+		return 0, nil
+	}
+	return f.startWithMessage(ctx, policyIDs, userID, chatID, messageID, requestKey)
 }
 
 const telegramOperatorQueryPattern = `(?s)SELECT id.*FROM v2_user.*WHERE telegram_id = \$1 AND banned = 0 AND \(is_admin = 1 OR is_staff = 1\).*ORDER BY id ASC.*LIMIT 1`
@@ -196,12 +215,12 @@ func TestMonitorRunCallbackAcknowledgesAndStartsForAuthorizedStaff(t *testing.T)
 	defer db.Close()
 
 	acknowledged := false
-	controller := &fakeEntryMonitorController{start: func(_ context.Context, userID, chatID int64, requestKey string) (int64, error) {
+	controller := &fakeEntryMonitorController{options: []admin.ClientEntryMonitorRunOption{{PolicyID: 1, Name: "华东", TargetCount: 2}}, startWithMessage: func(_ context.Context, policyIDs []int64, userID, chatID, messageID int64, requestKey string) (int64, error) {
 		if !acknowledged {
 			t.Fatal("callback must be acknowledged before monitor work starts")
 		}
-		if userID != 9 || chatID != 123 || requestKey != "callback-1" {
-			t.Fatalf("start args = user %d chat %d request key %q", userID, chatID, requestKey)
+		if len(policyIDs) != 1 || policyIDs[0] != 1 || userID != 9 || chatID != 123 || messageID != 1 || requestKey != "telegram-callback:123:1:cem:r:1" {
+			t.Fatalf("start args = policies=%v user=%d chat=%d message=%d request=%q", policyIDs, userID, chatID, messageID, requestKey)
 		}
 		return 42, nil
 	}}
@@ -213,23 +232,32 @@ func TestMonitorRunCallbackAcknowledgesAndStartsForAuthorizedStaff(t *testing.T)
 		acknowledged = true
 		return nil
 	}
-	var sent string
-	svc.sendMessage = func(_ context.Context, chatID int64, text string) error {
+	var edited string
+	svc.editMessageText = func(_ context.Context, chatID, messageID int64, text string, markup any) error {
 		if chatID != 123 {
 			t.Fatalf("chatID = %d", chatID)
 		}
-		sent = text
+		if messageID != 1 || mustJSON(t, markup) != mustJSON(t, entryMonitorEmptyInlineKeyboard()) {
+			t.Fatalf("edit message=%d markup=%s", messageID, mustJSON(t, markup))
+		}
+		edited = text
 		return nil
 	}
 	mock.ExpectQuery(telegramOperatorQueryPattern).
 		WithArgs(int64(123)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
 
-	if err := svc.HandleWebhook(context.Background(), monitorCallbackPayload("callback-1", clientEntryMonitorRunCallback, 123)); err != nil {
+	if err := svc.HandleWebhook(context.Background(), monitorCallbackPayload("callback-1", "cem:r:1", 123)); err != nil {
 		t.Fatalf("HandleWebhook: %v", err)
 	}
-	if !acknowledged || !strings.Contains(sent, "检测任务已启动") || strings.Contains(sent, "42") || strings.Contains(sent, "#") {
-		t.Fatalf("acknowledged = %v, message = %q", acknowledged, sent)
+	if !acknowledged || !strings.Contains(edited, "检测已启动") || strings.Contains(edited, "42") || strings.Contains(edited, "#") {
+		t.Fatalf("acknowledged = %v, message = %q", acknowledged, edited)
+	}
+	svc.entryMonitorMenusMu.Lock()
+	menu := svc.entryMonitorMenus["123:1"]
+	svc.entryMonitorMenusMu.Unlock()
+	if menu == nil || !menu.started {
+		t.Fatal("started menu was not retained for callback idempotency")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
@@ -339,30 +367,94 @@ func TestMonitorRecentCallbackSendsImageWithInlineKeyboard(t *testing.T) {
 	}
 }
 
-func TestMonitorRunReplyKeyboardTextUsesStableMessageIdempotencyKey(t *testing.T) {
+func TestMonitorPhotoRunCallbackOpensTextPickerForEditableProgress(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	for range 3 {
+		mock.ExpectQuery(telegramOperatorQueryPattern).
+			WithArgs(int64(123)).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+	}
+
+	started := 0
+	controller := &fakeEntryMonitorController{
+		options: []admin.ClientEntryMonitorRunOption{{PolicyID: 1, Name: "华东", TargetCount: 2}},
+		startWithMessage: func(_ context.Context, policyIDs []int64, _, chatID, messageID int64, requestKey string) (int64, error) {
+			if len(policyIDs) != 1 || policyIDs[0] != 1 || chatID != 123 || messageID != 99 || requestKey != "telegram-callback:123:99:cem:r:1" {
+				t.Fatalf("start args = policies=%v chat=%d message=%d request=%q", policyIDs, chatID, messageID, requestKey)
+			}
+			started++
+			return 1, nil
+		},
+	}
+	svc := NewService(config.Config{}, db).WithEntryMonitorController(controller)
+	svc.answerCallback = func(context.Context, string, string, bool) error { return nil }
+	pickers := 0
+	svc.sendMessageMarkup = func(_ context.Context, chatID int64, text string, markup any) error {
+		if chatID != 123 || !strings.Contains(text, "选择要主动检测") || mustJSON(t, markup) != mustJSON(t, entryMonitorRulesKeyboardForTest()) {
+			t.Fatalf("picker = chat=%d text=%q markup=%s", chatID, text, mustJSON(t, markup))
+		}
+		pickers++
+		return nil
+	}
+	edits := 0
+	svc.editMessageText = func(_ context.Context, chatID, messageID int64, text string, markup any) error {
+		if chatID != 123 || messageID != 99 || !strings.Contains(text, "检测已启动") || mustJSON(t, markup) != mustJSON(t, entryMonitorEmptyInlineKeyboard()) {
+			t.Fatalf("edit = chat=%d message=%d text=%q markup=%s", chatID, messageID, text, mustJSON(t, markup))
+		}
+		edits++
+		return nil
+	}
+
+	photoPayload := monitorCallbackPayload("photo-run", clientEntryMonitorRunCallback, 123)
+	photoMessage := photoPayload["callback_query"].(map[string]any)["message"].(map[string]any)
+	delete(photoMessage, "text")
+	photoMessage["photo"] = []any{map[string]any{"file_id": "report"}}
+	for range 2 {
+		if err := svc.HandleWebhook(context.Background(), photoPayload); err != nil {
+			t.Fatalf("photo callback: %v", err)
+		}
+	}
+	if pickers != 1 || edits != 0 || started != 0 {
+		t.Fatalf("after photo callback pickers=%d edits=%d started=%d", pickers, edits, started)
+	}
+
+	textPayload := monitorCallbackPayload("text-rule", "cem:r:1", 123)
+	textPayload["callback_query"].(map[string]any)["message"].(map[string]any)["message_id"] = int64(99)
+	if err := svc.HandleWebhook(context.Background(), textPayload); err != nil {
+		t.Fatalf("text picker callback: %v", err)
+	}
+	if pickers != 1 || edits != 1 || started != 1 {
+		t.Fatalf("final pickers=%d edits=%d started=%d", pickers, edits, started)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestMonitorRunReplyKeyboardTextCreatesOnePickerPerWebhookMessage(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
 
-	var requestKeys []string
-	controller := &fakeEntryMonitorController{start: func(_ context.Context, userID, chatID int64, requestKey string) (int64, error) {
-		if userID != 9 || chatID != 123 {
-			t.Fatalf("start args = user %d chat %d", userID, chatID)
-		}
-		requestKeys = append(requestKeys, requestKey)
-		return 42, nil
-	}}
+	controller := &fakeEntryMonitorController{options: []admin.ClientEntryMonitorRunOption{{PolicyID: 1, Name: "华东", TargetCount: 2}}}
 	svc := NewService(config.Config{}, db).WithEntryMonitorController(controller)
 	svc.answerCallback = func(context.Context, string, string, bool) error {
 		t.Fatal("reply keyboard text must not use callback acknowledgement")
 		return nil
 	}
 	var messages []string
-	svc.sendMessage = func(_ context.Context, chatID int64, text string) error {
+	svc.sendMessageMarkup = func(_ context.Context, chatID int64, text string, markup any) error {
 		if chatID != 123 {
 			t.Fatalf("chatID = %d", chatID)
+		}
+		if mustJSON(t, markup) != mustJSON(t, entryMonitorRulesKeyboardForTest()) {
+			t.Fatalf("picker markup = %s", mustJSON(t, markup))
 		}
 		messages = append(messages, text)
 		return nil
@@ -374,17 +466,12 @@ func TestMonitorRunReplyKeyboardTextUsesStableMessageIdempotencyKey(t *testing.T
 	}
 
 	payload := monitorTextPayload(clientEntryMonitorRunButtonText, 123, 77)
-	// Telegram can retry the same webhook. Both deliveries must carry the same
-	// request key so the controller can return the original run idempotently.
 	for range 2 {
 		if err := svc.HandleWebhook(context.Background(), payload); err != nil {
 			t.Fatalf("HandleWebhook: %v", err)
 		}
 	}
-	if len(requestKeys) != 2 || requestKeys[0] != "telegram-message:123:77" || requestKeys[1] != requestKeys[0] {
-		t.Fatalf("request keys = %#v", requestKeys)
-	}
-	if len(messages) != 2 || !strings.Contains(messages[0], "检测任务已启动") || strings.Contains(messages[0], "#") || strings.Contains(messages[0], "42") {
+	if len(messages) != 1 || !strings.Contains(messages[0], "选择要主动检测") {
 		t.Fatalf("messages = %#v", messages)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -506,7 +593,7 @@ func TestMonitorCallbackRejectsUnauthorizedUserWithoutStarting(t *testing.T) {
 		return nil
 	}
 	var sent string
-	svc.sendMessage = func(_ context.Context, _ int64, text string) error {
+	svc.editMessageText = func(_ context.Context, _, _ int64, text string, _ any) error {
 		sent = text
 		return nil
 	}
@@ -557,10 +644,10 @@ func TestMonitorCallbackStillStartsWhenAcknowledgementFails(t *testing.T) {
 	defer db.Close()
 
 	started := false
-	controller := &fakeEntryMonitorController{start: func(_ context.Context, userID, chatID int64, requestKey string) (int64, error) {
+	controller := &fakeEntryMonitorController{options: []admin.ClientEntryMonitorRunOption{{PolicyID: 1, Name: "华东", TargetCount: 2}}, startWithMessage: func(_ context.Context, policyIDs []int64, userID, chatID, messageID int64, requestKey string) (int64, error) {
 		started = true
-		if userID != 9 || chatID != 123 || requestKey != "callback-ack-failed" {
-			t.Fatalf("start args = user %d chat %d request key %q", userID, chatID, requestKey)
+		if len(policyIDs) != 1 || policyIDs[0] != 1 || userID != 9 || chatID != 123 || messageID != 1 || requestKey != "telegram-callback:123:1:cem:r:1" {
+			t.Fatalf("start args = policies=%v user=%d chat=%d message=%d request=%q", policyIDs, userID, chatID, messageID, requestKey)
 		}
 		return 42, nil
 	}}
@@ -568,12 +655,12 @@ func TestMonitorCallbackStillStartsWhenAcknowledgementFails(t *testing.T) {
 	svc.answerCallback = func(context.Context, string, string, bool) error {
 		return errors.New("telegram response lost")
 	}
-	svc.sendMessage = func(context.Context, int64, string) error { return nil }
+	svc.editMessageText = func(context.Context, int64, int64, string, any) error { return nil }
 	mock.ExpectQuery(telegramOperatorQueryPattern).
 		WithArgs(int64(123)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
 
-	if err := svc.HandleWebhook(context.Background(), monitorCallbackPayload("callback-ack-failed", clientEntryMonitorRunCallback, 123)); err != nil {
+	if err := svc.HandleWebhook(context.Background(), monitorCallbackPayload("callback-ack-failed", "cem:r:1", 123)); err != nil {
 		t.Fatalf("HandleWebhook: %v", err)
 	}
 	if !started {
@@ -607,7 +694,8 @@ func TestForwardedMonitorCallbackCannotSendResultsToGroup(t *testing.T) {
 		"data": clientEntryMonitorRunCallback,
 		"from": map[string]any{"id": int64(123)},
 		"message": map[string]any{
-			"chat": map[string]any{"id": int64(-1001), "type": "group"},
+			"message_id": int64(1),
+			"chat":       map[string]any{"id": int64(-1001), "type": "group"},
 		},
 	}}
 	if err := svc.HandleWebhook(context.Background(), payload); err != nil {
@@ -792,6 +880,24 @@ func TestDirectNotifierNotifyChatImageUsesPhotoSender(t *testing.T) {
 	}
 }
 
+func TestDirectNotifierEditChatMessageClearsInlineKeyboard(t *testing.T) {
+	svc := NewService(config.Config{TelegramBotEnable: true, TelegramBotToken: "bot-token"}, nil)
+	called := false
+	svc.editMessageText = func(_ context.Context, chatID, messageID int64, text string, markup any) error {
+		if chatID != 456 || messageID != 78 || text != "进度" || mustJSON(t, markup) != mustJSON(t, entryMonitorEmptyInlineKeyboard()) {
+			t.Fatalf("edit delivery = chat=%d message=%d text=%q markup=%s", chatID, messageID, text, mustJSON(t, markup))
+		}
+		called = true
+		return nil
+	}
+	if err := svc.DirectNotifier().EditChatMessage(context.Background(), 456, 78, "进度"); err != nil {
+		t.Fatalf("EditChatMessage: %v", err)
+	}
+	if !called {
+		t.Fatal("DirectNotifier did not edit the progress message")
+	}
+}
+
 func TestTelegramSendMessageEncodesPersistentReplyKeyboardMarkup(t *testing.T) {
 	svc := NewService(config.Config{TelegramBotToken: "bot-token"}, nil)
 	svc.client = &http.Client{Transport: telegramRoundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -844,6 +950,201 @@ func TestTelegramAnswerCallbackQueryUsesDedicatedMethod(t *testing.T) {
 	}
 }
 
+func TestEntryMonitorRulePickerPaginatesEightOptionsAndUsesShortCallbacks(t *testing.T) {
+	options := make([]admin.ClientEntryMonitorRunOption, 0, 9)
+	for id := int64(1); id <= 9; id++ {
+		options = append(options, admin.ClientEntryMonitorRunOption{PolicyID: id, Name: "规则", TargetCount: id})
+	}
+	controller := &fakeEntryMonitorController{options: options}
+	text, keyboard, err := entryMonitorRulesPage(context.Background(), controller, 2)
+	if err != nil || !strings.Contains(text, "第 2/2 页") {
+		t.Fatalf("page = %q err=%v", text, err)
+	}
+	if len(keyboard.InlineKeyboard) != 3 || keyboard.InlineKeyboard[0][0].CallbackData != "cem:r:9" || keyboard.InlineKeyboard[1][0].CallbackData != "cem:r:all" || keyboard.InlineKeyboard[2][0].CallbackData != "cem:p:1" {
+		t.Fatalf("keyboard = %#v", keyboard)
+	}
+	for _, row := range keyboard.InlineKeyboard {
+		for _, button := range row {
+			if len(button.CallbackData) > 64 {
+				t.Fatalf("callback too long: %q", button.CallbackData)
+			}
+		}
+	}
+	ids, label := selectedEntryMonitorRuleOptions(options, clientEntryMonitorCallback{RunAll: true})
+	if len(ids) != 9 || ids[0] != 1 || ids[8] != 9 || label != "全部 9 个规则组" {
+		t.Fatalf("all selection = ids=%v label=%q", ids, label)
+	}
+}
+
+func TestEntryMonitorRuleCallbacksRejectInvalidValuesAndRequireMessageID(t *testing.T) {
+	for _, value := range []string{"cem:p:0", "cem:p:1000", "cem:r:0", "cem:r:-1", "cem:r:bad", "cem:x:1", "client_entry_monitor:run"} {
+		if _, ok := parseClientEntryMonitorCallback(value); ok {
+			t.Fatalf("invalid callback accepted: %q", value)
+		}
+	}
+	if got, ok := parseClientEntryMonitorCallback("cem:r:42"); !ok || got.PolicyID != 42 {
+		t.Fatalf("valid callback = %#v ok=%v", got, ok)
+	}
+	payload := monitorCallbackPayload("missing-message", "cem:p:1", 123)
+	delete(payload["callback_query"].(map[string]any)["message"].(map[string]any), "message_id")
+	if _, ok := parseWebhookCallbackQuery(payload["callback_query"].(map[string]any)); ok {
+		t.Fatal("callback without message_id was accepted")
+	}
+}
+
+func TestEntryMonitorMenuLockPreventsQueuedRuleFromOverwritingStartedRun(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	mock.MatchExpectationsInOrder(false)
+	for range 2 {
+		mock.ExpectQuery(telegramOperatorQueryPattern).WithArgs(int64(123)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+	}
+
+	started := make(chan struct{})
+	continueStart := make(chan struct{})
+	controller := &fakeEntryMonitorController{
+		options: []admin.ClientEntryMonitorRunOption{{PolicyID: 1, Name: "华东", TargetCount: 1}, {PolicyID: 2, Name: "华南", TargetCount: 1}},
+		startWithMessage: func(context.Context, []int64, int64, int64, int64, string) (int64, error) {
+			close(started)
+			<-continueStart
+			return 1, nil
+		},
+	}
+	svc := NewService(config.Config{}, db).WithEntryMonitorController(controller)
+	svc.answerCallback = func(context.Context, string, string, bool) error { return nil }
+	var editsMu sync.Mutex
+	var edits []string
+	svc.editMessageText = func(_ context.Context, _, _ int64, text string, _ any) error {
+		editsMu.Lock()
+		edits = append(edits, text)
+		editsMu.Unlock()
+		return nil
+	}
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- svc.HandleWebhook(context.Background(), monitorCallbackPayload("run", "cem:r:1", 123))
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("run did not reach start")
+	}
+	ruleDone := make(chan error, 1)
+	go func() {
+		ruleDone <- svc.HandleWebhook(context.Background(), monitorCallbackPayload("other-rule", "cem:r:2", 123))
+	}()
+	close(continueStart)
+	if err := <-runDone; err != nil {
+		t.Fatalf("run callback: %v", err)
+	}
+	if err := <-ruleDone; err != nil {
+		t.Fatalf("second rule callback: %v", err)
+	}
+	editsMu.Lock()
+	defer editsMu.Unlock()
+	if len(edits) != 1 || !strings.Contains(edits[0], "检测已启动") {
+		t.Fatalf("edits = %#v", edits)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestEntryMonitorMenuLockDeduplicatesRetryAndExpires(t *testing.T) {
+	svc := NewService(config.Config{}, nil)
+	key, state := svc.lockEntryMonitorMenu(123, 7)
+	svc.unlockEntryMonitorMenu(key, state, true)
+
+	queued := make(chan bool, 1)
+	go func() {
+		queuedKey, queuedState := svc.lockEntryMonitorMenu(123, 7)
+		queued <- queuedState.started
+		svc.unlockEntryMonitorMenu(queuedKey, queuedState, false)
+	}()
+	select {
+	case started := <-queued:
+		if !started {
+			t.Fatal("retry did not observe started menu state")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retry did not acquire menu lock")
+	}
+
+	oldRetention := entryMonitorMenuRetention
+	entryMonitorMenuRetention = 5 * time.Millisecond
+	defer func() { entryMonitorMenuRetention = oldRetention }()
+	key, state = svc.lockEntryMonitorMenu(124, 8)
+	svc.unlockEntryMonitorMenu(key, state, true)
+	deadline := time.Now().Add(time.Second)
+	for {
+		svc.entryMonitorMenusMu.Lock()
+		_, exists := svc.entryMonitorMenus["124:8"]
+		svc.entryMonitorMenusMu.Unlock()
+		if !exists {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("expired menu state was retained")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestEntryMonitorRunCallbackRetryStartsOnlyOnce(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	for range 2 {
+		mock.ExpectQuery(telegramOperatorQueryPattern).WithArgs(int64(123)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+	}
+	starts := 0
+	controller := &fakeEntryMonitorController{
+		options: []admin.ClientEntryMonitorRunOption{{PolicyID: 1, Name: "华东", TargetCount: 1}},
+		startWithMessage: func(context.Context, []int64, int64, int64, int64, string) (int64, error) {
+			starts++
+			return 1, nil
+		},
+	}
+	svc := NewService(config.Config{}, db).WithEntryMonitorController(controller)
+	svc.answerCallback = func(context.Context, string, string, bool) error { return nil }
+	edits := 0
+	svc.editMessageText = func(context.Context, int64, int64, string, any) error {
+		edits++
+		return nil
+	}
+	payload := monitorCallbackPayload("retry", "cem:r:1", 123)
+	for range 2 {
+		if err := svc.HandleWebhook(context.Background(), payload); err != nil {
+			t.Fatalf("HandleWebhook: %v", err)
+		}
+	}
+	if starts != 1 || edits != 1 {
+		t.Fatalf("starts=%d edits=%d", starts, edits)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestTelegramEditMessageTreatsNotModifiedAsSuccess(t *testing.T) {
+	svc := NewService(config.Config{TelegramBotToken: "bot-token"}, nil)
+	svc.client = &http.Client{Transport: telegramRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/botbot-token/editMessageText" {
+			t.Fatalf("path = %q", request.URL.Path)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":false,"description":"Bad Request: message is not modified"}`))}, nil
+	})}
+	if err := svc.editMessageTextNow(context.Background(), 123, 77, "unchanged", entryMonitorEmptyInlineKeyboard()); err != nil {
+		t.Fatalf("editMessageTextNow: %v", err)
+	}
+}
+
 func monitorCommandPayload(command string, chatID int64) map[string]any {
 	return map[string]any{"message": map[string]any{
 		"message_id": int64(1),
@@ -866,8 +1167,17 @@ func monitorCallbackPayload(callbackID, data string, telegramID int64) map[strin
 		"data": data,
 		"from": map[string]any{"id": telegramID},
 		"message": map[string]any{
-			"chat": map[string]any{"id": telegramID, "type": "private"},
+			"message_id": int64(1),
+			"text":       "入口检测菜单",
+			"chat":       map[string]any{"id": telegramID, "type": "private"},
 		},
+	}}
+}
+
+func entryMonitorRulesKeyboardForTest() inlineKeyboardMarkup {
+	return inlineKeyboardMarkup{InlineKeyboard: [][]inlineKeyboardButton{
+		{{Text: "华东 · 2 个目标", CallbackData: "cem:r:1"}},
+		{{Text: "检测全部（1 组）", CallbackData: "cem:r:all"}},
 	}}
 }
 

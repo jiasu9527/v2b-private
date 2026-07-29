@@ -244,17 +244,23 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS expected_pairs`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	for _, column := range []string{"progress_message_id", "progress_reported_results", "progress_reported_status", "progress_attempts", "progress_next_attempt_at", "progress_last_error"} {
+		mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS ` + column).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
 	mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor_target ADD COLUMN IF NOT EXISTS generation`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	for _, column := range []string{"target_name", "host", "port", "probe_name"} {
+	for _, column := range []string{"target_name", "host", "port", "probe_name", "policy_id", "policy_name"} {
 		mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor_run_result ADD COLUMN IF NOT EXISTS ` + column).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
-	for range 48 {
+	mock.ExpectExec(`(?s)UPDATE v2_client_entry_monitor_run_result result.*SET policy_id = monitor.policy_id.*policy_name = policy.name.*FROM v2_client_entry_monitor_target target`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	for range 51 {
 		mock.ExpectExec(`(?s)DO \$client_entry_monitor\$.*ADD CONSTRAINT`).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
-	for range 17 {
+	for range 18 {
 		mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_monitor_`).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}

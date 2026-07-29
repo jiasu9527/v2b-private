@@ -19,6 +19,7 @@ type clientEntryMonitorReportFailure struct {
 
 type clientEntryMonitorReportTarget struct {
 	Key            string
+	PolicyName     string
 	Name           string
 	Host           string
 	Port           int64
@@ -29,10 +30,23 @@ type clientEntryMonitorReportTarget struct {
 	Unknown        int
 	LatestReported int64
 	Failures       []clientEntryMonitorReportFailure
+	PendingProbes  []string
+}
+
+type clientEntryMonitorRunReportSummary struct {
+	Targets              []*clientEntryMonitorReportTarget
+	TargetCount          int
+	FailedTargetCount    int
+	Normal               int
+	Abnormal             int
+	Missing              int
+	ProbeCount           int
+	UsesExpectedSnapshot bool
 }
 
 func formatClientEntryMonitorRunReport(run ClientEntryMonitorRun) string {
-	resultTargets, normal, abnormal, probeCount := summarizeClientEntryMonitorRunResults(run.Results)
+	summary := summarizeClientEntryMonitorRun(run)
+	resultTargets := summary.Targets
 	totalResults := run.TotalResults
 	if totalResults < run.ReceivedResults {
 		totalResults = run.ReceivedResults
@@ -40,21 +54,33 @@ func formatClientEntryMonitorRunReport(run ClientEntryMonitorRun) string {
 	if totalResults < int64(len(run.Results)) {
 		totalResults = int64(len(run.Results))
 	}
-	missing := run.ExpectedResults - run.ReceivedResults
-	if missing < 0 {
-		missing = 0
-	}
-	failedTargets := countClientEntryMonitorReportTargets(resultTargets, func(target *clientEntryMonitorReportTarget) bool {
+	visibleFailedTargets := countClientEntryMonitorReportTargets(resultTargets, func(target *clientEntryMonitorReportTarget) bool {
 		return target.Failure > 0
+	})
+	failedTargets := summary.FailedTargetCount
+	if failedTargets < visibleFailedTargets {
+		failedTargets = visibleFailedTargets
+	}
+	waitingTargets := countClientEntryMonitorReportTargets(resultTargets, func(target *clientEntryMonitorReportTarget) bool {
+		return target.Unknown > 0
 	})
 	healthyTargets := countClientEntryMonitorReportTargets(resultTargets, func(target *clientEntryMonitorReportTarget) bool {
 		return target.Total > 0 && target.Failure == 0 && target.Stale == 0 && target.Unknown == 0
 	})
+	if summary.Missing == 0 && summary.TargetCount >= failedTargets {
+		healthyTargets = summary.TargetCount - failedTargets
+	} else if run.ResultsTruncated && !summary.UsesExpectedSnapshot {
+		healthyTargets = 0
+	}
 
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "用户入口一键检测 #%d\n状态：%s · 进度：%d/%d\n📊 目标：%d · 探针：%d · 异常目标：%d\n🟢 正常：%d · 🔴 异常：%d · 🟡 未返回：%d",
-		run.ID, clientEntryMonitorRunStatusText(run.Status), run.ReceivedResults, run.ExpectedResults,
-		len(resultTargets), probeCount, failedTargets, normal, abnormal, missing)
+	fmt.Fprintf(&builder, "用户入口一键检测\n状态：%s · 进度：%d/%d\n📊 目标：%d · 探针：%d · 异常目标：%d",
+		clientEntryMonitorRunStatusText(run.Status), run.ReceivedResults, run.ExpectedResults,
+		summary.TargetCount, summary.ProbeCount, failedTargets)
+	if summary.UsesExpectedSnapshot {
+		fmt.Fprintf(&builder, " · 待返回目标：%d", waitingTargets)
+	}
+	fmt.Fprintf(&builder, "\n🟢 正常：%d · 🔴 异常：%d · 🟡 未返回：%d", summary.Normal, summary.Abnormal, summary.Missing)
 	if latest := latestClientEntryMonitorReportTime(resultTargets); latest > 0 {
 		fmt.Fprintf(&builder, "\n最近上报：%s", compactClientEntryMonitorReportTime(latest))
 	}
@@ -73,6 +99,9 @@ func formatClientEntryMonitorRunReport(run ClientEntryMonitorRun) string {
 	if healthyTargets > 0 {
 		fmt.Fprintf(&builder, "\n\n✅ 正常目标已折叠：%d 个", healthyTargets)
 	}
+	if waitingTargets > 0 {
+		fmt.Fprintf(&builder, "\n🟡 待返回目标已折叠：%d 个", waitingTargets)
+	}
 	if run.ResultsTruncated || totalResults > int64(len(run.Results)) {
 		fmt.Fprintf(&builder, "\n⚠️ 结果仅展示前 %d 条，完整统计以任务进度为准。", len(run.Results))
 	}
@@ -80,6 +109,151 @@ func formatClientEntryMonitorRunReport(run ClientEntryMonitorRun) string {
 		builder.WriteString("\n\n🟡 当前结果仍在等待或已过期，请稍后重试。")
 	}
 	return builder.String()
+}
+
+func summarizeClientEntryMonitorRun(run ClientEntryMonitorRun) clientEntryMonitorRunReportSummary {
+	if summary, ok := summarizeClientEntryMonitorRunExpectedSnapshot(run); ok {
+		return summary
+	}
+	targets, normal, abnormal, probeCount := summarizeClientEntryMonitorRunResults(run.Results)
+	targetCount := len(targets)
+	failedTargetCount := countClientEntryMonitorReportTargets(targets, func(target *clientEntryMonitorReportTarget) bool {
+		return target.Failure > 0
+	})
+	if run.ResultStatsLoaded {
+		normal = int(run.SuccessfulResults)
+		abnormal = int(run.FailedResults)
+		targetCount = int(run.ResultTargetCount)
+		failedTargetCount = int(run.FailedTargetCount)
+		probeCount = int(run.ResultProbeCount)
+	}
+	expectedTargets, expectedProbes := clientEntryMonitorRunExpectedDimensions(run.ExpectedPairs)
+	if expectedTargets > targetCount {
+		targetCount = expectedTargets
+	}
+	if expectedProbes > probeCount {
+		probeCount = expectedProbes
+	}
+	missing := run.ExpectedResults - run.ReceivedResults
+	if missing < 0 {
+		missing = 0
+	}
+	return clientEntryMonitorRunReportSummary{
+		Targets: targets, TargetCount: targetCount, FailedTargetCount: failedTargetCount,
+		Normal: normal, Abnormal: abnormal, Missing: int(missing), ProbeCount: probeCount,
+	}
+}
+
+func clientEntryMonitorRunExpectedDimensions(pairs []clientEntryMonitorRunPair) (int, int) {
+	targets := make(map[int64]struct{})
+	probes := make(map[int64]struct{})
+	for _, pair := range pairs {
+		if pair.TargetID > 0 {
+			targets[pair.TargetID] = struct{}{}
+		}
+		if pair.ProbeID > 0 {
+			probes[pair.ProbeID] = struct{}{}
+		}
+	}
+	return len(targets), len(probes)
+}
+
+func summarizeClientEntryMonitorRunExpectedSnapshot(run ClientEntryMonitorRun) (clientEntryMonitorRunReportSummary, bool) {
+	if len(run.ExpectedPairs) == 0 || run.ReceivedResults > int64(len(run.Results)) {
+		return clientEntryMonitorRunReportSummary{}, false
+	}
+
+	targetsByKey := make(map[string]*clientEntryMonitorReportTarget)
+	expectedByPair := make(map[[2]int64]*clientEntryMonitorReportTarget, len(run.ExpectedPairs))
+	expectedProbeName := make(map[[2]int64]string, len(run.ExpectedPairs))
+	expectedOrder := make([][2]int64, 0, len(run.ExpectedPairs))
+	probeIDs := make(map[int64]struct{})
+	for _, pair := range run.ExpectedPairs {
+		if pair.PolicyID <= 0 || pair.TargetID <= 0 || pair.ProbeID <= 0 ||
+			strings.TrimSpace(pair.Host) == "" || pair.Port <= 0 || pair.Port > 65535 {
+			return clientEntryMonitorRunReportSummary{}, false
+		}
+		pairKey := [2]int64{pair.TargetID, pair.ProbeID}
+		if _, duplicate := expectedByPair[pairKey]; duplicate {
+			return clientEntryMonitorRunReportSummary{}, false
+		}
+		targetKey := clientEntryMonitorReportResultKey(pair.PolicyID, pair.TargetID, pair.TargetName, pair.Host, pair.Port)
+		target := targetsByKey[targetKey]
+		if target == nil {
+			policyName := compactClientEntryMonitorReportText(pair.PolicyName)
+			if policyName == "" {
+				policyName = "未命名规则组"
+			}
+			target = &clientEntryMonitorReportTarget{
+				Key: targetKey, PolicyName: policyName,
+				Name: compactClientEntryMonitorReportText(pair.TargetName),
+				Host: compactClientEntryMonitorReportText(pair.Host), Port: pair.Port,
+			}
+			targetsByKey[targetKey] = target
+		}
+		target.Total++
+		expectedByPair[pairKey] = target
+		probeName := compactClientEntryMonitorReportText(pair.ProbeName)
+		if probeName == "" {
+			probeName = "未命名探针"
+		}
+		expectedProbeName[pairKey] = probeName
+		expectedOrder = append(expectedOrder, pairKey)
+		probeIDs[pair.ProbeID] = struct{}{}
+	}
+	if run.ExpectedResults != int64(len(expectedOrder)) {
+		return clientEntryMonitorRunReportSummary{}, false
+	}
+
+	receivedPairs := make(map[[2]int64]struct{}, len(run.Results))
+	normal, abnormal := 0, 0
+	for _, result := range run.Results {
+		pairKey := [2]int64{result.TargetID, result.ProbeID}
+		target := expectedByPair[pairKey]
+		if target == nil {
+			return clientEntryMonitorRunReportSummary{}, false
+		}
+		if _, duplicate := receivedPairs[pairKey]; duplicate {
+			return clientEntryMonitorRunReportSummary{}, false
+		}
+		receivedPairs[pairKey] = struct{}{}
+		if result.ReportedAt > target.LatestReported {
+			target.LatestReported = result.ReportedAt
+		}
+		if result.Success {
+			target.Success++
+			normal++
+			continue
+		}
+		target.Failure++
+		abnormal++
+		probeName := compactClientEntryMonitorReportText(result.ProbeName)
+		if probeName == "" {
+			probeName = expectedProbeName[pairKey]
+		}
+		target.Failures = append(target.Failures, clientEntryMonitorReportFailure{
+			ProbeName: probeName,
+			Detail:    compactClientEntryMonitorReportText(result.Error),
+		})
+	}
+
+	missing := 0
+	for _, pairKey := range expectedOrder {
+		if _, received := receivedPairs[pairKey]; received {
+			continue
+		}
+		target := expectedByPair[pairKey]
+		target.Unknown++
+		target.PendingProbes = append(target.PendingProbes, expectedProbeName[pairKey])
+		missing++
+	}
+	targets := sortedClientEntryMonitorReportTargets(targetsByKey)
+	return clientEntryMonitorRunReportSummary{
+		Targets: targets, TargetCount: len(targets),
+		FailedTargetCount: countClientEntryMonitorReportTargets(targets, func(target *clientEntryMonitorReportTarget) bool { return target.Failure > 0 }),
+		Normal:            normal, Abnormal: abnormal, Missing: missing, ProbeCount: len(probeIDs),
+		UsesExpectedSnapshot: true,
+	}, true
 }
 
 func formatClientEntryMonitorOverviewReport(overview ClientEntryMonitorOverview) string {
@@ -128,10 +302,10 @@ func summarizeClientEntryMonitorRunResults(results []ClientEntryMonitorRunResult
 	targetsByKey := make(map[string]*clientEntryMonitorReportTarget)
 	probeKeys := make(map[string]struct{})
 	for _, result := range results {
-		key := clientEntryMonitorReportResultKey(result.TargetID, result.TargetName, result.Host, result.Port)
+		key := clientEntryMonitorReportResultKey(result.PolicyID, result.TargetID, result.TargetName, result.Host, result.Port)
 		target := targetsByKey[key]
 		if target == nil {
-			target = &clientEntryMonitorReportTarget{Key: key, Name: compactClientEntryMonitorReportText(result.TargetName), Host: compactClientEntryMonitorReportText(result.Host), Port: result.Port}
+			target = &clientEntryMonitorReportTarget{Key: key, PolicyName: compactClientEntryMonitorReportText(result.PolicyName), Name: compactClientEntryMonitorReportText(result.TargetName), Host: compactClientEntryMonitorReportText(result.Host), Port: result.Port}
 			targetsByKey[key] = target
 		}
 		target.Total++
@@ -172,10 +346,11 @@ func summarizeClientEntryMonitorOverview(overview ClientEntryMonitorOverview) ([
 				key = fmt.Sprintf("monitor:%d:target:%d", monitor.ID, targetIndex)
 			}
 			target := &clientEntryMonitorReportTarget{
-				Key:  key,
-				Name: compactClientEntryMonitorReportText(monitor.PolicyName),
-				Host: compactClientEntryMonitorReportText(targetState.Host),
-				Port: targetState.Port,
+				Key:        key,
+				PolicyName: compactClientEntryMonitorReportText(monitor.PolicyName),
+				Name:       compactClientEntryMonitorReportText(targetState.Name),
+				Host:       compactClientEntryMonitorReportText(targetState.Host),
+				Port:       targetState.Port,
 			}
 			targetsByKey[key] = target
 			if len(targetState.States) == 0 {
@@ -306,18 +481,22 @@ func latestClientEntryMonitorReportTime(targets []*clientEntryMonitorReportTarge
 	return latest
 }
 
-func clientEntryMonitorReportResultKey(targetID int64, name, host string, port int64) string {
+func clientEntryMonitorReportResultKey(policyID, targetID int64, name, host string, port int64) string {
 	if targetID > 0 {
-		return fmt.Sprintf("target:%d", targetID)
+		return fmt.Sprintf("policy:%d:target:%d", policyID, targetID)
 	}
-	return fmt.Sprintf("target:%s:%s:%d", compactClientEntryMonitorReportText(name), compactClientEntryMonitorReportText(host), port)
+	return fmt.Sprintf("policy:%d:target:%s:%s:%d", policyID, compactClientEntryMonitorReportText(name), compactClientEntryMonitorReportText(host), port)
 }
 
 func clientEntryMonitorReportTargetLabel(target *clientEntryMonitorReportTarget) string {
-	if target.Name != "" {
-		return truncateClientEntryMonitorReportText(target.Name, 80)
+	name := target.Name
+	if name == "" {
+		name = "入口目标"
 	}
-	return "入口目标"
+	if target.PolicyName == "" {
+		return truncateClientEntryMonitorReportText(name, 80)
+	}
+	return truncateClientEntryMonitorReportText(target.PolicyName+" · "+name, 80)
 }
 
 func clientEntryMonitorReportTargetAddress(target *clientEntryMonitorReportTarget) string {

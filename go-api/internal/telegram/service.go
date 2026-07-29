@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"forest/go-api/internal/admin"
@@ -35,9 +36,25 @@ type EntryMonitorImageController interface {
 	RecentClientEntryMonitorReportImage(ctx context.Context) ([]byte, string, error)
 }
 
+// EntryMonitorRunOptionsController backs Telegram's rule-group picker. The
+// option list is already filtered to runnable, enabled monitor groups.
+type EntryMonitorRunOptionsController interface {
+	ListClientEntryMonitorRunOptions(ctx context.Context) ([]admin.ClientEntryMonitorRunOption, error)
+	StartClientEntryMonitorRunForPoliciesWithMessage(ctx context.Context, policyIDs []int64, userID, chatID, messageID int64, requestKey string) (runID int64, err error)
+}
+
 var ErrDirectNotifierUnavailable = errors.New("telegram direct notifier unavailable")
 
 const telegramMessageLimit = 4096
+
+var entryMonitorMenuRetention = 6 * time.Minute
+
+type entryMonitorMenuState struct {
+	mu      sync.Mutex
+	users   int
+	started bool
+	timer   *time.Timer
+}
 
 // DirectNotifier is the synchronous delivery adapter used by durable workers.
 // Unlike Service.NotifyAdmins, it never hands delivery to the in-memory queue.
@@ -46,37 +63,104 @@ type DirectNotifier struct {
 }
 
 type Service struct {
-	cfg               config.Config
-	runtime           *config.RuntimeState
-	db                *sql.DB
-	jobs              queue.Enqueuer
-	client            *http.Client
-	resolveRecipients func(ctx context.Context, includeStaff bool) ([]int64, error)
-	resolveUserID     func(ctx context.Context, token string) (int64, error)
-	adminService      ticketReplyService
-	entryMonitor      EntryMonitorController
-	sendMessage       func(ctx context.Context, chatID int64, text string) error
-	sendMessageMarkup func(ctx context.Context, chatID int64, text string, replyMarkup any) error
-	sendPhoto         func(ctx context.Context, chatID int64, photo []byte, caption string, replyMarkup any) error
-	answerCallback    func(ctx context.Context, callbackQueryID, text string, showAlert bool) error
-	approveJoin       func(ctx context.Context, chatID, userID int64) error
-	declineJoin       func(ctx context.Context, chatID, userID int64) error
+	cfg                 config.Config
+	runtime             *config.RuntimeState
+	db                  *sql.DB
+	jobs                queue.Enqueuer
+	client              *http.Client
+	resolveRecipients   func(ctx context.Context, includeStaff bool) ([]int64, error)
+	resolveUserID       func(ctx context.Context, token string) (int64, error)
+	adminService        ticketReplyService
+	entryMonitor        EntryMonitorController
+	entryMonitorMenusMu sync.Mutex
+	entryMonitorMenus   map[string]*entryMonitorMenuState
+	sendMessage         func(ctx context.Context, chatID int64, text string) error
+	sendMessageMarkup   func(ctx context.Context, chatID int64, text string, replyMarkup any) error
+	editMessageText     func(ctx context.Context, chatID, messageID int64, text string, replyMarkup any) error
+	sendPhoto           func(ctx context.Context, chatID int64, photo []byte, caption string, replyMarkup any) error
+	answerCallback      func(ctx context.Context, callbackQueryID, text string, showAlert bool) error
+	approveJoin         func(ctx context.Context, chatID, userID int64) error
+	declineJoin         func(ctx context.Context, chatID, userID int64) error
 }
 
 func NewService(cfg config.Config, db *sql.DB) *Service {
 	svc := &Service{
-		cfg:    cfg,
-		db:     db,
-		client: &http.Client{Timeout: 10 * time.Second},
+		cfg:               cfg,
+		db:                db,
+		client:            &http.Client{Timeout: 10 * time.Second},
+		entryMonitorMenus: make(map[string]*entryMonitorMenuState),
 	}
 	svc.resolveRecipients = svc.lookupRecipients
 	svc.sendMessage = svc.sendMessageNow
 	svc.sendMessageMarkup = svc.sendMessageWithMarkupNow
+	svc.editMessageText = svc.editMessageTextNow
 	svc.sendPhoto = svc.sendPhotoWithMarkupNow
 	svc.answerCallback = svc.answerCallbackQueryNow
 	svc.approveJoin = svc.approveJoinNow
 	svc.declineJoin = svc.declineJoinNow
 	return svc
+}
+
+func (s *Service) lockEntryMonitorMenu(chatID, messageID int64) (string, *entryMonitorMenuState) {
+	key := strconv.FormatInt(chatID, 10) + ":" + strconv.FormatInt(messageID, 10)
+	s.entryMonitorMenusMu.Lock()
+	if s.entryMonitorMenus == nil {
+		s.entryMonitorMenus = make(map[string]*entryMonitorMenuState)
+	}
+	state := s.entryMonitorMenus[key]
+	if state == nil {
+		state = &entryMonitorMenuState{}
+		s.entryMonitorMenus[key] = state
+	}
+	state.users++
+	s.entryMonitorMenusMu.Unlock()
+	state.mu.Lock()
+	return key, state
+}
+
+func (s *Service) unlockEntryMonitorMenu(key string, state *entryMonitorMenuState, retain bool) {
+	if s == nil || state == nil {
+		return
+	}
+	if retain {
+		state.started = true
+	}
+	s.entryMonitorMenusMu.Lock()
+	state.users--
+	if state.users < 0 {
+		state.users = 0
+	}
+	if state.started {
+		if state.timer == nil {
+			state.timer = time.AfterFunc(entryMonitorMenuRetention, func() {
+				s.expireEntryMonitorMenu(key, state)
+			})
+		}
+	} else if state.users == 0 && s.entryMonitorMenus[key] == state {
+		delete(s.entryMonitorMenus, key)
+	}
+	s.entryMonitorMenusMu.Unlock()
+	state.mu.Unlock()
+}
+
+func (s *Service) expireEntryMonitorMenu(key string, state *entryMonitorMenuState) {
+	if s == nil || state == nil {
+		return
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	s.entryMonitorMenusMu.Lock()
+	defer s.entryMonitorMenusMu.Unlock()
+	if s.entryMonitorMenus[key] != state {
+		return
+	}
+	if state.users > 0 {
+		state.timer = time.AfterFunc(time.Second, func() {
+			s.expireEntryMonitorMenu(key, state)
+		})
+		return
+	}
+	delete(s.entryMonitorMenus, key)
 }
 
 func (s *Service) WithQueueRuntime(jobs queue.Enqueuer) *Service {
@@ -172,6 +256,31 @@ func (n *DirectNotifier) NotifyChat(ctx context.Context, chatID int64, message s
 	}
 	if err := s.sendMessageChunks(ctx, chatID, message); err != nil {
 		return fmt.Errorf("send direct telegram notification to %d: %w", chatID, err)
+	}
+	return nil
+}
+
+// EditChatMessage updates the existing Telegram menu message used by an
+// interactive monitor run. It intentionally uses text only: final run
+// reports are delivered separately as images by the durable worker.
+func (n *DirectNotifier) EditChatMessage(ctx context.Context, chatID, messageID int64, message string) error {
+	if n == nil || n.service == nil || chatID <= 0 || messageID <= 0 {
+		return ErrDirectNotifierUnavailable
+	}
+	s := n.service
+	cfg := s.currentConfig()
+	if !cfg.TelegramBotEnable || strings.TrimSpace(cfg.TelegramBotToken) == "" {
+		return ErrDirectNotifierUnavailable
+	}
+	if s.editMessageText == nil {
+		return ErrDirectNotifierUnavailable
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return nil
+	}
+	if err := s.editMessageText(ctx, chatID, messageID, message, entryMonitorEmptyInlineKeyboard()); err != nil {
+		return fmt.Errorf("edit direct telegram message %d/%d: %w", chatID, messageID, err)
 	}
 	return nil
 }
@@ -291,6 +400,28 @@ func (s *Service) sendMessageWithMarkupNow(ctx context.Context, chatID int64, te
 	}
 
 	return s.postForm(ctx, "sendMessage", values)
+}
+
+func (s *Service) editMessageTextNow(ctx context.Context, chatID, messageID int64, text string, replyMarkup any) error {
+	if chatID == 0 || messageID <= 0 {
+		return errors.New("telegram message reference is invalid")
+	}
+	values := url.Values{}
+	values.Set("chat_id", strconv.FormatInt(chatID, 10))
+	values.Set("message_id", strconv.FormatInt(messageID, 10))
+	values.Set("text", telegramPlainText(text))
+	if replyMarkup != nil {
+		encoded, err := json.Marshal(replyMarkup)
+		if err != nil {
+			return fmt.Errorf("encode telegram edit reply markup: %w", err)
+		}
+		values.Set("reply_markup", string(encoded))
+	}
+	err := s.postForm(ctx, "editMessageText", values)
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "message is not modified") {
+		return nil
+	}
+	return err
 }
 
 func (s *Service) sendPhotoWithMarkupNow(ctx context.Context, chatID int64, photo []byte, caption string, replyMarkup any) error {

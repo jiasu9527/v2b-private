@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -70,6 +71,57 @@ func TestLockClientEntryMonitorRunStartIsSerializedAndIdempotent(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestListClientEntryMonitorRunOptionsReturnsRunnablePolicyGroups(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	mock.ExpectQuery(`(?s)SELECT policy.id, policy.name, COUNT\(target.id\).*FROM v2_client_entry_user_policy policy.*monitor.enabled = 1.*policy.enabled = 1.*EXISTS \(SELECT 1 FROM v2_dns_probe probe WHERE probe.enabled = 1\).*ORDER BY policy.sort ASC NULLS LAST, policy.id ASC`).
+		WillReturnRows(sqlmock.NewRows([]string{"policy_id", "policy_name", "target_count"}).
+			AddRow(int64(12), "  高级入口  ", int64(2)).
+			AddRow(int64(19), "备用入口", int64(1)))
+
+	options, err := service.ListClientEntryMonitorRunOptions(context.Background())
+	if err != nil {
+		t.Fatalf("ListClientEntryMonitorRunOptions: %v", err)
+	}
+	want := []ClientEntryMonitorRunOption{
+		{PolicyID: 12, Name: "高级入口", TargetCount: 2},
+		{PolicyID: 19, Name: "备用入口", TargetCount: 1},
+	}
+	if !reflect.DeepEqual(options, want) {
+		t.Fatalf("options = %#v, want %#v", options, want)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestDecodeClientEntryMonitorRunPairsPreservesReportSnapshots(t *testing.T) {
+	pairs, err := decodeClientEntryMonitorRunPairs([]byte(`[{"target_id":5,"probe_id":7,"target_version":2,"policy_id":42,"policy_name":"高级入口","target_name":"上海入口","host":"entry.example.com","port":8443,"probe_name":"东京探针"}]`))
+	if err != nil {
+		t.Fatalf("decodeClientEntryMonitorRunPairs: %v", err)
+	}
+	want := []clientEntryMonitorRunPair{{
+		TargetID: 5, ProbeID: 7, TargetVersion: 2,
+		PolicyID: 42, PolicyName: "高级入口", TargetName: "上海入口",
+		Host: "entry.example.com", Port: 8443, ProbeName: "东京探针",
+	}}
+	if !reflect.DeepEqual(pairs, want) {
+		t.Fatalf("pairs = %#v, want %#v", pairs, want)
+	}
+	raw, err := json.Marshal(ClientEntryMonitorRun{ExpectedPairs: pairs})
+	if err != nil {
+		t.Fatalf("marshal run: %v", err)
+	}
+	if strings.Contains(string(raw), "expected_pairs") || strings.Contains(string(raw), "高级入口") {
+		t.Fatalf("run snapshot leaked into JSON: %s", raw)
 	}
 }
 
@@ -442,6 +494,24 @@ func TestClientEntryMonitorRunReportSummarizesAndCapsResults(t *testing.T) {
 	}
 }
 
+func TestClientEntryMonitorRunReportKeepsHistoricalPolicyNamesSeparate(t *testing.T) {
+	results := []ClientEntryMonitorRunResult{
+		{PolicyID: 12, PolicyName: "旧规则组", TargetID: 5, TargetName: "入口", Host: "old.example.com", Port: 443, ProbeID: 7, ProbeName: "东京", Success: false, Error: "timeout", ReportedAt: 100},
+		{PolicyID: 19, PolicyName: "新规则组", TargetID: 5, TargetName: "入口", Host: "new.example.com", Port: 443, ProbeID: 7, ProbeName: "东京", Success: true, ReportedAt: 101},
+	}
+	targets, _, _, _ := summarizeClientEntryMonitorRunResults(results)
+	if len(targets) != 2 {
+		t.Fatalf("target count = %d, want policy-separated entries", len(targets))
+	}
+	if targets[0].PolicyName == targets[1].PolicyName {
+		t.Fatalf("policy snapshots were merged: %#v", targets)
+	}
+	report := formatClientEntryMonitorRunReport(ClientEntryMonitorRun{ID: 9, Status: "completed", ExpectedResults: 2, ReceivedResults: 2, Results: results})
+	if !strings.Contains(report, "旧规则组 · 入口") {
+		t.Fatalf("report missing historical policy name: %s", report)
+	}
+}
+
 func TestListClientEntryMonitorRunsCapsEachRunResultSet(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -450,24 +520,29 @@ func TestListClientEntryMonitorRunsCapsEachRunResultSet(t *testing.T) {
 	defer db.Close()
 
 	service := &DBService{db: db, dnsFailoverSchemaOK: true}
-	mock.ExpectQuery(`(?s)SELECT id, policy_ids, status, expected_results,.*FROM v2_client_entry_monitor_run\s+WHERE status = 'running' OR created_at >= \$1\s+ORDER BY id DESC LIMIT \$2`).
+	mock.ExpectQuery(`(?s)SELECT id, policy_ids, expected_pairs, status, expected_results,.*FROM v2_client_entry_monitor_run\s+WHERE status = 'running' OR created_at >= \$1\s+ORDER BY id DESC LIMIT \$2`).
 		WithArgs(cleanupCutoffHours(24), int64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "policy_ids", "status", "expected_results", "received_results",
+			"id", "policy_ids", "expected_pairs", "status", "expected_results", "received_results",
+			"progress_message_id", "progress_reported_results", "progress_reported_status", "progress_next_attempt_at", "progress_last_error",
 			"started_at", "completed_at", "created_at",
-		}).AddRow(int64(91), `[12]`, "completed", int64(250), int64(250), int64(100), int64(101), int64(100)))
+		}).AddRow(int64(91), `[12]`, `[{"target_id":5,"probe_id":7,"target_version":2,"policy_id":12,"policy_name":"规则","probe_name":"探针"}]`, "completed", int64(250), int64(250), int64(456), int64(200), "completed", int64(111), "", int64(100), int64(101), int64(100)))
 
 	resultRows := sqlmock.NewRows([]string{
-		"id", "run_id", "target_id", "target_name", "host", "port", "probe_id", "probe_name",
+		"id", "run_id", "policy_id", "policy_name", "target_id", "target_name", "host", "port", "probe_id", "probe_name",
 		"success", "latency_ms", "error", "resolved_ip", "reported_at",
 	})
 	for index := int64(1); index <= clientEntryMonitorRunResultListLimit; index++ {
-		resultRows.AddRow(index, int64(91), index, "入口", "entry.example.com", int64(443), int64(7), "探针",
+		resultRows.AddRow(index, int64(91), int64(12), "规则", index, "入口", "entry.example.com", int64(443), int64(7), "探针",
 			int64(1), int64(12), "", "203.0.113.1", int64(101))
 	}
 	mock.ExpectQuery(`(?s)WITH ranked_results AS \(.*ROW_NUMBER\(\) OVER \(PARTITION BY result.run_id.*WHERE result_rank <= \$2`).
 		WithArgs(int64(91), clientEntryMonitorRunResultListLimit).
 		WillReturnRows(resultRows)
+	mock.ExpectQuery(`(?s)SELECT run_id,.*COUNT\(\*\) FILTER \(WHERE success = 1\).*FROM v2_client_entry_monitor_run_result.*WHERE run_id IN \(\$1\).*GROUP BY run_id`).
+		WithArgs(int64(91)).
+		WillReturnRows(sqlmock.NewRows([]string{"run_id", "successful", "failed", "targets", "failed_targets", "probes"}).
+			AddRow(int64(91), int64(250), int64(0), int64(250), int64(0), int64(1)))
 
 	runs, err := service.ListClientEntryMonitorRuns(context.Background(), 1)
 	if err != nil {
@@ -479,6 +554,15 @@ func TestListClientEntryMonitorRunsCapsEachRunResultSet(t *testing.T) {
 	run := runs[0]
 	if len(run.Results) != int(clientEntryMonitorRunResultListLimit) || run.TotalResults != 250 || !run.ResultsTruncated {
 		t.Fatalf("run result summary = visible %d total %d truncated %v", len(run.Results), run.TotalResults, run.ResultsTruncated)
+	}
+	if run.ProgressMessageID == nil || *run.ProgressMessageID != 456 || run.ProgressReportedResults != 200 || run.ProgressReportedStatus != "completed" {
+		t.Fatalf("run progress = %#v", run)
+	}
+	if len(run.ExpectedPairs) != 1 || run.ExpectedPairs[0].PolicyName != "规则" || run.ExpectedPairs[0].ProbeName != "探针" {
+		t.Fatalf("run expected pairs = %#v", run.ExpectedPairs)
+	}
+	if !run.ResultStatsLoaded || run.SuccessfulResults != 250 || run.FailedResults != 0 || run.ResultTargetCount != 250 || run.ResultProbeCount != 1 {
+		t.Fatalf("run aggregate stats = %#v", run)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
@@ -493,19 +577,24 @@ func TestLoadClientEntryMonitorRunCapsTelegramResultSet(t *testing.T) {
 	defer db.Close()
 
 	service := &DBService{db: db}
-	mock.ExpectQuery(`(?s)SELECT id, policy_ids, status, expected_results,.*FROM v2_client_entry_monitor_run WHERE id = \$1`).
+	mock.ExpectQuery(`(?s)SELECT id, policy_ids, expected_pairs, status, expected_results,.*FROM v2_client_entry_monitor_run WHERE id = \$1`).
 		WithArgs(int64(91)).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "policy_ids", "status", "expected_results", "received_results",
+			"id", "policy_ids", "expected_pairs", "status", "expected_results", "received_results",
+			"progress_message_id", "progress_reported_results", "progress_reported_status", "progress_next_attempt_at", "progress_last_error",
 			"started_at", "completed_at", "created_at",
-		}).AddRow(int64(91), `[12]`, "completed", int64(230), int64(230), int64(100), int64(101), int64(100)))
+		}).AddRow(int64(91), `[12]`, `[]`, "completed", int64(230), int64(230), int64(77), int64(230), "completed", int64(0), "", int64(100), int64(101), int64(100)))
 	mock.ExpectQuery(`(?s)FROM v2_client_entry_monitor_run_result result.*WHERE result.run_id = \$1.*LIMIT \$2`).
 		WithArgs(int64(91), clientEntryMonitorRunResultListLimit).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "target_id", "target_name", "host", "port", "probe_id", "probe_name",
+			"id", "policy_id", "policy_name", "target_id", "target_name", "host", "port", "probe_id", "probe_name",
 			"success", "latency_ms", "error", "resolved_ip", "reported_at",
-		}).AddRow(int64(1), int64(5), "入口", "entry.example.com", int64(443), int64(7), "探针",
+		}).AddRow(int64(1), int64(12), "华东规则组", int64(5), "入口", "entry.example.com", int64(443), int64(7), "探针",
 			int64(0), nil, "timeout", "203.0.113.1", int64(101)))
+	mock.ExpectQuery(`(?s)SELECT run_id,.*COUNT\(\*\) FILTER \(WHERE success = 1\).*FROM v2_client_entry_monitor_run_result.*WHERE run_id IN \(\$1\).*GROUP BY run_id`).
+		WithArgs(int64(91)).
+		WillReturnRows(sqlmock.NewRows([]string{"run_id", "successful", "failed", "targets", "failed_targets", "probes"}).
+			AddRow(int64(91), int64(100), int64(130), int64(230), int64(130), int64(7)))
 
 	run, err := service.loadClientEntryMonitorRun(context.Background(), 91)
 	if err != nil {
@@ -513,6 +602,9 @@ func TestLoadClientEntryMonitorRunCapsTelegramResultSet(t *testing.T) {
 	}
 	if len(run.Results) != 1 || run.TotalResults != 230 || !run.ResultsTruncated {
 		t.Fatalf("run result summary = visible %d total %d truncated %v", len(run.Results), run.TotalResults, run.ResultsTruncated)
+	}
+	if !run.ResultStatsLoaded || run.SuccessfulResults != 100 || run.FailedResults != 130 || run.FailedTargetCount != 130 || run.ResultProbeCount != 7 {
+		t.Fatalf("run aggregate stats = %#v", run)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)

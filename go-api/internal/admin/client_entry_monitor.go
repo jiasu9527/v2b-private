@@ -102,6 +102,8 @@ type ClientEntryMonitorSaveRequest struct {
 
 type ClientEntryMonitorRunResult struct {
 	ID         int64  `json:"id"`
+	PolicyID   int64  `json:"policy_id"`
+	PolicyName string `json:"policy_name"`
 	TargetID   int64  `json:"target_id"`
 	TargetName string `json:"target_name"`
 	Host       string `json:"host"`
@@ -116,17 +118,37 @@ type ClientEntryMonitorRunResult struct {
 }
 
 type ClientEntryMonitorRun struct {
-	ID               int64                         `json:"id"`
-	PolicyIDs        []int64                       `json:"policy_ids"`
-	Status           string                        `json:"status"`
-	ExpectedResults  int64                         `json:"expected_results"`
-	ReceivedResults  int64                         `json:"received_results"`
-	TotalResults     int64                         `json:"total_results"`
-	ResultsTruncated bool                          `json:"results_truncated"`
-	StartedAt        int64                         `json:"started_at"`
-	CompletedAt      *int64                        `json:"completed_at"`
-	CreatedAt        int64                         `json:"created_at"`
-	Results          []ClientEntryMonitorRunResult `json:"results"`
+	ID                      int64                         `json:"id"`
+	PolicyIDs               []int64                       `json:"policy_ids"`
+	Status                  string                        `json:"status"`
+	ExpectedResults         int64                         `json:"expected_results"`
+	ReceivedResults         int64                         `json:"received_results"`
+	TotalResults            int64                         `json:"total_results"`
+	ResultsTruncated        bool                          `json:"results_truncated"`
+	ProgressMessageID       *int64                        `json:"progress_message_id"`
+	ProgressReportedResults int64                         `json:"progress_reported_results"`
+	ProgressReportedStatus  string                        `json:"progress_reported_status"`
+	ProgressNextAttemptAt   int64                         `json:"progress_next_attempt_at"`
+	ProgressLastError       string                        `json:"progress_last_error"`
+	ExpectedPairs           []clientEntryMonitorRunPair   `json:"-"`
+	ResultStatsLoaded       bool                          `json:"-"`
+	SuccessfulResults       int64                         `json:"-"`
+	FailedResults           int64                         `json:"-"`
+	ResultTargetCount       int64                         `json:"-"`
+	FailedTargetCount       int64                         `json:"-"`
+	ResultProbeCount        int64                         `json:"-"`
+	StartedAt               int64                         `json:"started_at"`
+	CompletedAt             *int64                        `json:"completed_at"`
+	CreatedAt               int64                         `json:"created_at"`
+	Results                 []ClientEntryMonitorRunResult `json:"results"`
+}
+
+// ClientEntryMonitorRunOption is a policy group available to an operator for
+// an on-demand check.
+type ClientEntryMonitorRunOption struct {
+	PolicyID    int64  `json:"policy_id"`
+	Name        string `json:"name"`
+	TargetCount int64  `json:"target_count"`
 }
 
 type ClientEntryMonitorAdminService interface {
