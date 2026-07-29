@@ -105,14 +105,14 @@ CONSTRAINT uniq_v2_client_entry_user_policy_member UNIQUE (policy_id, server_typ
 		{"v2_client_entry_user_policy", "action", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN action varchar(16) NOT NULL DEFAULT 'override'`},
 		{"v2_client_entry_user_policy", "conditions", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN conditions text NOT NULL DEFAULT '[]'`},
 		{"v2_client_entry_user_policy", "entry_host", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN entry_host varchar(255) NOT NULL DEFAULT ''`},
-		{"v2_server_shadowsocks", "client_entry_only", `ALTER TABLE v2_server_shadowsocks ADD COLUMN client_entry_only SMALLINT NOT NULL DEFAULT 0`},
-		{"v2_server_vmess", "client_entry_only", `ALTER TABLE v2_server_vmess ADD COLUMN client_entry_only SMALLINT NOT NULL DEFAULT 0`},
-		{"v2_server_vless", "client_entry_only", `ALTER TABLE v2_server_vless ADD COLUMN client_entry_only SMALLINT NOT NULL DEFAULT 0`},
-		{"v2_server_trojan", "client_entry_only", `ALTER TABLE v2_server_trojan ADD COLUMN client_entry_only SMALLINT NOT NULL DEFAULT 0`},
-		{"v2_server_tuic", "client_entry_only", `ALTER TABLE v2_server_tuic ADD COLUMN client_entry_only SMALLINT NOT NULL DEFAULT 0`},
-		{"v2_server_hysteria", "client_entry_only", `ALTER TABLE v2_server_hysteria ADD COLUMN client_entry_only SMALLINT NOT NULL DEFAULT 0`},
-		{"v2_server_anytls", "client_entry_only", `ALTER TABLE v2_server_anytls ADD COLUMN client_entry_only SMALLINT NOT NULL DEFAULT 0`},
-		{"v2_server_v2node", "client_entry_only", `ALTER TABLE v2_server_v2node ADD COLUMN client_entry_only SMALLINT NOT NULL DEFAULT 0`},
+		{"v2_server_shadowsocks", "client_entry_only", `ALTER TABLE v2_server_shadowsocks ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
+		{"v2_server_vmess", "client_entry_only", `ALTER TABLE v2_server_vmess ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
+		{"v2_server_vless", "client_entry_only", `ALTER TABLE v2_server_vless ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
+		{"v2_server_trojan", "client_entry_only", `ALTER TABLE v2_server_trojan ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
+		{"v2_server_tuic", "client_entry_only", `ALTER TABLE v2_server_tuic ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
+		{"v2_server_hysteria", "client_entry_only", `ALTER TABLE v2_server_hysteria ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
+		{"v2_server_anytls", "client_entry_only", `ALTER TABLE v2_server_anytls ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
+		{"v2_server_v2node", "client_entry_only", `ALTER TABLE v2_server_v2node ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
 	} {
 		exists, err := columnExists(ctx, db, item.table, item.column)
 		if err != nil {
