@@ -13,6 +13,7 @@ import (
 
 const (
 	ActionOverride = "override"
+	ActionOriginal = "original"
 	ActionHide     = "hide"
 )
 
@@ -42,7 +43,7 @@ func NormalizeAction(value string) (string, error) {
 		action = ActionOverride
 	}
 	switch action {
-	case ActionOverride, ActionHide:
+	case ActionOverride, ActionOriginal, ActionHide:
 		return action, nil
 	default:
 		return "", errors.New("规则动作无效")

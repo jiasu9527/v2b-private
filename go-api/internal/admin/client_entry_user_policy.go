@@ -320,9 +320,12 @@ func normalizeClientEntryUserPolicySaveRequest(req ClientEntryUserPolicySaveRequ
 		return result, err
 	}
 	result.Action = action
-	if action == cliententry.ActionHide {
+	if action != cliententry.ActionOverride {
 		if strings.TrimSpace(req.EntryHost) != "" {
-			return result, errors.New("隐藏节点规则不能填写独立入口地址")
+			if action == cliententry.ActionHide {
+				return result, errors.New("隐藏节点规则不能填写独立入口地址")
+			}
+			return result, errors.New("下发原入口地址规则不能填写独立入口地址")
 		}
 	} else {
 		host, err := cliententry.NormalizeHost(req.EntryHost)

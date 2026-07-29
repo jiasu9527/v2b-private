@@ -161,6 +161,7 @@ func TestApplyClientEntryUserPolicyOverridesSelectedNodeHosts(t *testing.T) {
 	policies := []clientEntryUserPolicy{
 		{
 			ID:        int64(3),
+			Action:    cliententry.ActionOverride,
 			EntryHost: "vip-entry.example.com",
 			Members: []ClientEntryGroupMember{
 				{ServerType: "vmess", ServerID: int64(11)},
@@ -182,6 +183,42 @@ func TestApplyClientEntryUserPolicyOverridesSelectedNodeHosts(t *testing.T) {
 	}
 	if got := servers[2]["host"]; got != "keep.example.com" {
 		t.Fatalf("expected non-selected node to keep original host, got %#v", got)
+	}
+}
+
+func TestApplyClientEntryUserPolicyDeliversMultipleOriginalHostsOnlyToMatchedUser(t *testing.T) {
+	servers := []map[string]any{
+		{"id": int64(11), "type": "vmess", "host": "node-a.example.com", "client_entry_only": int64(1)},
+		{"id": int64(12), "type": "trojan", "host": "203.0.113.12", "client_entry_only": int64(1)},
+	}
+	policies := []clientEntryUserPolicy{{
+		ID: 9, Action: cliententry.ActionOriginal,
+		Conditions: []cliententry.Condition{{Field: "user_id", Operator: "in", Values: []json.RawMessage{json.RawMessage("100")}}},
+		Members: []ClientEntryGroupMember{
+			{ServerType: "vmess", ServerID: 11},
+			{ServerType: "trojan", ServerID: 12},
+		},
+	}}
+
+	unmatched := applyClientEntryUserPolicies(cloneServerMapsForTest(servers), cliententry.Subject{UserID: 99}, policies)
+	if len(unmatched) != 0 {
+		t.Fatalf("unmatched user received original-address nodes: %#v", unmatched)
+	}
+
+	matched := applyClientEntryUserPolicies(cloneServerMapsForTest(servers), cliententry.Subject{UserID: 100}, policies)
+	if len(matched) != 2 {
+		t.Fatalf("matched user should receive both original-address nodes: %#v", matched)
+	}
+	if matched[0]["host"] != "node-a.example.com" || matched[1]["host"] != "203.0.113.12" {
+		t.Fatalf("original node hosts must remain unchanged: %#v", matched)
+	}
+	for _, server := range matched {
+		if server["client_entry_user_policy_id"] != int64(9) {
+			t.Fatalf("expected matched policy marker on original-address node: %#v", server)
+		}
+		if _, exists := server["client_entry_only"]; exists {
+			t.Fatalf("internal entry-only marker leaked to subscription: %#v", server)
+		}
 	}
 }
 

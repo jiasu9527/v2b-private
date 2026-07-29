@@ -751,7 +751,7 @@ export default function ServerManage() {
           <ProtocolFields type={currentType} protocol={watchProtocol} tls={watchTLS} network={watchNetwork} form={form} onEditChild={(title, type) => setChildEditor({ title, type })} />
           <div className="form-col-12"><Form.Item name="parent_id" label="父节点"><Select allowClear placeholder="无" options={rows.filter((row) => row.type === currentType && row.id !== edit?.id).map((row) => ({ label: row.name, value: row.id }))} /></Form.Item></div>
           <div className="form-col-12"><Form.Item name="show" label="显示"><Select options={[{ label: '显示', value: 1 }, { label: '隐藏', value: 0 }]} /></Form.Item></div>
-          <div className="form-col-12"><Form.Item name="client_entry_only" label="仅入口分配用户可见" valuePropName="checked" extra="请同时保持“显示”为“显示”；开启后，节点仍受权限组限制，并且只有命中已启用“用户入口分配”覆盖规则的用户才会收到。未命中或命中隐藏规则的用户不会下发。"><Switch /></Form.Item></div>
+          <div className="form-col-12"><Form.Item name="client_entry_only" label="仅入口分配用户可见" valuePropName="checked" extra="请同时保持“显示”为“显示”；开启后，节点仍受权限组限制，并且只有命中已启用的“覆盖入口地址”或“下发原入口地址”规则的用户才会收到。未命中或命中隐藏规则的用户不会下发。"><Switch /></Form.Item></div>
           <div className="form-col-24"><Form.Item name="route_id" label="路由组"><Select mode="multiple" placeholder="请选择路由组" options={routes.map((route) => ({ label: route.remarks || route.name || route.id, value: String(route.id) }))} /></Form.Item></div>
           {currentType === 'v2node' && <DDNSFields form={form} host={watchHost} />}
           {currentType === 'v2node' && <div className="form-col-24"><Form.Item name="install_command" label="一键安装指令"><Input.TextArea rows={4} readOnly style={{ backgroundColor: '#f5f5f5', cursor: 'text' }} /></Form.Item></div>}

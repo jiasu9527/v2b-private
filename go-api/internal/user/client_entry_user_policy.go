@@ -91,8 +91,10 @@ func clientEntryPolicyHasMember(values []ClientEntryGroupMember, target ClientEn
 // applyClientEntryUserPolicies preserves the permission-filtered server set,
 // then resolves each remaining node against the first matching rule. A node
 // marked client_entry_only is denied by default and is retained only by a
-// matching override rule. A rule never grants access to a node that was
-// filtered by its group_id earlier in Servers.
+// matching delivery rule. An original-address rule grants the node without
+// changing its host, while an override rule grants it with a replacement
+// host. A rule never grants access to a node that was filtered by its group_id
+// earlier in Servers.
 func applyClientEntryUserPolicies(servers []map[string]any, subject cliententry.Subject, policies []clientEntryUserPolicy) []map[string]any {
 	if len(servers) == 0 {
 		return servers
@@ -117,7 +119,9 @@ func applyClientEntryUserPolicies(servers []map[string]any, subject cliententry.
 				break
 			}
 			granted = true
-			server["host"] = policy.EntryHost
+			if policy.Action == cliententry.ActionOverride {
+				server["host"] = policy.EntryHost
+			}
 			server["client_entry_user_policy"] = 1
 			server["client_entry_user_policy_id"] = policy.ID
 			break

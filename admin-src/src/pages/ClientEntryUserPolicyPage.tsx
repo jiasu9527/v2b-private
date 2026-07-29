@@ -42,6 +42,7 @@ type EntryCondition = {
 
 type UserOption = { value: number; label: string };
 type EmailOption = { value: string; label: string };
+type PolicyAction = 'override' | 'original' | 'hide';
 
 const fieldOptions = [
   { label: '用户 ID', value: 'user_id' },
@@ -176,13 +177,19 @@ function normalizedMembers(row: any) {
   return (Array.isArray(row?.members) ? row.members : []).map(memberKey).filter(Boolean);
 }
 
+function normalizePolicyAction(value: any): PolicyAction {
+  if (value === 'original' || value === 'hide') return value;
+  return 'override';
+}
+
 function policyPayload(row: any, overrides: Record<string, any> = {}) {
   const source = { ...row, ...overrides };
+  const action = normalizePolicyAction(source.action);
   return {
     id: source.id,
     name: String(source.name || '').trim(),
-    entry_host: source.action === 'hide' ? '' : String(source.entry_host || '').trim(),
-    action: source.action === 'hide' ? 'hide' : 'override',
+    entry_host: action === 'override' ? String(source.entry_host || '').trim() : '',
+    action,
     conditions: cleanConditions(source.conditions),
     members: (Array.isArray(source.members) ? source.members : [])
       .map((member: any) => typeof member === 'string' ? splitMemberKey(member) : member)
@@ -340,7 +347,7 @@ function PolicyEditor({
       id: row?.id,
       name: row?.name || '',
       entry_host: row?.entry_host || '',
-      action: row?.action === 'hide' ? 'hide' : 'override',
+      action: normalizePolicyAction(row?.action),
       conditions,
       members: normalizedMembers(row),
       enabled: row?.enabled === undefined ? true : Number(row.enabled) !== 0,
@@ -448,10 +455,18 @@ function PolicyEditor({
         <Form.Item name="action" label="命中后动作" rules={[{ required: true }]}>
           <Select options={[
             { label: '覆盖入口地址', value: 'override' },
+            { label: '下发原入口地址', value: 'original' },
             { label: '不下发所选节点', value: 'hide' },
           ]} />
         </Form.Item>
-        {action !== 'hide' && <Form.Item
+        {action === 'original' && <Alert
+          type="info"
+          showIcon
+          message="保留每个节点自己的原入口地址"
+          description="可以在下方一次选择多个节点。节点需在编辑页开启“仅入口分配用户可见”，这样未命中本规则的用户不会收到这些节点。"
+          style={{ marginBottom: 24 }}
+        />}
+        {action === 'override' && <Form.Item
           name="entry_host"
           label="独立入口地址"
           rules={[
@@ -563,6 +578,13 @@ function policyMatches(row: any, input: any) {
   return parseConditions(row.conditions).every((condition) => conditionMatches(condition, input));
 }
 
+function policyResultDescription(row: any) {
+  const action = normalizePolicyAction(row?.action);
+  if (action === 'hide') return '结果：不下发所选节点';
+  if (action === 'original') return '结果：下发所选节点各自的原入口地址';
+  return `结果：下发独立入口 ${row?.entry_host || '-'}`;
+}
+
 function SimulationModal({
   open,
   onClose,
@@ -661,7 +683,7 @@ function SimulationModal({
       showIcon
       style={{ marginTop: 16 }}
       message={`命中：${result.name || `规则 #${result.id}`}`}
-      description={result.action === 'hide' ? '结果：不下发所选节点' : `结果：下发独立入口 ${result.entry_host}`}
+      description={policyResultDescription(result)}
     />}
   </Modal>;
 }
@@ -779,9 +801,12 @@ export default function ClientEntryUserPolicyPage() {
       title: '命中结果',
       key: 'result',
       width: 250,
-      render: (_: any, row: any) => row.action === 'hide'
-        ? <Tag color="red">不下发节点</Tag>
-        : <Typography.Text code copyable={{ text: String(row.entry_host || '') }}>{row.entry_host || '-'}</Typography.Text>,
+      render: (_: any, row: any) => {
+        const action = normalizePolicyAction(row.action);
+        if (action === 'hide') return <Tag color="red">不下发节点</Tag>;
+        if (action === 'original') return <Tag color="blue">下发原入口地址</Tag>;
+        return <Typography.Text code copyable={{ text: String(row.entry_host || '') }}>{row.entry_host || '-'}</Typography.Text>;
+      },
     },
     {
       title: '生效节点',
@@ -828,7 +853,7 @@ export default function ClientEntryUserPolicyPage() {
         type="info"
         showIcon
         message="仅入口分配节点的下发规则"
-        description="节点编辑中标记为“仅入口分配”的节点，请先保持节点“显示”为“显示”，然后只有命中已启用的“覆盖入口地址”规则才会下发；未命中或命中“不下发所选节点”规则的用户看不到该节点，节点权限组仍然生效。"
+        description="节点编辑中标记为“仅入口分配”的节点，请先保持节点“显示”为“显示”。命中“覆盖入口地址”或“下发原入口地址”规则后才会下发；后者可一次选择多个节点并分别保留各自地址。未命中或命中“不下发所选节点”规则的用户看不到这些节点，节点权限组仍然生效。"
       />
       <Card className="block-card" styles={{ body: { padding: 0 } }}>
         <div className="forest-table-action">

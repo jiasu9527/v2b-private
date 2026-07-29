@@ -5,6 +5,14 @@ import (
 	"testing"
 )
 
+func TestNormalizeActionAcceptsOriginalAddressDelivery(t *testing.T) {
+	for _, value := range []string{ActionOverride, ActionOriginal, ActionHide} {
+		if action, err := NormalizeAction(value); err != nil || action != value {
+			t.Fatalf("NormalizeAction(%q) = %q, %v", value, action, err)
+		}
+	}
+}
+
 func TestNormalizeConditionsRejectsNegativeAndInvalidUserIDs(t *testing.T) {
 	for _, condition := range []Condition{
 		{Field: "registration_days", Operator: "lte", Value: json.RawMessage("-1")},

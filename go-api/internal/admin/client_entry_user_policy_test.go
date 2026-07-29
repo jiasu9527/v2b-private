@@ -103,6 +103,33 @@ func TestDBServiceSaveClientEntryUserPolicyRejectsInvalidActionBeforeDatabase(t 
 	}
 }
 
+func TestNormalizeClientEntryUserPolicyAllowsOriginalAddressWithoutEntryHost(t *testing.T) {
+	prepared, err := normalizeClientEntryUserPolicySaveRequest(ClientEntryUserPolicySaveRequest{
+		Name:   "指定用户原入口",
+		Action: cliententry.ActionOriginal,
+		Members: []ClientEntryGroupMemberSaveRequest{
+			{ServerType: "vmess", ServerID: 11},
+			{ServerType: "trojan", ServerID: 12},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalize original-address rule: %v", err)
+	}
+	if prepared.Action != cliententry.ActionOriginal || prepared.EntryHost != "" || len(prepared.Members) != 2 {
+		t.Fatalf("unexpected original-address rule: %#v", prepared)
+	}
+}
+
+func TestNormalizeClientEntryUserPolicyRejectsEntryHostForOriginalAddress(t *testing.T) {
+	_, err := normalizeClientEntryUserPolicySaveRequest(ClientEntryUserPolicySaveRequest{
+		Name: "指定用户原入口", Action: cliententry.ActionOriginal, EntryHost: "unexpected.example.com",
+		Members: []ClientEntryGroupMemberSaveRequest{{ServerType: "vmess", ServerID: 11}},
+	})
+	if err == nil {
+		t.Fatal("expected original-address rule with entry_host to be rejected")
+	}
+}
+
 func TestDBServiceSortClientEntryUserPoliciesRequiresExactRuleSet(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
