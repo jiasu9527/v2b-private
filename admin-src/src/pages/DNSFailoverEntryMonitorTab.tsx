@@ -1,11 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
-  Collapse,
   Divider,
-  Empty,
   InputNumber,
-  Select,
   Space,
   Spin,
   Switch,
@@ -72,7 +69,6 @@ type EntryMonitorDraft = {
   enabled: boolean;
   check_interval_sec: number;
   tcp_timeout_ms: number;
-  probe_ids: number[];
   targets: EntryTarget[];
 };
 
@@ -232,7 +228,6 @@ function normalizeDraft(policy: EntryPolicy, item?: any): EntryMonitorDraft {
     enabled: boolValue(item?.enabled, true),
     check_interval_sec: numberValue(item?.check_interval_sec, 30),
     tcp_timeout_ms: numberValue(item?.tcp_timeout_ms, 3000),
-    probe_ids: uniqueIDs(list(item?.probe_ids)),
     targets: (configuredTargets.length ? configuredTargets : derivedPolicyTargets(policy))
       .sort((left, right) => left.sort - right.sort),
   };
@@ -360,7 +355,7 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
   const [probes, setProbes] = useState<EntryProbe[]>([]);
   const [drafts, setDrafts] = useState<Record<number, EntryMonitorDraft>>({});
   const [selectedPolicyIDs, setSelectedPolicyIDs] = useState<number[]>([]);
-  const [openPolicyIDs, setOpenPolicyIDs] = useState<string[]>([]);
+  const [expandedPolicyIDs, setExpandedPolicyIDs] = useState<number[]>([]);
   const [runs, setRuns] = useState<any[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -369,7 +364,6 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
   const [running, setRunning] = useState(false);
 
   const policiesRef = useRef<EntryPolicy[]>([]);
-  const probesRef = useRef<EntryProbe[]>([]);
   const draftsRef = useRef<Record<number, EntryMonitorDraft>>({});
   const selectedPolicyIDsRef = useRef<number[]>([]);
   const loadedRef = useRef(false);
@@ -401,7 +395,6 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
       const preserveEdits = dirtyRef.current || editVersionRef.current !== requestEditVersion;
 
       policiesRef.current = next.policies;
-      probesRef.current = next.probes;
       setPolicies(next.policies);
       setProbes(next.probes);
       if (preserveEdits) {
@@ -416,9 +409,6 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
         setDrafts(next.drafts);
         setSelectedPolicyIDs(next.configuredPolicyIDs);
         setDirty(false);
-      }
-      if (!preserveEdits) {
-        if (!loadedRef.current) setOpenPolicyIDs(next.configuredPolicyIDs.map(String));
       }
       loadedRef.current = true;
       setLoaded(true);
@@ -505,11 +495,18 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
     const next = uniqueIDs(keys as any[]).filter((policyID) => selectablePolicyIDs.has(policyID));
     selectedPolicyIDsRef.current = next;
     setSelectedPolicyIDs(next);
-    setOpenPolicyIDs((current) => Array.from(new Set([
-      ...current.filter((key) => next.includes(Number(key))),
-      ...next.map(String),
+    setExpandedPolicyIDs((current) => Array.from(new Set([
+      ...current.filter((policyID) => next.includes(policyID)),
+      ...next,
     ])));
     markEdited();
+  };
+
+  const selectPolicy = (policyID: number, selected: boolean) => {
+    const current = selectedPolicyIDsRef.current;
+    selectPolicies(selected
+      ? [...current, policyID]
+      : current.filter((currentPolicyID) => currentPolicyID !== policyID));
   };
 
   const validate = (
@@ -517,7 +514,6 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
     monitorDrafts: Record<number, EntryMonitorDraft>,
   ) => {
     const currentPolicyByID = new Map(policiesRef.current.map((policy) => [policy.id, policy]));
-    const currentProbeByID = new Map(probesRef.current.map((probe) => [probe.id, probe]));
     for (const policyID of policyIDs) {
       const draft = monitorDrafts[policyID];
       const policy = currentPolicyByID.get(policyID);
@@ -527,10 +523,6 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
       if (draft.tcp_timeout_ms < 100 || draft.tcp_timeout_ms > 60000) return `${policy.name} 的 TCP 超时必须在 100-60000 毫秒之间`;
       if (draft.targets.some((target) => !target.source_key || !target.host)) return `${policy.name} 包含无效检测地址`;
       if (draft.targets.some((target) => target.port < 1 || target.port > 65535)) return `${policy.name} 的 TCP 端口必须在 1-65535 之间`;
-      if (draft.enabled && !draft.probe_ids.length) return `${policy.name} 尚未选择探针`;
-      if (draft.enabled && draft.probe_ids.some((probeID) => !currentProbeByID.get(probeID)?.enabled)) {
-        return `${policy.name} 绑定了已停用探针，请重新选择`;
-      }
     }
     return '';
   };
@@ -554,7 +546,6 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
         enabled: draft.enabled,
         check_interval_sec: draft.check_interval_sec,
         tcp_timeout_ms: draft.tcp_timeout_ms,
-        probe_ids: uniqueIDs(draft.probe_ids),
         targets: draft.targets.map((target) => ({
           source_key: target.source_key,
           port: target.port,
@@ -575,7 +566,6 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
       const hasNewEdits = editVersionRef.current !== saveEditVersion;
 
       policiesRef.current = next.policies;
-      probesRef.current = next.probes;
       revisionRef.current = next.revision;
       setPolicies(next.policies);
       setProbes(next.probes);
@@ -676,11 +666,11 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
       },
     },
     {
-      title: '检测配置',
+      title: '监控状态',
       key: 'configured',
       width: 160,
       render: (_: any, policy: EntryPolicy) => {
-        if (!selectedPolicyIDs.includes(policy.id)) return <Tag>未选择</Tag>;
+        if (!selectedPolicyIDs.includes(policy.id)) return <Tag>未纳入</Tag>;
         const draft = drafts[policy.id];
         return <Tag color={draft?.enabled ? 'success' : 'default'}>
           {draft?.enabled ? '检测中' : '已暂停'}
@@ -689,7 +679,7 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
     },
   ];
 
-  const targetColumns = (policyID: number): any[] => [
+  const targetColumns = (policyID: number, disabled = false): any[] => [
     {
       title: '地址',
       key: 'host',
@@ -709,6 +699,8 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
         max={65535}
         precision={0}
         value={port}
+        disabled={disabled}
+        aria-label={`${target.name || target.host || '检测地址'} TCP 端口`}
         onChange={(value) => updateTargetPort(policyID, target.source_key, value)}
       />,
     },
@@ -749,33 +741,35 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
     },
   ];
 
-  const selectedPolicies = selectedPolicyIDs
-    .map((policyID) => policyByID.get(policyID))
-    .filter(Boolean) as EntryPolicy[];
-
-  const collapseItems = selectedPolicies.map((policy) => {
+  const renderPolicyConfiguration = (policy: EntryPolicy) => {
     const draft = drafts[policy.id];
-    return {
-      key: String(policy.id),
-      label: <div className="dns-entry-config-title">
-        <strong>{policy.name}</strong>
-        <Space size={4} wrap>
-          {actionTag(policy.action)}
-          <Tag color={draft?.enabled ? 'success' : 'default'}>{draft?.enabled ? '检测中' : '已暂停'}</Tag>
-        </Space>
-      </div>,
-      children: draft ? <div className="dns-entry-config-body">
+    if (!draft) return null;
+    const selected = selectedPolicyIDs.includes(policy.id);
+    const enabledProbeCount = probes.filter((probe) => probe.enabled).length;
+    return <div className="dns-entry-config-body">
         <div className="dns-entry-monitor-fields">
-          <label className="dns-entry-monitor-field">
+          <div className="dns-entry-monitor-field">
+            <span>纳入监控</span>
+            <Switch
+              checked={selected}
+              checkedChildren="已纳入"
+              unCheckedChildren="未纳入"
+              aria-label={`${policy.name} 纳入监控`}
+              onChange={(checked) => selectPolicy(policy.id, checked)}
+            />
+          </div>
+          <div className="dns-entry-monitor-field">
             <span>启用检测</span>
             <Switch
               checked={draft.enabled}
+              disabled={!selected}
               checkedChildren="启用"
               unCheckedChildren="暂停"
+              aria-label={`${policy.name} 启用检测`}
               onChange={(enabled) => updateDraft(policy.id, { enabled })}
             />
-          </label>
-          <label className="dns-entry-monitor-field">
+          </div>
+          <div className="dns-entry-monitor-field">
             <span>检测间隔</span>
             <InputNumber
               min={5}
@@ -783,10 +777,12 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
               precision={0}
               addonAfter="秒"
               value={draft.check_interval_sec}
+              disabled={!selected}
+              aria-label={`${policy.name} 检测间隔`}
               onChange={(value) => updateDraft(policy.id, { check_interval_sec: numberValue(value) })}
             />
-          </label>
-          <label className="dns-entry-monitor-field">
+          </div>
+          <div className="dns-entry-monitor-field">
             <span>TCP 超时</span>
             <InputNumber
               min={100}
@@ -794,24 +790,17 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
               precision={0}
               addonAfter="ms"
               value={draft.tcp_timeout_ms}
+              disabled={!selected}
+              aria-label={`${policy.name} TCP 超时`}
               onChange={(value) => updateDraft(policy.id, { tcp_timeout_ms: numberValue(value) })}
             />
-          </label>
-          <label className="dns-entry-monitor-field dns-entry-monitor-field--probes">
+          </div>
+          <div className="dns-entry-monitor-field dns-entry-monitor-field--probe-scope">
             <span>检测探针</span>
-            <Select
-              mode="multiple"
-              value={draft.probe_ids}
-              placeholder="选择已启用探针"
-              optionFilterProp="label"
-              options={probes.map((probe) => ({
-                value: probe.id,
-                label: `${probe.name}${probe.public_ip ? ` · ${probe.public_ip}` : ''}${probe.enabled ? '' : ' · 已停用'}`,
-                disabled: !probe.enabled,
-              }))}
-              onChange={(probeIDs) => updateDraft(policy.id, { probe_ids: uniqueIDs(probeIDs) })}
-            />
-          </label>
+            {enabledProbeCount > 0
+              ? <Tag color="blue">全部启用探针 · {enabledProbeCount}</Tag>
+              : <Tag color="error">暂无启用探针</Tag>}
+          </div>
         </div>
         <Table
           className="dns-entry-target-table"
@@ -819,13 +808,12 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
           size="small"
           pagination={false}
           dataSource={draft.targets}
-          columns={targetColumns(policy.id)}
+          columns={targetColumns(policy.id, !selected)}
           scroll={{ x: 1110 }}
           locale={{ emptyText: '没有可检测地址' }}
         />
-      </div> : null,
-    };
-  });
+      </div>;
+  };
 
   const runColumns: any[] = [
     {
@@ -968,26 +956,24 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
         pagination={false}
         dataSource={policies}
         columns={policyColumns}
-        scroll={{ x: 910 }}
+        scroll={{ x: 1010 }}
         rowSelection={{
+          columnTitle: '纳入监控',
+          columnWidth: 100,
           selectedRowKeys: selectedPolicyIDs,
           onChange: selectPolicies,
           getCheckboxProps: (policy: EntryPolicy) => ({
             disabled: !isPolicySelectable(policy),
           }),
         }}
+        expandable={{
+          expandedRowKeys: expandedPolicyIDs,
+          onExpandedRowsChange: (keys) => setExpandedPolicyIDs(uniqueIDs(keys as any[])),
+          rowExpandable: isPolicySelectable,
+          expandedRowRender: renderPolicyConfiguration,
+        }}
         locale={{ emptyText: loaded ? '暂无用户入口规则' : '正在加载' }}
       />
-
-      <Divider orientation="left">监控配置</Divider>
-      {collapseItems.length
-        ? <Collapse
-          className="dns-entry-configs"
-          activeKey={openPolicyIDs}
-          onChange={(keys) => setOpenPolicyIDs((Array.isArray(keys) ? keys : [keys]).map(String))}
-          items={collapseItems}
-        />
-        : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未选择检测规则" />}
 
       <Divider orientation="left">近期检测</Divider>
       <Table

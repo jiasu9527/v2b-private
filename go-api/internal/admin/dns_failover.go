@@ -328,7 +328,19 @@ func (s *DBService) SetDNSProbeEnabled(ctx context.Context, id int64, enabled bo
 	if id <= 0 {
 		return false, errors.New("探针 ID 无效")
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE v2_dns_probe SET enabled = $2, updated_at = $3 WHERE id = $1`, id, boolToInt64(enabled), time.Now().Unix())
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("开始更新探针状态失败: %w", err)
+	}
+	defer tx.Rollback()
+	var currentEnabled int64
+	if err := tx.QueryRowContext(ctx, `SELECT enabled FROM v2_dns_probe WHERE id = $1 FOR UPDATE`, id).Scan(&currentEnabled); errors.Is(err, sql.ErrNoRows) {
+		return false, errors.New("探针不存在")
+	} else if err != nil {
+		return false, fmt.Errorf("读取探针状态失败: %w", err)
+	}
+	now := time.Now().Unix()
+	result, err := tx.ExecContext(ctx, `UPDATE v2_dns_probe SET enabled = $2, updated_at = $3 WHERE id = $1`, id, boolToInt64(enabled), now)
 	if err != nil {
 		return false, fmt.Errorf("更新探针状态失败: %w", err)
 	}
@@ -338,6 +350,14 @@ func (s *DBService) SetDNSProbeEnabled(ctx context.Context, id int64, enabled bo
 	}
 	if affected == 0 {
 		return false, errors.New("探针不存在")
+	}
+	if currentEnabled != boolToInt64(enabled) {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_monitor_state WHERE probe_id = $1`, id); err != nil {
+			return false, fmt.Errorf("重置入口检测探针状态失败: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("提交探针状态失败: %w", err)
 	}
 	return true, nil
 }

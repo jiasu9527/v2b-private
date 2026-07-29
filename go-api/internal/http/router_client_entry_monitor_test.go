@@ -68,7 +68,7 @@ func TestClientEntryMonitorRoutesMapConfigurationRunAndHistory(t *testing.T) {
 	}
 	router := clientEntryMonitorRouter(service)
 
-	if rec := dnsFailoverRequest(router, http.MethodGet, "/api/v1/control/dns-failover/entry-monitors", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"revision":7`) || !strings.Contains(rec.Body.String(), `"policy_id":12`) {
+	if rec := dnsFailoverRequest(router, http.MethodGet, "/api/v1/control/dns-failover/entry-monitors", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"revision":7`) || !strings.Contains(rec.Body.String(), `"policy_id":12`) || strings.Contains(rec.Body.String(), `"probe_ids"`) {
 		t.Fatalf("GET configuration: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	if rec := dnsFailoverRequest(router, http.MethodPut, "/api/v1/control/dns-failover/entry-monitors", `{"revision":7,"items":[]}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"revision":8`) {
@@ -102,6 +102,7 @@ func TestClientEntryMonitorRoutesRejectInvalidContracts(t *testing.T) {
 		status int
 	}{
 		{http.MethodPut, "/api/v1/control/dns-failover/entry-monitors", `{"revision":1,"group_id":9,"items":[]}`, http.StatusBadRequest},
+		{http.MethodPut, "/api/v1/control/dns-failover/entry-monitors", `{"revision":1,"items":[{"policy_id":9,"enabled":true,"probe_ids":[7],"targets":[]}]}`, http.StatusBadRequest},
 		{http.MethodPut, "/api/v1/control/dns-failover/entry-monitors", `{"revision":1}`, http.StatusBadRequest},
 		{http.MethodGet, "/api/v1/control/dns-failover/entry-monitors/runs?limit=bad", "", http.StatusBadRequest},
 		{http.MethodDelete, "/api/v1/control/dns-failover/entry-monitors", "", http.StatusMethodNotAllowed},

@@ -126,7 +126,7 @@ func TestClientEntryMonitorRefreshRunsInitiallyAndWhenDirty(t *testing.T) {
 	}
 }
 
-func TestClientEntryMonitorEndpointAndBindingChangesResetState(t *testing.T) {
+func TestClientEntryMonitorEndpointChangesResetState(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -156,18 +156,53 @@ func TestClientEntryMonitorEndpointAndBindingChangesResetState(t *testing.T) {
 	if err := resetClientEntryMonitorTargetState(context.Background(), tx, 3, "policy:42", "new.example.com", &port); err != nil {
 		t.Fatalf("reset endpoint state: %v", err)
 	}
-	mock.ExpectExec(`(?s)DELETE FROM v2_client_entry_monitor_state state.*NOT EXISTS.*v2_client_entry_monitor_probe binding`).
-		WithArgs(int64(3)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	if err := deleteUnboundClientEntryMonitorStates(context.Background(), tx, 3); err != nil {
-		t.Fatalf("delete unbound state: %v", err)
-	}
 	mock.ExpectRollback()
 	if err := tx.Rollback(); err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestRequireEnabledClientEntryMonitorProbe(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		rows    *sqlmock.Rows
+		wantErr string
+	}{
+		{name: "none", rows: sqlmock.NewRows([]string{"id"}), wantErr: "启用入口检测前请先启用至少一个探针"},
+		{name: "enabled", rows: sqlmock.NewRows([]string{"id"}).AddRow(int64(7))},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("sqlmock: %v", err)
+			}
+			defer db.Close()
+			mock.ExpectBegin()
+			tx, err := db.BeginTx(context.Background(), nil)
+			if err != nil {
+				t.Fatalf("BeginTx: %v", err)
+			}
+			mock.ExpectQuery(`(?s)SELECT id FROM v2_dns_probe.*WHERE enabled = 1.*LIMIT 1.*FOR SHARE`).
+				WillReturnRows(test.rows)
+			err = requireEnabledClientEntryMonitorProbe(context.Background(), tx)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("error = %v, want %q", err, test.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("require enabled probe: %v", err)
+			}
+			mock.ExpectRollback()
+			if err := tx.Rollback(); err != nil {
+				t.Fatalf("Rollback: %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("expectations: %v", err)
+			}
+		})
 	}
 }
 

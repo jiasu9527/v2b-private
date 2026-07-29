@@ -224,6 +224,9 @@ WHERE gp.probe_id = $1 AND g.enabled = 1`, probeID).Scan(&configuredOffline)
 		if _, err := tx.ExecContext(ctx, `UPDATE v2_dns_probe_target_state SET warmed_up = 0, consecutive_success = 0, consecutive_failure = 0, updated_at = $2 WHERE probe_id = $1`, probeID, now); err != nil {
 			return DNSProbeHeartbeatResult{}, fmt.Errorf("reset DNS probe state: %w", err)
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_monitor_state WHERE probe_id = $1`, probeID); err != nil {
+			return DNSProbeHeartbeatResult{}, fmt.Errorf("reset client entry monitor state: %w", err)
+		}
 		prewarmCount = 0
 	} else {
 		if _, err := tx.ExecContext(ctx, `UPDATE v2_dns_probe SET version = $2, arch = $3, public_ip = $4, last_heartbeat_at = $5, updated_at = $5 WHERE id = $1`, probeID, request.Version, request.Arch, request.PublicIP, now); err != nil {

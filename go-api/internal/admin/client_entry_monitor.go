@@ -71,7 +71,6 @@ type ClientEntryMonitorRecord struct {
 	CheckIntervalSec int64                      `json:"check_interval_sec"`
 	TCPTimeoutMS     int64                      `json:"tcp_timeout_ms"`
 	Targets          []ClientEntryMonitorTarget `json:"targets"`
-	ProbeIDs         []int64                    `json:"probe_ids"`
 	CreatedAt        int64                      `json:"created_at"`
 	UpdatedAt        int64                      `json:"updated_at"`
 }
@@ -93,7 +92,6 @@ type ClientEntryMonitorSaveItem struct {
 	Enabled          bool                                  `json:"enabled"`
 	CheckIntervalSec int64                                 `json:"check_interval_sec"`
 	TCPTimeoutMS     int64                                 `json:"tcp_timeout_ms"`
-	ProbeIDs         []int64                               `json:"probe_ids"`
 	Targets          []ClientEntryMonitorTargetSaveRequest `json:"targets"`
 }
 
@@ -414,19 +412,6 @@ FOR UPDATE`, monitorID, sourceKey).Scan(&targetID, &currentHost, &currentPort)
 	return nil
 }
 
-func deleteUnboundClientEntryMonitorStates(ctx context.Context, tx *sql.Tx, monitorID int64) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_monitor_state state
-USING v2_client_entry_monitor_target target
-WHERE state.target_id = target.id AND target.monitor_id = $1
-  AND NOT EXISTS (
-    SELECT 1 FROM v2_client_entry_monitor_probe binding
-    WHERE binding.monitor_id = $1 AND binding.probe_id = state.probe_id
-  )`, monitorID); err != nil {
-		return fmt.Errorf("delete unbound client entry monitor states: %w", err)
-	}
-	return nil
-}
-
 func (s *DBService) ListClientEntryMonitors(ctx context.Context) (ClientEntryMonitorOverview, error) {
 	if s == nil || s.db == nil {
 		return ClientEntryMonitorOverview{}, ErrUnavailable
@@ -486,7 +471,6 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 		}
 		item.Enabled = enabled == 1
 		item.Targets = make([]ClientEntryMonitorTarget, 0)
-		item.ProbeIDs = make([]int64, 0)
 		indexByID[item.ID] = len(items)
 		items = append(items, item)
 	}
@@ -529,11 +513,10 @@ ORDER BY t.monitor_id, t.sort, t.id`)
 	rows, err = s.db.QueryContext(ctx, `SELECT s.target_id, s.probe_id, p.name, s.last_success,
 s.last_latency_ms, s.last_error, s.last_resolved_ip, s.consecutive_success,
 s.consecutive_failure, s.last_reported_at
-FROM v2_client_entry_monitor_state s
-JOIN v2_dns_probe p ON p.id = s.probe_id
-JOIN v2_client_entry_monitor_target target ON target.id = s.target_id
-JOIN v2_client_entry_monitor_probe binding ON binding.monitor_id = target.monitor_id AND binding.probe_id = s.probe_id
-ORDER BY s.target_id, s.probe_id`)
+	FROM v2_client_entry_monitor_state s
+	JOIN v2_dns_probe p ON p.id = s.probe_id AND p.enabled = 1
+	JOIN v2_client_entry_monitor_target target ON target.id = s.target_id
+	ORDER BY s.target_id, s.probe_id`)
 	if err != nil {
 		return nil, fmt.Errorf("query client entry monitor states: %w", err)
 	}
@@ -570,25 +553,6 @@ ORDER BY s.target_id, s.probe_id`)
 		return nil, fmt.Errorf("iterate client entry monitor states: %w", err)
 	}
 	_ = rows.Close()
-	rows, err = s.db.QueryContext(ctx, `SELECT monitor_id, probe_id FROM v2_client_entry_monitor_probe ORDER BY monitor_id, probe_id`)
-	if err != nil {
-		return nil, fmt.Errorf("query client entry monitor probes: %w", err)
-	}
-	for rows.Next() {
-		var monitorID, probeID int64
-		if err := rows.Scan(&monitorID, &probeID); err != nil {
-			_ = rows.Close()
-			return nil, fmt.Errorf("scan client entry monitor probe: %w", err)
-		}
-		if index, ok := indexByID[monitorID]; ok {
-			items[index].ProbeIDs = append(items[index].ProbeIDs, probeID)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return nil, fmt.Errorf("iterate client entry monitor probes: %w", err)
-	}
-	_ = rows.Close()
 	return items, nil
 }
 
@@ -615,6 +579,7 @@ func (s *DBService) SaveClientEntryMonitors(ctx context.Context, request ClientE
 		return ClientEntryMonitorOverview{}, errors.New("入口检测规则数量过多")
 	}
 	seenPolicies := make(map[int64]struct{}, len(request.Items))
+	requiresEnabledProbe := false
 	for index := range request.Items {
 		item := &request.Items[index]
 		if _, exists := seenPolicies[item.PolicyID]; exists {
@@ -637,21 +602,7 @@ func (s *DBService) SaveClientEntryMonitors(ctx context.Context, request ClientE
 		if item.TCPTimeoutMS < 100 || item.TCPTimeoutMS > 60000 {
 			return ClientEntryMonitorOverview{}, errors.New("TCP 超时必须在 100 到 60000 毫秒之间")
 		}
-		probeSet := make(map[int64]struct{}, len(item.ProbeIDs))
-		for _, probeID := range item.ProbeIDs {
-			if probeID <= 0 {
-				return ClientEntryMonitorOverview{}, errors.New("探针选择无效")
-			}
-			probeSet[probeID] = struct{}{}
-		}
-		item.ProbeIDs = item.ProbeIDs[:0]
-		for probeID := range probeSet {
-			item.ProbeIDs = append(item.ProbeIDs, probeID)
-		}
-		sort.Slice(item.ProbeIDs, func(i, j int) bool { return item.ProbeIDs[i] < item.ProbeIDs[j] })
-		if item.Enabled && len(item.ProbeIDs) == 0 {
-			return ClientEntryMonitorOverview{}, errors.New("启用入口检测时至少选择一个探针")
-		}
+		requiresEnabledProbe = requiresEnabledProbe || item.Enabled
 		candidateByKey := make(map[string]ClientEntryMonitorCandidateTarget, len(policy.Targets))
 		for _, target := range policy.Targets {
 			candidateByKey[target.SourceKey] = target
@@ -684,6 +635,11 @@ func (s *DBService) SaveClientEntryMonitors(ctx context.Context, request ClientE
 	if err := lockClientEntryMonitorRevision(ctx, tx, request.Revision); err != nil {
 		return ClientEntryMonitorOverview{}, err
 	}
+	if requiresEnabledProbe {
+		if err := requireEnabledClientEntryMonitorProbe(ctx, tx); err != nil {
+			return ClientEntryMonitorOverview{}, err
+		}
+	}
 	for _, item := range request.Items {
 		policy := policyByID[item.PolicyID]
 		var monitorID int64
@@ -695,23 +651,6 @@ check_interval_sec = EXCLUDED.check_interval_sec, tcp_timeout_ms = EXCLUDED.tcp_
 updated_at = EXCLUDED.updated_at
 RETURNING id`, item.PolicyID, boolToInt64(item.Enabled), item.CheckIntervalSec, item.TCPTimeoutMS, now).Scan(&monitorID); err != nil {
 			return ClientEntryMonitorOverview{}, fmt.Errorf("save client entry monitor: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_monitor_probe WHERE monitor_id = $1`, monitorID); err != nil {
-			return ClientEntryMonitorOverview{}, fmt.Errorf("replace client entry monitor probes: %w", err)
-		}
-		for _, probeID := range item.ProbeIDs {
-			inserted, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_monitor_probe (monitor_id, probe_id, created_at)
-SELECT $1, id, $3 FROM v2_dns_probe WHERE id = $2 AND enabled = 1`, monitorID, probeID, now)
-			if err != nil {
-				return ClientEntryMonitorOverview{}, fmt.Errorf("save client entry monitor probe: %w", err)
-			}
-			count, err := inserted.RowsAffected()
-			if err != nil || count != 1 {
-				return ClientEntryMonitorOverview{}, errors.New("所选探针不存在或已停用")
-			}
-		}
-		if err := deleteUnboundClientEntryMonitorStates(ctx, tx, monitorID); err != nil {
-			return ClientEntryMonitorOverview{}, err
 		}
 		portByKey := make(map[string]int64, len(item.Targets))
 		for _, target := range item.Targets {
@@ -773,6 +712,22 @@ SET revision = revision + 1, updated_at = $1 WHERE id = 1`, now); err != nil {
 		return ClientEntryMonitorOverview{}, fmt.Errorf("commit client entry monitor settings: %w", err)
 	}
 	return s.ListClientEntryMonitors(ctx)
+}
+
+func requireEnabledClientEntryMonitorProbe(ctx context.Context, tx *sql.Tx) error {
+	var probeID int64
+	err := tx.QueryRowContext(ctx, `SELECT id FROM v2_dns_probe
+WHERE enabled = 1
+ORDER BY id
+LIMIT 1
+FOR SHARE`).Scan(&probeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errors.New("启用入口检测前请先启用至少一个探针")
+	}
+	if err != nil {
+		return fmt.Errorf("query enabled client entry monitor probe: %w", err)
+	}
+	return nil
 }
 
 func lockClientEntryMonitorRevision(ctx context.Context, tx *sql.Tx, expected int64) error {

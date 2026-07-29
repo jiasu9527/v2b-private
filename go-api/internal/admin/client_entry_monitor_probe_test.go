@@ -57,6 +57,56 @@ func TestClientEntryProbeFailureCreatesStateAndAlertEvent(t *testing.T) {
 	}
 }
 
+func TestClientEntryProbeRecoveryCreatesAlertEvent(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	probeID := int64(7)
+	targetID := int64(5)
+	now := time.Now().Unix()
+	latency := int64(32)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT enabled, last_heartbeat_at FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
+		WithArgs(probeID).
+		WillReturnRows(sqlmock.NewRows([]string{"enabled", "last_heartbeat_at"}).AddRow(int64(1), now))
+	mock.ExpectQuery(`(?s)SELECT target.id, target.generation, monitor.id, monitor.policy_id,.*FROM v2_client_entry_monitor_target target.*WHERE target.id = \$2`).
+		WithArgs(probeID, targetID).
+		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "policy_name", "target_name", "host", "port", "probe_name"}).
+			AddRow(targetID, int64(2), int64(3), int64(42), "高级入口", "独立入口", "entry.example.com", int64(443), "东京探针"))
+	mock.ExpectQuery(`(?s)INSERT INTO v2_client_entry_monitor_result_inbox.*ON CONFLICT \(probe_id, result_id\) DO NOTHING.*RETURNING id`).
+		WithArgs(probeID, targetID, nil, "entry-recovered-1", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(2)))
+	mock.ExpectQuery(`(?s)SELECT last_success, consecutive_success, consecutive_failure.*FROM v2_client_entry_monitor_state.*FOR UPDATE`).
+		WithArgs(targetID, probeID).
+		WillReturnRows(sqlmock.NewRows([]string{"last_success", "consecutive_success", "consecutive_failure"}).AddRow(int64(0), int64(0), int64(2)))
+	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_state.*ON CONFLICT \(target_id, probe_id\) DO UPDATE SET`).
+		WithArgs(targetID, probeID, int64(1), latency, "", "203.0.113.9", int64(1), int64(0), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_event.*VALUES`).
+		WithArgs(int64(3), targetID, probeID, "recovered", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	succeeded := true
+	result, err := service.ReportDNSProbeResults(context.Background(), probeID, DNSProbeResultsRequest{Results: []DNSProbeResult{{
+		ResultID: "entry-recovered-1", TargetID: clientEntryProbeTargetOffset + targetID,
+		TargetVersion: 2, Success: &succeeded, LatencyMS: &latency, ResolvedIP: "203.0.113.9",
+	}}})
+	if err != nil {
+		t.Fatalf("ReportDNSProbeResults: %v", err)
+	}
+	if result.Accepted != 1 || result.Skipped != 0 || result.Duplicates != 0 {
+		t.Fatalf("result = %#v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func TestClientEntryProbeTargetEncodingDoesNotOverlapDNSIDs(t *testing.T) {
 	encoded := encodeClientEntryProbeTargetID(123)
 	if encoded <= clientEntryProbeTargetOffset {

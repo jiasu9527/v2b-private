@@ -96,7 +96,7 @@ WHERE status = 'running' AND started_at < $2`, now, cutoff); err != nil {
 		}
 		for _, policyID := range policyIDs {
 			if _, ok := availableSet[policyID]; !ok {
-				return 0, errors.New("所选用户入口检测规则未启用或没有可用探针")
+				return 0, errors.New("所选用户入口检测规则未启用或当前没有已启用探针")
 			}
 		}
 	}
@@ -104,14 +104,13 @@ WHERE status = 'running' AND started_at < $2`, now, cutoff); err != nil {
 		return 0, errors.New("暂无已启用的用户入口检测规则")
 	}
 	placeholders, args := clientEntryMonitorIDPlaceholders(policyIDs, 1)
-	rows, err := tx.QueryContext(ctx, `SELECT target.id, binding.probe_id, target.generation
+	rows, err := tx.QueryContext(ctx, `SELECT target.id, probe.id, target.generation
 	FROM v2_client_entry_monitor m
 	JOIN v2_client_entry_user_policy policy ON policy.id = m.policy_id AND policy.enabled = 1
 	JOIN v2_client_entry_monitor_target target ON target.monitor_id = m.id
-	JOIN v2_client_entry_monitor_probe binding ON binding.monitor_id = m.id
-	JOIN v2_dns_probe probe ON probe.id = binding.probe_id AND probe.enabled = 1
+	JOIN v2_dns_probe probe ON probe.enabled = 1
 	WHERE m.enabled = 1 AND m.policy_id IN (`+strings.Join(placeholders, ",")+`)
-	ORDER BY target.id, binding.probe_id`, args...)
+	ORDER BY target.id, probe.id`, args...)
 	if err != nil {
 		return 0, fmt.Errorf("snapshot client entry monitor run tasks: %w", err)
 	}
@@ -244,9 +243,8 @@ func loadEnabledClientEntryMonitorPolicyIDs(ctx context.Context, tx *sql.Tx) ([]
 FROM v2_client_entry_monitor m
 JOIN v2_client_entry_user_policy policy ON policy.id = m.policy_id AND policy.enabled = 1
 JOIN v2_client_entry_monitor_target target ON target.monitor_id = m.id
-JOIN v2_client_entry_monitor_probe binding ON binding.monitor_id = m.id
-JOIN v2_dns_probe probe ON probe.id = binding.probe_id AND probe.enabled = 1
 WHERE m.enabled = 1
+  AND EXISTS (SELECT 1 FROM v2_dns_probe probe WHERE probe.enabled = 1)
 ORDER BY m.policy_id`)
 	if err != nil {
 		return nil, fmt.Errorf("query enabled client entry monitor policies: %w", err)

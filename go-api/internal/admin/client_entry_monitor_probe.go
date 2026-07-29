@@ -64,12 +64,11 @@ ORDER BY id DESC LIMIT 1`).Scan(&runID, &rawExpectedPairs)
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT target.id, target.generation, monitor.id, monitor.policy_id,
 target.host, target.port, monitor.tcp_timeout_ms, monitor.check_interval_sec
-FROM v2_client_entry_monitor_probe binding
-JOIN v2_dns_probe probe ON probe.id = binding.probe_id AND probe.enabled = 1
-JOIN v2_client_entry_monitor monitor ON monitor.id = binding.monitor_id AND monitor.enabled = 1
+FROM v2_client_entry_monitor monitor
 JOIN v2_client_entry_user_policy policy ON policy.id = monitor.policy_id AND policy.enabled = 1
 JOIN v2_client_entry_monitor_target target ON target.monitor_id = monitor.id
-WHERE binding.probe_id = $1
+WHERE monitor.enabled = 1
+  AND EXISTS (SELECT 1 FROM v2_dns_probe probe WHERE probe.id = $1 AND probe.enabled = 1)
 ORDER BY monitor.id, target.sort, target.id`, probeID)
 	if err != nil {
 		return nil, fmt.Errorf("list client entry probe tasks: %w", err)
@@ -281,10 +280,9 @@ policy.name, target.name, target.host, target.port, probe.name
 FROM v2_client_entry_monitor_target target
 JOIN v2_client_entry_monitor monitor ON monitor.id = target.monitor_id AND monitor.enabled = 1
 JOIN v2_client_entry_user_policy policy ON policy.id = monitor.policy_id AND policy.enabled = 1
-JOIN v2_client_entry_monitor_probe binding ON binding.monitor_id = monitor.id AND binding.probe_id = $1
-JOIN v2_dns_probe probe ON probe.id = binding.probe_id AND probe.enabled = 1
+JOIN v2_dns_probe probe ON probe.id = $1 AND probe.enabled = 1
 WHERE target.id = $2
-FOR SHARE OF target, monitor, policy, binding, probe`, probeID, targetID).Scan(
+FOR SHARE OF target, monitor, policy, probe`, probeID, targetID).Scan(
 		&snapshot.TargetID, &snapshot.TargetVersion, &snapshot.MonitorID, &snapshot.PolicyID, &snapshot.PolicyName,
 		&snapshot.TargetName, &snapshot.Host, &snapshot.Port, &snapshot.ProbeName,
 	)

@@ -190,16 +190,28 @@ func TestDNSFailoverProbeListAndRevoke(t *testing.T) {
 		t.Fatalf("unexpected probes: %#v", probes)
 	}
 
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT enabled FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
+		WithArgs(int64(3)).WillReturnRows(sqlmock.NewRows([]string{"enabled"}).AddRow(int64(1)))
 	mock.ExpectExec(`UPDATE v2_dns_probe SET enabled = \$2, updated_at = \$3 WHERE id = \$1`).
 		WithArgs(int64(3), int64(0), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_client_entry_monitor_state WHERE probe_id = \$1`).
+		WithArgs(int64(3)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 	if ok, err := service.SetDNSProbeEnabled(context.Background(), 3, false); err != nil || !ok {
 		t.Fatalf("SetDNSProbeEnabled revoke = %v, %v", ok, err)
 	}
 
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT enabled FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
+		WithArgs(int64(3)).WillReturnRows(sqlmock.NewRows([]string{"enabled"}).AddRow(int64(0)))
 	mock.ExpectExec(`UPDATE v2_dns_probe SET enabled = \$2, updated_at = \$3 WHERE id = \$1`).
 		WithArgs(int64(3), int64(1), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_client_entry_monitor_state WHERE probe_id = \$1`).
+		WithArgs(int64(3)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 	if ok, err := service.SetDNSProbeEnabled(context.Background(), 3, true); err != nil || !ok {
 		t.Fatalf("SetDNSProbeEnabled enable = %v, %v", ok, err)
 	}
@@ -217,9 +229,13 @@ func TestDNSFailoverRowsAffectedErrorIsNotReportedAsMissing(t *testing.T) {
 	service := &DBService{db: db, dnsFailoverSchemaOK: true}
 	dbErr := errors.New("rows affected unavailable")
 
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT enabled FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
+		WithArgs(int64(3)).WillReturnRows(sqlmock.NewRows([]string{"enabled"}).AddRow(int64(1)))
 	mock.ExpectExec(`UPDATE v2_dns_probe SET enabled = \$2, updated_at = \$3 WHERE id = \$1`).
 		WithArgs(int64(3), int64(0), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewErrorResult(dbErr))
+	mock.ExpectRollback()
 	if ok, err := service.SetDNSProbeEnabled(context.Background(), 3, false); err == nil || ok || !errors.Is(err, dbErr) || strings.Contains(err.Error(), "不存在") {
 		t.Fatalf("SetDNSProbeEnabled RowsAffected error = %v, %v, want wrapped database error distinct from not found", ok, err)
 	}
