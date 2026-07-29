@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Badge, Button, Card, DatePicker, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, message } from 'antd';
 import type { MenuProps } from 'antd';
-import { AccountBookOutlined, CopyOutlined, DeleteOutlined, DownOutlined, EditOutlined, ExportOutlined, MailOutlined, ReloadOutlined, SolutionOutlined, StopOutlined, UserAddOutlined, UsergroupAddOutlined } from '@ant-design/icons';
+import { AccountBookOutlined, CheckCircleOutlined, CopyOutlined, DeleteOutlined, DownOutlined, EditOutlined, ExportOutlined, MailOutlined, ReloadOutlined, SolutionOutlined, StopOutlined, UserAddOutlined, UsergroupAddOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { apiGet, apiPost, bytes, bytesToGB, bytesToGBText, gbToBytes, getAdminPath, unixTime } from '../lib/api';
 import LegacyFilterDrawer, { FilterButton } from '../components/LegacyFilterDrawer';
@@ -26,7 +26,7 @@ const filterDefinitions = [
   { key: 'expired_at', title: '到期时间', condition: ['>=', '>', '<', '<='], type: 'date' },
   { key: 'uuid', title: 'UUID', condition: ['='] },
   { key: 'token', title: 'TOKEN', condition: ['='] },
-  { key: 'banned', title: '账号状态', condition: ['='], type: 'select', options: [{ label: '正常', value: 0 }, { label: '封禁', value: 1 }] },
+  { key: 'banned', title: '账号状态', condition: ['='], type: 'select', options: [{ label: '正常', value: 0 }, { label: '已封禁', value: 1 }] },
   { key: 'invite_by_email', title: '邀请人邮箱', condition: ['模糊'] },
   { key: 'invite_user_id', title: '邀请人ID', condition: ['='] },
   { key: 'remarks', title: '备注', condition: ['模糊'] },
@@ -323,11 +323,13 @@ const bytesFromGBForm = (value: any) => {
 
 const boolToNumber = (value: any) => (value === true || value === 1 || value === '1' ? 1 : 0);
 const isNeverExpire = (value: any) => !Number(value || 0);
+const isUserBanned = (value: any) => value === true || Number(value || 0) === 1;
 
 export function userToAdminFormValues(data: any = {}) {
   const expiredAt = Number(data.expired_at || 0);
   return {
     ...data,
+    banned: isUserBanned(data.banned) ? 1 : 0,
     password: '',
     transfer_enable: bytesToGB(data.transfer_enable),
     u: bytesToGB(data.u),
@@ -430,6 +432,30 @@ export default function UserPage() {
     load();
   };
 
+  const setUserBanned = async (row: any, banned: number) => {
+    try {
+      const path = banned ? '/user/ban' : '/user/unban';
+      await apiPost(path, {
+        filter: [{ key: 'id', condition: '=', value: row.id }],
+      }, { form: true });
+      message.success(banned ? '已封禁用户' : '已解除封禁');
+      load();
+    } catch (e: any) {
+      message.error(e.message || (banned ? '封禁失败' : '解除封禁失败'));
+    }
+  };
+
+  const confirmUserBanned = (row: any, banned: number) => {
+    Modal.confirm({
+      title: banned ? '确认封禁账号？' : '确认解除封禁？',
+      content: row.email || `用户 #${row.id}`,
+      okText: banned ? '确认封禁' : '解除封禁',
+      cancelText: '取消',
+      okButtonProps: { danger: banned === 1 },
+      onOk: () => setUserBanned(row, banned),
+    });
+  };
+
   const dumpCSV = async () => {
     if (!effectiveFilters.length) return message.warning('请先设置过滤器');
     try {
@@ -447,6 +473,9 @@ export default function UserPage() {
   };
 
   const rowMenu = (row: any): MenuProps['items'] => [
+    { key: 'status', label: isUserBanned(row.banned)
+      ? <span><CheckCircleOutlined /> 解除封禁</span>
+      : <span className="text-danger"><StopOutlined /> 封禁账号</span>, onClick: () => confirmUserBanned(row, isUserBanned(row.banned) ? 0 : 1) },
     { key: 'edit', label: <span><EditOutlined /> 编辑</span>, onClick: async () => { const d = await apiGet('/user/getUserInfoById', { id: row.id }).catch(() => ({ data: row })); const data = d.data || row; form.resetFields(); setEdit(data); form.setFieldsValue(userToAdminFormValues(data)); } },
     { key: 'assign', label: <span><UserAddOutlined /> 分配订单</span>, onClick: () => setAssignUser(row) },
     { key: 'copy', label: <span><CopyOutlined /> 复制订阅URL</span>, onClick: () => copySubscribe(row) },
@@ -462,13 +491,14 @@ export default function UserPage() {
     { key: 'csv', label: <span><ExportOutlined /> 导出CSV</span>, onClick: dumpCSV },
     { key: 'mail', label: <span><MailOutlined /> 发送邮件</span>, onClick: () => setMailOpen(true) },
     { key: 'ban', label: <span><StopOutlined /> 批量封禁</span>, disabled: !effectiveFilters.length, onClick: () => batchAction('/user/ban', '已批量封禁') },
+    { key: 'unban', label: <span><CheckCircleOutlined /> 批量解除封禁</span>, disabled: !effectiveFilters.length, onClick: () => batchAction('/user/unban', '已批量解除封禁') },
     { key: 'delete', danger: true, label: <span><DeleteOutlined /> 批量删除</span>, disabled: !effectiveFilters.length, onClick: () => batchAction('/user/allDel', '已批量删除') },
   ];
 
   const columns: any[] = [
     { title: 'ID', dataIndex: 'id', sorter: true, width: 80 },
     { title: '邮箱', dataIndex: 'email', width: 240, render: (email: any, row: any) => <Tooltip title={row.t ? `最后在线${dayjs(row.t * 1000).format('YYYY-MM-DD HH:mm:ss')}` : '从未在线'}><Space><Badge status={Date.now() / 1000 - 600 > Number(row.t || 0) ? 'default' : 'success'} />{email}</Space></Tooltip> },
-    { title: '状态', dataIndex: 'banned', sorter: true, width: 90, render: (banned: any) => <Tag color={banned ? 'red' : 'green'}>{banned ? '封禁' : '正常'}</Tag> },
+    { title: '账号状态', dataIndex: 'banned', sorter: true, width: 110, align: 'center', render: (banned: any) => isUserBanned(banned) ? <Tag color="red">已封禁</Tag> : <Tag color="green">正常</Tag> },
     { title: '订阅', dataIndex: 'plan_name', sorter: true, width: 160, render: (v: any) => v || '-' },
     { title: '权限组', dataIndex: 'group_id', sorter: true, width: 130, render: (id: any) => groups.find((g) => Number(g.id) === Number(id))?.name || id || '-' },
     { title: '已用(G)', dataIndex: 'total_used', sorter: true, width: 110, render: (_: any, row: any) => <Tag color={Number(row.total_used || row.u + row.d || 0) > Number(row.transfer_enable || 0) ? 'red' : 'green'}>{bytesToGBText(row.total_used ?? (Number(row.u || 0) + Number(row.d || 0)))}</Tag> },
@@ -515,7 +545,7 @@ export default function UserPage() {
           {({ getFieldValue }) => <Form.Item name="expired_at" label="到期时间"><DatePicker showTime disabled={!!getFieldValue('never_expire')} style={{ width: '100%' }} placeholder="长期有效" /></Form.Item>}
         </Form.Item>
         <Form.Item name="plan_id" label="订阅计划"><Select allowClear placeholder="请选择用户订阅计划" options={[{ label: '无', value: null }, ...plans.map((plan) => ({ label: plan.name, value: plan.id }))]} /></Form.Item>
-        <Form.Item name="banned" label="账户状态"><Select options={[{ label: '封禁', value: 1 }, { label: '正常', value: 0 }]} /></Form.Item>
+        <Form.Item name="banned" label="账号状态"><Select options={[{ label: '正常', value: 0 }, { label: '已封禁', value: 1 }]} /></Form.Item>
         <Form.Item name="commission_type" label="推荐返利类型"><Select options={[{ label: '跟随系统设置', value: 0 }, { label: '循环返利', value: 1 }, { label: '首次返利', value: 2 }]} /></Form.Item>
         <Form.Item name="commission_rate" label="推荐返利比例"><InputNumber addonAfter="%" style={{ width: '100%' }} placeholder="请输入推荐返利比例(为空则跟随站点设置返利比例)" /></Form.Item>
         <Form.Item name="discount" label="专享折扣比例"><InputNumber addonAfter="%" style={{ width: '100%' }} placeholder="请输入专享折扣比例" /></Form.Item>

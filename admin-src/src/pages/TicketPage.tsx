@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Badge, Button, DatePicker, Drawer, Form, Input, InputNumber, Modal, Radio, Space, Spin, Switch, Table, Tooltip, message } from 'antd';
+import { Badge, Button, DatePicker, Drawer, Form, Input, InputNumber, Modal, Radio, Select, Space, Spin, Switch, Table, Tooltip, message } from 'antd';
 import { SolutionOutlined, UserOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { apiGet, apiPost, bytes, getAdminPath } from '../lib/api';
@@ -61,23 +61,23 @@ function UserManageDrawer({ userId, open, onClose }: { userId?: any; open: boole
     <div className="fixed-action-drawer-body ticket-user-body">
       <Spin spinning={loading}>
         <Form form={form} layout="vertical" className="modal-grid-form ticket-user-form">
-        <Form.Item hidden name="banned"><Input type="hidden" /></Form.Item>
-        <Form.Item hidden name="is_admin"><Input type="hidden" /></Form.Item>
-        <Form.Item hidden name="is_staff"><Input type="hidden" /></Form.Item>
-        <Form.Item name="email" label="邮箱"><Input placeholder="请输入邮箱" /></Form.Item>
-        <Form.Item name="invite_user_email" label="邀请人邮箱"><Input placeholder="请输入邀请人邮箱" /></Form.Item>
-        <Form.Item name="invite_code" label="邀请码"><Input placeholder="可直接修改，例如 888" /></Form.Item>
-        <Form.Item name="password" label="密码"><Input.Password placeholder="如需修改密码请输入" autoComplete="new-password" /></Form.Item>
-        <Form.Item name="balance" label="余额"><InputNumber addonAfter="¥" style={{ width: '100%' }} placeholder="余额" /></Form.Item>
-        <Form.Item name="commission_balance" label="推广佣金"><InputNumber addonAfter="¥" style={{ width: '100%' }} placeholder="推广佣金" /></Form.Item>
-        <Form.Item name="u" label="已用上行"><InputNumber addonAfter="GB" style={{ width: '100%' }} placeholder="已用上行" /></Form.Item>
-        <Form.Item name="d" label="已用下行"><InputNumber addonAfter="GB" style={{ width: '100%' }} placeholder="已用下行" /></Form.Item>
-        <Form.Item name="transfer_enable" label="流量"><InputNumber addonAfter="GB" style={{ width: '100%' }} placeholder="请输入流量" /></Form.Item>
-        <Form.Item name="device_limit" label="设备数限制"><InputNumber style={{ width: '100%' }} placeholder="留空则不限制" /></Form.Item>
-        <Form.Item name="never_expire" label="长期有效" valuePropName="checked"><Switch checkedChildren="不限时" unCheckedChildren="指定时间" onChange={(checked) => { if (checked) form.setFieldValue('expired_at', null); }} /></Form.Item>
-        <Form.Item name="expired_at" label="到期时间"><DatePicker showTime disabled={!!neverExpire} style={{ width: '100%' }} placeholder="长期有效" /></Form.Item>
-        <Form.Item name="speed_limit" label="限速"><InputNumber addonAfter="Mbps" style={{ width: '100%' }} placeholder="留空则不限制" /></Form.Item>
-        <Form.Item name="remarks" label="备注"><Input.TextArea rows={4} placeholder="请在这里记录.." /></Form.Item>
+          <Form.Item name="banned" label="账号状态"><Select options={[{ label: '正常', value: 0 }, { label: '已封禁', value: 1 }]} /></Form.Item>
+          <Form.Item hidden name="is_admin"><Input type="hidden" /></Form.Item>
+          <Form.Item hidden name="is_staff"><Input type="hidden" /></Form.Item>
+          <Form.Item name="email" label="邮箱"><Input placeholder="请输入邮箱" /></Form.Item>
+          <Form.Item name="invite_user_email" label="邀请人邮箱"><Input placeholder="请输入邀请人邮箱" /></Form.Item>
+          <Form.Item name="invite_code" label="邀请码"><Input placeholder="可直接修改，例如 888" /></Form.Item>
+          <Form.Item name="password" label="密码"><Input.Password placeholder="如需修改密码请输入" autoComplete="new-password" /></Form.Item>
+          <Form.Item name="balance" label="余额"><InputNumber addonAfter="¥" style={{ width: '100%' }} placeholder="余额" /></Form.Item>
+          <Form.Item name="commission_balance" label="推广佣金"><InputNumber addonAfter="¥" style={{ width: '100%' }} placeholder="推广佣金" /></Form.Item>
+          <Form.Item name="u" label="已用上行"><InputNumber addonAfter="GB" style={{ width: '100%' }} placeholder="已用上行" /></Form.Item>
+          <Form.Item name="d" label="已用下行"><InputNumber addonAfter="GB" style={{ width: '100%' }} placeholder="已用下行" /></Form.Item>
+          <Form.Item name="transfer_enable" label="流量"><InputNumber addonAfter="GB" style={{ width: '100%' }} placeholder="请输入流量" /></Form.Item>
+          <Form.Item name="device_limit" label="设备数限制"><InputNumber style={{ width: '100%' }} placeholder="留空则不限制" /></Form.Item>
+          <Form.Item name="never_expire" label="长期有效" valuePropName="checked"><Switch checkedChildren="不限时" unCheckedChildren="指定时间" onChange={(checked) => { if (checked) form.setFieldValue('expired_at', null); }} /></Form.Item>
+          <Form.Item name="expired_at" label="到期时间"><DatePicker showTime disabled={!!neverExpire} style={{ width: '100%' }} placeholder="长期有效" /></Form.Item>
+          <Form.Item name="speed_limit" label="限速"><InputNumber addonAfter="Mbps" style={{ width: '100%' }} placeholder="留空则不限制" /></Form.Item>
+          <Form.Item name="remarks" label="备注"><Input.TextArea rows={4} placeholder="请在这里记录.." /></Form.Item>
         </Form>
       </Spin>
     </div>

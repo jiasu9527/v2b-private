@@ -316,6 +316,7 @@ type Service interface {
 	DumpUserCSV(ctx context.Context, filters []UserFilter) (string, error)
 	SendUserMail(ctx context.Context, req UserMailRequest) (bool, error)
 	BanUsers(ctx context.Context, filters []UserFilter) (bool, error)
+	UnbanUsers(ctx context.Context, filters []UserFilter) (bool, error)
 	ResetUserSecret(ctx context.Context, id int64) (bool, error)
 	DeleteUser(ctx context.Context, id int64) (bool, error)
 	DeleteUsers(ctx context.Context, filters []UserFilter) (bool, error)

@@ -901,8 +901,19 @@ func (s *DBService) SendUserMail(ctx context.Context, req UserMailRequest) (bool
 }
 
 func (s *DBService) BanUsers(ctx context.Context, filters []UserFilter) (bool, error) {
+	return s.setUsersBanned(ctx, filters, 1)
+}
+
+func (s *DBService) UnbanUsers(ctx context.Context, filters []UserFilter) (bool, error) {
+	return s.setUsersBanned(ctx, filters, 0)
+}
+
+func (s *DBService) setUsersBanned(ctx context.Context, filters []UserFilter, banned int64) (bool, error) {
 	if s.db == nil {
 		return false, ErrUnavailable
+	}
+	if banned != 0 && banned != 1 {
+		return false, errors.New("账号状态无效")
 	}
 
 	ids, err := s.matchingUserIDs(ctx, filters)
@@ -915,21 +926,23 @@ func (s *DBService) BanUsers(ctx context.Context, filters []UserFilter) (bool, e
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, fmt.Errorf("begin admin user ban transaction: %w", err)
+		return false, fmt.Errorf("begin admin user status transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	if err := deleteAuthSessionsByUserIDs(ctx, tx, ids, "处理失败"); err != nil {
-		return false, err
+	if banned == 1 {
+		if err := deleteAuthSessionsByUserIDs(ctx, tx, ids, "处理失败"); err != nil {
+			return false, err
+		}
 	}
-	inClause, inArgs := buildInt64Placeholders(2, ids)
-	query := `UPDATE v2_user SET banned = 1, updated_at = $1 WHERE id IN (` + inClause + `)`
-	args := append([]any{time.Now().Unix()}, inArgs...)
+	inClause, inArgs := buildInt64Placeholders(3, ids)
+	query := `UPDATE v2_user SET banned = $1, updated_at = $2 WHERE id IN (` + inClause + `)`
+	args := append([]any{banned, time.Now().Unix()}, inArgs...)
 	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 		return false, errors.New("处理失败")
 	}
 	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit admin user ban transaction: %w", err)
+		return false, fmt.Errorf("commit admin user status transaction: %w", err)
 	}
 	if s.authCache != nil {
 		for _, id := range ids {

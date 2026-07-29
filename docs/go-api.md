@@ -100,6 +100,7 @@ NODE_TYPE=vmess \
 - `POST /api/v1/staff/user/update`
 - `POST /api/v1/staff/user/sendMail`
 - `POST /api/v1/staff/user/ban`
+- `POST /api/v1/staff/user/unban`
 - `GET /api/v1/<admin_path>/system/getSystemStatus`
 - `GET /api/v1/<admin_path>/config/fetch`
 - `POST /api/v1/<admin_path>/config/save`
@@ -198,6 +199,7 @@ NODE_TYPE=vmess \
 - `POST /api/v1/<admin_path>/user/dumpCSV`
 - `POST /api/v1/<admin_path>/user/sendMail`
 - `POST /api/v1/<admin_path>/user/ban`
+- `POST /api/v1/<admin_path>/user/unban`
 - `POST /api/v1/<admin_path>/user/resetSecret`
 - `POST /api/v1/<admin_path>/user/delUser`
 - `POST /api/v1/<admin_path>/user/allDel`

@@ -953,6 +953,7 @@ type fakeAdminService struct {
 	lastUserMail                  admin.UserMailRequest
 	lastUserDump                  []admin.UserFilter
 	lastUserBan                   []admin.UserFilter
+	lastUserUnban                 []admin.UserFilter
 	lastUserBannedID              int64
 	lastUserBannedValue           int64
 	lastUserResetID               int64
@@ -1200,6 +1201,11 @@ func (f *fakeAdminService) SendUserMail(_ context.Context, req admin.UserMailReq
 
 func (f *fakeAdminService) BanUsers(_ context.Context, filters []admin.UserFilter) (bool, error) {
 	f.lastUserBan = filters
+	return true, f.err
+}
+
+func (f *fakeAdminService) UnbanUsers(_ context.Context, filters []admin.UserFilter) (bool, error) {
+	f.lastUserUnban = filters
 	return true, f.err
 }
 
@@ -4862,6 +4868,28 @@ func TestRouterAdminUserBanEndpoint(t *testing.T) {
 	}
 }
 
+func TestRouterAdminUserUnbanEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/user/unban", strings.NewReader("auth_data=jwt-admin&filter[0][key]=id&filter[0][condition]=%3D&filter[0][value]=9"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if len(adminService.lastUserUnban) != 1 || adminService.lastUserUnban[0].Key != "id" || adminService.lastUserUnban[0].Value != "9" {
+		t.Fatalf("unexpected unban filters: %#v", adminService.lastUserUnban)
+	}
+}
+
 func TestRouterAdminSubscribeGuardSetUserBannedEndpoint(t *testing.T) {
 	adminService := &fakeAdminService{}
 	router := NewRouter(config.Config{AdminPath: "localadmin"}, WithSessionService(&fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1, Email: "admin@example.com"}}), WithAdminService(adminService))
@@ -5209,6 +5237,28 @@ func TestRouterStaffUserBanEndpoint(t *testing.T) {
 	}
 	if len(adminService.lastUserBan) != 3 {
 		t.Fatalf("expected user filter plus enforced staff filters, got %#v", adminService.lastUserBan)
+	}
+}
+
+func TestRouterStaffUserUnbanEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsStaff: 1}}
+	adminService := &fakeAdminService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/staff/user/unban", strings.NewReader("auth_data=jwt-staff&filter[0][key]=id&filter[0][condition]=%3D&filter[0][value]=9"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if len(adminService.lastUserUnban) != 3 {
+		t.Fatalf("expected user filter plus enforced staff filters, got %#v", adminService.lastUserUnban)
 	}
 }
 

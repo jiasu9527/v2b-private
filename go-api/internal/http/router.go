@@ -569,6 +569,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleStaffUserBan(w, r, state.session, state.admin) {
 				return
 			}
+		case r.URL.Path == "/api/v1/staff/user/unban":
+			if handleStaffUserUnban(w, r, state.session, state.admin) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/system/getSystemStatus":
 			if handleAdminSystemStatus(w, r, state.session, state.admin) {
 				return
@@ -651,6 +655,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			}
 		case r.URL.Path == adminPrefix+"/user/ban":
 			if handleAdminUserBan(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/user/unban":
+			if handleAdminUserUnban(w, r, state.session, state.admin) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/user/resetSecret":
@@ -3383,6 +3391,29 @@ func handleStaffUserBan(w http.ResponseWriter, r *http.Request, sessionService s
 	return true
 }
 
+func handleStaffUserUnban(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	if _, ok := authenticateStaffRequest(w, r, sessionService); !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+
+	inputs, err := readInputs(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+
+	unbanned, err := adminService.UnbanUsers(r.Context(), enforceStaffUserScope(userFilters(inputs)))
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": unbanned})
+	return true
+}
+
 func handleAdminSystemStatus(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
 	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
 		return true
@@ -3641,6 +3672,29 @@ func handleAdminUserBan(w http.ResponseWriter, r *http.Request, sessionService s
 		return handleAdminError(w, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": banned})
+	return true
+}
+
+func handleAdminUserUnban(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+
+	inputs, err := readInputs(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+
+	unbanned, err := adminService.UnbanUsers(r.Context(), userFilters(inputs))
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": unbanned})
 	return true
 }
 
