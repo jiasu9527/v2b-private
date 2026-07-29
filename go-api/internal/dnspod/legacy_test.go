@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLegacyClientListsDomainsWithLoginToken(t *testing.T) {
@@ -265,5 +266,41 @@ func TestLegacyAPIErrorPreservesProviderTokenFailure(t *testing.T) {
 		if !strings.Contains(err, "Token verification failed") || !strings.Contains(err, "DNSPOD_API_TOKEN") || !strings.Contains(err, "错误码="+code) {
 			t.Fatalf("token error lost provider diagnostics for code %s: %q", code, err)
 		}
+	}
+}
+
+func TestLegacyClientRetriesTransientUnknownProviderError(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls < 3 {
+			_, _ = w.Write([]byte(`{"status":{"code":"-1","message":"Unknown error, please retry later."}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"info":{"domain_total":"2"},"domains":[]}`))
+	}))
+	defer server.Close()
+
+	client := NewLegacyClient("1,token", WithLegacyEndpoint(server.URL))
+	client.retryDelays = []time.Duration{0, 0}
+	result, err := client.DescribeDomainList(context.Background(), DescribeDomainListRequest{Limit: 1})
+	if err != nil || result.Total != 2 || calls != 3 {
+		t.Fatalf("transient DNSPod retry result=%#v calls=%d err=%v", result, calls, err)
+	}
+}
+
+func TestLegacyClientDoesNotRetryPermanentTokenFailure(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"status":{"code":"10004","message":"Token verification failed"}}`))
+	}))
+	defer server.Close()
+
+	client := NewLegacyClient("1,token", WithLegacyEndpoint(server.URL))
+	client.retryDelays = []time.Duration{0, 0}
+	_, err := client.DescribeDomainList(context.Background(), DescribeDomainListRequest{Limit: 1})
+	if err == nil || calls != 1 {
+		t.Fatalf("permanent token failure should not retry: calls=%d err=%v", calls, err)
 	}
 }

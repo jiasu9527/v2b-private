@@ -11,10 +11,19 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-const LegacyEndpoint = "https://api.dnspod.com"
+const (
+	LegacyEndpoint        = "https://api.dnspod.com"
+	legacyRequestInterval = 300 * time.Millisecond
+)
+
+var legacyRequestThrottle struct {
+	sync.Mutex
+	next time.Time
+}
 
 type LegacyOption func(*LegacyClient)
 
@@ -31,16 +40,18 @@ func WithLegacyHTTPClient(httpClient *http.Client) LegacyOption {
 }
 
 type LegacyClient struct {
-	apiToken   string
-	endpoint   string
-	httpClient *http.Client
+	apiToken    string
+	endpoint    string
+	httpClient  *http.Client
+	retryDelays []time.Duration
 }
 
 func NewLegacyClient(apiToken string, options ...LegacyOption) *LegacyClient {
 	client := &LegacyClient{
-		apiToken:   strings.TrimSpace(apiToken),
-		endpoint:   LegacyEndpoint,
-		httpClient: &http.Client{Timeout: 15 * time.Second},
+		apiToken:    strings.TrimSpace(apiToken),
+		endpoint:    LegacyEndpoint,
+		httpClient:  &http.Client{Timeout: 15 * time.Second},
+		retryDelays: []time.Duration{500 * time.Millisecond, 1500 * time.Millisecond},
 	}
 	for _, option := range options {
 		option(client)
@@ -90,6 +101,45 @@ func legacyTokenAuthError(providerMessage string) string {
 	return message + "；请确认 Token 在 DNSPod 控制台仍处于启用状态，并检查服务器环境变量 DNSPOD_API_TOKEN 是否覆盖了后台配置"
 }
 
+func waitLegacyRequestSlot(ctx context.Context) error {
+	now := time.Now()
+	legacyRequestThrottle.Lock()
+	slot := now
+	if legacyRequestThrottle.next.After(slot) {
+		slot = legacyRequestThrottle.next
+	}
+	legacyRequestThrottle.next = slot.Add(legacyRequestInterval)
+	legacyRequestThrottle.Unlock()
+	if wait := time.Until(slot); wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil
+}
+
+func isTransientLegacyAPIError(err error) bool {
+	var apiErr *LegacyAPIError
+	if !errors.As(err, &apiErr) || strings.TrimSpace(apiErr.Code) != "-1" {
+		return false
+	}
+	message := strings.ToLower(strings.TrimSpace(apiErr.Message))
+	return strings.Contains(message, "unknown error") || strings.Contains(message, "retry later") || strings.Contains(message, "try again")
+}
+
+func isLegacyRetrySafeAction(action string) bool {
+	switch action {
+	case "Domain.List", "Record.List", "Record.Type", "Record.Line", "Record.Modify", "Record.Status":
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *LegacyClient) call(ctx context.Context, action string, values url.Values) (map[string]any, error) {
 	if c == nil || !ValidLegacyToken(c.apiToken) {
 		return nil, errors.New("DNSPod API Token 格式错误，应为 ID,Token")
@@ -100,6 +150,25 @@ func (c *LegacyClient) call(ctx context.Context, action string, values url.Value
 	values.Set("login_token", c.apiToken)
 	values.Set("format", "json")
 	values.Set("error_on_empty", "no")
+	for attempt := 0; ; attempt++ {
+		if err := waitLegacyRequestSlot(ctx); err != nil {
+			return nil, fmt.Errorf("等待 DNSPod 国际版请求限速失败：%w", err)
+		}
+		payload, err := c.callOnce(ctx, action, values)
+		if err == nil || !isLegacyRetrySafeAction(action) || !isTransientLegacyAPIError(err) || attempt >= len(c.retryDelays) {
+			return payload, err
+		}
+		timer := time.NewTimer(c.retryDelays[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, fmt.Errorf("重试 DNSPod 国际版请求失败：%w", ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func (c *LegacyClient) callOnce(ctx context.Context, action string, values url.Values) (map[string]any, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint+"/"+action, strings.NewReader(values.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("创建 DNSPod 国际版请求失败：%w", err)
