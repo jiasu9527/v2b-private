@@ -16,10 +16,10 @@ func TestDBServiceUpdateManagedServerReplacesEntryGroupBinding(t *testing.T) {
 
 	service := &DBService{db: db}
 
+	expectEnsureClientEntrySchema(mock)
 	mock.ExpectQuery(`SELECT 1 FROM "v2_server_vmess" WHERE id = \$1 LIMIT 1`).
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(int64(1)))
-	expectEnsureClientEntrySchema(mock)
 	mock.ExpectBegin()
 	mock.ExpectExec(`DELETE FROM v2_client_entry_group_member WHERE server_type = \$1 AND server_id = \$2`).
 		WithArgs("vmess", int64(9)).
@@ -55,10 +55,10 @@ func TestDBServiceUpdateManagedServerClearsEntryGroupBinding(t *testing.T) {
 
 	service := &DBService{db: db}
 
+	expectEnsureClientEntrySchema(mock)
 	mock.ExpectQuery(`SELECT 1 FROM "v2_server_vmess" WHERE id = \$1 LIMIT 1`).
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(int64(1)))
-	expectEnsureClientEntrySchema(mock)
 	mock.ExpectBegin()
 	mock.ExpectExec(`DELETE FROM v2_client_entry_group_member WHERE server_type = \$1 AND server_id = \$2`).
 		WithArgs("vmess", int64(9)).
@@ -84,5 +84,42 @@ func TestNormalizeManagedServerUpdatePayloadRejectsInvalidEntryGroup(t *testing.
 		"entry_group_id": "abc",
 	}); err == nil {
 		t.Fatalf("expected invalid entry group error")
+	}
+}
+
+func TestNormalizeManagedServerUpdatePayloadAcceptsClientEntryOnly(t *testing.T) {
+	values, err := normalizeManagedServerUpdatePayload(map[string]any{
+		"client_entry_only": int64(1),
+	})
+	if err != nil {
+		t.Fatalf("normalize client entry only: %v", err)
+	}
+	if values["client_entry_only"] != int64(1) {
+		t.Fatalf("unexpected client entry only value: %#v", values)
+	}
+}
+
+func TestNormalizeManagedServerUpdatePayloadRejectsInvalidClientEntryOnly(t *testing.T) {
+	for _, value := range []any{int64(-1), int64(2), "true", "1.5"} {
+		if _, err := normalizeManagedServerUpdatePayload(map[string]any{
+			"client_entry_only": value,
+		}); err == nil {
+			t.Fatalf("expected invalid client entry only error for %#v", value)
+		}
+	}
+}
+
+func TestManagedServerDefinitionsIncludeClientEntryOnly(t *testing.T) {
+	for serverType, definition := range managedServerDefinitions {
+		found := false
+		for _, column := range definition.columns {
+			if column == "client_entry_only" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%s definition does not persist client_entry_only", serverType)
+		}
 	}
 }

@@ -649,7 +649,13 @@ function SimulationModal({
       <Button type="primary" icon={<PlayCircleOutlined />} loading={running} onClick={run}>开始模拟</Button>
     </Form>
     {simulationError && <Alert type="error" showIcon message={simulationError} style={{ marginTop: 16 }} />}
-    {result === null && <Alert type="warning" showIcon message="没有命中任何启用规则，将使用节点默认地址。" style={{ marginTop: 16 }} />}
+    {result === null && <Alert
+      type="warning"
+      showIcon
+      message="没有命中任何启用规则"
+      description="普通节点将使用默认地址；标记为“仅入口分配”的节点不会下发。"
+      style={{ marginTop: 16 }}
+    />}
     {result && <Alert
       type={result.action === 'hide' ? 'warning' : 'success'}
       showIcon
@@ -817,6 +823,13 @@ export default function ClientEntryUserPolicyPage() {
   return <div className="legacy-page client-entry-page">
     <div className="content-heading">用户入口分配</div>
     <Spin spinning={loading}>
+      <Alert
+        className="client-entry-help"
+        type="info"
+        showIcon
+        message="仅入口分配节点的下发规则"
+        description="节点编辑中标记为“仅入口分配”的节点，请先保持节点“显示”为“显示”，然后只有命中已启用的“覆盖入口地址”规则才会下发；未命中或命中“不下发所选节点”规则的用户看不到该节点，节点权限组仍然生效。"
+      />
       <Card className="block-card" styles={{ body: { padding: 0 } }}>
         <div className="forest-table-action">
           <Space wrap>

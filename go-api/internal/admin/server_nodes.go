@@ -38,7 +38,7 @@ var managedServerDefinitions = map[string]managedServerDefinition{
 		columns: []string{
 			"group_id", "route_id", "name", "parent_id", "host", "port", "server_port",
 			"tls", "tags", "rate", "network", "rules", "networkSettings", "tlsSettings",
-			"ruleSettings", "dnsSettings", "show", "sort", "created_at", "updated_at",
+			"ruleSettings", "dnsSettings", "show", "client_entry_only", "sort", "created_at", "updated_at",
 		},
 	},
 	"trojan": {
@@ -46,14 +46,14 @@ var managedServerDefinitions = map[string]managedServerDefinition{
 		columns: []string{
 			"group_id", "route_id", "parent_id", "tags", "name", "rate", "host", "port",
 			"server_port", "network", "network_settings", "allow_insecure", "server_name",
-			"show", "sort", "created_at", "updated_at",
+			"show", "client_entry_only", "sort", "created_at", "updated_at",
 		},
 	},
 	"shadowsocks": {
 		table: "v2_server_shadowsocks",
 		columns: []string{
 			"group_id", "route_id", "parent_id", "tags", "name", "rate", "host", "port",
-			"server_port", "cipher", "obfs", "obfs_settings", "show", "sort", "created_at",
+			"server_port", "cipher", "obfs", "obfs_settings", "show", "client_entry_only", "sort", "created_at",
 			"updated_at",
 		},
 	},
@@ -61,7 +61,7 @@ var managedServerDefinitions = map[string]managedServerDefinition{
 		table: "v2_server_tuic",
 		columns: []string{
 			"group_id", "route_id", "name", "parent_id", "host", "port", "server_port",
-			"tags", "rate", "show", "sort", "server_name", "insecure", "disable_sni",
+			"tags", "rate", "show", "client_entry_only", "sort", "server_name", "insecure", "disable_sni",
 			"udp_relay_mode", "zero_rtt_handshake", "congestion_control", "created_at",
 			"updated_at",
 		},
@@ -70,7 +70,7 @@ var managedServerDefinitions = map[string]managedServerDefinition{
 		table: "v2_server_hysteria",
 		columns: []string{
 			"version", "group_id", "route_id", "name", "parent_id", "host", "port",
-			"server_port", "tags", "rate", "show", "sort", "up_mbps", "down_mbps",
+			"server_port", "tags", "rate", "show", "client_entry_only", "sort", "up_mbps", "down_mbps",
 			"obfs", "obfs_password", "server_name", "insecure", "created_at", "updated_at",
 		},
 	},
@@ -79,14 +79,14 @@ var managedServerDefinitions = map[string]managedServerDefinition{
 		columns: []string{
 			"group_id", "route_id", "name", "parent_id", "host", "port", "server_port",
 			"tls", "tls_settings", "flow", "network", "network_settings", "encryption",
-			"encryption_settings", "tags", "rate", "show", "sort", "created_at", "updated_at",
+			"encryption_settings", "tags", "rate", "show", "client_entry_only", "sort", "created_at", "updated_at",
 		},
 	},
 	"anytls": {
 		table: "v2_server_anytls",
 		columns: []string{
 			"group_id", "route_id", "name", "parent_id", "host", "port", "server_port",
-			"tags", "rate", "show", "sort", "server_name", "insecure", "padding_scheme",
+			"tags", "rate", "show", "client_entry_only", "sort", "server_name", "insecure", "padding_scheme",
 			"created_at", "updated_at",
 		},
 	},
@@ -94,7 +94,7 @@ var managedServerDefinitions = map[string]managedServerDefinition{
 		table: "v2_server_v2node",
 		columns: []string{
 			"group_id", "route_id", "name", "parent_id", "host", "listen_ip", "send_through", "port",
-			"server_port", "tags", "rate", "show", "sort", "protocol", "tls",
+			"server_port", "tags", "rate", "show", "client_entry_only", "sort", "protocol", "tls",
 			"tls_settings", "flow", "network", "network_settings", "encryption",
 			"encryption_settings", "disable_sni", "udp_relay_mode", "zero_rtt_handshake",
 			"congestion_control", "cipher", "up_mbps", "down_mbps", "obfs", "obfs_password",
@@ -106,6 +106,9 @@ var managedServerDefinitions = map[string]managedServerDefinition{
 func (s *DBService) SaveManagedServer(ctx context.Context, serverType string, payload map[string]any) (bool, error) {
 	if s.db == nil {
 		return false, ErrUnavailable
+	}
+	if err := s.ensureClientEntrySchema(ctx); err != nil {
+		return false, err
 	}
 
 	def, ok := managedServerDefinitions[strings.TrimSpace(serverType)]
@@ -193,6 +196,9 @@ func (s *DBService) UpdateManagedServer(ctx context.Context, serverType string, 
 	if s.db == nil {
 		return false, ErrUnavailable
 	}
+	if err := s.ensureClientEntrySchema(ctx); err != nil {
+		return false, err
+	}
 
 	def, ok := managedServerDefinitions[strings.TrimSpace(serverType)]
 	if !ok {
@@ -231,6 +237,9 @@ func (s *DBService) UpdateManagedServer(ctx context.Context, serverType string, 
 func (s *DBService) CopyManagedServer(ctx context.Context, serverType string, id int64) (bool, error) {
 	if s.db == nil {
 		return false, ErrUnavailable
+	}
+	if err := s.ensureClientEntrySchema(ctx); err != nil {
+		return false, err
 	}
 
 	def, ok := managedServerDefinitions[strings.TrimSpace(serverType)]
@@ -342,6 +351,11 @@ func normalizeManagedServerUpdatePayload(payload map[string]any) (map[string]any
 	}
 	if present {
 		values["show"] = show
+	}
+	if entryOnly, present, err := optionalAllowedIntField(payload, "client_entry_only", []int64{0, 1}, "入口分配可见性格式不正确"); err != nil {
+		return nil, err
+	} else if present {
+		values["client_entry_only"] = entryOnly
 	}
 	if entryGroupID, present, err := optionalManagedServerEntryGroupField(payload, "entry_group_id", "入口组格式不正确"); err != nil {
 		return nil, err
@@ -521,6 +535,13 @@ func normalizeManagedServerCommon(payload map[string]any, values map[string]any,
 		values["show"] = show
 	} else if !hasID {
 		values["show"] = int64(0)
+	}
+	if entryOnly, present, err := optionalAllowedIntField(payload, "client_entry_only", []int64{0, 1}, "入口分配可见性格式不正确"); err != nil {
+		return "", err
+	} else if present {
+		values["client_entry_only"] = entryOnly
+	} else if !hasID {
+		values["client_entry_only"] = int64(0)
 	}
 
 	if sortValue, present, err := optionalIntField(payload, "sort", "排序格式不正确"); err != nil {

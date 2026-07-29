@@ -89,18 +89,22 @@ func clientEntryPolicyHasMember(values []ClientEntryGroupMember, target ClientEn
 }
 
 // applyClientEntryUserPolicies preserves the permission-filtered server set,
-// then resolves each remaining node against the first matching rule.  A hide
-// rule removes only the selected node; a rule never grants access to a node
-// that was filtered by its group_id earlier in Servers.
+// then resolves each remaining node against the first matching rule. A node
+// marked client_entry_only is denied by default and is retained only by a
+// matching override rule. A rule never grants access to a node that was
+// filtered by its group_id earlier in Servers.
 func applyClientEntryUserPolicies(servers []map[string]any, subject cliententry.Subject, policies []clientEntryUserPolicy) []map[string]any {
-	if len(servers) == 0 || len(policies) == 0 {
+	if len(servers) == 0 {
 		return servers
 	}
 	result := make([]map[string]any, 0, len(servers))
 	for _, server := range servers {
 		serverType := strings.ToLower(strings.TrimSpace(fmt.Sprint(server["type"])))
 		serverID := mapInt64(server["id"])
+		entryOnly := mapInt64(server["client_entry_only"]) != 0
+		delete(server, "client_entry_only")
 		hide := false
+		granted := !entryOnly
 		for _, policy := range policies {
 			if !clientEntryPolicyHasMember(policy.Members, ClientEntryGroupMember{ServerType: serverType, ServerID: serverID}) {
 				continue
@@ -112,12 +116,13 @@ func applyClientEntryUserPolicies(servers []map[string]any, subject cliententry.
 				hide = true
 				break
 			}
+			granted = true
 			server["host"] = policy.EntryHost
 			server["client_entry_user_policy"] = 1
 			server["client_entry_user_policy_id"] = policy.ID
 			break
 		}
-		if hide {
+		if hide || !granted {
 			continue
 		}
 		result = append(result, server)

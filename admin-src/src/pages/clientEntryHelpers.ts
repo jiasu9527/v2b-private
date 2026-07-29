@@ -31,7 +31,8 @@ function nodeLabel(row: any) {
   const host = String(row?.host || '').trim();
   const port = String(row?.port || row?.server_port || '').trim();
   const endpoint = host ? `${host}${port ? `:${port}` : ''}` : '';
-  return [name, type && `/${type}`, id && `#${id}`, endpoint && `(${endpoint})`].filter(Boolean).join(' ');
+  const entryOnly = Number(row?.client_entry_only || 0) !== 0 ? '[仅入口分配]' : '';
+  return [entryOnly, name, type && `/${type}`, id && `#${id}`, endpoint && `(${endpoint})`].filter(Boolean).join(' ');
 }
 
 export function buildVisibleServerOptions(nodes: any[]) {

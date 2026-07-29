@@ -47,6 +47,58 @@ func TestInstallPostgresPlanTransferEnableUsesBigint(t *testing.T) {
 	}
 }
 
+func TestInstallPostgresManagedServersIncludeClientEntryOnly(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(repoRootFromTestFile(t), "database", "install.pgsql.sql")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	for _, table := range []string{
+		"v2_server_shadowsocks",
+		"v2_server_vmess",
+		"v2_server_vless",
+		"v2_server_trojan",
+		"v2_server_tuic",
+		"v2_server_hysteria",
+		"v2_server_anytls",
+		"v2_server_v2node",
+	} {
+		pattern := regexp.MustCompile(`(?m)^CREATE TABLE "` + regexp.QuoteMeta(table) + `" .*"client_entry_only" SMALLINT NOT NULL DEFAULT '0'`)
+		if !pattern.Match(raw) {
+			t.Errorf("%s should create %s.client_entry_only with a safe disabled default", path, table)
+		}
+	}
+}
+
+func TestUpdatePostgresManagedServersIncludeClientEntryOnly(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(repoRootFromTestFile(t), "database", "update.pgsql.sql")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	for _, table := range []string{
+		"v2_server_shadowsocks",
+		"v2_server_vmess",
+		"v2_server_vless",
+		"v2_server_trojan",
+		"v2_server_tuic",
+		"v2_server_hysteria",
+		"v2_server_anytls",
+		"v2_server_v2node",
+	} {
+		pattern := regexp.MustCompile(`(?m)^ALTER TABLE "` + regexp.QuoteMeta(table) + `" ADD COLUMN IF NOT EXISTS "client_entry_only" SMALLINT NOT NULL DEFAULT 0;`)
+		if !pattern.Match(raw) {
+			t.Errorf("%s should add %s.client_entry_only with a safe disabled default", path, table)
+		}
+	}
+}
+
 func TestUpdatePostgresSQLAvoidsLegacyMigrationChain(t *testing.T) {
 	t.Parallel()
 

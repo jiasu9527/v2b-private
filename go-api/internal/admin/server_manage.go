@@ -29,6 +29,9 @@ func (s *DBService) ListManagedServers(ctx context.Context) ([]map[string]any, e
 	if s.db == nil {
 		return nil, ErrUnavailable
 	}
+	if err := s.ensureClientEntrySchema(ctx); err != nil {
+		return nil, err
+	}
 
 	result := make([]map[string]any, 0)
 	for serverType, table := range managedServerTypeTable {

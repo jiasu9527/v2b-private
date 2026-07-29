@@ -36,6 +36,14 @@ func expectEnsureClientEntrySchema(mock sqlmock.Sqlmock) {
 		{"v2_client_entry_user_policy", "action"},
 		{"v2_client_entry_user_policy", "conditions"},
 		{"v2_client_entry_user_policy", "entry_host"},
+		{"v2_server_shadowsocks", "client_entry_only"},
+		{"v2_server_vmess", "client_entry_only"},
+		{"v2_server_vless", "client_entry_only"},
+		{"v2_server_trojan", "client_entry_only"},
+		{"v2_server_tuic", "client_entry_only"},
+		{"v2_server_hysteria", "client_entry_only"},
+		{"v2_server_anytls", "client_entry_only"},
+		{"v2_server_v2node", "client_entry_only"},
 	} {
 		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
 			WithArgs(item.table, item.column).
