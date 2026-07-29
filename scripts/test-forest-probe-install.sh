@@ -42,7 +42,11 @@ if rg -F 'https://panel.example.com/probe/download/' "${TMP_DIR}/log" >/dev/null
 fi
 rg -F 'ExecStart=/usr/local/bin/forest-probe -config /etc/forest-probe/config.json' "${TMP_DIR}/etc/systemd/system/forest-probe.service" >/dev/null
 [[ "$(rg -c 'daemon-reload' "${TMP_DIR}/log")" == 2 ]]
-[[ "$(rg -c 'enable --now forest-probe.service' "${TMP_DIR}/log")" == 2 ]]
+[[ "$(rg -c '^enable forest-probe.service$' "${TMP_DIR}/log")" == 2 ]]
+[[ "$(rg -c '^restart forest-probe.service$' "${TMP_DIR}/log")" == 2 ]]
+if rg -F 'enable --now forest-probe.service' "${TMP_DIR}/log" >/dev/null; then
+  echo 'installer must restart an already-running probe' >&2; exit 1
+fi
 if PATH="${TMP_DIR}/bin:${PATH}" API_URL='file:///tmp/nope' TOKEN='bad token' bash "${ROOT_DIR}/scripts/forest-probe-install.sh" >/dev/null 2>&1; then
   echo 'unsafe API URL/token unexpectedly accepted' >&2; exit 1
 fi

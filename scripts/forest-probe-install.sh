@@ -54,4 +54,8 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
-systemctl enable --now forest-probe.service
+systemctl enable forest-probe.service
+# `enable --now` does not restart an already-running service after its binary
+# is replaced. Restart guarantees that updates immediately run the new binary;
+# it also starts the unit when it was previously inactive.
+systemctl restart forest-probe.service

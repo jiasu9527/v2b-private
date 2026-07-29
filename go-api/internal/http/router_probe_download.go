@@ -118,5 +118,6 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
-systemctl enable --now forest-probe.service
+systemctl enable forest-probe.service
+systemctl restart forest-probe.service
 `

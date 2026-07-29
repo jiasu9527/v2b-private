@@ -32,6 +32,14 @@ func TestRouterProbeInstallRendersValidatedScript(t *testing.T) {
 			t.Fatalf("script missing %q: %s", want, body)
 		}
 	}
+	for _, want := range []string{"systemctl enable forest-probe.service", "systemctl restart forest-probe.service"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("script missing update activation command %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "systemctl enable --now forest-probe.service") {
+		t.Fatalf("installer would leave an already-running probe on the old binary: %s", body)
+	}
 	if strings.Contains(body, "internal-upstream.example") {
 		t.Fatalf("script leaked reverse-proxy upstream host into DOWNLOAD_BASE: %s", body)
 	}
