@@ -421,20 +421,24 @@ func TestClientEntryMonitorRunReportSummarizesAndCapsResults(t *testing.T) {
 	results := make([]ClientEntryMonitorRunResult, 55)
 	for index := range results {
 		results[index] = ClientEntryMonitorRunResult{
+			TargetID:   7,
 			TargetName: "节点", Host: "entry.example.com", Port: 443,
-			ProbeName: "探针", Success: index < 40, ReportedAt: 1,
+			ProbeID: 8, ProbeName: "探针", Success: index < 40, ReportedAt: 1,
 		}
 	}
 	report := formatClientEntryMonitorRunReport(ClientEntryMonitorRun{
 		ID: 9, Status: "timeout", ExpectedResults: 60, ReceivedResults: 55, Results: results,
 	})
-	for _, want := range []string{"正常：40", "异常：15", "未返回：5", "共 55 条结果，其余请在后台查看。"} {
+	for _, want := range []string{"目标：1", "探针：1", "正常：40", "异常：15", "未返回：5", "失败 15/55", "×15"} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q: %s", want, report)
 		}
 	}
-	if got := strings.Count(report, "\n节点 ·"); got != 50 {
-		t.Fatalf("visible result lines = %d, want 50", got)
+	if got := strings.Count(report, "\n• 节点 ·"); got != 1 {
+		t.Fatalf("aggregated target lines = %d, want 1", got)
+	}
+	if got := strings.Count(report, "上报："); got != 1 {
+		t.Fatalf("reported timestamp count = %d, want one summary timestamp: %s", got, report)
 	}
 }
 

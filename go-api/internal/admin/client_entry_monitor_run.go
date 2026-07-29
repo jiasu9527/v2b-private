@@ -342,7 +342,7 @@ ORDER BY id DESC LIMIT $2`, time.Now().Add(-clientEntryMonitorRetention).Unix(),
 	SELECT result.id, result.run_id, result.target_id,
 	result.target_name, result.host, result.port, result.probe_id, result.probe_name, result.success,
 	result.latency_ms, result.error, result.resolved_ip, result.reported_at,
-	ROW_NUMBER() OVER (PARTITION BY result.run_id ORDER BY result.target_id, result.probe_id) AS result_rank
+	ROW_NUMBER() OVER (PARTITION BY result.run_id ORDER BY result.success ASC, result.target_id, result.probe_id) AS result_rank
 	FROM v2_client_entry_monitor_run_result result
 	WHERE result.run_id IN (`+strings.Join(placeholders, ",")+`)
 )
@@ -350,7 +350,7 @@ ORDER BY id DESC LIMIT $2`, time.Now().Add(-clientEntryMonitorRetention).Unix(),
 	latency_ms, error, resolved_ip, reported_at
 	FROM ranked_results
 	WHERE result_rank <= `+resultLimitPlaceholder+`
-	ORDER BY run_id DESC, target_id, probe_id`, args...)
+	ORDER BY run_id DESC, success ASC, target_id, probe_id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query client entry monitor run results: %w", err)
 	}
@@ -401,109 +401,5 @@ func (s *DBService) RecentClientEntryMonitorReport(ctx context.Context) (string,
 	if err != nil {
 		return "", err
 	}
-	var builder strings.Builder
-	builder.WriteString("用户入口检测近期状态\n")
-	count := 0
-	for _, monitor := range overview.Items {
-		for _, target := range monitor.Targets {
-			for _, state := range target.States {
-				if count >= 50 {
-					builder.WriteString("\n结果较多，其余请在后台查看。")
-					return builder.String(), nil
-				}
-				status := "未检测"
-				if state.Stale {
-					status = "已过期"
-				} else if state.LastSuccess != nil && *state.LastSuccess {
-					status = "正常"
-				} else if state.LastSuccess != nil {
-					status = "异常"
-				}
-				reportedAt := "无上报时间"
-				if state.LastReportedAt != nil {
-					reportedAt = formatClientEntryMonitorReportedAt(*state.LastReportedAt)
-				}
-				fmt.Fprintf(&builder, "\n%s · %s:%d · %s · %s · 上报：%s", monitor.PolicyName, target.Host, target.Port, state.ProbeName, status, reportedAt)
-				count++
-			}
-		}
-	}
-	if count == 0 {
-		builder.WriteString("\n暂无检测结果。")
-	}
-	return builder.String(), nil
-}
-
-func formatClientEntryMonitorRunReport(run ClientEntryMonitorRun) string {
-	var builder strings.Builder
-	totalResults := run.TotalResults
-	if totalResults < run.ReceivedResults {
-		totalResults = run.ReceivedResults
-	}
-	if totalResults < int64(len(run.Results)) {
-		totalResults = int64(len(run.Results))
-	}
-	normal, abnormal := 0, 0
-	for _, result := range run.Results {
-		if result.Success {
-			normal++
-		} else {
-			abnormal++
-		}
-	}
-	missing := run.ExpectedResults - run.ReceivedResults
-	if missing < 0 {
-		missing = 0
-	}
-	resultSummary := fmt.Sprintf("正常：%d · 异常：%d · 未返回：%d", normal, abnormal, missing)
-	if run.ResultsTruncated {
-		resultSummary = fmt.Sprintf("前 %d 条结果：%s", len(run.Results), resultSummary)
-	}
-	fmt.Fprintf(&builder, "用户入口一键检测 #%d\n状态：%s\n进度：%d/%d\n%s",
-		run.ID, clientEntryMonitorRunStatusText(run.Status), run.ReceivedResults, run.ExpectedResults, resultSummary)
-	const resultLimit = 50
-	visibleResults := run.Results
-	if len(visibleResults) > resultLimit {
-		visibleResults = visibleResults[:resultLimit]
-	}
-	for _, result := range visibleResults {
-		status := "异常"
-		detail := strings.TrimSpace(result.Error)
-		if result.Success {
-			status = "正常"
-			if result.LatencyMS != nil {
-				detail = fmt.Sprintf("%d ms", *result.LatencyMS)
-			}
-		}
-		if detail == "" {
-			detail = "无详情"
-		}
-		fmt.Fprintf(&builder, "\n%s · %s:%d · %s · %s（%s） · 上报：%s", result.TargetName, result.Host, result.Port, result.ProbeName, status, detail, formatClientEntryMonitorReportedAt(result.ReportedAt))
-	}
-	if len(run.Results) == 0 {
-		builder.WriteString("\n暂无可用检测结果。")
-	} else if totalResults > int64(len(visibleResults)) {
-		fmt.Fprintf(&builder, "\n共 %d 条结果，其余请在后台查看。", totalResults)
-	}
-	return builder.String()
-}
-
-func formatClientEntryMonitorReportedAt(value int64) string {
-	if value <= 0 {
-		return "未知"
-	}
-	return time.Unix(value, 0).Format("2006-01-02 15:04:05 MST")
-}
-
-func clientEntryMonitorRunStatusText(status string) string {
-	switch status {
-	case "running":
-		return "检测中"
-	case "completed":
-		return "已完成"
-	case "timeout":
-		return "已超时"
-	default:
-		return status
-	}
+	return formatClientEntryMonitorOverviewReport(overview), nil
 }

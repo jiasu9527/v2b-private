@@ -1,11 +1,13 @@
 package telegram
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -27,6 +29,10 @@ type ticketReplyService interface {
 type EntryMonitorController interface {
 	StartClientEntryMonitorRun(ctx context.Context, userID, chatID int64, requestKey string) (runID int64, err error)
 	RecentClientEntryMonitorReport(ctx context.Context) (string, error)
+}
+
+type EntryMonitorImageController interface {
+	RecentClientEntryMonitorReportImage(ctx context.Context) ([]byte, string, error)
 }
 
 var ErrDirectNotifierUnavailable = errors.New("telegram direct notifier unavailable")
@@ -51,6 +57,7 @@ type Service struct {
 	entryMonitor      EntryMonitorController
 	sendMessage       func(ctx context.Context, chatID int64, text string) error
 	sendMessageMarkup func(ctx context.Context, chatID int64, text string, replyMarkup any) error
+	sendPhoto         func(ctx context.Context, chatID int64, photo []byte, caption string, replyMarkup any) error
 	answerCallback    func(ctx context.Context, callbackQueryID, text string, showAlert bool) error
 	approveJoin       func(ctx context.Context, chatID, userID int64) error
 	declineJoin       func(ctx context.Context, chatID, userID int64) error
@@ -65,6 +72,7 @@ func NewService(cfg config.Config, db *sql.DB) *Service {
 	svc.resolveRecipients = svc.lookupRecipients
 	svc.sendMessage = svc.sendMessageNow
 	svc.sendMessageMarkup = svc.sendMessageWithMarkupNow
+	svc.sendPhoto = svc.sendPhotoWithMarkupNow
 	svc.answerCallback = svc.answerCallbackQueryNow
 	svc.approveJoin = svc.approveJoinNow
 	svc.declineJoin = svc.declineJoinNow
@@ -168,6 +176,27 @@ func (n *DirectNotifier) NotifyChat(ctx context.Context, chatID int64, message s
 	return nil
 }
 
+func (n *DirectNotifier) NotifyChatImage(ctx context.Context, chatID int64, photo []byte, caption string) error {
+	if n == nil || n.service == nil {
+		return ErrDirectNotifierUnavailable
+	}
+	s := n.service
+	cfg := s.currentConfig()
+	if !cfg.TelegramBotEnable || strings.TrimSpace(cfg.TelegramBotToken) == "" {
+		return ErrDirectNotifierUnavailable
+	}
+	if len(photo) == 0 {
+		return errors.New("telegram image is empty")
+	}
+	if s.sendPhoto == nil {
+		return ErrDirectNotifierUnavailable
+	}
+	if err := s.sendPhoto(ctx, chatID, photo, caption, nil); err != nil {
+		return fmt.Errorf("send direct telegram image to %d: %w", chatID, err)
+	}
+	return nil
+}
+
 func (s *Service) currentConfig() config.Config {
 	if s == nil {
 		return config.Config{}
@@ -264,6 +293,50 @@ func (s *Service) sendMessageWithMarkupNow(ctx context.Context, chatID int64, te
 	return s.postForm(ctx, "sendMessage", values)
 }
 
+func (s *Service) sendPhotoWithMarkupNow(ctx context.Context, chatID int64, photo []byte, caption string, replyMarkup any) error {
+	if len(photo) == 0 {
+		return errors.New("telegram image is empty")
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("chat_id", strconv.FormatInt(chatID, 10)); err != nil {
+		return fmt.Errorf("encode telegram photo chat id: %w", err)
+	}
+	if caption = truncateTelegramCaptionText(telegramPlainText(caption)); caption != "" {
+		if err := writer.WriteField("caption", caption); err != nil {
+			return fmt.Errorf("encode telegram photo caption: %w", err)
+		}
+	}
+	if replyMarkup != nil {
+		encoded, err := json.Marshal(replyMarkup)
+		if err != nil {
+			return fmt.Errorf("encode telegram photo reply markup: %w", err)
+		}
+		if err := writer.WriteField("reply_markup", string(encoded)); err != nil {
+			return fmt.Errorf("encode telegram photo reply markup field: %w", err)
+		}
+	}
+	part, err := writer.CreateFormFile("photo", "entry-monitor.png")
+	if err != nil {
+		return fmt.Errorf("create telegram photo form: %w", err)
+	}
+	if _, err := part.Write(photo); err != nil {
+		return fmt.Errorf("write telegram photo form: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("close telegram photo form: %w", err)
+	}
+
+	token := strings.TrimSpace(s.currentConfig().TelegramBotToken)
+	endpoint := "https://api.telegram.org/bot" + token + "/sendPhoto"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &body)
+	if err != nil {
+		return fmt.Errorf("build telegram photo request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	return s.doTelegramRequest(req)
+}
+
 func (s *Service) answerCallbackQueryNow(ctx context.Context, callbackQueryID, text string, showAlert bool) error {
 	values := url.Values{}
 	values.Set("callback_query_id", strings.TrimSpace(callbackQueryID))
@@ -333,6 +406,16 @@ func splitTelegramMessage(message string) []string {
 	return chunks
 }
 
+func truncateTelegramCaptionText(value string) string {
+	value = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(value, "\r\n", "\n"), "\r", "\n"))
+	const limit = 1024
+	if len([]rune(value)) <= limit {
+		return value
+	}
+	runes := []rune(value)
+	return strings.TrimSpace(string(runes[:limit-20])) + "\n…其余详情请查看后台。"
+}
+
 func (s *Service) approveJoinNow(ctx context.Context, chatID, userID int64) error {
 	values := url.Values{}
 	values.Set("chat_id", strconv.FormatInt(chatID, 10))
@@ -360,7 +443,10 @@ func (s *Service) postForm(ctx context.Context, method string, values url.Values
 		return fmt.Errorf("build telegram request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return s.doTelegramRequest(req)
+}
 
+func (s *Service) doTelegramRequest(req *http.Request) error {
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("send telegram request: %w", err)

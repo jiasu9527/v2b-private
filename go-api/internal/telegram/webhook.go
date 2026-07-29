@@ -196,6 +196,15 @@ func (s *Service) handleMonitorAction(ctx context.Context, telegramID, chatID in
 		message := "🚀 检测任务已启动\n完成后，结果会自动发送到当前 Telegram。"
 		return s.sendMessage(ctx, chatID, message)
 	case clientEntryMonitorRecentCallback:
+		if imageController, ok := s.entryMonitor.(EntryMonitorImageController); ok && s.sendPhoto != nil {
+			imageBytes, caption, renderErr := imageController.RecentClientEntryMonitorReportImage(ctx)
+			if renderErr == nil && len(imageBytes) > 0 {
+				if err := s.sendPhoto(ctx, chatID, imageBytes, caption, entryMonitorInlineKeyboard()); err != nil {
+					return fmt.Errorf("send recent client entry monitor image: %w", err)
+				}
+				return nil
+			}
+		}
 		report, err := s.entryMonitor.RecentClientEntryMonitorReport(ctx)
 		if err != nil {
 			return s.sendMessage(ctx, chatID, "❌ 获取近期检测结果失败\n原因："+err.Error())

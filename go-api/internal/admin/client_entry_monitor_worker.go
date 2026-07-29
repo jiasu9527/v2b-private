@@ -14,6 +14,10 @@ type clientEntryMonitorChatNotifier interface {
 	NotifyChat(context.Context, int64, string) error
 }
 
+type clientEntryMonitorImageNotifier interface {
+	NotifyChatImage(context.Context, int64, []byte, string) error
+}
+
 type clientEntryMonitorEventNotifier interface {
 	ListAdminChats(context.Context, bool) ([]int64, error)
 	NotifyChat(context.Context, int64, string) error
@@ -116,6 +120,15 @@ SET notify_attempts = notify_attempts + 1, notify_next_attempt_at = $2 WHERE id 
 		return true, nil
 	}
 	chatIDs = uniquePositiveClientEntryMonitorChatIDs(chatIDs)
+	imageNotifier, imageCapable := notifier.(clientEntryMonitorImageNotifier)
+	var imageBytes []byte
+	var imageCaption string
+	if imageCapable {
+		imageBytes, imageCaption, err = renderClientEntryMonitorEventImage(message)
+		if err != nil {
+			imageCapable = false
+		}
+	}
 	deliveries, err := syncClientEntryMonitorEventDeliveries(ctx, conn, eventID, chatIDs, time.Now().Unix())
 	if err != nil {
 		return false, err
@@ -144,7 +157,12 @@ WHERE event_id = $1 AND chat_id = $2 AND delivered_at IS NULL`, eventID, chatID,
 			saturatingUnixAdd(now, dnsFailoverNotificationLease), now); err != nil {
 			return false, fmt.Errorf("claim client entry monitor event recipient: %w", err)
 		}
-		notifyErr := notifier.NotifyChat(ctx, chatID, message)
+		var notifyErr error
+		if imageCapable {
+			notifyErr = imageNotifier.NotifyChatImage(ctx, chatID, imageBytes, imageCaption)
+		} else {
+			notifyErr = notifier.NotifyChat(ctx, chatID, message)
+		}
 		finishedAt := time.Now().Unix()
 		if notifyErr != nil {
 			next := saturatingUnixAdd(finishedAt, dnsFailoverRetryDelay(delivery.Attempts))
@@ -323,7 +341,17 @@ ORDER BY id ASC LIMIT 1
 	}
 	notifyErr := ErrDNSFailoverNotifierUnavailable
 	if notifier, ok := s.dnsFailoverNotifier.(clientEntryMonitorChatNotifier); ok {
-		notifyErr = notifier.NotifyChat(ctx, chatID, formatClientEntryMonitorRunReport(run))
+		message := formatClientEntryMonitorRunReport(run)
+		if imageNotifier, imageCapable := notifier.(clientEntryMonitorImageNotifier); imageCapable {
+			imageBytes, imageCaption, renderErr := renderClientEntryMonitorRunImage(run)
+			if renderErr == nil {
+				notifyErr = imageNotifier.NotifyChatImage(ctx, chatID, imageBytes, imageCaption)
+			} else {
+				notifyErr = notifier.NotifyChat(ctx, chatID, message)
+			}
+		} else {
+			notifyErr = notifier.NotifyChat(ctx, chatID, message)
+		}
 	}
 	if notifyErr != nil {
 		next := saturatingUnixAdd(time.Now().Unix(), dnsFailoverRetryDelay(attempts))
@@ -378,7 +406,7 @@ result.host, result.port, result.probe_id, result.probe_name, result.success,
 result.latency_ms, result.error, result.resolved_ip, result.reported_at
 	FROM v2_client_entry_monitor_run_result result
 	WHERE result.run_id = $1
-	ORDER BY result.target_id, result.probe_id
+	ORDER BY result.success ASC, result.target_id, result.probe_id
 	LIMIT $2`, runID, clientEntryMonitorRunResultListLimit)
 	if err != nil {
 		return run, fmt.Errorf("load client entry monitor run results: %w", err)

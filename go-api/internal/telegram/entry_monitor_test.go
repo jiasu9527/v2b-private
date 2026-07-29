@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -16,8 +17,9 @@ import (
 )
 
 type fakeEntryMonitorController struct {
-	start  func(context.Context, int64, int64, string) (int64, error)
-	recent func(context.Context) (string, error)
+	start       func(context.Context, int64, int64, string) (int64, error)
+	recent      func(context.Context) (string, error)
+	recentImage func(context.Context) ([]byte, string, error)
 }
 
 const telegramOperatorQueryPattern = `(?s)SELECT id.*FROM v2_user.*WHERE telegram_id = \$1 AND banned = 0 AND \(is_admin = 1 OR is_staff = 1\).*ORDER BY id ASC.*LIMIT 1`
@@ -34,6 +36,13 @@ func (f *fakeEntryMonitorController) RecentClientEntryMonitorReport(ctx context.
 		return "", nil
 	}
 	return f.recent(ctx)
+}
+
+func (f *fakeEntryMonitorController) RecentClientEntryMonitorReportImage(ctx context.Context) ([]byte, string, error) {
+	if f == nil || f.recentImage == nil {
+		return nil, "", nil
+	}
+	return f.recentImage(ctx)
 }
 
 type telegramRoundTripFunc func(*http.Request) (*http.Response, error)
@@ -265,6 +274,65 @@ func TestMonitorRecentCallbackAcknowledgesAndSplitsReport(t *testing.T) {
 	}
 	if len(chunks) != 2 || len([]rune(chunks[0])) > telegramMessageLimit || strings.Join(chunks, "") != plainReport {
 		t.Fatalf("report chunks = lengths %v, joined matches = %v", runeLengths(chunks), strings.Join(chunks, "") == plainReport)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestMonitorRecentCallbackSendsImageWithInlineKeyboard(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	photo := []byte{0x89, 'P', 'N', 'G'}
+	acknowledged := false
+	controller := &fakeEntryMonitorController{recentImage: func(context.Context) ([]byte, string, error) {
+		if !acknowledged {
+			t.Fatal("callback must be acknowledged before rendering an image")
+		}
+		return photo, "近期入口检测", nil
+	}, recent: func(context.Context) (string, error) {
+		t.Fatal("text report must not be loaded when image rendering succeeds")
+		return "", nil
+	}}
+	svc := NewService(config.Config{}, db).WithEntryMonitorController(controller)
+	svc.answerCallback = func(_ context.Context, callbackID, text string, showAlert bool) error {
+		if callbackID != "callback-image" || text != "" || showAlert {
+			t.Fatalf("callback answer = id %q text %q alert %v", callbackID, text, showAlert)
+		}
+		acknowledged = true
+		return nil
+	}
+	sent := false
+	svc.sendPhoto = func(_ context.Context, chatID int64, gotPhoto []byte, caption string, markup any) error {
+		if chatID != 123 {
+			t.Fatalf("chatID = %d", chatID)
+		}
+		if !bytes.Equal(gotPhoto, photo) || caption != "近期入口检测" {
+			t.Fatalf("photo delivery = %x caption %q", gotPhoto, caption)
+		}
+		if mustJSON(t, markup) != mustJSON(t, entryMonitorInlineKeyboard()) {
+			t.Fatalf("inline markup = %s", mustJSON(t, markup))
+		}
+		sent = true
+		return nil
+	}
+	svc.sendMessage = func(context.Context, int64, string) error {
+		t.Fatal("successful image delivery must not send a text fallback")
+		return nil
+	}
+	mock.ExpectQuery(telegramOperatorQueryPattern).
+		WithArgs(int64(123)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+
+	if err := svc.HandleWebhook(context.Background(), monitorCallbackPayload("callback-image", clientEntryMonitorRecentCallback, 123)); err != nil {
+		t.Fatalf("HandleWebhook: %v", err)
+	}
+	if !sent {
+		t.Fatal("recent image was not sent")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
@@ -650,6 +718,77 @@ func TestTelegramSendMessageEncodesInlineKeyboardMarkup(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("telegram API was not called")
+	}
+}
+
+func TestTelegramSendPhotoEncodesMultipartPayload(t *testing.T) {
+	svc := NewService(config.Config{TelegramBotToken: "bot-token"}, nil)
+	wantPhoto := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a}
+	called := false
+	svc.client = &http.Client{Transport: telegramRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		called = true
+		if request.Method != http.MethodPost || request.URL.Path != "/botbot-token/sendPhoto" {
+			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
+		}
+		if !strings.HasPrefix(request.Header.Get("Content-Type"), "multipart/form-data;") {
+			t.Fatalf("content type = %q", request.Header.Get("Content-Type"))
+		}
+		if err := request.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatalf("ParseMultipartForm: %v", err)
+		}
+		if request.FormValue("chat_id") != "123" || request.FormValue("caption") != "入口检测" {
+			t.Fatalf("form values = %#v", request.Form)
+		}
+		var markup inlineKeyboardMarkup
+		if err := json.Unmarshal([]byte(request.FormValue("reply_markup")), &markup); err != nil {
+			t.Fatalf("decode reply_markup: %v", err)
+		}
+		if mustJSON(t, markup) != mustJSON(t, entryMonitorInlineKeyboard()) {
+			t.Fatalf("markup = %s", mustJSON(t, markup))
+		}
+		file, header, err := request.FormFile("photo")
+		if err != nil {
+			t.Fatalf("FormFile(photo): %v", err)
+		}
+		defer file.Close()
+		if header.Filename != "entry-monitor.png" {
+			t.Fatalf("photo filename = %q", header.Filename)
+		}
+		gotPhoto, err := io.ReadAll(file)
+		if err != nil {
+			t.Fatalf("read photo: %v", err)
+		}
+		if !bytes.Equal(gotPhoto, wantPhoto) {
+			t.Fatalf("photo bytes = %x, want %x", gotPhoto, wantPhoto)
+		}
+		return telegramOKResponse(), nil
+	})}
+
+	if err := svc.sendPhotoWithMarkupNow(context.Background(), 123, wantPhoto, "**入口检测**", entryMonitorInlineKeyboard()); err != nil {
+		t.Fatalf("sendPhotoWithMarkupNow: %v", err)
+	}
+	if !called {
+		t.Fatal("telegram sendPhoto API was not called")
+	}
+}
+
+func TestDirectNotifierNotifyChatImageUsesPhotoSender(t *testing.T) {
+	svc := NewService(config.Config{TelegramBotEnable: true, TelegramBotToken: "bot-token"}, nil)
+	wantPhoto := []byte{1, 2, 3}
+	called := false
+	svc.sendPhoto = func(_ context.Context, chatID int64, photo []byte, caption string, markup any) error {
+		if chatID != 456 || !bytes.Equal(photo, wantPhoto) || caption != "检测报告" || markup != nil {
+			t.Fatalf("image delivery = chat %d photo %v caption %q markup %#v", chatID, photo, caption, markup)
+		}
+		called = true
+		return nil
+	}
+
+	if err := svc.DirectNotifier().NotifyChatImage(context.Background(), 456, wantPhoto, "检测报告"); err != nil {
+		t.Fatalf("NotifyChatImage: %v", err)
+	}
+	if !called {
+		t.Fatal("DirectNotifier did not call sendPhoto")
 	}
 }
 
