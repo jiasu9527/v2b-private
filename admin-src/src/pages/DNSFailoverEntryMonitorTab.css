@@ -1,0 +1,220 @@
+.dns-entry-monitor-tab {
+  min-width: 0;
+  padding-bottom: 18px;
+}
+
+.dns-failover-tabs .ant-tabs-tab {
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.dns-entry-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dns-entry-save-state {
+  color: #777;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.dns-entry-monitor-tab .ant-btn,
+.dns-entry-monitor-tab .ant-tag,
+.dns-entry-monitor-tab .ant-table-thead > tr > th,
+.dns-entry-monitor-tab .ant-collapse-header-text {
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.dns-entry-monitor-tab .ant-table-cell {
+  word-break: normal;
+}
+
+.dns-entry-policy-name {
+  min-width: 0;
+}
+
+.dns-entry-policy-name strong,
+.dns-entry-config-title strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dns-entry-host {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.dns-entry-policy-details > summary {
+  width: max-content;
+  color: #1677ff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dns-entry-policy-hosts {
+  display: grid;
+  gap: 4px;
+  max-height: 160px;
+  margin-top: 8px;
+  overflow: auto;
+}
+
+.dns-entry-policy-hosts .dns-entry-host {
+  color: #595959;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.dns-entry-configs {
+  margin: 0 16px;
+}
+
+.dns-entry-config-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.dns-entry-config-title > strong {
+  flex: 1 1 auto;
+}
+
+.dns-entry-config-body {
+  min-width: 0;
+}
+
+.dns-entry-monitor-fields {
+  display: grid;
+  grid-template-columns: 140px minmax(150px, 0.7fr) minmax(170px, 0.8fr) minmax(280px, 1.8fr);
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.dns-entry-monitor-field {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  min-width: 0;
+  color: #595959;
+  font-size: 13px;
+}
+
+.dns-entry-monitor-field > span:first-child {
+  min-height: 22px;
+  color: #262626;
+  font-weight: 500;
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.dns-entry-monitor-field .ant-input-number,
+.dns-entry-monitor-field .ant-select {
+  width: 100%;
+}
+
+.dns-entry-target-table .ant-input-number {
+  width: 112px;
+}
+
+.dns-entry-state-list {
+  display: grid;
+  gap: 7px;
+  min-width: 620px;
+}
+
+.dns-entry-state {
+  display: grid;
+  grid-template-columns: 130px 70px 72px minmax(150px, 1fr) 165px;
+  align-items: start;
+  gap: 8px;
+  min-height: 24px;
+  padding-bottom: 7px;
+  border-bottom: 1px dashed #e8e8e8;
+  line-height: 22px;
+}
+
+.dns-entry-state:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.dns-entry-state-probe,
+.dns-entry-state-time {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dns-entry-state-result {
+  display: grid;
+  min-width: 0;
+}
+
+.dns-entry-state-result .text-danger,
+.dns-entry-run-error {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.dns-entry-state-time {
+  color: #777;
+  font-size: 12px;
+}
+
+.dns-entry-runs-table {
+  margin-bottom: 4px;
+}
+
+@media (max-width: 1100px) {
+  .dns-entry-monitor-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dns-entry-monitor-field--probes {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 768px) {
+  .dns-entry-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .dns-entry-configs {
+    margin: 0 12px;
+  }
+
+  .dns-entry-config-title {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .dns-entry-monitor-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 10px;
+  }
+}
+
+@media (max-width: 520px) {
+  .dns-entry-monitor-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .dns-entry-monitor-field--probes {
+    grid-column: auto;
+  }
+}

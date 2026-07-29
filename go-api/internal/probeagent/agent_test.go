@@ -204,6 +204,33 @@ func TestAgentFlushPreservesEveryResultInOriginalOrder(t *testing.T) {
 	}
 }
 
+func TestAgentCopiesManualRunAndTargetVersionIntoProbeResult(t *testing.T) {
+	checker := &immediateChecker{started: make(chan struct{}), stopped: make(chan struct{})}
+	agent, err := New(
+		Config{APIURL: "http://127.0.0.1", Token: "secret", Interval: time.Second},
+		WithChecker(checker),
+		WithInsecureLocalHTTP(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.runTask(ctx, Task{
+		TargetID: 7, RunID: 91, TargetVersion: 4, CheckHost: "127.0.0.1", CheckPort: 443,
+		TCPTimeoutMS: 1000, CheckIntervalSec: 60,
+	})
+	select {
+	case result := <-agent.results:
+		if result.TargetID != 7 || result.RunID != 91 || result.TargetVersion != 4 {
+			t.Fatalf("result = %#v", result)
+		}
+		cancel()
+	case <-time.After(time.Second):
+		t.Fatal("probe result was not produced")
+	}
+}
+
 func TestAgentLogsEachOperationOutageAndRecoveryOnce(t *testing.T) {
 	originalOutput := log.Writer()
 	originalFlags := log.Flags()

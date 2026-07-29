@@ -195,6 +195,9 @@ func (s *DBService) UpdateManagedServerHost(ctx context.Context, oldHost, newHos
 	if err := tx.Commit(); err != nil {
 		return ManagedServerHostUpdateResult{}, errors.New("批量修改地址失败")
 	}
+	if result.UpdatedTotal > 0 {
+		s.markClientEntryMonitorTargetsDirty()
+	}
 	return result, nil
 }
 

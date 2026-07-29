@@ -198,6 +198,7 @@ func expectDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		mock.ExpectExec(`CREATE INDEX IF NOT EXISTS ` + index).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
+	expectClientEntryMonitorSchema(mock)
 }
 
 var expectedDNSFailoverConstraints = []struct {

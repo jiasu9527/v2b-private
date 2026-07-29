@@ -101,6 +101,7 @@ func TestCleanupRetentionDeletesConfiguredHistoryAndExpiredRows(t *testing.T) {
 	mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM v2_dns_failover_event WHERE notified_at IS NOT NULL AND created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM v2_dns_failover_event`).
 		WithArgs(cleanupCutoffDays(3), int64(dnsFailoverCleanupBatchSize)).
 		WillReturnResult(sqlmock.NewResult(0, 4))
+	expectClientEntryMonitorCleanup(mock)
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO v2_runtime_kv (k, v, expire_at, created_at, updated_at)
 VALUES ($1, $2, 0, $3, $3)
 ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = EXCLUDED.expire_at, updated_at = EXCLUDED.updated_at`)).
@@ -142,6 +143,7 @@ func TestCleanupRetentionDeletesExpirableRowsEvenWithoutKeepDays(t *testing.T) {
 	mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM v2_dns_failover_event WHERE notified_at IS NOT NULL AND created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM v2_dns_failover_event`).
 		WithArgs(cleanupCutoffDays(3), int64(dnsFailoverCleanupBatchSize)).
 		WillReturnResult(sqlmock.NewResult(0, 4))
+	expectClientEntryMonitorCleanup(mock)
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO v2_runtime_kv (k, v, expire_at, created_at, updated_at)
 VALUES ($1, $2, 0, $3, $3)
 ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = EXCLUDED.expire_at, updated_at = EXCLUDED.updated_at`)).
@@ -154,6 +156,21 @@ ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = EXCLUDED.expire_at, up
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
 	}
+}
+
+func expectClientEntryMonitorCleanup(mock sqlmock.Sqlmock) {
+	for _, table := range []string{
+		"v2_client_entry_monitor_event",
+		"v2_client_entry_monitor_result_inbox",
+		"v2_client_entry_monitor_run_result",
+	} {
+		mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM `+table+` WHERE created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM `+table).
+			WithArgs(cleanupCutoffDays(3), int64(dnsFailoverCleanupBatchSize)).
+			WillReturnResult(sqlmock.NewResult(0, 4))
+	}
+	mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM v2_client_entry_monitor_run WHERE status <> 'running' AND created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM v2_client_entry_monitor_run`).
+		WithArgs(cleanupCutoffDays(3), int64(dnsFailoverCleanupBatchSize)).
+		WillReturnResult(sqlmock.NewResult(0, 4))
 }
 
 func TestDeleteDNSFailoverRetentionRowsRunsBoundedBatchesUntilDrained(t *testing.T) {

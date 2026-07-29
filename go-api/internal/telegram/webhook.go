@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -17,11 +18,33 @@ import (
 
 var ticketReplyPattern = regexp.MustCompile(`#\s*([0-9]+)`)
 
+const (
+	clientEntryMonitorRunCallback    = "client_entry_monitor:run"
+	clientEntryMonitorRecentCallback = "client_entry_monitor:recent"
+)
+
+type inlineKeyboardButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data"`
+}
+
+type inlineKeyboardMarkup struct {
+	InlineKeyboard [][]inlineKeyboardButton `json:"inline_keyboard"`
+}
+
 type webhookMessage struct {
 	ChatID    int64
 	Text      string
 	IsPrivate bool
 	ReplyText string
+}
+
+type webhookCallbackQuery struct {
+	ID        string
+	FromID    int64
+	ChatID    int64
+	Data      string
+	IsPrivate bool
 }
 
 func (s *Service) HandleWebhook(ctx context.Context, payload map[string]any) error {
@@ -31,6 +54,13 @@ func (s *Service) HandleWebhook(ctx context.Context, payload map[string]any) err
 
 	if joinPayload, ok := payload["chat_join_request"].(map[string]any); ok {
 		return s.handleChatJoinRequest(ctx, joinPayload)
+	}
+	if callbackPayload, ok := payload["callback_query"].(map[string]any); ok {
+		callback, parsed := parseWebhookCallbackQuery(callbackPayload)
+		if !parsed {
+			return nil
+		}
+		return s.handleCallbackQuery(ctx, callback)
 	}
 
 	messagePayload, ok := payload["message"].(map[string]any)
@@ -58,9 +88,107 @@ func (s *Service) HandleWebhook(ctx context.Context, payload map[string]any) err
 		return s.handleTrafficCommand(ctx, message)
 	case "/getlatesturl":
 		return s.handleGetLatestURLCommand(ctx, message)
+	case "/start", "/monitor":
+		return s.handleMonitorCommand(ctx, message)
 	default:
 		return nil
 	}
+}
+
+func (s *Service) handleMonitorCommand(ctx context.Context, message webhookMessage) error {
+	if !message.IsPrivate {
+		return nil
+	}
+
+	_, authorized, err := s.lookupTelegramOperator(ctx, message.ChatID)
+	if err != nil {
+		return err
+	}
+	if !authorized {
+		return s.sendMessage(ctx, message.ChatID, "无权限：仅已绑定 Telegram 的管理员和员工可使用入口检测。")
+	}
+
+	return s.sendMessageMarkup(ctx, message.ChatID, "用户入口检测", entryMonitorKeyboard())
+}
+
+func (s *Service) handleCallbackQuery(ctx context.Context, callback webhookCallbackQuery) error {
+	// Telegram keeps a loading spinner open until answerCallbackQuery returns.
+	// Acknowledge first, then perform database checks or start monitor work.
+	if err := s.answerCallback(ctx, callback.ID, "", false); err != nil {
+		// Callback acknowledgement is best effort. The business action is
+		// idempotent and must still run when Telegram accepted the answer but
+		// the HTTP response was lost.
+		log.Printf("answer Telegram callback %q: %v", callback.ID, err)
+	}
+	if !callback.IsPrivate || callback.ChatID != callback.FromID {
+		return nil
+	}
+	if callback.Data != clientEntryMonitorRunCallback && callback.Data != clientEntryMonitorRecentCallback {
+		return nil
+	}
+
+	userID, authorized, err := s.lookupTelegramOperator(ctx, callback.FromID)
+	if err != nil {
+		return err
+	}
+	if !authorized {
+		return s.sendMessage(ctx, callback.ChatID, "无权限：仅已绑定 Telegram 的管理员和员工可使用入口检测。")
+	}
+
+	if s.entryMonitor == nil {
+		return s.sendMessage(ctx, callback.ChatID, "用户入口检测功能暂不可用。")
+	}
+
+	switch callback.Data {
+	case clientEntryMonitorRunCallback:
+		runID, err := s.entryMonitor.StartClientEntryMonitorRun(ctx, userID, callback.ChatID, callback.ID)
+		if err != nil {
+			return s.sendMessage(ctx, callback.ChatID, "启动用户入口检测失败："+err.Error())
+		}
+		message := "用户入口检测已开始，完成后会将结果发送到当前 Telegram。"
+		if runID > 0 {
+			message = fmt.Sprintf("用户入口检测已开始（任务 #%d），完成后会将结果发送到当前 Telegram。", runID)
+		}
+		return s.sendMessage(ctx, callback.ChatID, message)
+	case clientEntryMonitorRecentCallback:
+		report, err := s.entryMonitor.RecentClientEntryMonitorReport(ctx)
+		if err != nil {
+			return s.sendMessage(ctx, callback.ChatID, "获取近期检测结果失败："+err.Error())
+		}
+		if strings.TrimSpace(report) == "" {
+			report = "暂无近期用户入口检测结果。"
+		}
+		return s.sendMessageChunks(ctx, callback.ChatID, report)
+	default:
+		return nil
+	}
+}
+
+func (s *Service) lookupTelegramOperator(ctx context.Context, telegramID int64) (int64, bool, error) {
+	if s.db == nil {
+		return 0, false, errors.New("telegram service unavailable")
+	}
+
+	var userID int64
+	err := s.db.QueryRowContext(ctx, `SELECT id
+FROM v2_user
+WHERE telegram_id = $1 AND banned = 0 AND (is_admin = 1 OR is_staff = 1)
+ORDER BY id ASC
+LIMIT 1`, telegramID).Scan(&userID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("lookup telegram operator: %w", err)
+	}
+	return userID, true, nil
+}
+
+func entryMonitorKeyboard() inlineKeyboardMarkup {
+	return inlineKeyboardMarkup{InlineKeyboard: [][]inlineKeyboardButton{
+		{{Text: "一键检测用户入口组", CallbackData: clientEntryMonitorRunCallback}},
+		{{Text: "查看近期检测结果", CallbackData: clientEntryMonitorRecentCallback}},
+	}}
 }
 
 func (s *Service) handleBindCommand(ctx context.Context, message webhookMessage, args []string) error {
@@ -318,6 +446,40 @@ func parseWebhookMessage(payload map[string]any) (webhookMessage, bool) {
 	}
 
 	return message, true
+}
+
+func parseWebhookCallbackQuery(payload map[string]any) (webhookCallbackQuery, bool) {
+	callback := webhookCallbackQuery{
+		ID:   strings.TrimSpace(anyToString(payload["id"])),
+		Data: strings.TrimSpace(anyToString(payload["data"])),
+	}
+	if callback.ID == "" || callback.Data == "" {
+		return webhookCallbackQuery{}, false
+	}
+
+	fromPayload, ok := payload["from"].(map[string]any)
+	if !ok {
+		return webhookCallbackQuery{}, false
+	}
+	callback.FromID, ok = anyToInt64(fromPayload["id"])
+	if !ok {
+		return webhookCallbackQuery{}, false
+	}
+
+	messagePayload, ok := payload["message"].(map[string]any)
+	if !ok {
+		return webhookCallbackQuery{}, false
+	}
+	chatPayload, ok := messagePayload["chat"].(map[string]any)
+	if !ok {
+		return webhookCallbackQuery{}, false
+	}
+	callback.ChatID, ok = anyToInt64(chatPayload["id"])
+	if !ok {
+		return webhookCallbackQuery{}, false
+	}
+	callback.IsPrivate = strings.EqualFold(strings.TrimSpace(anyToString(chatPayload["type"])), "private")
+	return callback, true
 }
 
 func parseWebhookCommand(text string) (string, []string) {

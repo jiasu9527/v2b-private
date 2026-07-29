@@ -48,6 +48,8 @@ type DNSProbeHeartbeatResult struct {
 type DNSProbeTask struct {
 	TargetID         int64  `json:"target_id"`
 	GroupID          int64  `json:"group_id"`
+	RunID            int64  `json:"run_id,omitempty"`
+	TargetVersion    int64  `json:"target_version,omitempty"`
 	CheckHost        string `json:"check_host"`
 	CheckPort        int64  `json:"check_port"`
 	TCPTimeoutMS     int64  `json:"tcp_timeout_ms"`
@@ -55,12 +57,14 @@ type DNSProbeTask struct {
 }
 
 type DNSProbeResult struct {
-	ResultID   string `json:"result_id"`
-	TargetID   int64  `json:"target_id"`
-	Success    *bool  `json:"success"`
-	LatencyMS  *int64 `json:"latency_ms"`
-	Error      string `json:"error"`
-	ResolvedIP string `json:"resolved_ip"`
+	ResultID      string `json:"result_id"`
+	TargetID      int64  `json:"target_id"`
+	RunID         int64  `json:"run_id,omitempty"`
+	TargetVersion int64  `json:"target_version,omitempty"`
+	Success       *bool  `json:"success"`
+	LatencyMS     *int64 `json:"latency_ms"`
+	Error         string `json:"error"`
+	ResolvedIP    string `json:"resolved_ip"`
 }
 
 type DNSProbeResultsRequest struct {
@@ -294,10 +298,61 @@ ORDER BY g.id ASC, t.sort ASC, t.id ASC`, probeID)
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list DNS probe tasks: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close DNS probe tasks: %w", err)
+	}
+	if err := s.refreshClientEntryMonitorTargetsIfDue(ctx); err != nil {
+		return nil, fmt.Errorf("refresh client entry probe tasks: %w", err)
+	}
+	entryTasks, err := s.listClientEntryProbeTasks(ctx, probeID)
+	if err != nil {
+		return nil, err
+	}
+	tasks = append(tasks, entryTasks...)
 	return tasks, nil
 }
 
 func (s *DBService) ReportDNSProbeResults(ctx context.Context, probeID int64, request DNSProbeResultsRequest) (DNSProbeReportResult, error) {
+	if probeID <= 0 {
+		return DNSProbeReportResult{}, ErrDNSProbeUnauthorized
+	}
+	if err := normalizeDNSProbeResultsRequest(&request); err != nil {
+		return DNSProbeReportResult{}, err
+	}
+	if err := s.ensureDNSFailoverSchema(ctx); err != nil {
+		return DNSProbeReportResult{}, err
+	}
+	dnsResults := make([]DNSProbeResult, 0, len(request.Results))
+	entryResults := make([]DNSProbeResult, 0, len(request.Results))
+	for _, result := range request.Results {
+		if isClientEntryProbeTargetID(result.TargetID) {
+			entryResults = append(entryResults, result)
+		} else {
+			dnsResults = append(dnsResults, result)
+		}
+	}
+	entrySummary := DNSProbeReportResult{GroupIDs: make([]int64, 0)}
+	if len(entryResults) > 0 {
+		var err error
+		entrySummary, err = s.reportClientEntryProbeResults(ctx, probeID, entryResults)
+		if err != nil {
+			return DNSProbeReportResult{}, err
+		}
+	}
+	if len(dnsResults) == 0 {
+		return entrySummary, nil
+	}
+	dnsSummary, err := s.reportDNSFailoverProbeResults(ctx, probeID, DNSProbeResultsRequest{Results: dnsResults})
+	if err != nil {
+		return DNSProbeReportResult{}, err
+	}
+	dnsSummary.Accepted += entrySummary.Accepted
+	dnsSummary.Duplicates += entrySummary.Duplicates
+	dnsSummary.Skipped += entrySummary.Skipped
+	return dnsSummary, nil
+}
+
+func (s *DBService) reportDNSFailoverProbeResults(ctx context.Context, probeID int64, request DNSProbeResultsRequest) (DNSProbeReportResult, error) {
 	requestNow := time.Now().Unix()
 	if probeID <= 0 {
 		return DNSProbeReportResult{}, ErrDNSProbeUnauthorized
@@ -792,6 +847,12 @@ func normalizeDNSProbeResultsRequest(request *DNSProbeResultsRequest) error {
 		}
 		if result.TargetID <= 0 {
 			return fmt.Errorf("%w: result %d: target_id is invalid", ErrDNSProbeInvalidRequest, index)
+		}
+		if result.RunID < 0 {
+			return fmt.Errorf("%w: result %d: run_id is invalid", ErrDNSProbeInvalidRequest, index)
+		}
+		if result.TargetVersion < 0 {
+			return fmt.Errorf("%w: result %d: target_version is invalid", ErrDNSProbeInvalidRequest, index)
 		}
 		if result.Success == nil {
 			return fmt.Errorf("%w: result %d: success is required", ErrDNSProbeInvalidRequest, index)

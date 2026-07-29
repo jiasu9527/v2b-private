@@ -62,6 +62,35 @@ func TestDirectNotifierReturnsActualSendFailure(t *testing.T) {
 	}
 }
 
+func TestDirectNotifierAttemptsAllUniqueRecipientsAndJoinsFailures(t *testing.T) {
+	firstErr := errors.New("first send failed")
+	secondErr := errors.New("second send failed")
+	svc := NewService(config.Config{TelegramBotEnable: true, TelegramBotToken: "bot-token"}, nil)
+	svc.resolveRecipients = func(context.Context, bool) ([]int64, error) {
+		return []int64{11, 11, 22, 33}, nil
+	}
+	var sent []int64
+	svc.sendMessage = func(_ context.Context, chatID int64, _ string) error {
+		sent = append(sent, chatID)
+		switch chatID {
+		case 11:
+			return firstErr
+		case 22:
+			return secondErr
+		default:
+			return nil
+		}
+	}
+
+	err := svc.DirectNotifier().NotifyAdmins(context.Background(), "dns alert", true)
+	if !errors.Is(err, firstErr) || !errors.Is(err, secondErr) {
+		t.Fatalf("error = %v, want both send failures", err)
+	}
+	if len(sent) != 3 || sent[0] != 11 || sent[1] != 22 || sent[2] != 33 {
+		t.Fatalf("direct sends = %#v, want each unique recipient attempted", sent)
+	}
+}
+
 func TestDirectNotifierTreatsNoRecipientsAsDelivered(t *testing.T) {
 	svc := NewService(config.Config{TelegramBotEnable: true, TelegramBotToken: "bot-token"}, nil)
 	svc.resolveRecipients = func(context.Context, bool) ([]int64, error) { return nil, nil }

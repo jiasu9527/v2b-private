@@ -110,7 +110,9 @@ func main() {
 				log.Printf("stop DNS failover automation: %v", err)
 			}
 		}()
-		telegramService = telegramService.WithUserResolver(userDBService.ResolveClientUserID).WithAdminService(adminDBService)
+		telegramService = telegramService.WithUserResolver(userDBService.ResolveClientUserID).
+			WithAdminService(adminDBService).
+			WithEntryMonitorController(adminDBService)
 		adminService = adminDBService
 		nodeService = nodeapi.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig)
 		backgroundRunner = background.NewRunner(jobQueue, adminDBService, userDBService, adminDBService, adminDBService)

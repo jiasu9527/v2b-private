@@ -22,7 +22,7 @@ if [[ -z "${DOWNLOAD_BASE}" ]]; then
   scheme="${API_URL%%://*}"
   authority_path="${API_URL#*://}"
   origin="${scheme}://${authority_path%%/*}"
-  DOWNLOAD_BASE="${origin}/probe/download/linux"
+  DOWNLOAD_BASE="${origin}/api/v1/probe/download/linux"
 fi
 case "${DOWNLOAD_BASE}" in http://*|https://*) ;; *) echo "DOWNLOAD_BASE must use http or https" >&2; exit 1;; esac
 
@@ -42,7 +42,7 @@ printf '{"api_url":"%s","token":"%s","interval":%s}\n' "${API_URL}" "${TOKEN}" "
 chmod 0600 "${CONFIG_DIR}/config.json"
 cat > "${SYSTEMD_DIR}/forest-probe.service" <<'UNIT'
 [Unit]
-Description=Forest DNS Probe
+Description=Forest Probe
 After=network-online.target
 Wants=network-online.target
 [Service]

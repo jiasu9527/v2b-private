@@ -36,6 +36,10 @@ run_install
 [[ "$(stat -f '%Lp' "${TMP_DIR}/etc/forest-probe/config.json")" == "600" ]]
 rg -F '"api_url":"https://panel.example.com/api/v1"' "${TMP_DIR}/etc/forest-probe/config.json" >/dev/null
 rg -F '"interval":45' "${TMP_DIR}/etc/forest-probe/config.json" >/dev/null
+[[ "$(rg -c -F 'https://panel.example.com/api/v1/probe/download/linux/' "${TMP_DIR}/log")" == 4 ]]
+if rg -F 'https://panel.example.com/probe/download/' "${TMP_DIR}/log" >/dev/null; then
+  echo 'legacy probe download path unexpectedly used' >&2; exit 1
+fi
 rg -F 'ExecStart=/usr/local/bin/forest-probe -config /etc/forest-probe/config.json' "${TMP_DIR}/etc/systemd/system/forest-probe.service" >/dev/null
 [[ "$(rg -c 'daemon-reload' "${TMP_DIR}/log")" == 2 ]]
 [[ "$(rg -c 'enable --now forest-probe.service' "${TMP_DIR}/log")" == 2 ]]

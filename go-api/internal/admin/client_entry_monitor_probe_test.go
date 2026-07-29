@@ -1,0 +1,156 @@
+package admin
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
+)
+
+func TestClientEntryProbeFailureCreatesStateAndAlertEvent(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	probeID := int64(7)
+	targetID := int64(5)
+	now := time.Now().Unix()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT enabled, last_heartbeat_at FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
+		WithArgs(probeID).
+		WillReturnRows(sqlmock.NewRows([]string{"enabled", "last_heartbeat_at"}).AddRow(int64(1), now))
+	mock.ExpectQuery(`(?s)SELECT target.id, target.generation, monitor.id, monitor.policy_id,.*FROM v2_client_entry_monitor_target target.*WHERE target.id = \$2`).
+		WithArgs(probeID, targetID).
+		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "policy_name", "target_name", "host", "port", "probe_name"}).
+			AddRow(targetID, int64(2), int64(3), int64(42), "高级入口", "独立入口", "entry.example.com", int64(443), "东京探针"))
+	mock.ExpectQuery(`(?s)INSERT INTO v2_client_entry_monitor_result_inbox.*ON CONFLICT \(probe_id, result_id\) DO NOTHING.*RETURNING id`).
+		WithArgs(probeID, targetID, nil, "entry-result-1", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
+	mock.ExpectQuery(`(?s)SELECT last_success, consecutive_success, consecutive_failure.*FROM v2_client_entry_monitor_state.*FOR UPDATE`).
+		WithArgs(targetID, probeID).
+		WillReturnRows(sqlmock.NewRows([]string{"last_success", "consecutive_success", "consecutive_failure"}))
+	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_state.*ON CONFLICT \(target_id, probe_id\) DO UPDATE SET`).
+		WithArgs(targetID, probeID, int64(0), nil, "connection refused", "203.0.113.9", int64(0), int64(1), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_event.*VALUES`).
+		WithArgs(int64(3), targetID, probeID, "down", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	failed := false
+	result, err := service.ReportDNSProbeResults(context.Background(), probeID, DNSProbeResultsRequest{Results: []DNSProbeResult{{
+		ResultID: "entry-result-1", TargetID: clientEntryProbeTargetOffset + targetID,
+		TargetVersion: 2, Success: &failed, Error: "connection refused", ResolvedIP: "203.0.113.9",
+	}}})
+	if err != nil {
+		t.Fatalf("ReportDNSProbeResults: %v", err)
+	}
+	if result.Accepted != 1 || result.Skipped != 0 || result.Duplicates != 0 {
+		t.Fatalf("result = %#v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestClientEntryProbeTargetEncodingDoesNotOverlapDNSIDs(t *testing.T) {
+	encoded := encodeClientEntryProbeTargetID(123)
+	if encoded <= clientEntryProbeTargetOffset {
+		t.Fatalf("encoded = %d", encoded)
+	}
+	decoded, ok := decodeClientEntryProbeTargetID(encoded)
+	if !ok || decoded != 123 {
+		t.Fatalf("decoded = %d, ok = %v", decoded, ok)
+	}
+	if isClientEntryProbeTargetID(123) {
+		t.Fatal("ordinary DNS target was classified as a client-entry target")
+	}
+}
+
+func TestClientEntryManualRunRejectsLegacyAndUnexpectedPairs(t *testing.T) {
+	if runID, err := validateClientEntryMonitorRunResult(context.Background(), nil, 0, 5, 7, 2); err != nil || runID != 0 {
+		t.Fatalf("legacy run result = (%d, %v), want ignored", runID, err)
+	}
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	mock.ExpectQuery(`(?s)SELECT id, status, expected_pairs.*FROM v2_client_entry_monitor_run WHERE id = \$1 FOR UPDATE`).
+		WithArgs(int64(91)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "status", "expected_pairs"}).
+			AddRow(int64(91), "running", `[{"target_id":5,"probe_id":8,"target_version":2}]`))
+	runID, err := validateClientEntryMonitorRunResult(context.Background(), tx, 91, 5, 7, 2)
+	if err != nil || runID != 0 {
+		t.Fatalf("unexpected tuple result = (%d, %v), want ignored", runID, err)
+	}
+	mock.ExpectRollback()
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	mock.ExpectBegin()
+	tx, err = db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx generation: %v", err)
+	}
+	mock.ExpectQuery(`(?s)SELECT id, status, expected_pairs.*FROM v2_client_entry_monitor_run WHERE id = \$1 FOR UPDATE`).
+		WithArgs(int64(91)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "status", "expected_pairs"}).
+			AddRow(int64(91), "running", `[{"target_id":5,"probe_id":7,"target_version":1}]`))
+	runID, err = validateClientEntryMonitorRunResult(context.Background(), tx, 91, 5, 7, 2)
+	if err != nil || runID != 0 {
+		t.Fatalf("changed endpoint generation result = (%d, %v), want ignored", runID, err)
+	}
+	mock.ExpectRollback()
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback generation: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestClientEntryProbeSkipsStaleTargetGeneration(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	probeID := int64(7)
+	targetID := int64(5)
+	now := time.Now().Unix()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT enabled, last_heartbeat_at FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
+		WithArgs(probeID).
+		WillReturnRows(sqlmock.NewRows([]string{"enabled", "last_heartbeat_at"}).AddRow(int64(1), now))
+	mock.ExpectQuery(`(?s)SELECT target.id, target.generation, monitor.id, monitor.policy_id,.*WHERE target.id = \$2`).
+		WithArgs(probeID, targetID).
+		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "policy_name", "target_name", "host", "port", "probe_name"}).
+			AddRow(targetID, int64(2), int64(3), int64(42), "高级入口", "独立入口", "new.example.com", int64(443), "东京探针"))
+	mock.ExpectCommit()
+	failed := false
+	result, err := service.ReportDNSProbeResults(context.Background(), probeID, DNSProbeResultsRequest{Results: []DNSProbeResult{{
+		ResultID: "old-endpoint-result", TargetID: clientEntryProbeTargetOffset + targetID,
+		TargetVersion: 1, Success: &failed, Error: "old endpoint timeout",
+	}}})
+	if err != nil {
+		t.Fatalf("ReportDNSProbeResults: %v", err)
+	}
+	if result.Skipped != 1 || result.Accepted != 0 {
+		t.Fatalf("result = %#v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}

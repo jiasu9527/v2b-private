@@ -55,6 +55,15 @@ func handleAdminDNSFailover(w http.ResponseWriter, r *http.Request, sessions ses
 	if len(parts) == 1 && parts[0] == "logs" {
 		return handleDNSFailoverLogs(w, r, service)
 	}
+	if len(parts) == 1 && parts[0] == "entry-monitors" {
+		return handleClientEntryMonitors(w, r, service)
+	}
+	if len(parts) == 2 && parts[0] == "entry-monitors" && parts[1] == "run" {
+		return handleClientEntryMonitorRun(w, r, service)
+	}
+	if len(parts) == 2 && parts[0] == "entry-monitors" && parts[1] == "runs" {
+		return handleClientEntryMonitorRuns(w, r, service)
+	}
 	writeJSON(w, http.StatusNotFound, map[string]any{"message": "DNS 故障转移接口不存在"})
 	return true
 }
@@ -452,10 +461,19 @@ func dnsFailoverMethodNotAllowed(w http.ResponseWriter, r *http.Request, allow s
 func writeDNSFailoverError(w http.ResponseWriter, err error) bool {
 	message := err.Error()
 	status := http.StatusBadRequest
+	if errors.Is(err, admin.ErrClientEntryMonitorRevisionConflict) {
+		writeJSON(w, http.StatusConflict, map[string]any{"message": message})
+		return true
+	}
 	lower := strings.ToLower(message)
 	if strings.Contains(lower, "not found") || strings.Contains(message, "不存在") {
 		status = 404
 		message = "请求的 DNS 故障转移资源不存在"
+	}
+	if strings.Contains(message, "用户入口检测正在进行") {
+		status = http.StatusConflict
+		writeJSON(w, status, map[string]any{"message": message})
+		return true
 	}
 	if strings.Contains(lower, "busy") || strings.Contains(lower, "conflict") || strings.Contains(message, "进行中") {
 		status = 409

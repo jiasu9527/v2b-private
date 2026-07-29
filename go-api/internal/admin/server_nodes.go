@@ -128,6 +128,7 @@ func (s *DBService) SaveManagedServer(ctx context.Context, serverType string, pa
 		if err := s.insertManagedServer(ctx, def, values); err != nil {
 			return false, errors.New("创建失败")
 		}
+		s.markClientEntryMonitorTargetsDirty()
 		return true, nil
 	}
 
@@ -143,6 +144,7 @@ func (s *DBService) SaveManagedServer(ctx context.Context, serverType string, pa
 	if err := s.updateManagedServerRecord(ctx, def, *id, values); err != nil {
 		return false, errors.New("保存失败")
 	}
+	s.markClientEntryMonitorTargetsDirty()
 	return true, nil
 }
 
@@ -189,6 +191,7 @@ func (s *DBService) DeleteManagedServer(ctx context.Context, serverType string, 
 	if err := tx.Commit(); err != nil {
 		return false, errors.New("删除失败")
 	}
+	s.markClientEntryMonitorTargetsDirty()
 	return true, nil
 }
 
@@ -231,6 +234,7 @@ func (s *DBService) UpdateManagedServer(ctx context.Context, serverType string, 
 			return false, errors.New("保存失败")
 		}
 	}
+	s.markClientEntryMonitorTargetsDirty()
 	return true, nil
 }
 

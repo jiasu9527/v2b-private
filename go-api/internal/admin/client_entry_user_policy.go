@@ -193,6 +193,7 @@ VALUES ($1, $2, $3, $4, $5, $5)`, policyID, member.ServerType, member.ServerID, 
 	if err := tx.Commit(); err != nil {
 		return false, errors.New("保存失败")
 	}
+	s.markClientEntryMonitorTargetsDirty()
 	return true, nil
 }
 
@@ -286,6 +287,7 @@ func (s *DBService) DeleteClientEntryUserPolicy(ctx context.Context, id int64) (
 	if err := tx.Commit(); err != nil {
 		return false, errors.New("删除失败")
 	}
+	s.markClientEntryMonitorTargetsDirty()
 	return true, nil
 }
 

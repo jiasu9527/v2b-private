@@ -539,6 +539,9 @@ $dns_failover$;`, constraint.table, constraint.name, constraint.definition)
 			return fmt.Errorf("ensure DNS failover index: %w", err)
 		}
 	}
+	if err := EnsureClientEntryMonitorSchema(ctx, db); err != nil {
+		return fmt.Errorf("ensure client entry monitor schema from DNS probe schema: %w", err)
+	}
 
 	return nil
 }

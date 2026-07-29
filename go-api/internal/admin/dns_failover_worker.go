@@ -142,26 +142,32 @@ func (s *DBService) StartDNSFailoverAutomation(ctx context.Context) {
 		if interval <= 0 {
 			interval = dnsFailoverDefaultTick
 		}
-		s.dnsFailoverWorkerWG.Add(1)
-		go func() {
-			defer s.dnsFailoverWorkerWG.Done()
-			runCycle := func() {
-				if err := s.runDNSFailoverCycle(workerCtx); err != nil && workerCtx.Err() == nil {
-					s.logDNSFailoverWorkerError("DNS failover automation cycle failed: %v", err)
+		startWorker := func(name string, runCycle func(context.Context) error) {
+			s.dnsFailoverWorkerWG.Add(1)
+			go func() {
+				defer s.dnsFailoverWorkerWG.Done()
+				run := func() {
+					if err := runCycle(workerCtx); err != nil && workerCtx.Err() == nil {
+						s.logDNSFailoverWorkerError("%s cycle failed: %v", name, err)
+					}
 				}
-			}
-			runCycle()
-			ticker := time.NewTicker(interval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-workerCtx.Done():
-					return
-				case <-ticker.C:
-					runCycle()
+				run()
+				ticker := time.NewTicker(interval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-workerCtx.Done():
+						return
+					case <-ticker.C:
+						run()
+					}
 				}
-			}
-		}()
+			}()
+		}
+		startWorker("DNS failover automation", s.runDNSFailoverCycle)
+		startWorker("client entry monitor notification", func(cycleCtx context.Context) error {
+			return s.drainPendingClientEntryMonitorNotifications(cycleCtx, dnsFailoverNotificationBatch)
+		})
 	})
 }
 

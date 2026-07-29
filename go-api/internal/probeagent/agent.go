@@ -35,6 +35,8 @@ type fileConfig struct {
 type Task struct {
 	TargetID         int64  `json:"target_id"`
 	GroupID          int64  `json:"group_id"`
+	RunID            int64  `json:"run_id,omitempty"`
+	TargetVersion    int64  `json:"target_version,omitempty"`
 	CheckHost        string `json:"check_host"`
 	CheckPort        int    `json:"check_port"`
 	TCPTimeoutMS     int64  `json:"tcp_timeout_ms"`
@@ -45,12 +47,14 @@ type taskWorker struct {
 	cancel context.CancelFunc
 }
 type Result struct {
-	ResultID   string `json:"result_id"`
-	TargetID   int64  `json:"target_id"`
-	Success    bool   `json:"success"`
-	LatencyMS  *int64 `json:"latency_ms"`
-	Error      string `json:"error"`
-	ResolvedIP string `json:"resolved_ip"`
+	ResultID      string `json:"result_id"`
+	TargetID      int64  `json:"target_id"`
+	RunID         int64  `json:"run_id,omitempty"`
+	TargetVersion int64  `json:"target_version,omitempty"`
+	Success       bool   `json:"success"`
+	LatencyMS     *int64 `json:"latency_ms"`
+	Error         string `json:"error"`
+	ResolvedIP    string `json:"resolved_ip"`
 }
 type Checker interface {
 	Check(context.Context, string, int, time.Duration) CheckResult
@@ -206,7 +210,7 @@ func (a *Agent) runTask(ctx context.Context, task Task) {
 		if ctx.Err() != nil {
 			return
 		}
-		report := Result{ResultID: fmt.Sprintf("%d-%d", task.TargetID, time.Now().UnixNano()), TargetID: task.TargetID, Success: result.Success, LatencyMS: result.LatencyMS, Error: result.Error, ResolvedIP: result.ResolvedIP}
+		report := Result{ResultID: fmt.Sprintf("%d-%d", task.TargetID, time.Now().UnixNano()), TargetID: task.TargetID, RunID: task.RunID, TargetVersion: task.TargetVersion, Success: result.Success, LatencyMS: result.LatencyMS, Error: result.Error, ResolvedIP: result.ResolvedIP}
 		select {
 		case a.results <- report:
 		case <-ctx.Done():

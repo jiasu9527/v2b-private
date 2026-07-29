@@ -372,6 +372,7 @@ func TestDNSProbeTasksReturnOnlyBoundEnabledGroupsAndTargetsInStableOrder(t *tes
 	}
 	defer db.Close()
 	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	service.clientEntryMonitorAt = time.Now()
 
 	mock.ExpectQuery(`(?s)SELECT t.id, g.id, t.check_host, t.check_port, g.tcp_timeout_ms, g.check_interval_sec.*FROM v2_dns_failover_group_probe gp.*JOIN v2_dns_failover_group g ON g.id = gp.group_id.*JOIN v2_dns_failover_target t ON t.group_id = g.id.*WHERE gp.probe_id = \$1 AND g.enabled = 1 AND t.enabled = 1.*ORDER BY g.id ASC, t.sort ASC, t.id ASC`).
 		WithArgs(int64(7)).
@@ -379,6 +380,7 @@ func TestDNSProbeTasksReturnOnlyBoundEnabledGroupsAndTargetsInStableOrder(t *tes
 			AddRow(int64(11), int64(3), "a.example.com", int64(443), int64(3000), int64(30)).
 			AddRow(int64(10), int64(3), "203.0.113.10", int64(8443), int64(2000), int64(15)).
 			AddRow(int64(20), int64(9), "2001:db8::20", int64(22), int64(5000), int64(60)))
+	expectEmptyClientEntryProbeTasks(mock, 7)
 
 	tasks, err := service.ListDNSProbeTasks(context.Background(), 7)
 	if err != nil {
@@ -409,9 +411,11 @@ func TestDNSProbeTasksReturnEmptyArrayInsteadOfNil(t *testing.T) {
 	}
 	defer db.Close()
 	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	service.clientEntryMonitorAt = time.Now()
 	mock.ExpectQuery(`(?s)SELECT t.id, g.id, t.check_host, t.check_port, g.tcp_timeout_ms, g.check_interval_sec.*WHERE gp.probe_id = \$1 AND g.enabled = 1 AND t.enabled = 1`).
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"target_id", "group_id", "check_host", "check_port", "tcp_timeout_ms", "check_interval_sec"}))
+	expectEmptyClientEntryProbeTasks(mock, 7)
 
 	tasks, err := service.ListDNSProbeTasks(context.Background(), 7)
 	if err != nil {
@@ -422,6 +426,49 @@ func TestDNSProbeTasksReturnEmptyArrayInsteadOfNil(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func expectEmptyClientEntryProbeTasks(mock sqlmock.Sqlmock, probeID int64) {
+	mock.ExpectQuery(`(?s)SELECT id, expected_pairs.*FROM v2_client_entry_monitor_run.*WHERE status = 'running'.*ORDER BY id DESC LIMIT 1`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "expected_pairs"}))
+	mock.ExpectQuery(`(?s)SELECT target.id, target.generation, monitor.id, monitor.policy_id,.*FROM v2_client_entry_monitor_probe binding.*WHERE binding.probe_id = \$1.*ORDER BY monitor.id, target.sort, target.id`).
+		WithArgs(probeID).
+		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "host", "port", "timeout", "interval"}))
+}
+
+func TestDNSProbeTasksIncludeClientEntryTargetsAndManualRun(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	service.clientEntryMonitorAt = time.Now()
+	mock.ExpectQuery(`(?s)SELECT t.id, g.id, t.check_host, t.check_port, g.tcp_timeout_ms, g.check_interval_sec.*WHERE gp.probe_id = \$1`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"target_id", "group_id", "host", "port", "timeout", "interval"}))
+	mock.ExpectQuery(`(?s)SELECT id, expected_pairs.*FROM v2_client_entry_monitor_run.*WHERE status = 'running'`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "expected_pairs"}).AddRow(int64(91), `[{"target_id":5,"probe_id":7,"target_version":4}]`))
+	mock.ExpectQuery(`(?s)SELECT target.id, target.generation, monitor.id, monitor.policy_id,.*FROM v2_client_entry_monitor_probe binding.*WHERE binding.probe_id = \$1`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "host", "port", "timeout", "interval"}).
+			AddRow(int64(5), int64(4), int64(3), int64(42), "entry.example.com", int64(8443), int64(2500), int64(20)))
+
+	tasks, err := service.ListDNSProbeTasks(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("ListDNSProbeTasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %#v", tasks)
+	}
+	wantTarget := clientEntryProbeTargetOffset + 5
+	wantGroup := clientEntryProbeTargetOffset + 3
+	if tasks[0].TargetID != wantTarget || tasks[0].GroupID != wantGroup || tasks[0].RunID != 91 || tasks[0].TargetVersion != 4 || tasks[0].CheckHost != "entry.example.com" || tasks[0].CheckPort != 8443 {
+		t.Fatalf("task = %#v", tasks[0])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
 	}
 }
 

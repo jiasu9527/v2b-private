@@ -223,6 +223,43 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		mock.ExpectExec(`CREATE INDEX IF NOT EXISTS ` + index).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
+	for _, table := range []string{
+		"v2_client_entry_monitor_config",
+		"v2_client_entry_monitor",
+		"v2_client_entry_monitor_target",
+		"v2_client_entry_monitor_probe",
+		"v2_client_entry_monitor_state",
+		"v2_client_entry_monitor_event",
+		"v2_client_entry_monitor_event_delivery",
+		"v2_client_entry_monitor_run",
+		"v2_client_entry_monitor_run_result",
+		"v2_client_entry_monitor_result_inbox",
+	} {
+		mock.ExpectExec(`CREATE TABLE IF NOT EXISTS ` + table + ` \(`).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor_event ADD COLUMN IF NOT EXISTS notify_next_attempt_at`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS request_key`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS expected_pairs`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor_target ADD COLUMN IF NOT EXISTS generation`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	for _, column := range []string{"target_name", "host", "port", "probe_name"} {
+		mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor_run_result ADD COLUMN IF NOT EXISTS ` + column).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	for range 48 {
+		mock.ExpectExec(`(?s)DO \$client_entry_monitor\$.*ADD CONSTRAINT`).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	for range 17 {
+		mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_monitor_`).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	mock.ExpectExec(`INSERT INTO v2_client_entry_monitor_config`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 }
 
 func TestDecideDNSFailover(t *testing.T) {

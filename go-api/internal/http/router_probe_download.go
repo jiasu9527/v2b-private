@@ -106,7 +106,7 @@ printf '{"api_url":"%%s","token":"%%s","interval":%%s}\n' "$API_URL" "$TOKEN" "$
 chmod 0600 "$CONFIG_DIR/config.json"
 cat > /etc/systemd/system/forest-probe.service <<'UNIT'
 [Unit]
-Description=Forest DNS Probe
+Description=Forest Probe
 After=network-online.target
 Wants=network-online.target
 [Service]

@@ -21,7 +21,17 @@ type ticketReplyService interface {
 	ReplyTicket(ctx context.Context, req admin.TicketReplyRequest) (bool, error)
 }
 
+// EntryMonitorController bridges Telegram actions to the client-entry monitor.
+// Implementations should create the run asynchronously and use chatID to deliver
+// the completed report through DirectNotifier.NotifyChat.
+type EntryMonitorController interface {
+	StartClientEntryMonitorRun(ctx context.Context, userID, chatID int64, requestKey string) (runID int64, err error)
+	RecentClientEntryMonitorReport(ctx context.Context) (string, error)
+}
+
 var ErrDirectNotifierUnavailable = errors.New("telegram direct notifier unavailable")
+
+const telegramMessageLimit = 4096
 
 // DirectNotifier is the synchronous delivery adapter used by durable workers.
 // Unlike Service.NotifyAdmins, it never hands delivery to the in-memory queue.
@@ -38,7 +48,10 @@ type Service struct {
 	resolveRecipients func(ctx context.Context, includeStaff bool) ([]int64, error)
 	resolveUserID     func(ctx context.Context, token string) (int64, error)
 	adminService      ticketReplyService
+	entryMonitor      EntryMonitorController
 	sendMessage       func(ctx context.Context, chatID int64, text string) error
+	sendMessageMarkup func(ctx context.Context, chatID int64, text string, replyMarkup any) error
+	answerCallback    func(ctx context.Context, callbackQueryID, text string, showAlert bool) error
 	approveJoin       func(ctx context.Context, chatID, userID int64) error
 	declineJoin       func(ctx context.Context, chatID, userID int64) error
 }
@@ -51,6 +64,8 @@ func NewService(cfg config.Config, db *sql.DB) *Service {
 	}
 	svc.resolveRecipients = svc.lookupRecipients
 	svc.sendMessage = svc.sendMessageNow
+	svc.sendMessageMarkup = svc.sendMessageWithMarkupNow
+	svc.answerCallback = svc.answerCallbackQueryNow
 	svc.approveJoin = svc.approveJoinNow
 	svc.declineJoin = svc.declineJoinNow
 	return svc
@@ -76,8 +91,36 @@ func (s *Service) WithAdminService(service ticketReplyService) *Service {
 	return s
 }
 
+func (s *Service) WithEntryMonitorController(controller EntryMonitorController) *Service {
+	s.entryMonitor = controller
+	return s
+}
+
 func (s *Service) DirectNotifier() *DirectNotifier {
 	return &DirectNotifier{service: s}
+}
+
+func (n *DirectNotifier) ListAdminChats(ctx context.Context, includeStaff bool) ([]int64, error) {
+	if n == nil || n.service == nil {
+		return nil, ErrDirectNotifierUnavailable
+	}
+	ids, err := n.service.resolveRecipients(ctx, includeStaff)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]int64, 0, len(ids))
+	seen := make(map[int64]struct{}, len(ids))
+	for _, chatID := range ids {
+		if chatID == 0 {
+			continue
+		}
+		if _, exists := seen[chatID]; exists {
+			continue
+		}
+		seen[chatID] = struct{}{}
+		result = append(result, chatID)
+	}
+	return result, nil
 }
 
 func (n *DirectNotifier) NotifyAdmins(ctx context.Context, message string, includeStaff bool) error {
@@ -93,14 +136,34 @@ func (n *DirectNotifier) NotifyAdmins(ctx context.Context, message string, inclu
 	if message == "" {
 		return nil
 	}
-	ids, err := s.resolveRecipients(ctx, includeStaff)
+	ids, err := n.ListAdminChats(ctx, includeStaff)
 	if err != nil {
 		return err
 	}
+	sendErrors := make([]error, 0)
 	for _, chatID := range ids {
-		if err := s.sendMessage(ctx, chatID, message); err != nil {
-			return fmt.Errorf("send direct telegram notification to %d: %w", chatID, err)
+		if err := s.sendMessageChunks(ctx, chatID, message); err != nil {
+			sendErrors = append(sendErrors, fmt.Errorf("send direct telegram notification to %d: %w", chatID, err))
 		}
+	}
+	return errors.Join(sendErrors...)
+}
+
+func (n *DirectNotifier) NotifyChat(ctx context.Context, chatID int64, message string) error {
+	if n == nil || n.service == nil {
+		return ErrDirectNotifierUnavailable
+	}
+	s := n.service
+	cfg := s.currentConfig()
+	if !cfg.TelegramBotEnable || strings.TrimSpace(cfg.TelegramBotToken) == "" {
+		return ErrDirectNotifierUnavailable
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return nil
+	}
+	if err := s.sendMessageChunks(ctx, chatID, message); err != nil {
+		return fmt.Errorf("send direct telegram notification to %d: %w", chatID, err)
 	}
 	return nil
 }
@@ -132,7 +195,7 @@ func (s *Service) NotifyAdmins(ctx context.Context, message string, includeStaff
 	for _, chatID := range ids {
 		chatID := chatID
 		runJob := func(jobCtx context.Context) error {
-			return s.sendMessage(jobCtx, chatID, message)
+			return s.sendMessageChunks(jobCtx, chatID, message)
 		}
 		if s.jobs != nil {
 			if err := s.jobs.Enqueue("send_telegram", "telegram:"+strconv.FormatInt(chatID, 10), runJob); err == nil {
@@ -154,6 +217,7 @@ func (s *Service) lookupRecipients(ctx context.Context, includeStaff bool) ([]in
 	query := `SELECT telegram_id
 FROM v2_user
 WHERE telegram_id IS NOT NULL
+	AND banned = 0
   AND (is_admin = 1`
 	if includeStaff {
 		query += ` OR is_staff = 1`
@@ -182,11 +246,67 @@ ORDER BY id ASC`
 }
 
 func (s *Service) sendMessageNow(ctx context.Context, chatID int64, text string) error {
+	return s.sendMessageWithMarkupNow(ctx, chatID, text, nil)
+}
+
+func (s *Service) sendMessageWithMarkupNow(ctx context.Context, chatID int64, text string, replyMarkup any) error {
 	values := url.Values{}
 	values.Set("chat_id", strconv.FormatInt(chatID, 10))
 	values.Set("text", text)
+	if replyMarkup != nil {
+		encoded, err := json.Marshal(replyMarkup)
+		if err != nil {
+			return fmt.Errorf("encode telegram reply markup: %w", err)
+		}
+		values.Set("reply_markup", string(encoded))
+	}
 
 	return s.postForm(ctx, "sendMessage", values)
+}
+
+func (s *Service) answerCallbackQueryNow(ctx context.Context, callbackQueryID, text string, showAlert bool) error {
+	values := url.Values{}
+	values.Set("callback_query_id", strings.TrimSpace(callbackQueryID))
+	if text = strings.TrimSpace(text); text != "" {
+		values.Set("text", text)
+	}
+	values.Set("show_alert", strconv.FormatBool(showAlert))
+
+	return s.postForm(ctx, "answerCallbackQuery", values)
+}
+
+func (s *Service) sendMessageChunks(ctx context.Context, chatID int64, message string) error {
+	for _, chunk := range splitTelegramMessage(message) {
+		if err := s.sendMessage(ctx, chatID, chunk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func splitTelegramMessage(message string) []string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return nil
+	}
+
+	remaining := []rune(message)
+	chunks := make([]string, 0, (len(remaining)+telegramMessageLimit-1)/telegramMessageLimit)
+	for len(remaining) > telegramMessageLimit {
+		end := telegramMessageLimit
+		for index := telegramMessageLimit - 1; index >= telegramMessageLimit/2; index-- {
+			if remaining[index] == '\n' {
+				end = index + 1
+				break
+			}
+		}
+		chunks = append(chunks, string(remaining[:end]))
+		remaining = remaining[end:]
+	}
+	if len(remaining) > 0 {
+		chunks = append(chunks, string(remaining))
+	}
+	return chunks
 }
 
 func (s *Service) approveJoinNow(ctx context.Context, chatID, userID int64) error {

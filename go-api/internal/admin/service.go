@@ -443,6 +443,9 @@ type DBService struct {
 
 	clientEntryEnsureOnce   sync.Once
 	clientEntryEnsureErr    error
+	clientEntryMonitorMu    sync.Mutex
+	clientEntryMonitorDirty bool
+	clientEntryMonitorAt    time.Time
 	dnsFailoverEnsureMu     sync.Mutex
 	dnsFailoverSchemaOK     bool
 	dnsFailoverWakeMu       sync.Mutex
