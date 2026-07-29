@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"regexp"
+	"strconv"
 	"testing"
 	"time"
 
@@ -24,6 +25,22 @@ func (days cleanupCutoffDays) Match(value driver.Value) bool {
 	return delta >= -2 && delta <= 2
 }
 
+type cleanupCutoffHours int64
+
+func (hours cleanupCutoffHours) Match(value driver.Value) bool {
+	cutoff, ok := value.(int64)
+	if !ok {
+		return false
+	}
+	want := time.Now().Unix() - int64(hours)*3600
+	delta := cutoff - want
+	return delta >= -2 && delta <= 2
+}
+
+func cleanupDayStart(now time.Time) int64 {
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
+}
+
 func TestCleanupRetentionSkipsWhenAlreadyRanToday(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -32,10 +49,11 @@ func TestCleanupRetentionSkipsWhenAlreadyRanToday(t *testing.T) {
 	defer db.Close()
 
 	service := &DBService{db: db, cfg: config.Config{}}
+	todayStart := cleanupDayStart(time.Now())
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = $1 LIMIT 1`)).
 		WithArgs(cleanupLastCheckKey).
-		WillReturnRows(sqlmock.NewRows([]string{"v", "expire_at"}).AddRow("32503680000", int64(0)))
+		WillReturnRows(sqlmock.NewRows([]string{"v", "expire_at"}).AddRow(strconv.FormatInt(todayStart, 10), int64(0)))
 
 	if err := service.CleanupRetention(context.Background()); err != nil {
 		t.Fatalf("cleanup retention: %v", err)
@@ -61,6 +79,7 @@ func TestCleanupRetentionDeletesConfiguredHistoryAndExpiredRows(t *testing.T) {
 		RuntimeKVKeepDays:   7,
 		FailedJobsKeepDays:  15,
 	}}
+	todayStart := cleanupDayStart(time.Now())
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = $1 LIMIT 1`)).
 		WithArgs(cleanupLastCheckKey).
@@ -105,7 +124,7 @@ func TestCleanupRetentionDeletesConfiguredHistoryAndExpiredRows(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO v2_runtime_kv (k, v, expire_at, created_at, updated_at)
 VALUES ($1, $2, 0, $3, $3)
 ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = EXCLUDED.expire_at, updated_at = EXCLUDED.updated_at`)).
-		WithArgs(cleanupLastCheckKey, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(cleanupLastCheckKey, strconv.FormatInt(todayStart, 10), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := service.CleanupRetention(context.Background()); err != nil {
@@ -116,7 +135,7 @@ ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = EXCLUDED.expire_at, up
 	}
 }
 
-func TestCleanupRetentionDeletesExpirableRowsEvenWithoutKeepDays(t *testing.T) {
+func TestCleanupRetentionRunsAgainNextDayAndDeletesExpirableRowsWithoutKeepDays(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -124,10 +143,13 @@ func TestCleanupRetentionDeletesExpirableRowsEvenWithoutKeepDays(t *testing.T) {
 	defer db.Close()
 
 	service := &DBService{db: db, cfg: config.Config{}}
+	now := time.Now()
+	todayStart := cleanupDayStart(now)
+	yesterdayStart := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, now.Location()).Unix()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = $1 LIMIT 1`)).
 		WithArgs(cleanupLastCheckKey).
-		WillReturnRows(sqlmock.NewRows([]string{"v", "expire_at"}))
+		WillReturnRows(sqlmock.NewRows([]string{"v", "expire_at"}).AddRow(strconv.FormatInt(yesterdayStart, 10), int64(0)))
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM v2_auth_session WHERE expire_at > 0 AND expire_at <= $1`)).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 2))
@@ -147,7 +169,7 @@ func TestCleanupRetentionDeletesExpirableRowsEvenWithoutKeepDays(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO v2_runtime_kv (k, v, expire_at, created_at, updated_at)
 VALUES ($1, $2, 0, $3, $3)
 ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = EXCLUDED.expire_at, updated_at = EXCLUDED.updated_at`)).
-		WithArgs(cleanupLastCheckKey, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(cleanupLastCheckKey, strconv.FormatInt(todayStart, 10), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := service.CleanupRetention(context.Background()); err != nil {
@@ -165,11 +187,11 @@ func expectClientEntryMonitorCleanup(mock sqlmock.Sqlmock) {
 		"v2_client_entry_monitor_run_result",
 	} {
 		mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM `+table+` WHERE created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM `+table).
-			WithArgs(cleanupCutoffDays(3), int64(dnsFailoverCleanupBatchSize)).
+			WithArgs(cleanupCutoffHours(24), int64(dnsFailoverCleanupBatchSize)).
 			WillReturnResult(sqlmock.NewResult(0, 4))
 	}
 	mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM v2_client_entry_monitor_run WHERE status <> 'running' AND created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM v2_client_entry_monitor_run`).
-		WithArgs(cleanupCutoffDays(3), int64(dnsFailoverCleanupBatchSize)).
+		WithArgs(cleanupCutoffHours(24), int64(dnsFailoverCleanupBatchSize)).
 		WillReturnResult(sqlmock.NewResult(0, 4))
 }
 

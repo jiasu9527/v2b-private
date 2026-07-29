@@ -252,7 +252,7 @@ func (s *Service) sendMessageNow(ctx context.Context, chatID int64, text string)
 func (s *Service) sendMessageWithMarkupNow(ctx context.Context, chatID int64, text string, replyMarkup any) error {
 	values := url.Values{}
 	values.Set("chat_id", strconv.FormatInt(chatID, 10))
-	values.Set("text", text)
+	values.Set("text", telegramPlainText(text))
 	if replyMarkup != nil {
 		encoded, err := json.Marshal(replyMarkup)
 		if err != nil {
@@ -276,12 +276,36 @@ func (s *Service) answerCallbackQueryNow(ctx context.Context, callbackQueryID, t
 }
 
 func (s *Service) sendMessageChunks(ctx context.Context, chatID int64, message string) error {
+	message = telegramPlainText(message)
 	for _, chunk := range splitTelegramMessage(message) {
 		if err := s.sendMessage(ctx, chatID, chunk); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// telegramPlainText keeps bot output readable without relying on Telegram's
+// Markdown parser. Some persisted or imported notification text can still
+// contain Markdown bold delimiters; with no parse_mode those delimiters would
+// be shown literally to operators.
+func telegramPlainText(message string) string {
+	message = strings.ReplaceAll(message, "\r\n", "\n")
+	message = strings.ReplaceAll(message, "\r", "\n")
+	message = strings.ReplaceAll(message, "**", "")
+	lines := strings.Split(message, "\n")
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "用户入口一键检测 #"):
+			// The database run ID is an implementation detail. Keep it available
+			// in the admin panel, but do not expose it in operator chat output.
+			lines[index] = "🧭 用户入口检测结果"
+		case trimmed == "用户入口检测近期状态":
+			lines[index] = "🕘 近期检测状态"
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func splitTelegramMessage(message string) []string {

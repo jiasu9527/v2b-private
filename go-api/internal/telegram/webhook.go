@@ -19,8 +19,10 @@ import (
 var ticketReplyPattern = regexp.MustCompile(`#\s*([0-9]+)`)
 
 const (
-	clientEntryMonitorRunCallback    = "client_entry_monitor:run"
-	clientEntryMonitorRecentCallback = "client_entry_monitor:recent"
+	clientEntryMonitorRunCallback      = "client_entry_monitor:run"
+	clientEntryMonitorRecentCallback   = "client_entry_monitor:recent"
+	clientEntryMonitorRunButtonText    = "一键检测用户入口组"
+	clientEntryMonitorRecentButtonText = "查看近期检测结果"
 )
 
 type inlineKeyboardButton struct {
@@ -32,7 +34,19 @@ type inlineKeyboardMarkup struct {
 	InlineKeyboard [][]inlineKeyboardButton `json:"inline_keyboard"`
 }
 
+type replyKeyboardButton struct {
+	Text string `json:"text"`
+}
+
+type replyKeyboardMarkup struct {
+	Keyboard              [][]replyKeyboardButton `json:"keyboard"`
+	ResizeKeyboard        bool                    `json:"resize_keyboard"`
+	IsPersistent          bool                    `json:"is_persistent"`
+	InputFieldPlaceholder string                  `json:"input_field_placeholder,omitempty"`
+}
+
 type webhookMessage struct {
+	ID        int64
 	ChatID    int64
 	Text      string
 	IsPrivate bool
@@ -78,6 +92,10 @@ func (s *Service) HandleWebhook(ctx context.Context, payload map[string]any) err
 		return err
 	}
 
+	if action, ok := clientEntryMonitorActionForText(message.Text); ok {
+		return s.handleMonitorTextAction(ctx, message, action)
+	}
+
 	command, args := parseWebhookCommand(message.Text)
 	switch command {
 	case "/bind":
@@ -108,7 +126,17 @@ func (s *Service) handleMonitorCommand(ctx context.Context, message webhookMessa
 		return s.sendMessage(ctx, message.ChatID, "无权限：仅已绑定 Telegram 的管理员和员工可使用入口检测。")
 	}
 
-	return s.sendMessageMarkup(ctx, message.ChatID, "用户入口检测", entryMonitorKeyboard())
+	// Telegram only accepts one reply_markup per message. Send the persistent
+	// chat keyboard first, then retain the existing inline actions on a second
+	// message so operators can use either interaction style.
+	if err := s.sendMessageMarkup(ctx, message.ChatID,
+		"🛡 用户入口检测\n\n快捷菜单已固定在输入框下方，可随时发起检测或查看结果。",
+		entryMonitorReplyKeyboard()); err != nil {
+		return err
+	}
+	return s.sendMessageMarkup(ctx, message.ChatID,
+		"快捷操作",
+		entryMonitorInlineKeyboard())
 }
 
 func (s *Service) handleCallbackQuery(ctx context.Context, callback webhookCallbackQuery) error {
@@ -127,38 +155,55 @@ func (s *Service) handleCallbackQuery(ctx context.Context, callback webhookCallb
 		return nil
 	}
 
-	userID, authorized, err := s.lookupTelegramOperator(ctx, callback.FromID)
+	return s.handleMonitorAction(ctx, callback.FromID, callback.ChatID, callback.Data, callback.ID)
+}
+
+func (s *Service) handleMonitorTextAction(ctx context.Context, message webhookMessage, action string) error {
+	if !message.IsPrivate || message.ChatID <= 0 {
+		return nil
+	}
+	// Telegram private messages always carry message_id. Refuse a malformed
+	// run request instead of starting it without a stable idempotency key.
+	if action == clientEntryMonitorRunCallback && message.ID <= 0 {
+		return nil
+	}
+	requestKey := ""
+	if message.ID > 0 {
+		requestKey = fmt.Sprintf("telegram-message:%d:%d", message.ChatID, message.ID)
+	}
+	return s.handleMonitorAction(ctx, message.ChatID, message.ChatID, action, requestKey)
+}
+
+func (s *Service) handleMonitorAction(ctx context.Context, telegramID, chatID int64, action, requestKey string) error {
+	userID, authorized, err := s.lookupTelegramOperator(ctx, telegramID)
 	if err != nil {
 		return err
 	}
 	if !authorized {
-		return s.sendMessage(ctx, callback.ChatID, "无权限：仅已绑定 Telegram 的管理员和员工可使用入口检测。")
+		return s.sendMessage(ctx, chatID, "⛔ 无权限\n仅已绑定 Telegram 的管理员和员工可使用入口检测。")
 	}
 
 	if s.entryMonitor == nil {
-		return s.sendMessage(ctx, callback.ChatID, "用户入口检测功能暂不可用。")
+		return s.sendMessage(ctx, chatID, "⚠️ 用户入口检测功能暂不可用，请稍后重试。")
 	}
 
-	switch callback.Data {
+	switch action {
 	case clientEntryMonitorRunCallback:
-		runID, err := s.entryMonitor.StartClientEntryMonitorRun(ctx, userID, callback.ChatID, callback.ID)
+		_, err := s.entryMonitor.StartClientEntryMonitorRun(ctx, userID, chatID, requestKey)
 		if err != nil {
-			return s.sendMessage(ctx, callback.ChatID, "启动用户入口检测失败："+err.Error())
+			return s.sendMessage(ctx, chatID, "❌ 启动检测失败\n原因："+err.Error())
 		}
-		message := "用户入口检测已开始，完成后会将结果发送到当前 Telegram。"
-		if runID > 0 {
-			message = fmt.Sprintf("用户入口检测已开始（任务 #%d），完成后会将结果发送到当前 Telegram。", runID)
-		}
-		return s.sendMessage(ctx, callback.ChatID, message)
+		message := "🚀 检测任务已启动\n完成后，结果会自动发送到当前 Telegram。"
+		return s.sendMessage(ctx, chatID, message)
 	case clientEntryMonitorRecentCallback:
 		report, err := s.entryMonitor.RecentClientEntryMonitorReport(ctx)
 		if err != nil {
-			return s.sendMessage(ctx, callback.ChatID, "获取近期检测结果失败："+err.Error())
+			return s.sendMessage(ctx, chatID, "❌ 获取近期检测结果失败\n原因："+err.Error())
 		}
 		if strings.TrimSpace(report) == "" {
-			report = "暂无近期用户入口检测结果。"
+			report = "📭 暂无近期用户入口检测结果。"
 		}
-		return s.sendMessageChunks(ctx, callback.ChatID, report)
+		return s.sendMessageChunks(ctx, chatID, report)
 	default:
 		return nil
 	}
@@ -184,11 +229,34 @@ LIMIT 1`, telegramID).Scan(&userID)
 	return userID, true, nil
 }
 
-func entryMonitorKeyboard() inlineKeyboardMarkup {
+func entryMonitorInlineKeyboard() inlineKeyboardMarkup {
 	return inlineKeyboardMarkup{InlineKeyboard: [][]inlineKeyboardButton{
-		{{Text: "一键检测用户入口组", CallbackData: clientEntryMonitorRunCallback}},
-		{{Text: "查看近期检测结果", CallbackData: clientEntryMonitorRecentCallback}},
+		{{Text: clientEntryMonitorRunButtonText, CallbackData: clientEntryMonitorRunCallback}},
+		{{Text: clientEntryMonitorRecentButtonText, CallbackData: clientEntryMonitorRecentCallback}},
 	}}
+}
+
+func entryMonitorReplyKeyboard() replyKeyboardMarkup {
+	return replyKeyboardMarkup{
+		Keyboard: [][]replyKeyboardButton{
+			{{Text: clientEntryMonitorRunButtonText}},
+			{{Text: clientEntryMonitorRecentButtonText}},
+		},
+		ResizeKeyboard:        true,
+		IsPersistent:          true,
+		InputFieldPlaceholder: "请选择入口检测操作",
+	}
+}
+
+func clientEntryMonitorActionForText(text string) (string, bool) {
+	switch strings.TrimSpace(text) {
+	case clientEntryMonitorRunButtonText:
+		return clientEntryMonitorRunCallback, true
+	case clientEntryMonitorRecentButtonText:
+		return clientEntryMonitorRecentCallback, true
+	default:
+		return "", false
+	}
 }
 
 func (s *Service) handleBindCommand(ctx context.Context, message webhookMessage, args []string) error {
@@ -434,8 +502,10 @@ func parseWebhookMessage(payload map[string]any) (webhookMessage, bool) {
 	if !ok {
 		return webhookMessage{}, false
 	}
+	messageID, _ := anyToInt64(payload["message_id"])
 
 	message := webhookMessage{
+		ID:        messageID,
 		ChatID:    chatID,
 		Text:      text,
 		IsPrivate: strings.EqualFold(strings.TrimSpace(anyToString(chatPayload["type"])), "private"),

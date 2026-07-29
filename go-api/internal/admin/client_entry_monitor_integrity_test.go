@@ -411,8 +411,8 @@ func TestListClientEntryMonitorRunsCapsEachRunResultSet(t *testing.T) {
 	defer db.Close()
 
 	service := &DBService{db: db, dnsFailoverSchemaOK: true}
-	mock.ExpectQuery(`(?s)SELECT id, policy_ids, status, expected_results,.*FROM v2_client_entry_monitor_run.*LIMIT \$1`).
-		WithArgs(int64(1)).
+	mock.ExpectQuery(`(?s)SELECT id, policy_ids, status, expected_results,.*FROM v2_client_entry_monitor_run\s+WHERE status = 'running' OR created_at >= \$1\s+ORDER BY id DESC LIMIT \$2`).
+		WithArgs(cleanupCutoffHours(24), int64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "policy_ids", "status", "expected_results", "received_results",
 			"started_at", "completed_at", "created_at",

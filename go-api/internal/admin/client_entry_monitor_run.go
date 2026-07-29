@@ -299,7 +299,8 @@ func (s *DBService) ListClientEntryMonitorRuns(ctx context.Context, limit int64)
 	rows, err := s.db.QueryContext(ctx, `SELECT id, policy_ids, status, expected_results,
 	received_results, COALESCE(started_at, 0), completed_at, created_at
 FROM v2_client_entry_monitor_run
-ORDER BY id DESC LIMIT $1`, limit)
+WHERE status = 'running' OR created_at >= $1
+ORDER BY id DESC LIMIT $2`, time.Now().Add(-clientEntryMonitorRetention).Unix(), limit)
 	if err != nil {
 		return nil, fmt.Errorf("query client entry monitor runs: %w", err)
 	}

@@ -42,7 +42,7 @@ func (f telegramRoundTripFunc) RoundTrip(request *http.Request) (*http.Response,
 	return f(request)
 }
 
-func TestMonitorCommandsShowInlineKeyboardToBoundOperators(t *testing.T) {
+func TestMonitorCommandsShowPersistentAndInlineKeyboardsToBoundOperators(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		command string
@@ -58,17 +58,14 @@ func TestMonitorCommandsShowInlineKeyboardToBoundOperators(t *testing.T) {
 			defer db.Close()
 
 			svc := NewService(config.Config{}, db)
-			var gotChatID int64
-			var gotText string
-			var gotMarkup inlineKeyboardMarkup
+			type delivery struct {
+				chatID int64
+				text   string
+				markup any
+			}
+			var deliveries []delivery
 			svc.sendMessageMarkup = func(_ context.Context, chatID int64, text string, markup any) error {
-				gotChatID = chatID
-				gotText = text
-				var ok bool
-				gotMarkup, ok = markup.(inlineKeyboardMarkup)
-				if !ok {
-					t.Fatalf("markup type = %T", markup)
-				}
+				deliveries = append(deliveries, delivery{chatID: chatID, text: text, markup: markup})
 				return nil
 			}
 
@@ -80,12 +77,28 @@ func TestMonitorCommandsShowInlineKeyboardToBoundOperators(t *testing.T) {
 			if err != nil {
 				t.Fatalf("HandleWebhook: %v", err)
 			}
-			if gotChatID != 123 || gotText != "用户入口检测" {
-				t.Fatalf("message = chat %d text %q", gotChatID, gotText)
+			if len(deliveries) != 2 {
+				t.Fatalf("deliveries = %#v", deliveries)
 			}
-			want := entryMonitorKeyboard()
-			if encoded, _ := json.Marshal(gotMarkup); string(encoded) != mustJSON(t, want) {
-				t.Fatalf("keyboard = %s, want %s", encoded, mustJSON(t, want))
+			if deliveries[0].chatID != 123 || !strings.Contains(deliveries[0].text, "固定在输入框下方") {
+				t.Fatalf("reply keyboard message = %#v", deliveries[0])
+			}
+			replyMarkup, ok := deliveries[0].markup.(replyKeyboardMarkup)
+			if !ok {
+				t.Fatalf("reply markup type = %T", deliveries[0].markup)
+			}
+			if !replyMarkup.IsPersistent || !replyMarkup.ResizeKeyboard || mustJSON(t, replyMarkup) != mustJSON(t, entryMonitorReplyKeyboard()) {
+				t.Fatalf("reply keyboard = %s", mustJSON(t, replyMarkup))
+			}
+			if deliveries[1].chatID != 123 || deliveries[1].text != "快捷操作" {
+				t.Fatalf("inline keyboard message = %#v", deliveries[1])
+			}
+			inlineMarkup, ok := deliveries[1].markup.(inlineKeyboardMarkup)
+			if !ok {
+				t.Fatalf("inline markup type = %T", deliveries[1].markup)
+			}
+			if mustJSON(t, inlineMarkup) != mustJSON(t, entryMonitorInlineKeyboard()) {
+				t.Fatalf("inline keyboard = %s", mustJSON(t, inlineMarkup))
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatalf("expectations: %v", err)
@@ -206,7 +219,7 @@ func TestMonitorRunCallbackAcknowledgesAndStartsForAuthorizedStaff(t *testing.T)
 	if err := svc.HandleWebhook(context.Background(), monitorCallbackPayload("callback-1", clientEntryMonitorRunCallback, 123)); err != nil {
 		t.Fatalf("HandleWebhook: %v", err)
 	}
-	if !acknowledged || !strings.Contains(sent, "#42") || !strings.Contains(sent, "检测已开始") {
+	if !acknowledged || !strings.Contains(sent, "检测任务已启动") || strings.Contains(sent, "42") || strings.Contains(sent, "#") {
 		t.Fatalf("acknowledged = %v, message = %q", acknowledged, sent)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -221,7 +234,8 @@ func TestMonitorRecentCallbackAcknowledgesAndSplitsReport(t *testing.T) {
 	}
 	defer db.Close()
 
-	report := strings.Repeat("测", telegramMessageLimit+17)
+	plainReport := strings.Repeat("测", telegramMessageLimit+17)
+	report := "**" + plainReport + "**"
 	acknowledged := false
 	controller := &fakeEntryMonitorController{recent: func(context.Context) (string, error) {
 		if !acknowledged {
@@ -249,11 +263,160 @@ func TestMonitorRecentCallbackAcknowledgesAndSplitsReport(t *testing.T) {
 	if err := svc.HandleWebhook(context.Background(), monitorCallbackPayload("callback-2", clientEntryMonitorRecentCallback, 123)); err != nil {
 		t.Fatalf("HandleWebhook: %v", err)
 	}
-	if len(chunks) != 2 || len([]rune(chunks[0])) > telegramMessageLimit || strings.Join(chunks, "") != report {
-		t.Fatalf("report chunks = lengths %v, joined matches = %v", runeLengths(chunks), strings.Join(chunks, "") == report)
+	if len(chunks) != 2 || len([]rune(chunks[0])) > telegramMessageLimit || strings.Join(chunks, "") != plainReport {
+		t.Fatalf("report chunks = lengths %v, joined matches = %v", runeLengths(chunks), strings.Join(chunks, "") == plainReport)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestMonitorRunReplyKeyboardTextUsesStableMessageIdempotencyKey(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	var requestKeys []string
+	controller := &fakeEntryMonitorController{start: func(_ context.Context, userID, chatID int64, requestKey string) (int64, error) {
+		if userID != 9 || chatID != 123 {
+			t.Fatalf("start args = user %d chat %d", userID, chatID)
+		}
+		requestKeys = append(requestKeys, requestKey)
+		return 42, nil
+	}}
+	svc := NewService(config.Config{}, db).WithEntryMonitorController(controller)
+	svc.answerCallback = func(context.Context, string, string, bool) error {
+		t.Fatal("reply keyboard text must not use callback acknowledgement")
+		return nil
+	}
+	var messages []string
+	svc.sendMessage = func(_ context.Context, chatID int64, text string) error {
+		if chatID != 123 {
+			t.Fatalf("chatID = %d", chatID)
+		}
+		messages = append(messages, text)
+		return nil
+	}
+	for range 2 {
+		mock.ExpectQuery(telegramOperatorQueryPattern).
+			WithArgs(int64(123)).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+	}
+
+	payload := monitorTextPayload(clientEntryMonitorRunButtonText, 123, 77)
+	// Telegram can retry the same webhook. Both deliveries must carry the same
+	// request key so the controller can return the original run idempotently.
+	for range 2 {
+		if err := svc.HandleWebhook(context.Background(), payload); err != nil {
+			t.Fatalf("HandleWebhook: %v", err)
+		}
+	}
+	if len(requestKeys) != 2 || requestKeys[0] != "telegram-message:123:77" || requestKeys[1] != requestKeys[0] {
+		t.Fatalf("request keys = %#v", requestKeys)
+	}
+	if len(messages) != 2 || !strings.Contains(messages[0], "检测任务已启动") || strings.Contains(messages[0], "#") || strings.Contains(messages[0], "42") {
+		t.Fatalf("messages = %#v", messages)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestMonitorRecentReplyKeyboardTextUsesSameAuthorizedAction(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	recentCalled := false
+	controller := &fakeEntryMonitorController{recent: func(context.Context) (string, error) {
+		recentCalled = true
+		return "**用户入口一键检测 #42**\n状态：已完成", nil
+	}}
+	svc := NewService(config.Config{}, db).WithEntryMonitorController(controller)
+	var sent string
+	svc.sendMessage = func(_ context.Context, chatID int64, text string) error {
+		if chatID != 123 {
+			t.Fatalf("chatID = %d", chatID)
+		}
+		sent += text
+		return nil
+	}
+	mock.ExpectQuery(telegramOperatorQueryPattern).
+		WithArgs(int64(123)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+
+	if err := svc.HandleWebhook(context.Background(), monitorTextPayload(clientEntryMonitorRecentButtonText, 123, 78)); err != nil {
+		t.Fatalf("HandleWebhook: %v", err)
+	}
+	if !recentCalled || !strings.Contains(sent, "🧭 用户入口检测结果") || strings.Contains(sent, "**") || strings.Contains(sent, "#42") {
+		t.Fatalf("recent called = %v, message = %q", recentCalled, sent)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestMonitorReplyKeyboardTextRejectsUnauthorizedUser(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	svc := NewService(config.Config{}, db).WithEntryMonitorController(&fakeEntryMonitorController{
+		start: func(context.Context, int64, int64, string) (int64, error) {
+			t.Fatal("unauthorized reply keyboard action must not start a run")
+			return 0, nil
+		},
+	})
+	var sent string
+	svc.sendMessage = func(_ context.Context, _ int64, text string) error {
+		sent = text
+		return nil
+	}
+	mock.ExpectQuery(telegramOperatorQueryPattern).
+		WithArgs(int64(123)).
+		WillReturnError(sql.ErrNoRows)
+
+	if err := svc.HandleWebhook(context.Background(), monitorTextPayload(clientEntryMonitorRunButtonText, 123, 79)); err != nil {
+		t.Fatalf("HandleWebhook: %v", err)
+	}
+	if !strings.Contains(sent, "无权限") {
+		t.Fatalf("message = %q", sent)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestMalformedOrGroupMonitorReplyTextDoesNotStartRun(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	svc := NewService(config.Config{}, db).WithEntryMonitorController(&fakeEntryMonitorController{
+		start: func(context.Context, int64, int64, string) (int64, error) {
+			t.Fatal("malformed or group message must not start a run")
+			return 0, nil
+		},
+	})
+	missingID := monitorTextPayload(clientEntryMonitorRunButtonText, 123, 0)
+	if err := svc.HandleWebhook(context.Background(), missingID); err != nil {
+		t.Fatalf("missing message id: %v", err)
+	}
+	group := monitorTextPayload(clientEntryMonitorRunButtonText, -1001, 80)
+	group["message"].(map[string]any)["chat"].(map[string]any)["type"] = "group"
+	if err := svc.HandleWebhook(context.Background(), group); err != nil {
+		t.Fatalf("group message: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unexpected database access: %v", err)
 	}
 }
 
@@ -469,21 +632,57 @@ func TestTelegramSendMessageEncodesInlineKeyboardMarkup(t *testing.T) {
 		if request.Form.Get("chat_id") != "123" || request.Form.Get("text") != "用户入口检测" {
 			t.Fatalf("form = %#v", request.Form)
 		}
+		if _, exists := request.Form["parse_mode"]; exists {
+			t.Fatalf("plain-text message must not set parse_mode: %#v", request.Form)
+		}
 		var markup inlineKeyboardMarkup
 		if err := json.Unmarshal([]byte(request.Form.Get("reply_markup")), &markup); err != nil {
 			t.Fatalf("decode reply_markup: %v", err)
 		}
-		if mustJSON(t, markup) != mustJSON(t, entryMonitorKeyboard()) {
+		if mustJSON(t, markup) != mustJSON(t, entryMonitorInlineKeyboard()) {
 			t.Fatalf("markup = %s", mustJSON(t, markup))
 		}
 		return telegramOKResponse(), nil
 	})}
 
-	if err := svc.sendMessageWithMarkupNow(context.Background(), 123, "用户入口检测", entryMonitorKeyboard()); err != nil {
+	if err := svc.sendMessageWithMarkupNow(context.Background(), 123, "**用户入口检测**", entryMonitorInlineKeyboard()); err != nil {
 		t.Fatalf("sendMessageWithMarkupNow: %v", err)
 	}
 	if !called {
 		t.Fatal("telegram API was not called")
+	}
+}
+
+func TestTelegramSendMessageEncodesPersistentReplyKeyboardMarkup(t *testing.T) {
+	svc := NewService(config.Config{TelegramBotToken: "bot-token"}, nil)
+	svc.client = &http.Client{Transport: telegramRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/botbot-token/sendMessage" {
+			t.Fatalf("path = %q", request.URL.Path)
+		}
+		if err := request.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		if request.Form.Get("chat_id") != "123" || request.Form.Get("text") != "快捷菜单" {
+			t.Fatalf("form = %#v", request.Form)
+		}
+		if _, exists := request.Form["parse_mode"]; exists {
+			t.Fatalf("plain-text message must not set parse_mode: %#v", request.Form)
+		}
+		var markup replyKeyboardMarkup
+		if err := json.Unmarshal([]byte(request.Form.Get("reply_markup")), &markup); err != nil {
+			t.Fatalf("decode reply_markup: %v", err)
+		}
+		if !markup.IsPersistent || !markup.ResizeKeyboard || markup.InputFieldPlaceholder != "请选择入口检测操作" {
+			t.Fatalf("reply keyboard options = %#v", markup)
+		}
+		if mustJSON(t, markup) != mustJSON(t, entryMonitorReplyKeyboard()) {
+			t.Fatalf("markup = %s", mustJSON(t, markup))
+		}
+		return telegramOKResponse(), nil
+	})}
+
+	if err := svc.sendMessageWithMarkupNow(context.Background(), 123, "快捷菜单", entryMonitorReplyKeyboard()); err != nil {
+		t.Fatalf("sendMessageWithMarkupNow: %v", err)
 	}
 }
 
@@ -508,8 +707,17 @@ func TestTelegramAnswerCallbackQueryUsesDedicatedMethod(t *testing.T) {
 
 func monitorCommandPayload(command string, chatID int64) map[string]any {
 	return map[string]any{"message": map[string]any{
-		"text": command,
-		"chat": map[string]any{"id": chatID, "type": "private"},
+		"message_id": int64(1),
+		"text":       command,
+		"chat":       map[string]any{"id": chatID, "type": "private"},
+	}}
+}
+
+func monitorTextPayload(text string, chatID, messageID int64) map[string]any {
+	return map[string]any{"message": map[string]any{
+		"message_id": messageID,
+		"text":       text,
+		"chat":       map[string]any{"id": chatID, "type": "private"},
 	}}
 }
 
