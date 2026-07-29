@@ -14,6 +14,7 @@ type DNSPodConfigStatus = {
   source?: string;
   edition?: 'international' | 'china';
   auth_type?: 'tc3' | 'token';
+  environment_overrides?: string[];
 };
 
 const editionOptions = [
@@ -622,7 +623,7 @@ export default function DNSPodPage() {
       </div>}
       destroyOnHidden
     >
-      {config.source === 'env' ? <Alert className="dnspod-modal-alert" type="info" showIcon message="当前使用环境变量中的 DNSPod 凭证" description="修改后台配置不会覆盖 DNSPOD_AUTH_TYPE、DNSPOD_API_TOKEN、DNSPOD_SECRET_ID、DNSPOD_SECRET_KEY 和 DNSPOD_EDITION。" /> : null}
+      {config.source === 'env' ? <Alert className="dnspod-modal-alert" type="warning" showIcon message="当前使用服务器环境变量中的 DNSPod 凭证" description={`后台填写的值不会生效。请先从服务环境中删除：${(config.environment_overrides || []).join('、') || 'DNSPOD 相关环境变量'}，然后重启服务。`} /> : null}
       <Form form={settingsForm} layout="vertical">
         <Form.Item name="auth_type" label="鉴权方式" rules={[{ required: true, message: '请选择鉴权方式' }]} extra="国际版控制台生成的 ID,Token 与腾讯云 SecretId/SecretKey 是两套独立凭证，不能混填">
           <Select

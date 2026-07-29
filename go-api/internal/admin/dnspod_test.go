@@ -235,6 +235,14 @@ func TestDBServiceDNSPodEnvironmentOverridesAreMergedPerField(t *testing.T) {
 	if err != nil || status.Source != "env" {
 		t.Fatalf("expected environment source, got status=%#v err=%v", status, err)
 	}
+	if got := strings.Join(status.EnvironmentOverrides, ","); got != "DNSPOD_SECRET_ID,DNSPOD_EDITION" {
+		t.Fatalf("unexpected environment override names: %q", got)
+	}
+	if _, err := service.SaveDNSPodConfig(context.Background(), DNSPodConfigSaveRequest{
+		SecretID: "new-id", SecretKey: "new-key", AuthType: dnspod.AuthTypeTC3,
+	}); err == nil || !strings.Contains(err.Error(), "DNSPOD_SECRET_ID") || !strings.Contains(err.Error(), "后台保存不会生效") {
+		t.Fatalf("expected actionable environment override save error, got %v", err)
+	}
 }
 
 func TestDBServiceDNSPodSwitchingAuthRemovesInactiveCredentials(t *testing.T) {

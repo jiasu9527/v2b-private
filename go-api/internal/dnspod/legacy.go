@@ -57,18 +57,19 @@ func (e *LegacyAPIError) Error() string {
 	if e == nil {
 		return "DNSPod 国际版 Token API 请求失败"
 	}
-	message := strings.TrimSpace(e.Message)
+	providerMessage := strings.TrimSpace(e.Message)
+	message := providerMessage
 	switch strings.TrimSpace(e.Code) {
 	case "26":
 		// The legacy international API uses the key returned by Record.Line
 		// (for example, "default" or "asia"). Tencent Cloud TC3 line IDs
 		// such as "10=0" are not valid values for record_line.
 		message = "DNSPod 国际版记录线路无效，请使用 Record.Line 返回的线路名称对应的 key（默认线路为 default），不要填写腾讯云线路 ID"
-	case "-1":
-		message = "DNSPod API Token 鉴权失败，请确认填写的是完整的 ID,Token，且 Token 仍然有效"
+	case "-1", "10004":
+		message = legacyTokenAuthError(providerMessage)
 	default:
-		if strings.Contains(strings.ToLower(message), "token") || strings.Contains(strings.ToLower(message), "login") {
-			message = "DNSPod API Token 鉴权失败，请确认填写的是完整的 ID,Token，且 Token 仍然有效"
+		if strings.Contains(strings.ToLower(providerMessage), "token") || strings.Contains(strings.ToLower(providerMessage), "login") {
+			message = legacyTokenAuthError(providerMessage)
 		} else if message == "" {
 			message = "DNSPod 国际版 Token API 返回错误"
 		} else {
@@ -79,6 +80,14 @@ func (e *LegacyAPIError) Error() string {
 		message += " 错误码=" + e.Code
 	}
 	return message
+}
+
+func legacyTokenAuthError(providerMessage string) string {
+	message := "DNSPod API Token 鉴权被服务商拒绝"
+	if providerMessage = strings.TrimSpace(providerMessage); providerMessage != "" {
+		message += "：" + providerMessage
+	}
+	return message + "；请确认 Token 在 DNSPod 控制台仍处于启用状态，并检查服务器环境变量 DNSPOD_API_TOKEN 是否覆盖了后台配置"
 }
 
 func (c *LegacyClient) call(ctx context.Context, action string, values url.Values) (map[string]any, error) {

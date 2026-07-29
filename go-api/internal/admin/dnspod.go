@@ -31,12 +31,13 @@ type dnspodAPI interface {
 }
 
 type DNSPodConfigStatus struct {
-	Configured       bool   `json:"configured"`
-	SecretIDMasked   string `json:"secret_id_masked"`
-	Source           string `json:"source"`
-	Edition          string `json:"edition"`
-	AuthType         string `json:"auth_type"`
-	CredentialMasked string `json:"credential_masked"`
+	Configured           bool     `json:"configured"`
+	SecretIDMasked       string   `json:"secret_id_masked"`
+	Source               string   `json:"source"`
+	Edition              string   `json:"edition"`
+	AuthType             string   `json:"auth_type"`
+	CredentialMasked     string   `json:"credential_masked"`
+	EnvironmentOverrides []string `json:"environment_overrides,omitempty"`
 }
 
 type DNSPodConfigSaveRequest struct {
@@ -93,16 +94,20 @@ func (s *DBService) GetDNSPodConfig(_ context.Context) (DNSPodConfigStatus, erro
 		masked = maskDNSPodAPIToken(credentials.APIToken)
 	}
 	return DNSPodConfigStatus{
-		Configured:       configured,
-		SecretIDMasked:   maskDNSPodSecretID(credentials.SecretID),
-		Source:           credentials.Source,
-		Edition:          credentials.Edition,
-		AuthType:         credentials.AuthType,
-		CredentialMasked: masked,
+		Configured:           configured,
+		SecretIDMasked:       maskDNSPodSecretID(credentials.SecretID),
+		Source:               credentials.Source,
+		Edition:              credentials.Edition,
+		AuthType:             credentials.AuthType,
+		CredentialMasked:     masked,
+		EnvironmentOverrides: activeDNSPodEnvironmentOverrides(),
 	}, nil
 }
 
 func (s *DBService) SaveDNSPodConfig(ctx context.Context, request DNSPodConfigSaveRequest) (DNSPodConfigStatus, error) {
+	if overrides := activeDNSPodEnvironmentOverrides(); !request.Clear && len(overrides) > 0 {
+		return DNSPodConfigStatus{}, fmt.Errorf("当前 DNSPod 凭证由服务器环境变量覆盖（%s），后台保存不会生效；请先删除这些环境变量并重启服务", strings.Join(overrides, "、"))
+	}
 	var mutationErr error
 	err := updateAdminConfigStore(adminConfigPath(), func(cfg *phpConfigFile) error {
 		if request.Clear {
@@ -180,6 +185,17 @@ func (s *DBService) SaveDNSPodConfig(ctx context.Context, request DNSPodConfigSa
 		return DNSPodConfigStatus{}, fmt.Errorf("保存 DNSPod 配置失败: %w", err)
 	}
 	return s.GetDNSPodConfig(ctx)
+}
+
+func activeDNSPodEnvironmentOverrides() []string {
+	keys := []string{"DNSPOD_AUTH_TYPE", "DNSPOD_API_TOKEN", "DNSPOD_SECRET_ID", "DNSPOD_SECRET_KEY", "DNSPOD_EDITION"}
+	active := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if strings.TrimSpace(os.Getenv(key)) != "" {
+			active = append(active, key)
+		}
+	}
+	return active
 }
 
 func (s *DBService) TestDNSPodConfig(ctx context.Context, request DNSPodConfigSaveRequest) error {

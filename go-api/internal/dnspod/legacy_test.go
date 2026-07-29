@@ -258,3 +258,12 @@ func TestLegacyAPIErrorExplainsIncorrectRecordLine(t *testing.T) {
 		t.Fatalf("incorrect record line error is not actionable: %q", err)
 	}
 }
+
+func TestLegacyAPIErrorPreservesProviderTokenFailure(t *testing.T) {
+	for _, code := range []string{"-1", "10004"} {
+		err := (&LegacyAPIError{Code: code, Message: "Token verification failed"}).Error()
+		if !strings.Contains(err, "Token verification failed") || !strings.Contains(err, "DNSPOD_API_TOKEN") || !strings.Contains(err, "错误码="+code) {
+			t.Fatalf("token error lost provider diagnostics for code %s: %q", code, err)
+		}
+	}
+}
