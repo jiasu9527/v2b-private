@@ -2,13 +2,42 @@ package admin
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestClientEntryProbeFailureCreatesStateAndAlertEvent(t *testing.T) {
+func TestConfirmClientEntryMonitorAvailability(t *testing.T) {
+	tests := []struct {
+		name          string
+		previous      sql.NullInt64
+		success       bool
+		failureStreak int64
+		want          sql.NullInt64
+		wantEvent     string
+	}{
+		{name: "unknown first failure", failureStreak: 1, want: sql.NullInt64{}},
+		{name: "unknown second failure", failureStreak: 2, want: sql.NullInt64{Int64: 0, Valid: true}, wantEvent: "down"},
+		{name: "healthy first failure", previous: sql.NullInt64{Int64: 1, Valid: true}, failureStreak: 1, want: sql.NullInt64{Int64: 1, Valid: true}},
+		{name: "healthy second failure", previous: sql.NullInt64{Int64: 1, Valid: true}, failureStreak: 2, want: sql.NullInt64{Int64: 0, Valid: true}, wantEvent: "down"},
+		{name: "confirmed third failure", previous: sql.NullInt64{Int64: 0, Valid: true}, failureStreak: 3, want: sql.NullInt64{Int64: 0, Valid: true}},
+		{name: "legacy confirmed failure stays down", previous: sql.NullInt64{Int64: 0, Valid: true}, failureStreak: 1, want: sql.NullInt64{Int64: 0, Valid: true}},
+		{name: "success after transient failure", previous: sql.NullInt64{Int64: 1, Valid: true}, success: true, want: sql.NullInt64{Int64: 1, Valid: true}},
+		{name: "success after confirmed failure", previous: sql.NullInt64{Int64: 0, Valid: true}, success: true, want: sql.NullInt64{Int64: 1, Valid: true}, wantEvent: "recovered"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, event := confirmClientEntryMonitorAvailability(test.previous, test.success, test.failureStreak)
+			if got != test.want || event != test.wantEvent {
+				t.Fatalf("availability = (%+v, %q), want (%+v, %q)", got, event, test.want, test.wantEvent)
+			}
+		})
+	}
+}
+
+func TestClientEntryProbeFirstFailureStaysPendingWithoutAlert(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -28,13 +57,61 @@ func TestClientEntryProbeFailureCreatesStateAndAlertEvent(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "policy_name", "target_name", "host", "port", "probe_name"}).
 			AddRow(targetID, int64(2), int64(3), int64(42), "高级入口", "独立入口", "entry.example.com", int64(443), "东京探针"))
 	mock.ExpectQuery(`(?s)INSERT INTO v2_client_entry_monitor_result_inbox.*ON CONFLICT \(probe_id, result_id\) DO NOTHING.*RETURNING id`).
-		WithArgs(probeID, targetID, nil, "entry-result-1", sqlmock.AnyArg()).
+		WithArgs(probeID, targetID, nil, "entry-timeout-1", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
 	mock.ExpectQuery(`(?s)SELECT last_success, consecutive_success, consecutive_failure.*FROM v2_client_entry_monitor_state.*FOR UPDATE`).
 		WithArgs(targetID, probeID).
-		WillReturnRows(sqlmock.NewRows([]string{"last_success", "consecutive_success", "consecutive_failure"}))
+		WillReturnRows(sqlmock.NewRows([]string{"last_success", "consecutive_success", "consecutive_failure"}).
+			AddRow(int64(1), int64(3), int64(0)))
 	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_state.*ON CONFLICT \(target_id, probe_id\) DO UPDATE SET`).
-		WithArgs(targetID, probeID, int64(0), nil, "connection refused", "203.0.113.9", int64(0), int64(1), sqlmock.AnyArg()).
+		WithArgs(targetID, probeID, int64(1), nil, "timeout", "203.0.113.9", int64(0), int64(1), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	failed := false
+	result, err := service.ReportDNSProbeResults(context.Background(), probeID, DNSProbeResultsRequest{Results: []DNSProbeResult{{
+		ResultID: "entry-timeout-1", TargetID: clientEntryProbeTargetOffset + targetID,
+		TargetVersion: 2, Success: &failed, Error: "timeout", ResolvedIP: "203.0.113.9",
+	}}})
+	if err != nil {
+		t.Fatalf("ReportDNSProbeResults: %v", err)
+	}
+	if result.Accepted != 1 || result.Skipped != 0 || result.Duplicates != 0 {
+		t.Fatalf("result = %#v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestClientEntryProbeSecondFailureCreatesStateAndAlertEvent(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	probeID := int64(7)
+	targetID := int64(5)
+	now := time.Now().Unix()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT enabled, last_heartbeat_at FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
+		WithArgs(probeID).
+		WillReturnRows(sqlmock.NewRows([]string{"enabled", "last_heartbeat_at"}).AddRow(int64(1), now))
+	mock.ExpectQuery(`(?s)SELECT target.id, target.generation, monitor.id, monitor.policy_id,.*FROM v2_client_entry_monitor_target target.*WHERE target.id = \$2`).
+		WithArgs(probeID, targetID).
+		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "policy_name", "target_name", "host", "port", "probe_name"}).
+			AddRow(targetID, int64(2), int64(3), int64(42), "高级入口", "独立入口", "entry.example.com", int64(443), "东京探针"))
+	mock.ExpectQuery(`(?s)INSERT INTO v2_client_entry_monitor_result_inbox.*ON CONFLICT \(probe_id, result_id\) DO NOTHING.*RETURNING id`).
+		WithArgs(probeID, targetID, nil, "entry-timeout-2", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
+	mock.ExpectQuery(`(?s)SELECT last_success, consecutive_success, consecutive_failure.*FROM v2_client_entry_monitor_state.*FOR UPDATE`).
+		WithArgs(targetID, probeID).
+		WillReturnRows(sqlmock.NewRows([]string{"last_success", "consecutive_success", "consecutive_failure"}).
+			AddRow(int64(1), int64(0), int64(1)))
+	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_state.*ON CONFLICT \(target_id, probe_id\) DO UPDATE SET`).
+		WithArgs(targetID, probeID, int64(0), nil, "timeout", "203.0.113.9", int64(0), int64(2), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_event.*VALUES`).
 		WithArgs(int64(3), targetID, probeID, "down", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
@@ -43,8 +120,8 @@ func TestClientEntryProbeFailureCreatesStateAndAlertEvent(t *testing.T) {
 
 	failed := false
 	result, err := service.ReportDNSProbeResults(context.Background(), probeID, DNSProbeResultsRequest{Results: []DNSProbeResult{{
-		ResultID: "entry-result-1", TargetID: clientEntryProbeTargetOffset + targetID,
-		TargetVersion: 2, Success: &failed, Error: "connection refused", ResolvedIP: "203.0.113.9",
+		ResultID: "entry-timeout-2", TargetID: clientEntryProbeTargetOffset + targetID,
+		TargetVersion: 2, Success: &failed, Error: "timeout", ResolvedIP: "203.0.113.9",
 	}}})
 	if err != nil {
 		t.Fatalf("ReportDNSProbeResults: %v", err)

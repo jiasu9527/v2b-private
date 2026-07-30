@@ -20,6 +20,7 @@ import { apiGet, apiJsonPost, apiPut, unwrapData } from '../lib/api';
 import './DNSFailoverEntryMonitorTab.css';
 
 const ENTRY_MONITOR_PATH = '/dns-failover/entry-monitors';
+const ENTRY_MONITOR_FAILURE_THRESHOLD = 2;
 
 type EntryPolicyAction = 'override' | 'original' | 'hide';
 
@@ -714,6 +715,10 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
             const probeID = numberValue(state.probe_id);
             const probe = probeByID.get(probeID);
             const success = stateSuccess(state);
+            const failureStreak = numberValue(state.consecutive_failure);
+            const awaitingFailureConfirmation = success !== false
+              && failureStreak > 0
+              && failureStreak < ENTRY_MONITOR_FAILURE_THRESHOLD;
             const latency = stateLatency(state);
             const ip = stateIP(state);
             const error = stateError(state);
@@ -723,6 +728,8 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
               </Tooltip>
               {state.stale
                 ? <Tag color="warning">已过期</Tag>
+                : awaitingFailureConfirmation
+                  ? <Tag color="warning">待复核 {failureStreak}/{ENTRY_MONITOR_FAILURE_THRESHOLD}</Tag>
                 : success === true
                   ? <Tag color="success">成功</Tag>
                   : success === false

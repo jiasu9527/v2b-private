@@ -11,7 +11,10 @@ import (
 	"time"
 )
 
-const clientEntryProbeTargetOffset int64 = 1 << 62
+const (
+	clientEntryProbeTargetOffset       int64 = 1 << 62
+	clientEntryMonitorFailureThreshold int64 = 2
+)
 
 type clientEntryProbeTargetSnapshot struct {
 	TargetID      int64
@@ -189,6 +192,11 @@ FOR UPDATE`, targetID, probeID).Scan(&previousSuccess, &successStreak, &failureS
 		if success {
 			errorText = ""
 		}
+		confirmedSuccess, transition := confirmClientEntryMonitorAvailability(previousSuccess, success, failureStreak)
+		var confirmedSuccessValue any
+		if confirmedSuccess.Valid {
+			confirmedSuccessValue = confirmedSuccess.Int64
+		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO v2_client_entry_monitor_state
 (target_id, probe_id, last_success, last_latency_ms, last_error, last_resolved_ip,
 consecutive_success, consecutive_failure, last_reported_at, updated_at)
@@ -199,16 +207,10 @@ last_error = EXCLUDED.last_error, last_resolved_ip = EXCLUDED.last_resolved_ip,
 consecutive_success = EXCLUDED.consecutive_success,
 consecutive_failure = EXCLUDED.consecutive_failure,
 last_reported_at = EXCLUDED.last_reported_at, updated_at = EXCLUDED.updated_at`,
-			targetID, probeID, boolToInt64(success), latency, errorText, result.ResolvedIP,
+			targetID, probeID, confirmedSuccessValue, latency, errorText, result.ResolvedIP,
 			successStreak, failureStreak, now)
 		if err != nil {
 			return summary, fmt.Errorf("save client entry monitor state: %w", err)
-		}
-		transition := ""
-		if !success && (!previousSuccess.Valid || previousSuccess.Int64 == 1) {
-			transition = "down"
-		} else if success && previousSuccess.Valid && previousSuccess.Int64 == 0 {
-			transition = "recovered"
 		}
 		if transition != "" {
 			details, _ := json.Marshal(map[string]any{
@@ -218,6 +220,8 @@ last_reported_at = EXCLUDED.last_reported_at, updated_at = EXCLUDED.updated_at`,
 				"probe_id": probeID, "probe_name": snapshot.ProbeName,
 				"success": success, "latency_ms": result.LatencyMS,
 				"error": errorText, "resolved_ip": result.ResolvedIP,
+				"consecutive_failure": failureStreak,
+				"failure_threshold":   clientEntryMonitorFailureThreshold,
 			})
 			message := formatClientEntryMonitorTransition(snapshot, transition, result, now)
 			if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_monitor_event
@@ -271,6 +275,30 @@ WHERE id = $1`, runID, received, status, completedAt, now); err != nil {
 		requestDNSFailoverEvaluationWake(ctx, s.dnsFailoverEvaluator, nil)
 	}
 	return summary, nil
+}
+
+// confirmClientEntryMonitorAvailability keeps last_success as the confirmed
+// availability state instead of the latest raw sample. The first failed check
+// preserves the previous state, so a transient timeout produces neither a
+// false down event nor a later false recovery. The second consecutive failure
+// confirms the target as down.
+func confirmClientEntryMonitorAvailability(previous sql.NullInt64, success bool, failureStreak int64) (sql.NullInt64, string) {
+	confirmed := previous
+	if success {
+		confirmed = sql.NullInt64{Int64: 1, Valid: true}
+		if previous.Valid && previous.Int64 == 0 {
+			return confirmed, "recovered"
+		}
+		return confirmed, ""
+	}
+	if failureStreak < clientEntryMonitorFailureThreshold {
+		return confirmed, ""
+	}
+	confirmed = sql.NullInt64{Int64: 0, Valid: true}
+	if !previous.Valid || previous.Int64 == 1 {
+		return confirmed, "down"
+	}
+	return confirmed, ""
 }
 
 func loadClientEntryProbeTargetSnapshot(ctx context.Context, tx *sql.Tx, probeID, targetID int64) (clientEntryProbeTargetSnapshot, error) {
