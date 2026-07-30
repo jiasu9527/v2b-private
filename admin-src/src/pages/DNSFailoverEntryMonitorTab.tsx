@@ -495,10 +495,10 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
     const next = uniqueIDs(keys as any[]).filter((policyID) => selectablePolicyIDs.has(policyID));
     selectedPolicyIDsRef.current = next;
     setSelectedPolicyIDs(next);
-    setExpandedPolicyIDs((current) => Array.from(new Set([
-      ...current.filter((policyID) => next.includes(policyID)),
-      ...next,
-    ])));
+    // Selection and expansion are intentionally independent. Removing an
+    // expanded rule from monitoring must not unmount its configuration table
+    // and make the scroll container jump; rows only open or close via the
+    // table's expand control.
     markEdited();
   };
 
