@@ -1049,13 +1049,14 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		return true
 	}
 	var payload struct {
-		ID         *json.Number            `json:"id"`
-		Name       string                  `json:"name"`
-		Action     string                  `json:"action"`
-		Conditions []cliententry.Condition `json:"conditions"`
-		EntryHost  string                  `json:"entry_host"`
-		ExtraNodes []string                `json:"extra_nodes"`
-		Members    []struct {
+		ID                 *json.Number            `json:"id"`
+		Name               string                  `json:"name"`
+		Action             string                  `json:"action"`
+		Conditions         []cliententry.Condition `json:"conditions"`
+		EntryHost          string                  `json:"entry_host"`
+		ExtraNodes         []string                `json:"extra_nodes"`
+		ExtraNodesPosition string                  `json:"extra_nodes_position"`
+		Members            []struct {
 			ServerType string       `json:"server_type"`
 			ServerID   *json.Number `json:"server_id"`
 			Sort       *json.Number `json:"sort"`
@@ -1082,6 +1083,7 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		payload.Action = strings.TrimSpace(inputs["action"])
 		payload.EntryHost = strings.TrimSpace(inputs["entry_host"])
 		payload.ExtraNodes = splitClientEntryLines(inputs["extra_nodes"])
+		payload.ExtraNodesPosition = strings.TrimSpace(inputs["extra_nodes_position"])
 		if raw := strings.TrimSpace(inputs["conditions"]); raw != "" {
 			if err := json.Unmarshal([]byte(raw), &payload.Conditions); err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"message": "匹配条件格式无效"})
@@ -1142,7 +1144,7 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		members = append(members, admin.ClientEntryGroupMemberSaveRequest{ServerType: member.ServerType, ServerID: *serverID, Sort: sortValue})
 	}
 	saved, err := adminService.SaveClientEntryUserPolicy(r.Context(), admin.ClientEntryUserPolicySaveRequest{
-		ID: id, Name: payload.Name, Action: payload.Action, Conditions: payload.Conditions, EntryHost: payload.EntryHost, ExtraNodes: payload.ExtraNodes, Members: members, Enabled: enabled, Remarks: payload.Remarks,
+		ID: id, Name: payload.Name, Action: payload.Action, Conditions: payload.Conditions, EntryHost: payload.EntryHost, ExtraNodes: payload.ExtraNodes, ExtraNodesPosition: payload.ExtraNodesPosition, Members: members, Enabled: enabled, Remarks: payload.Remarks,
 	})
 	if err != nil {
 		return handleAdminError(w, err)

@@ -8,6 +8,7 @@ import {
   InputNumber,
   Modal,
   Popconfirm,
+  Segmented,
   Select,
   Space,
   Spin,
@@ -43,6 +44,7 @@ type EntryCondition = {
 type UserOption = { value: number; label: string };
 type EmailOption = { value: string; label: string };
 type PolicyAction = 'override' | 'original' | 'hide';
+type ExtraNodePosition = 'before' | 'after';
 
 const fieldOptions = [
   { label: '用户 ID', value: 'user_id' },
@@ -200,6 +202,10 @@ function normalizePolicyAction(value: any): PolicyAction {
   return 'override';
 }
 
+function normalizeExtraNodePosition(value: any): ExtraNodePosition {
+  return value === 'before' ? 'before' : 'after';
+}
+
 function policyPayload(row: any, overrides: Record<string, any> = {}) {
   const source = { ...row, ...overrides };
   const action = normalizePolicyAction(source.action);
@@ -213,6 +219,7 @@ function policyPayload(row: any, overrides: Record<string, any> = {}) {
       .map((member: any) => typeof member === 'string' ? splitMemberKey(member) : member)
       .filter(Boolean),
     extra_nodes: parseExtraNodes(source.extra_nodes),
+    extra_nodes_position: normalizeExtraNodePosition(source.extra_nodes_position),
     enabled: source.enabled === true || Number(source.enabled) !== 0 ? 1 : 0,
     remarks: String(source.remarks || '').trim(),
   };
@@ -371,6 +378,7 @@ function PolicyEditor({
       conditions,
       members: normalizedMembers(row),
       extra_nodes: parseExtraNodes(row?.extra_nodes).join('\n'),
+      extra_nodes_position: normalizeExtraNodePosition(row?.extra_nodes_position),
       enabled: row?.enabled === undefined ? true : Number(row.enabled) !== 0,
       remarks: row?.remarks || '',
     });
@@ -533,6 +541,16 @@ function PolicyEditor({
             placeholder={'例如：\ntrojan://password@example.com:443?allowInsecure=1&peer=example.com#Hong%20Kong%20%7C%2001'}
           />
         </Form.Item>
+        {extraNodeCount > 0 && <Form.Item
+          name="extra_nodes_position"
+          label="额外节点位置"
+          tooltip="选择置顶后，额外节点会按上方行顺序排在站内节点前面。"
+        >
+          <Segmented block options={[
+            { label: '现有节点前面（置顶）', value: 'before' },
+            { label: '现有节点后面（置底）', value: 'after' },
+          ]} />
+        </Form.Item>}
         <Form.Item name="enabled" label="状态" valuePropName="checked">
           <Switch checkedChildren="启用" unCheckedChildren="禁用" />
         </Form.Item>
@@ -613,17 +631,19 @@ function policyMatches(row: any, input: any) {
 function policyResultDescription(row: any) {
   const action = normalizePolicyAction(row?.action);
   const extraNodeCount = parseExtraNodes(row?.extra_nodes).length;
-  const extraDescription = extraNodeCount ? `；另下发 ${extraNodeCount} 个额外节点（保留 URI 原地址）` : '';
+  const position = normalizeExtraNodePosition(row?.extra_nodes_position) === 'before' ? '置顶' : '置底';
+  const extraDescription = extraNodeCount ? `；另下发 ${extraNodeCount} 个额外节点（${position}，保留 URI 原地址）` : '';
   if (action === 'hide') return `结果：不下发所选节点${extraDescription}`;
   if (action === 'original') return `结果：下发所选节点各自的原入口地址${extraDescription}`;
   return `结果：下发独立入口 ${row?.entry_host || '-'}${extraDescription}`;
 }
 
-function ExtraNodesSummary({ value }: { value: any }) {
+function ExtraNodesSummary({ value, position }: { value: any; position: any }) {
   const nodes = parseExtraNodes(value);
   if (!nodes.length) return <>-</>;
+  const positionLabel = normalizeExtraNodePosition(position) === 'before' ? '置顶' : '置底';
   return <details className="client-entry-members">
-    <summary>额外下发 {nodes.length} 个节点</summary>
+    <summary>额外下发 {nodes.length} 个节点（{positionLabel}）</summary>
     <div style={{ marginTop: 8, maxHeight: 180, maxWidth: 360, overflow: 'auto' }}>
       {nodes.map((node, index) => <Typography.Text
         key={`${index}-${node}`}
@@ -760,6 +780,7 @@ export default function ClientEntryUserPolicyPage() {
         ...row,
         conditions: parseConditions(row.conditions),
         extra_nodes: parseExtraNodes(row.extra_nodes),
+        extra_nodes_position: normalizeExtraNodePosition(row.extra_nodes_position),
       })));
       setServerOptions(buildVisibleServerOptions(Array.isArray(nodeRes.data) ? nodeRes.data : []));
     } catch (error: any) {
@@ -882,7 +903,7 @@ export default function ClientEntryUserPolicyPage() {
       title: '额外节点',
       dataIndex: 'extra_nodes',
       width: 190,
-      render: (value: any) => <ExtraNodesSummary value={value} />,
+      render: (value: any, row: any) => <ExtraNodesSummary value={value} position={row.extra_nodes_position} />,
     },
     {
       title: '状态',

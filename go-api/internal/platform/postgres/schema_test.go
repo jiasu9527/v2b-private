@@ -37,6 +37,7 @@ func expectCurrentClientEntrySchema(mock sqlmock.Sqlmock, columnsExist bool) {
 		{"v2_client_entry_user_policy", "conditions", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN conditions text NOT NULL DEFAULT '\[\]'`},
 		{"v2_client_entry_user_policy", "entry_host", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN entry_host varchar\(255\) NOT NULL DEFAULT ''`},
 		{"v2_client_entry_user_policy", "extra_nodes", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN extra_nodes text NOT NULL DEFAULT '\[\]'`},
+		{"v2_client_entry_user_policy", "extra_nodes_position", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN extra_nodes_position varchar\(16\) NOT NULL DEFAULT 'after'`},
 		{"v2_server_shadowsocks", "client_entry_only", `ALTER TABLE v2_server_shadowsocks ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
 		{"v2_server_vmess", "client_entry_only", `ALTER TABLE v2_server_vmess ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
 		{"v2_server_vless", "client_entry_only", `ALTER TABLE v2_server_vless ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},

@@ -10,12 +10,13 @@ import (
 )
 
 type clientEntryUserPolicy struct {
-	ID         int64
-	Action     string
-	EntryHost  string
-	ExtraNodes []string
-	Conditions []cliententry.Condition
-	Members    []ClientEntryGroupMember
+	ID                 int64
+	Action             string
+	EntryHost          string
+	ExtraNodes         []string
+	ExtraNodesPosition string
+	Conditions         []cliententry.Condition
+	Members            []ClientEntryGroupMember
 }
 
 func (s *DBService) loadClientEntryUserPolicies(ctx context.Context) ([]clientEntryUserPolicy, error) {
@@ -23,7 +24,7 @@ func (s *DBService) loadClientEntryUserPolicies(ctx context.Context) ([]clientEn
 		return nil, err
 	}
 
-	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.action, p.conditions, p.entry_host, p.extra_nodes, m.server_type, m.server_id, m.sort AS member_sort
+	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.action, p.conditions, p.entry_host, p.extra_nodes, p.extra_nodes_position, m.server_type, m.server_id, m.sort AS member_sort
 FROM v2_client_entry_user_policy p
 JOIN v2_client_entry_user_policy_member m ON m.policy_id = p.id
 WHERE p.enabled = 1
@@ -53,13 +54,18 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC, m.sort ASC NULLS LAST, m.id ASC`)
 			if err != nil {
 				return nil, fmt.Errorf("decode client entry rule %d extra nodes: %w", id, err)
 			}
+			extraNodesPosition, err := subscribelink.NormalizePosition(fmt.Sprint(row["extra_nodes_position"]))
+			if err != nil {
+				return nil, fmt.Errorf("decode client entry rule %d extra node position: %w", id, err)
+			}
 			policy = &clientEntryUserPolicy{
-				ID:         id,
-				Action:     action,
-				EntryHost:  strings.TrimSpace(fmt.Sprint(row["entry_host"])),
-				ExtraNodes: extraNodes,
-				Conditions: conditions,
-				Members:    []ClientEntryGroupMember{},
+				ID:                 id,
+				Action:             action,
+				EntryHost:          strings.TrimSpace(fmt.Sprint(row["entry_host"])),
+				ExtraNodes:         extraNodes,
+				ExtraNodesPosition: extraNodesPosition,
+				Conditions:         conditions,
+				Members:            []ClientEntryGroupMember{},
 			}
 			byID[id] = policy
 			order = append(order, id)
@@ -134,16 +140,27 @@ func applyClientEntryUserPolicies(servers []map[string]any, subject cliententry.
 		if _, matched := matchedPolicyIDs[policy.ID]; !matched {
 			continue
 		}
+		extraServers := make([]map[string]any, 0, len(policy.ExtraNodes))
 		for index, raw := range policy.ExtraNodes {
 			extra, err := subscribelink.Parse(raw)
 			if err != nil {
 				continue
 			}
 			extra["id"] = -((policy.ID * 1000) + int64(index+1))
-			extra["sort"] = int64(len(result) + 1)
 			extra["client_entry_user_policy"] = 1
 			extra["client_entry_user_policy_id"] = policy.ID
-			result = append(result, extra)
+			extraServers = append(extraServers, extra)
+		}
+		if policy.ExtraNodesPosition == subscribelink.PositionBefore {
+			for index, extra := range extraServers {
+				extra["sort"] = int64(index - len(extraServers))
+			}
+			result = append(extraServers, result...)
+		} else {
+			for index, extra := range extraServers {
+				extra["sort"] = int64(len(result) + index + 1)
+			}
+			result = append(result, extraServers...)
 		}
 		break
 	}

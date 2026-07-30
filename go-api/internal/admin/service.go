@@ -1256,28 +1256,30 @@ func randomAlphaNumeric(length int) (string, error) {
 }
 
 type ClientEntryUserPolicyRecord struct {
-	ID         int64                          `json:"id"`
-	Name       string                         `json:"name"`
-	Sort       int64                          `json:"sort"`
-	Action     string                         `json:"action"`
-	Conditions []cliententry.Condition        `json:"conditions"`
-	Members    []ClientEntryGroupMemberRecord `json:"members,omitempty"`
-	EntryHost  string                         `json:"entry_host"`
-	ExtraNodes []string                       `json:"extra_nodes"`
-	Enabled    int64                          `json:"enabled"`
-	Remarks    string                         `json:"remarks"`
-	CreatedAt  int64                          `json:"created_at,omitempty"`
-	UpdatedAt  int64                          `json:"updated_at,omitempty"`
+	ID                 int64                          `json:"id"`
+	Name               string                         `json:"name"`
+	Sort               int64                          `json:"sort"`
+	Action             string                         `json:"action"`
+	Conditions         []cliententry.Condition        `json:"conditions"`
+	Members            []ClientEntryGroupMemberRecord `json:"members,omitempty"`
+	EntryHost          string                         `json:"entry_host"`
+	ExtraNodes         []string                       `json:"extra_nodes"`
+	ExtraNodesPosition string                         `json:"extra_nodes_position"`
+	Enabled            int64                          `json:"enabled"`
+	Remarks            string                         `json:"remarks"`
+	CreatedAt          int64                          `json:"created_at,omitempty"`
+	UpdatedAt          int64                          `json:"updated_at,omitempty"`
 }
 
 type ClientEntryUserPolicySaveRequest struct {
-	ID         *int64
-	Name       string
-	Action     string
-	Conditions []cliententry.Condition
-	Members    []ClientEntryGroupMemberSaveRequest
-	EntryHost  string
-	ExtraNodes []string
-	Enabled    *int64
-	Remarks    string
+	ID                 *int64
+	Name               string
+	Action             string
+	Conditions         []cliententry.Condition
+	Members            []ClientEntryGroupMemberSaveRequest
+	EntryHost          string
+	ExtraNodes         []string
+	ExtraNodesPosition string
+	Enabled            *int64
+	Remarks            string
 }

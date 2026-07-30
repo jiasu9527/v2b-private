@@ -9,6 +9,7 @@ import (
 
 	"forest/go-api/internal/cliententry"
 	"forest/go-api/internal/config"
+	"forest/go-api/internal/subscribelink"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -251,6 +252,27 @@ func TestApplyClientEntryUserPolicyAppendsExtraNodesInConfiguredOrder(t *testing
 	}
 }
 
+func TestApplyClientEntryUserPolicyPrependsExtraNodesInConfiguredOrder(t *testing.T) {
+	servers := []map[string]any{{"id": int64(11), "type": "vmess", "host": "managed.example.com"}}
+	policies := []clientEntryUserPolicy{{
+		ID: 17, Action: cliententry.ActionOriginal,
+		Members:            []ClientEntryGroupMember{{ServerType: "vmess", ServerID: 11}},
+		ExtraNodesPosition: subscribelink.PositionBefore,
+		ExtraNodes: []string{
+			"trojan://first@first.example.com:443#First",
+			"trojan://second@second.example.com:443#Second",
+		},
+	}}
+
+	result := applyClientEntryUserPolicies(servers, cliententry.Subject{UserID: 100}, policies)
+	if len(result) != 3 || result[0]["host"] != "first.example.com" || result[1]["host"] != "second.example.com" || result[2]["host"] != "managed.example.com" {
+		t.Fatalf("extra nodes were not prepended in configured order: %#v", result)
+	}
+	if mapInt64(result[0]["sort"]) >= mapInt64(result[1]["sort"]) || mapInt64(result[1]["sort"]) >= 0 {
+		t.Fatalf("prepended sort values should preserve order before managed nodes: %#v", result)
+	}
+}
+
 func TestApplyClientEntryUserPolicyDoesNotDeliverExtrasWithoutVisibleMatchedMembers(t *testing.T) {
 	policies := []clientEntryUserPolicy{{
 		ID: 16, Action: cliententry.ActionHide,
@@ -392,9 +414,9 @@ func expectServerFetchUserForVisibilityTest(mock sqlmock.Sqlmock, userID, groupI
 
 func expectMatchingOverridePolicyForVisibilityTest(mock sqlmock.Sqlmock, serverType string, serverID, userID int64) {
 	conditions := `[{"field":"user_id","operator":"in","values":[` + fmt.Sprint(userID) + `]}]`
-	mock.ExpectQuery(`SELECT p.id, p.action, p.conditions, p.entry_host, p.extra_nodes, m.server_type, m.server_id, m.sort AS member_sort\s+FROM v2_client_entry_user_policy p\s+JOIN v2_client_entry_user_policy_member m ON m.policy_id = p.id\s+WHERE p.enabled = 1`).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "action", "conditions", "entry_host", "extra_nodes", "server_type", "server_id", "member_sort"}).
-			AddRow(int64(7), cliententry.ActionOverride, conditions, "assigned.example.com", `[]`, serverType, serverID, int64(1)))
+	mock.ExpectQuery(`SELECT p.id, p.action, p.conditions, p.entry_host, p.extra_nodes, p.extra_nodes_position, m.server_type, m.server_id, m.sort AS member_sort\s+FROM v2_client_entry_user_policy p\s+JOIN v2_client_entry_user_policy_member m ON m.policy_id = p.id\s+WHERE p.enabled = 1`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "action", "conditions", "entry_host", "extra_nodes", "extra_nodes_position", "server_type", "server_id", "member_sort"}).
+			AddRow(int64(7), cliententry.ActionOverride, conditions, "assigned.example.com", `[]`, "after", serverType, serverID, int64(1)))
 }
 
 func expectServerFetchTableQueriesForVisibilityTest(mock sqlmock.Sqlmock, visibleType string, visibleID int64, visibleGroupIDs string) {

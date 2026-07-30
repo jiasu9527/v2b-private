@@ -4281,7 +4281,7 @@ func TestRouterAdminClientEntryUserPolicySaveEndpointAcceptsStructuredRules(t *t
 		WithAdminService(adminService),
 	)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/save", strings.NewReader(`{"auth_data":"jwt-admin","name":"新用户 Clash","action":"override","entry_host":"vip-entry.example.com","conditions":[{"field":"user_id","operator":"in","values":[1001,1002]},{"field":"ua","operator":"contains_any","values":["Clash","Mihomo"]}],"members":[{"server_type":"vmess","server_id":11},{"server_type":"trojan","server_id":12}],"extra_nodes":["trojan://secret@extra.example.com:443#Extra"],"enabled":1,"remarks":"VIP"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/save", strings.NewReader(`{"auth_data":"jwt-admin","name":"新用户 Clash","action":"override","entry_host":"vip-entry.example.com","conditions":[{"field":"user_id","operator":"in","values":[1001,1002]},{"field":"ua","operator":"contains_any","values":["Clash","Mihomo"]}],"members":[{"server_type":"vmess","server_id":11},{"server_type":"trojan","server_id":12}],"extra_nodes":["trojan://secret@extra.example.com:443#Extra"],"extra_nodes_position":"before","enabled":1,"remarks":"VIP"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -4303,6 +4303,9 @@ func TestRouterAdminClientEntryUserPolicySaveEndpointAcceptsStructuredRules(t *t
 	}
 	if len(adminService.lastClientEntryUserPolicySave.ExtraNodes) != 1 || adminService.lastClientEntryUserPolicySave.ExtraNodes[0] != "trojan://secret@extra.example.com:443#Extra" {
 		t.Fatalf("unexpected extra nodes: %#v", adminService.lastClientEntryUserPolicySave.ExtraNodes)
+	}
+	if adminService.lastClientEntryUserPolicySave.ExtraNodesPosition != "before" {
+		t.Fatalf("unexpected extra node position: %q", adminService.lastClientEntryUserPolicySave.ExtraNodesPosition)
 	}
 }
 

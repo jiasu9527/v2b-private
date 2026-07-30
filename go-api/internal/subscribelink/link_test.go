@@ -74,6 +74,18 @@ func TestNormalizeListKeepsConfiguredOrderIncludingDuplicates(t *testing.T) {
 	}
 }
 
+func TestNormalizePositionDefaultsAfterAndAllowsBefore(t *testing.T) {
+	if got, err := NormalizePosition(""); err != nil || got != PositionAfter {
+		t.Fatalf("default position = %q, %v", got, err)
+	}
+	if got, err := NormalizePosition(" BEFORE "); err != nil || got != PositionBefore {
+		t.Fatalf("before position = %q, %v", got, err)
+	}
+	if _, err := NormalizePosition("middle"); err == nil {
+		t.Fatal("invalid position should be rejected")
+	}
+}
+
 func assertMapValue(t *testing.T, values map[string]any, key string, want any) {
 	t.Helper()
 	if got := values[key]; got != want {

@@ -37,6 +37,7 @@ func expectEnsureClientEntrySchema(mock sqlmock.Sqlmock) {
 		{"v2_client_entry_user_policy", "conditions"},
 		{"v2_client_entry_user_policy", "entry_host"},
 		{"v2_client_entry_user_policy", "extra_nodes"},
+		{"v2_client_entry_user_policy", "extra_nodes_position"},
 		{"v2_server_shadowsocks", "client_entry_only"},
 		{"v2_server_vmess", "client_entry_only"},
 		{"v2_server_vless", "client_entry_only"},

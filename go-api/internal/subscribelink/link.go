@@ -21,7 +21,21 @@ const (
 
 	maxExtraNodes = 200
 	maxURILength  = 8192
+
+	PositionAfter  = "after"
+	PositionBefore = "before"
 )
+
+func NormalizePosition(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", PositionAfter:
+		return PositionAfter, nil
+	case PositionBefore:
+		return PositionBefore, nil
+	default:
+		return "", errors.New("额外节点位置无效")
+	}
+}
 
 func NormalizeList(values []string) ([]string, error) {
 	if len(values) > maxExtraNodes {

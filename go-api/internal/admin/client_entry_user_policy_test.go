@@ -23,9 +23,9 @@ func TestDBServiceListClientEntryUserPoliciesReturnsRulesInStoredOrder(t *testin
 
 	service := &DBService{db: db}
 	readyClientEntrySchemaForPolicyTest(service)
-	rows := sqlmock.NewRows([]string{"id", "name", "sort", "action", "conditions", "entry_host", "extra_nodes", "enabled", "remarks", "created_at", "updated_at"}).
-		AddRow(int64(3), "Clash", int64(10), "override", `[{"field":"ua","operator":"contains_any","values":["Clash"]}]`, "vip-entry.example.com", `["trojan://secret@extra.example.com:443#Extra"]`, int64(1), "VIP", int64(100), int64(200))
-	mock.ExpectQuery(`SELECT p.id, p.name, p.sort, p.action, p.conditions, p.entry_host, p.extra_nodes, p.enabled, p.remarks, p.created_at, p.updated_at\s+FROM v2_client_entry_user_policy p\s+ORDER BY p.sort ASC NULLS LAST, p.id ASC`).
+	rows := sqlmock.NewRows([]string{"id", "name", "sort", "action", "conditions", "entry_host", "extra_nodes", "extra_nodes_position", "enabled", "remarks", "created_at", "updated_at"}).
+		AddRow(int64(3), "Clash", int64(10), "override", `[{"field":"ua","operator":"contains_any","values":["Clash"]}]`, "vip-entry.example.com", `["trojan://secret@extra.example.com:443#Extra"]`, "before", int64(1), "VIP", int64(100), int64(200))
+	mock.ExpectQuery(`SELECT p.id, p.name, p.sort, p.action, p.conditions, p.entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at\s+FROM v2_client_entry_user_policy p\s+ORDER BY p.sort ASC NULLS LAST, p.id ASC`).
 		WillReturnRows(rows)
 	memberRows := sqlmock.NewRows([]string{"policy_id", "server_type", "server_id", "sort"}).
 		AddRow(int64(3), "vmess", int64(11), int64(10)).
@@ -49,6 +49,9 @@ func TestDBServiceListClientEntryUserPoliciesReturnsRulesInStoredOrder(t *testin
 	}
 	if len(policies[0].ExtraNodes) != 1 || policies[0].ExtraNodes[0] != "trojan://secret@extra.example.com:443#Extra" {
 		t.Fatalf("unexpected extra nodes: %#v", policies[0].ExtraNodes)
+	}
+	if policies[0].ExtraNodesPosition != "before" {
+		t.Fatalf("unexpected extra node position: %q", policies[0].ExtraNodesPosition)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -74,7 +77,7 @@ func TestDBServiceSaveClientEntryUserPolicyCreatesStructuredRule(t *testing.T) {
 	mock.ExpectQuery(`SELECT sort FROM v2_client_entry_user_policy\s+ORDER BY sort DESC NULLS LAST, id DESC\s+LIMIT 1\s+FOR UPDATE`).
 		WillReturnRows(sqlmock.NewRows([]string{"sort"}))
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy`).
-		WithArgs("VIP Clash", int64(10), "override", `[{"field":"user_id","operator":"in","values":[1001]}]`, "vip-entry.example.com", `["trojan://secret@extra.example.com:443#Extra"]`, int64(1), "VIP", sqlmock.AnyArg()).
+		WithArgs("VIP Clash", int64(10), "override", `[{"field":"user_id","operator":"in","values":[1001]}]`, "vip-entry.example.com", `["trojan://secret@extra.example.com:443#Extra"]`, "before", int64(1), "VIP", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
 	mock.ExpectExec(`DELETE FROM v2_client_entry_user_policy_member WHERE policy_id = \$1`).
 		WithArgs(int64(9)).
@@ -86,9 +89,10 @@ func TestDBServiceSaveClientEntryUserPolicyCreatesStructuredRule(t *testing.T) {
 
 	ok, err := service.SaveClientEntryUserPolicy(context.Background(), ClientEntryUserPolicySaveRequest{
 		Name: "VIP Clash", Action: "override", EntryHost: "VIP-ENTRY.example.com", Enabled: ptrInt64ForClientEntryPolicyTest(1), Remarks: "VIP",
-		Conditions: []cliententry.Condition{{Field: "user_id", Operator: "in", Values: []json.RawMessage{json.RawMessage("1001")}}},
-		Members:    []ClientEntryGroupMemberSaveRequest{{ServerType: "vmess", ServerID: 11}},
-		ExtraNodes: []string{"trojan://secret@extra.example.com:443#Extra"},
+		Conditions:         []cliententry.Condition{{Field: "user_id", Operator: "in", Values: []json.RawMessage{json.RawMessage("1001")}}},
+		Members:            []ClientEntryGroupMemberSaveRequest{{ServerType: "vmess", ServerID: 11}},
+		ExtraNodes:         []string{"trojan://secret@extra.example.com:443#Extra"},
+		ExtraNodesPosition: "before",
 	})
 	if err != nil || !ok {
 		t.Fatalf("save policy: ok=%v err=%v", ok, err)
