@@ -469,8 +469,9 @@ func (c *LegacyClient) resolveLegacyRecordLine(ctx context.Context, request Reco
 }
 
 // legacyRecordLineKey handles values that can be converted without another
-// API request. A modern numeric/Tencent line ID is deliberately not returned
-// as a legacy key; it must be resolved against Record.Line first.
+// API request. A numeric line ID is deliberately not returned directly; it
+// must first be resolved against this international account's Record.Line
+// response, then sent using the provider's mutation value.
 func legacyRecordLineKey(line, lineID string) (string, bool) {
 	line = strings.TrimSpace(line)
 	lineID = strings.TrimSpace(lineID)
@@ -557,12 +558,20 @@ func findLegacyRecordLine(lines []RecordLine, line, lineID string) string {
 	visit = func(items []RecordLine) string {
 		for _, item := range items {
 			itemID := strings.TrimSpace(item.LineID)
-			itemKeyUsable := itemID != "" && !isModernRecordLineID(itemID)
-			if lineID != "" && !isModernRecordLineID(lineID) && itemKeyUsable && strings.EqualFold(itemID, lineID) {
-				return itemID
+			mutationValue := itemID
+			if isModernRecordLineID(itemID) {
+				// Some international accounts return array-shaped line data such
+				// as {line_id:"3=0", name:"Global"}. The numeric ID is not a
+				// valid legacy record_line mutation value, but its provider-returned
+				// name is. Trust the live lookup instead of rejecting the record.
+				mutationValue = strings.TrimSpace(item.LineName)
 			}
-			if byName == "" && line != "" && itemKeyUsable && (legacyLineLabelsEqual(item.LineName, line) || legacyLineLabelsEqual(itemID, line)) {
-				byName = itemID
+			if lineID != "" && mutationValue != "" && strings.EqualFold(itemID, lineID) {
+				return mutationValue
+			}
+			if byName == "" && line != "" && mutationValue != "" &&
+				(legacyLineLabelsEqual(item.LineName, line) || legacyLineLabelsEqual(itemID, line)) {
+				byName = mutationValue
 			}
 			if nested := visit(item.SubGroup); nested != "" {
 				return nested

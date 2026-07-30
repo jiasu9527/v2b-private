@@ -225,15 +225,24 @@ func TestLegacyClientResolvesModernRecordLineIDBeforeMutation(t *testing.T) {
 	}
 }
 
-func TestLegacyClientDoesNotSendModernLineIDFromLineLookup(t *testing.T) {
+func TestLegacyClientUsesProviderNameForNumericInternationalLineID(t *testing.T) {
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
 		switch r.URL.Path {
 		case "/Record.Line":
-			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"lines":[{"line_id":"10=0","name":"China Mobile"},{"line_id":"7=0","name":"China Unicom"}]}`))
+			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"lines":[{"line_id":"0=0","name":"Default"},{"line_id":"3=0","name":"Global"}]}`))
 		case "/Record.Modify":
-			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"unexpected"},"record":{"id":"91"}}`))
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("parse modify form: %v", err)
+			}
+			if got := r.Form.Get("record_line"); got != "Global" {
+				t.Fatalf("resolved record_line = %q, want Global; form=%v", got, r.Form)
+			}
+			if got := r.Form.Get("record_line_id"); got != "" {
+				t.Fatalf("legacy mutation must not send record_line_id, got %q; form=%v", got, r.Form)
+			}
+			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"record":{"id":"91"}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -241,14 +250,13 @@ func TestLegacyClientDoesNotSendModernLineIDFromLineLookup(t *testing.T) {
 	defer server.Close()
 
 	client := NewLegacyClient("1,token", WithLegacyEndpoint(server.URL))
-	_, err := client.ModifyRecord(context.Background(), RecordMutationRequest{
+	if _, err := client.ModifyRecord(context.Background(), RecordMutationRequest{
 		Domain: "example.com", DomainID: 6, RecordID: 8, SubDomain: "www", RecordType: "A",
-		RecordLine: "China Mobile", RecordLineID: "10=0", Value: "192.0.2.2",
-	})
-	if err == nil || !strings.Contains(err.Error(), "无法识别记录线路") {
-		t.Fatalf("expected an actionable unmappable-line error, got %v", err)
+		RecordLine: "Global", RecordLineID: "3=0", Value: "192.0.2.2",
+	}); err != nil {
+		t.Fatalf("ModifyRecord: %v", err)
 	}
-	if got, want := strings.Join(paths, ","), "/Record.Line"; got != want {
+	if got, want := strings.Join(paths, ","), "/Record.Line,/Record.Modify"; got != want {
 		t.Fatalf("request order = %q, want %q", got, want)
 	}
 }
