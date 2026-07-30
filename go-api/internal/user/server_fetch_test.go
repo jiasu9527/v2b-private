@@ -224,7 +224,7 @@ func TestApplyClientEntryUserPolicyDeliversMultipleOriginalHostsOnlyToMatchedUse
 }
 
 func TestApplyClientEntryUserPolicyAppendsExtraNodesInConfiguredOrder(t *testing.T) {
-	servers := []map[string]any{{"id": int64(11), "type": "vmess", "host": "original.example.com"}}
+	servers := []map[string]any{{"id": int64(11), "type": "vmess", "host": "original.example.com", "sort": int64(20)}}
 	policies := []clientEntryUserPolicy{{
 		ID: 15, Action: cliententry.ActionOverride, EntryHost: "assigned.example.com",
 		Conditions: []cliententry.Condition{{Field: "user_id", Operator: "in", Values: []json.RawMessage{json.RawMessage("100")}}},
@@ -250,10 +250,13 @@ func TestApplyClientEntryUserPolicyAppendsExtraNodesInConfiguredOrder(t *testing
 	if matched[1]["client_entry_extra_password"] != "first-secret" || matched[2]["client_entry_extra_uuid"] != "second-secret" {
 		t.Fatalf("extra credentials were not retained: %#v", matched)
 	}
+	if mapInt64(matched[1]["sort"]) != 21 || mapInt64(matched[2]["sort"]) != 22 {
+		t.Fatalf("appended sort values should follow the managed node maximum: %#v", matched)
+	}
 }
 
 func TestApplyClientEntryUserPolicyPrependsExtraNodesInConfiguredOrder(t *testing.T) {
-	servers := []map[string]any{{"id": int64(11), "type": "vmess", "host": "managed.example.com"}}
+	servers := []map[string]any{{"id": int64(11), "type": "vmess", "host": "managed.example.com", "sort": int64(10)}}
 	policies := []clientEntryUserPolicy{{
 		ID: 17, Action: cliententry.ActionOriginal,
 		Members:            []ClientEntryGroupMember{{ServerType: "vmess", ServerID: 11}},
@@ -268,7 +271,7 @@ func TestApplyClientEntryUserPolicyPrependsExtraNodesInConfiguredOrder(t *testin
 	if len(result) != 3 || result[0]["host"] != "first.example.com" || result[1]["host"] != "second.example.com" || result[2]["host"] != "managed.example.com" {
 		t.Fatalf("extra nodes were not prepended in configured order: %#v", result)
 	}
-	if mapInt64(result[0]["sort"]) >= mapInt64(result[1]["sort"]) || mapInt64(result[1]["sort"]) >= 0 {
+	if mapInt64(result[0]["sort"]) != 8 || mapInt64(result[1]["sort"]) != 9 {
 		t.Fatalf("prepended sort values should preserve order before managed nodes: %#v", result)
 	}
 }

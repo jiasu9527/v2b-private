@@ -16,6 +16,7 @@ import (
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/nodeapi"
 	"forest/go-api/internal/session"
+	"forest/go-api/internal/subscribelink"
 	"forest/go-api/internal/user"
 )
 
@@ -1476,6 +1477,39 @@ func TestRouterClientSubscribeClashEndpointCanInjectInfoServers(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "距离下次重置剩余：3 天") {
 		t.Fatalf("expected clash profile to inject reset day server, got %q", rec.Body.String())
+	}
+}
+
+func TestPrependLegacySubscribeInfoServersDoesNotCloneExtraNodeURI(t *testing.T) {
+	raw := "trojan://secret@extra.example.com:443#Extra"
+	extra := map[string]any{
+		subscribelink.MarkerField: true,
+		subscribelink.RawURIField: raw,
+		"name":                    "Extra",
+	}
+	managed := map[string]any{"type": "vmess", "name": "Managed", "host": "managed.example.com", "port": int64(443)}
+	cfg := config.Config{ShowInfoToServerEnable: true}
+	subscribe := user.Subscribe{TransferEnable: 1024}
+
+	result := prependLegacySubscribeInfoServers(cfg, "shadowrocket", subscribe, []map[string]any{extra, managed})
+	if len(result) != 4 {
+		t.Fatalf("expected two info nodes plus the original nodes, got %#v", result)
+	}
+	for index := 0; index < 2; index++ {
+		if got := subscribelink.RawURI(result[index]); got != "" {
+			t.Fatalf("info node %d retained extra URI %q", index, got)
+		}
+		if result[index]["host"] != "managed.example.com" {
+			t.Fatalf("info node %d did not use the managed template: %#v", index, result[index])
+		}
+	}
+	if got := subscribelink.RawURI(result[2]); got != raw || result[3]["name"] != "Managed" {
+		t.Fatalf("original extra-before-managed order changed: %#v", result)
+	}
+
+	onlyExtra := prependLegacySubscribeInfoServers(cfg, "shadowrocket", subscribe, []map[string]any{extra})
+	if len(onlyExtra) != 1 || subscribelink.RawURI(onlyExtra[0]) != raw {
+		t.Fatalf("an extra-only subscription should not synthesize duplicate info nodes: %#v", onlyExtra)
 	}
 }
 

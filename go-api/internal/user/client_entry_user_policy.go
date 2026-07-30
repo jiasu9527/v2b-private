@@ -3,6 +3,7 @@ package user
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 
 	"forest/go-api/internal/cliententry"
@@ -152,17 +153,63 @@ func applyClientEntryUserPolicies(servers []map[string]any, subject cliententry.
 			extraServers = append(extraServers, extra)
 		}
 		if policy.ExtraNodesPosition == subscribelink.PositionBefore {
+			sortStart := clientEntryExtraNodeSortStart(result, subscribelink.PositionBefore, len(extraServers))
 			for index, extra := range extraServers {
-				extra["sort"] = int64(index - len(extraServers))
+				extra["sort"] = sortStart + int64(index)
 			}
 			result = append(extraServers, result...)
 		} else {
+			sortStart := clientEntryExtraNodeSortStart(result, subscribelink.PositionAfter, len(extraServers))
 			for index, extra := range extraServers {
-				extra["sort"] = int64(len(result) + index + 1)
+				extra["sort"] = sortStart + int64(index)
 			}
 			result = append(result, extraServers...)
 		}
 		break
 	}
 	return result
+}
+
+func clientEntryExtraNodeSortStart(servers []map[string]any, position string, count int) int64 {
+	if count <= 0 {
+		return 0
+	}
+
+	var bound int64
+	found := false
+	for _, server := range servers {
+		value, ok := serverSortValue(server["sort"])
+		if !ok {
+			continue
+		}
+		if !found {
+			bound = value
+			found = true
+			continue
+		}
+		if position == subscribelink.PositionBefore && value < bound {
+			bound = value
+		}
+		if position != subscribelink.PositionBefore && value > bound {
+			bound = value
+		}
+	}
+
+	delta := int64(count)
+	if position == subscribelink.PositionBefore {
+		if !found {
+			return -delta
+		}
+		if bound < math.MinInt64+delta {
+			return math.MinInt64
+		}
+		return bound - delta
+	}
+	if !found {
+		return 1
+	}
+	if bound > math.MaxInt64-delta {
+		return math.MaxInt64 - delta + 1
+	}
+	return bound + 1
 }

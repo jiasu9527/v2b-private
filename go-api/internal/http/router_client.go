@@ -11,6 +11,7 @@ import (
 
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/nodeapi"
+	"forest/go-api/internal/subscribelink"
 	usersvc "forest/go-api/internal/user"
 )
 
@@ -530,7 +531,16 @@ func prependLegacySubscribeInfoServers(cfg config.Config, flag string, subscribe
 		return servers
 	}
 
-	template := copyMap(servers[0])
+	var template map[string]any
+	for _, server := range servers {
+		if subscribelink.RawURI(server) == "" {
+			template = copyMap(server)
+			break
+		}
+	}
+	if template == nil {
+		return servers
+	}
 	infoServers := make([]map[string]any, 0, 3)
 
 	remainingTraffic := subscribe.TransferEnable - subscribe.U - subscribe.D
