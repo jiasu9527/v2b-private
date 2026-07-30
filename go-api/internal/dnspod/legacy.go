@@ -291,9 +291,7 @@ func (c *LegacyClient) DescribeRecordList(ctx context.Context, request DescribeR
 }
 
 func (c *LegacyClient) DescribeRecordType(ctx context.Context, request DescribeRecordTypeRequest) (DescribeRecordTypeResult, error) {
-	// DNSPod international's legacy Record.Type endpoint currently accepts DP_Free only,
-	// even when Domain.List reports a different grade for the selected domain.
-	payload, err := c.call(ctx, "Record.Type", url.Values{"domain_grade": {"DP_Free"}})
+	payload, err := c.call(ctx, "Record.Type", url.Values{"domain_grade": {legacyDomainGrade(request.DomainGrade)}})
 	if err != nil {
 		return DescribeRecordTypeResult{}, err
 	}
@@ -306,14 +304,20 @@ func (c *LegacyClient) DescribeRecordType(ctx context.Context, request DescribeR
 }
 
 func (c *LegacyClient) DescribeRecordLineList(ctx context.Context, request DescribeRecordLineListRequest) (DescribeRecordLineListResult, error) {
-	// Record.Line has the same DP_Free-only restriction as Record.Type.
-	values := url.Values{"domain_grade": {"DP_Free"}}
+	values := url.Values{"domain_grade": {legacyDomainGrade(request.DomainGrade)}}
 	setLegacyDomain(values, request.Domain, request.DomainID)
 	payload, err := c.call(ctx, "Record.Line", values)
 	if err != nil {
 		return DescribeRecordLineListResult{}, err
 	}
-	lines := parseLegacyRecordLines(payload["lines"])
+	// The international Token API returns two parallel fields: line_ids maps
+	// the provider's line name to its numeric ID, while lines preserves the
+	// display/mutation order.  Parsing lines alone loses every entry because it
+	// is commonly just an array of strings.
+	lines := parseLegacyRecordLineIDs(payload["line_ids"], payload["lines"])
+	if len(lines) == 0 {
+		lines = parseLegacyRecordLines(payload["lines"])
+	}
 	if len(lines) == 0 {
 		lines = parseLegacyRecordLines(payload["LineList"])
 	}
@@ -324,6 +328,98 @@ func (c *LegacyClient) DescribeRecordLineList(ctx context.Context, request Descr
 		lines = append(lines, RecordLine{LineID: "default", LineName: "Default", Useful: true})
 	}
 	return DescribeRecordLineListResult{Lines: lines}, nil
+}
+
+func legacyDomainGrade(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "DPG_Free"
+	}
+	// Admin API callers historically used these upper-case defaults. Preserve
+	// provider-returned grades verbatim, but canonicalise the known defaults so
+	// the legacy endpoint receives the spelling used by Domain.List.
+	switch strings.ToUpper(value) {
+	case "DP_FREE":
+		return "DP_Free"
+	case "DPG_FREE":
+		return "DPG_Free"
+	default:
+		return value
+	}
+}
+
+func parseLegacyRecordLineIDs(rawIDs, rawOrder any) []RecordLine {
+	ids, ok := rawIDs.(map[string]any)
+	if !ok || len(ids) == 0 {
+		return nil
+	}
+
+	orderedNames := legacyRecordLineNames(rawOrder)
+	seen := make(map[string]struct{}, len(ids))
+	lines := make([]RecordLine, 0, len(ids))
+	appendLine := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		lookupName := name
+		rawID, exists := ids[lookupName]
+		if !exists {
+			// Provider line names are currently exact matches, but tolerate a
+			// case-only discrepancy without making the map order observable.
+			for candidate, value := range ids {
+				if strings.EqualFold(strings.TrimSpace(candidate), name) {
+					lookupName, rawID, exists = candidate, value, true
+					break
+				}
+			}
+		}
+		if !exists {
+			return
+		}
+		if _, exists := seen[lookupName]; exists {
+			return
+		}
+		lineID := strings.TrimSpace(legacyString(rawID))
+		if row, isObject := rawID.(map[string]any); isObject {
+			lineID = legacyObjectString(row, "line_id", "LineId", "id", "value")
+		}
+		if lineID == "" {
+			lineID = lookupName
+		}
+		seen[lookupName] = struct{}{}
+		lines = append(lines, RecordLine{LineID: lineID, LineName: lookupName, Useful: true})
+	}
+
+	for _, name := range orderedNames {
+		appendLine(name)
+	}
+	// A partially populated lines array must not hide entries from line_ids.
+	// Sort the remainder to keep responses stable despite Go map iteration.
+	for _, name := range sortedLegacyKeys(ids) {
+		appendLine(name)
+	}
+	return lines
+}
+
+func legacyRecordLineNames(raw any) []string {
+	values, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(values))
+	for _, value := range values {
+		if row, isObject := value.(map[string]any); isObject {
+			if name := legacyObjectString(row, "name", "line", "LineName", "label"); name != "" {
+				names = append(names, name)
+			}
+			continue
+		}
+		if name := strings.TrimSpace(legacyString(value)); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func parseLegacyRecordLines(raw any) []RecordLine {
@@ -350,6 +446,10 @@ func parseLegacyRecordLines(raw any) []RecordLine {
 		for _, value := range values {
 			row, ok := value.(map[string]any)
 			if !ok {
+				name := strings.TrimSpace(legacyString(value))
+				if name != "" {
+					lines = append(lines, RecordLine{LineID: name, LineName: name, Useful: true})
+				}
 				continue
 			}
 			lineID := legacyObjectString(row, "line_id", "LineId", "id", "value")
@@ -457,15 +557,32 @@ func (c *LegacyClient) resolveLegacyRecordLine(ctx context.Context, request Reco
 	}
 
 	lines, err := c.DescribeRecordLineList(ctx, DescribeRecordLineListRequest{
-		Domain: request.Domain, DomainID: request.DomainID, DomainGrade: "DP_Free", RecordType: request.RecordType,
+		Domain: request.Domain, DomainID: request.DomainID, DomainGrade: request.DomainGrade, RecordType: request.RecordType,
 	})
 	if err != nil {
+		if fallback := legacyExistingRecordLineName(request); fallback != "" {
+			return fallback, nil
+		}
 		return "", fmt.Errorf("解析 DNSPod 国际版记录线路失败：%w", err)
 	}
 	if key := findLegacyRecordLine(lines.Lines, line, lineID); key != "" {
 		return key, nil
 	}
+	if fallback := legacyExistingRecordLineName(request); fallback != "" {
+		return fallback, nil
+	}
 	return "", fmt.Errorf("DNSPod 国际版无法识别记录线路（名称=%q，ID=%q），请重新选择国际版线路", line, lineID)
+}
+
+func legacyExistingRecordLineName(request RecordMutationRequest) string {
+	if request.RecordID <= 0 {
+		return ""
+	}
+	line := strings.TrimSpace(request.RecordLine)
+	if line == "" || isModernRecordLineID(line) {
+		return ""
+	}
+	return line
 }
 
 // legacyRecordLineKey handles values that can be converted without another

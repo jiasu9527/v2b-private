@@ -432,6 +432,7 @@ export default function DNSPodPage() {
         ...values,
         domain: selectedDomain.name,
         domain_id: selectedDomain.id,
+        domain_grade: selectedDomain.grade,
         record_id: editingRecord?.id || 0,
         record_line: selectedLine?.lineName || editingRecord?.line || '默认',
       });

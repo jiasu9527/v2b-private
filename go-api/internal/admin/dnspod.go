@@ -71,6 +71,7 @@ type DNSPodRecordListRequest struct {
 type DNSPodRecordSaveRequest struct {
 	Domain       string
 	DomainID     int64
+	DomainGrade  string
 	RecordID     int64
 	SubDomain    string
 	RecordType   string
@@ -297,6 +298,7 @@ func (s *DBService) ListDNSPodRecordLines(ctx context.Context, domain string, do
 
 func (s *DBService) SaveDNSPodRecord(ctx context.Context, request DNSPodRecordSaveRequest) (dnspod.RecordMutationResult, error) {
 	request.Domain = strings.TrimSpace(request.Domain)
+	request.DomainGrade = strings.TrimSpace(request.DomainGrade)
 	request.SubDomain = strings.TrimSpace(request.SubDomain)
 	request.RecordType = strings.ToUpper(strings.TrimSpace(request.RecordType))
 	request.RecordLine = strings.TrimSpace(request.RecordLine)
@@ -319,7 +321,7 @@ func (s *DBService) SaveDNSPodRecord(ctx context.Context, request DNSPodRecordSa
 		return dnspod.RecordMutationResult{}, err
 	}
 	mutation := dnspod.RecordMutationRequest{
-		Domain: request.Domain, DomainID: request.DomainID, RecordID: request.RecordID, SubDomain: request.SubDomain,
+		Domain: request.Domain, DomainID: request.DomainID, DomainGrade: request.DomainGrade, RecordID: request.RecordID, SubDomain: request.SubDomain,
 		RecordType: request.RecordType, RecordLine: request.RecordLine, RecordLineID: request.RecordLineID,
 		Value: request.Value, TTL: request.TTL, MX: request.MX, Weight: request.Weight,
 	}

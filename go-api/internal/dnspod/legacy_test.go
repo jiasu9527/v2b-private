@@ -64,16 +64,88 @@ func TestLegacyClientMapsRecordsTypesAndLines(t *testing.T) {
 	if err != nil || records.Total != 1 || len(records.Records) != 1 || records.Records[0].Status != "ENABLE" {
 		t.Fatalf("unexpected records=%#v err=%v", records, err)
 	}
-	types, err := client.DescribeRecordType(context.Background(), DescribeRecordTypeRequest{DomainGrade: "DP_Pro"})
+	types, err := client.DescribeRecordType(context.Background(), DescribeRecordTypeRequest{DomainGrade: "DPG_Enterprise"})
 	if err != nil || len(types.Types) != 3 || types.Types[1] != "CNAME" {
 		t.Fatalf("unexpected types=%#v err=%v", types, err)
 	}
-	lines, err := client.DescribeRecordLineList(context.Background(), DescribeRecordLineListRequest{Domain: "dnspod.com", DomainGrade: "DP_Pro"})
+	lines, err := client.DescribeRecordLineList(context.Background(), DescribeRecordLineListRequest{Domain: "dnspod.com", DomainGrade: "DPG_Enterprise"})
 	if err != nil || len(lines.Lines) != 2 || lines.Lines[0].LineID != "asia" || len(lines.Lines[0].SubGroup) != 2 || lines.Lines[0].SubGroup[0].LineID != "JP" {
 		t.Fatalf("unexpected lines=%#v err=%v", lines, err)
 	}
-	if gotTypeGrade != "DP_Free" || gotLineGrade != "DP_Free" {
-		t.Fatalf("legacy type/line APIs only support DP_Free, got type=%q line=%q", gotTypeGrade, gotLineGrade)
+	if gotTypeGrade != "DPG_Enterprise" || gotLineGrade != "DPG_Enterprise" {
+		t.Fatalf("legacy type/line APIs must use the selected domain grade, got type=%q line=%q", gotTypeGrade, gotLineGrade)
+	}
+}
+
+func TestLegacyClientMapsInternationalLineIDsInProviderOrder(t *testing.T) {
+	var gotGrade string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("parse Record.Line form: %v", err)
+		}
+		gotGrade = r.Form.Get("domain_grade")
+		_, _ = w.Write([]byte(`{
+			"status":{"code":"1","message":"ok"},
+			"line_ids":{"China Unicom":"10=1","Default":0,"Global":"3=0","China Mobile":"10=3"},
+			"lines":["Default","Global","China Mobile"],
+			"line_groups":[]
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewLegacyClient("1,token", WithLegacyEndpoint(server.URL))
+	result, err := client.DescribeRecordLineList(context.Background(), DescribeRecordLineListRequest{
+		Domain: "example.com", DomainID: 6, DomainGrade: "DPG_Free", RecordType: "A",
+	})
+	if err != nil {
+		t.Fatalf("DescribeRecordLineList: %v", err)
+	}
+	if gotGrade != "DPG_Free" {
+		t.Fatalf("Record.Line domain_grade = %q, want DPG_Free", gotGrade)
+	}
+	if len(result.Lines) != 4 {
+		t.Fatalf("expected every line_id entry, got %#v", result.Lines)
+	}
+	want := []RecordLine{
+		{LineID: "0", LineName: "Default", Useful: true},
+		{LineID: "3=0", LineName: "Global", Useful: true},
+		{LineID: "10=3", LineName: "China Mobile", Useful: true},
+		{LineID: "10=1", LineName: "China Unicom", Useful: true},
+	}
+	for index := range want {
+		if result.Lines[index].LineID != want[index].LineID || result.Lines[index].LineName != want[index].LineName || !result.Lines[index].Useful {
+			t.Fatalf("line %d = %#v, want %#v; all=%#v", index, result.Lines[index], want[index], result.Lines)
+		}
+	}
+}
+
+func TestLegacyClientCanonicalizesDefaultInternationalGrade(t *testing.T) {
+	var grades []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("parse form: %v", err)
+		}
+		grades = append(grades, r.Form.Get("domain_grade"))
+		switch r.URL.Path {
+		case "/Record.Type":
+			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"types":["A"]}`))
+		case "/Record.Line":
+			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"line_ids":{"Default":0},"lines":["Default"]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewLegacyClient("1,token", WithLegacyEndpoint(server.URL))
+	if _, err := client.DescribeRecordType(context.Background(), DescribeRecordTypeRequest{DomainGrade: "DP_FREE"}); err != nil {
+		t.Fatalf("DescribeRecordType: %v", err)
+	}
+	if _, err := client.DescribeRecordLineList(context.Background(), DescribeRecordLineListRequest{Domain: "example.com"}); err != nil {
+		t.Fatalf("DescribeRecordLineList: %v", err)
+	}
+	if got, want := strings.Join(grades, ","), "DP_Free,DPG_Free"; got != want {
+		t.Fatalf("canonical grades = %q, want %q", got, want)
 	}
 }
 
@@ -231,7 +303,13 @@ func TestLegacyClientUsesProviderNameForNumericInternationalLineID(t *testing.T)
 		paths = append(paths, r.URL.Path)
 		switch r.URL.Path {
 		case "/Record.Line":
-			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"lines":[{"line_id":"0=0","name":"Default"},{"line_id":"3=0","name":"Global"}]}`))
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("parse line form: %v", err)
+			}
+			if got := r.Form.Get("domain_grade"); got != "DPG_Enterprise" {
+				t.Fatalf("line lookup domain_grade = %q, want DPG_Enterprise", got)
+			}
+			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"line_ids":{"Default":0,"Global":"3=0"},"lines":["Default","Global"],"line_groups":[]}`))
 		case "/Record.Modify":
 			if err := r.ParseForm(); err != nil {
 				t.Fatalf("parse modify form: %v", err)
@@ -251,6 +329,85 @@ func TestLegacyClientUsesProviderNameForNumericInternationalLineID(t *testing.T)
 
 	client := NewLegacyClient("1,token", WithLegacyEndpoint(server.URL))
 	if _, err := client.ModifyRecord(context.Background(), RecordMutationRequest{
+		Domain: "example.com", DomainID: 6, DomainGrade: "DPG_Enterprise", RecordID: 8, SubDomain: "www", RecordType: "A",
+		RecordLine: "Global", RecordLineID: "3=0", Value: "192.0.2.2",
+	}); err != nil {
+		t.Fatalf("ModifyRecord: %v", err)
+	}
+	if got, want := strings.Join(paths, ","), "/Record.Line,/Record.Modify"; got != want {
+		t.Fatalf("request order = %q, want %q", got, want)
+	}
+}
+
+func TestLegacyClientCreatesEnterpriseGlobalRecord(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/Record.Line":
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("parse line form: %v", err)
+			}
+			if got := r.Form.Get("domain_grade"); got != "DPG_Enterprise" {
+				t.Fatalf("line lookup domain_grade = %q, want DPG_Enterprise", got)
+			}
+			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"line_ids":{"Default":0,"Global":"3=0"},"lines":["Default","Global"]}`))
+		case "/Record.Create":
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("parse create form: %v", err)
+			}
+			if got := r.Form.Get("record_line"); got != "Global" {
+				t.Fatalf("created record_line = %q, want Global; form=%v", got, r.Form)
+			}
+			if got := r.Form.Get("record_line_id"); got != "" {
+				t.Fatalf("legacy mutation must not send record_line_id, got %q", got)
+			}
+			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"record":{"id":"92"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewLegacyClient("1,token", WithLegacyEndpoint(server.URL))
+	created, err := client.CreateRecord(context.Background(), RecordMutationRequest{
+		Domain: "example.com", DomainID: 6, DomainGrade: "DPG_Enterprise", SubDomain: "www", RecordType: "A",
+		RecordLine: "Global", RecordLineID: "3=0", Value: "192.0.2.2",
+	})
+	if err != nil || created.RecordID != 92 {
+		t.Fatalf("CreateRecord result=%#v err=%v", created, err)
+	}
+	if got, want := strings.Join(paths, ","), "/Record.Line,/Record.Create"; got != want {
+		t.Fatalf("request order = %q, want %q", got, want)
+	}
+}
+
+func TestLegacyClientModifiesExistingRecordWithProviderNameWhenLineLookupMisses(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/Record.Line":
+			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"line_ids":{"Default":0},"lines":["Default"]}`))
+		case "/Record.Modify":
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("parse modify form: %v", err)
+			}
+			if got := r.Form.Get("record_line"); got != "Global" {
+				t.Fatalf("fallback record_line = %q, want Global; form=%v", got, r.Form)
+			}
+			if got := r.Form.Get("record_line_id"); got != "" {
+				t.Fatalf("legacy mutation must not send record_line_id, got %q", got)
+			}
+			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"record":{"id":"8"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewLegacyClient("1,token", WithLegacyEndpoint(server.URL))
+	if _, err := client.ModifyRecord(context.Background(), RecordMutationRequest{
 		Domain: "example.com", DomainID: 6, RecordID: 8, SubDomain: "www", RecordType: "A",
 		RecordLine: "Global", RecordLineID: "3=0", Value: "192.0.2.2",
 	}); err != nil {
@@ -258,6 +415,25 @@ func TestLegacyClientUsesProviderNameForNumericInternationalLineID(t *testing.T)
 	}
 	if got, want := strings.Join(paths, ","), "/Record.Line,/Record.Modify"; got != want {
 		t.Fatalf("request order = %q, want %q", got, want)
+	}
+}
+
+func TestLegacyClientDoesNotUseNumericLineNameAsModifyFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/Record.Line" {
+			t.Fatalf("numeric line name must be rejected before mutation, got %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"line_ids":{"Default":0},"lines":["Default"]}`))
+	}))
+	defer server.Close()
+
+	client := NewLegacyClient("1,token", WithLegacyEndpoint(server.URL))
+	_, err := client.ModifyRecord(context.Background(), RecordMutationRequest{
+		Domain: "example.com", DomainID: 6, RecordID: 8, SubDomain: "www", RecordType: "A",
+		RecordLine: "3=0", RecordLineID: "3=0", Value: "192.0.2.2",
+	})
+	if err == nil || !strings.Contains(err.Error(), "无法识别记录线路") {
+		t.Fatalf("expected numeric line rejection, got %v", err)
 	}
 }
 

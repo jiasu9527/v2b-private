@@ -150,9 +150,9 @@ func TestDBServiceDNSPodOperationsValidateAndDelegate(t *testing.T) {
 	}
 
 	result, err := service.SaveDNSPodRecord(context.Background(), DNSPodRecordSaveRequest{
-		Domain: "example.com", SubDomain: "www", RecordType: "a", RecordLine: "默认", Value: "192.0.2.1", TTL: 600,
+		Domain: "example.com", DomainGrade: " DPG_Enterprise ", SubDomain: "www", RecordType: "a", RecordLine: "默认", Value: "192.0.2.1", TTL: 600,
 	})
-	if err != nil || result.RecordID != 91 || fake.lastMutation.RecordType != "A" || fake.lastMutation.RecordLine != "默认" {
+	if err != nil || result.RecordID != 91 || fake.lastMutation.DomainGrade != "DPG_Enterprise" || fake.lastMutation.RecordType != "A" || fake.lastMutation.RecordLine != "默认" {
 		t.Fatalf("unexpected save delegation: result=%#v req=%#v err=%v", result, fake.lastMutation, err)
 	}
 	if _, err := service.SaveDNSPodRecord(context.Background(), DNSPodRecordSaveRequest{Domain: "example.com", RecordType: "A"}); err == nil {

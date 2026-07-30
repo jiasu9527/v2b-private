@@ -214,7 +214,7 @@ func handleAdminDNSPodRecordSave(w http.ResponseWriter, r *http.Request, session
 		return true
 	}
 	result, err := service.SaveDNSPodRecord(r.Context(), admin.DNSPodRecordSaveRequest{
-		Domain: inputs["domain"], DomainID: domainID, RecordID: recordID, SubDomain: inputs["sub_domain"], RecordType: inputs["record_type"],
+		Domain: inputs["domain"], DomainID: domainID, DomainGrade: inputs["domain_grade"], RecordID: recordID, SubDomain: inputs["sub_domain"], RecordType: inputs["record_type"],
 		RecordLine: inputs["record_line"], RecordLineID: inputs["record_line_id"], Value: inputs["value"],
 		TTL: ttl, MX: mx, Weight: weight,
 	})

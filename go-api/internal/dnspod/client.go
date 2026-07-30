@@ -360,6 +360,7 @@ func (c *Client) DescribeRecordLineList(ctx context.Context, request DescribeRec
 type RecordMutationRequest struct {
 	Domain       string `json:"Domain"`
 	DomainID     int64  `json:"-"`
+	DomainGrade  string `json:"-"`
 	RecordID     int64  `json:"RecordId,omitempty"`
 	SubDomain    string `json:"SubDomain"`
 	RecordType   string `json:"RecordType"`

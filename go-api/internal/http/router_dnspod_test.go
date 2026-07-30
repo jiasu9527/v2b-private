@@ -85,7 +85,7 @@ func TestRouterAdminDNSPodDomainAndRecordLists(t *testing.T) {
 func TestRouterAdminDNSPodSaveRecordParsesAllFields(t *testing.T) {
 	service := &fakeAdminService{dnspodMutation: dnspod.RecordMutationResult{RecordID: 91}}
 	router, _ := newDNSPodAdminRouter(service)
-	body := `{"auth_data":"jwt-admin","domain":"example.com","domain_id":7,"record_id":8,"sub_domain":"www","record_type":"A","record_line":"默认","record_line_id":"0=0","value":"192.0.2.2","ttl":600,"mx":10,"weight":20}`
+	body := `{"auth_data":"jwt-admin","domain":"example.com","domain_id":7,"domain_grade":"DPG_Enterprise","record_id":8,"sub_domain":"www","record_type":"A","record_line":"默认","record_line_id":"0=0","value":"192.0.2.2","ttl":600,"mx":10,"weight":20}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/dns/record/save", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -95,7 +95,7 @@ func TestRouterAdminDNSPodSaveRecordParsesAllFields(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	got := service.lastDNSPodRecordSave
-	if got.Domain != "example.com" || got.DomainID != 7 || got.RecordID != 8 || got.RecordLineID != "0=0" || got.TTL != 600 || got.MX != 10 || got.Weight == nil || *got.Weight != 20 {
+	if got.Domain != "example.com" || got.DomainID != 7 || got.DomainGrade != "DPG_Enterprise" || got.RecordID != 8 || got.RecordLineID != "0=0" || got.TTL != 600 || got.MX != 10 || got.Weight == nil || *got.Weight != 20 {
 		t.Fatalf("unexpected record save: %#v", got)
 	}
 }
