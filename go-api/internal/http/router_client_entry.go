@@ -1012,6 +1012,18 @@ func splitClientEntryTextList(raw string) []string {
 	return result
 }
 
+func splitClientEntryLines(raw string) []string {
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	parts := strings.Split(raw, "\n")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
+}
+
 func handleAdminClientEntryUserPolicyFetch(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
 	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
 		return true
@@ -1042,6 +1054,7 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		Action     string                  `json:"action"`
 		Conditions []cliententry.Condition `json:"conditions"`
 		EntryHost  string                  `json:"entry_host"`
+		ExtraNodes []string                `json:"extra_nodes"`
 		Members    []struct {
 			ServerType string       `json:"server_type"`
 			ServerID   *json.Number `json:"server_id"`
@@ -1068,6 +1081,7 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		payload.Name = strings.TrimSpace(inputs["name"])
 		payload.Action = strings.TrimSpace(inputs["action"])
 		payload.EntryHost = strings.TrimSpace(inputs["entry_host"])
+		payload.ExtraNodes = splitClientEntryLines(inputs["extra_nodes"])
 		if raw := strings.TrimSpace(inputs["conditions"]); raw != "" {
 			if err := json.Unmarshal([]byte(raw), &payload.Conditions); err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"message": "匹配条件格式无效"})
@@ -1128,7 +1142,7 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		members = append(members, admin.ClientEntryGroupMemberSaveRequest{ServerType: member.ServerType, ServerID: *serverID, Sort: sortValue})
 	}
 	saved, err := adminService.SaveClientEntryUserPolicy(r.Context(), admin.ClientEntryUserPolicySaveRequest{
-		ID: id, Name: payload.Name, Action: payload.Action, Conditions: payload.Conditions, EntryHost: payload.EntryHost, Members: members, Enabled: enabled, Remarks: payload.Remarks,
+		ID: id, Name: payload.Name, Action: payload.Action, Conditions: payload.Conditions, EntryHost: payload.EntryHost, ExtraNodes: payload.ExtraNodes, Members: members, Enabled: enabled, Remarks: payload.Remarks,
 	})
 	if err != nil {
 		return handleAdminError(w, err)

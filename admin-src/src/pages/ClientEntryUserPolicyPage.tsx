@@ -177,6 +177,24 @@ function normalizedMembers(row: any) {
   return (Array.isArray(row?.members) ? row.members : []).map(memberKey).filter(Boolean);
 }
 
+function parseExtraNodes(value: any): string[] {
+  let current = value;
+  for (let index = 0; index < 3 && typeof current === 'string'; index += 1) {
+    const text = current.trim();
+    if (!text) return [];
+    if (!text.startsWith('[')) {
+      return current.split(/\r?\n/).map((item: string) => item.trim()).filter(Boolean);
+    }
+    try {
+      current = JSON.parse(text);
+    } catch {
+      return current.split(/\r?\n/).map((item: string) => item.trim()).filter(Boolean);
+    }
+  }
+  if (!Array.isArray(current)) return [];
+  return current.map((item) => String(item || '').trim()).filter(Boolean);
+}
+
 function normalizePolicyAction(value: any): PolicyAction {
   if (value === 'original' || value === 'hide') return value;
   return 'override';
@@ -194,6 +212,7 @@ function policyPayload(row: any, overrides: Record<string, any> = {}) {
     members: (Array.isArray(source.members) ? source.members : [])
       .map((member: any) => typeof member === 'string' ? splitMemberKey(member) : member)
       .filter(Boolean),
+    extra_nodes: parseExtraNodes(source.extra_nodes),
     enabled: source.enabled === true || Number(source.enabled) !== 0 ? 1 : 0,
     remarks: String(source.remarks || '').trim(),
   };
@@ -327,6 +346,7 @@ function PolicyEditor({
   const emailSearchSequence = useRef(0);
   const [form] = Form.useForm();
   const action = Form.useWatch('action', form) || 'override';
+  const extraNodeCount = parseExtraNodes(Form.useWatch('extra_nodes', form)).length;
 
   const show = () => {
     const conditions = parseConditions(row?.conditions);
@@ -350,6 +370,7 @@ function PolicyEditor({
       action: normalizePolicyAction(row?.action),
       conditions,
       members: normalizedMembers(row),
+      extra_nodes: parseExtraNodes(row?.extra_nodes).join('\n'),
       enabled: row?.enabled === undefined ? true : Number(row.enabled) !== 0,
       remarks: row?.remarks || '',
     });
@@ -501,6 +522,17 @@ function PolicyEditor({
         <Form.Item name="members" label="生效节点" rules={[{ required: true, message: '请选择生效节点' }]} tooltip="规则只作用于选中的节点，可以选择多个。">
           <Select mode="multiple" showSearch allowClear placeholder="选择多个生效节点" options={serverOptions} optionFilterProp="label" />
         </Form.Item>
+        <Form.Item
+          name="extra_nodes"
+          label="额外下发节点"
+          tooltip="这里的节点使用 URI 自带的地址和认证信息，不会被上方的独立入口地址覆盖。"
+          extra={`一行一个完整节点 URI，行顺序就是下发顺序；空行会在保存时自动忽略。当前 ${extraNodeCount} 个。`}
+        >
+          <Input.TextArea
+            autoSize={{ minRows: 5, maxRows: 12 }}
+            placeholder={'例如：\ntrojan://password@example.com:443?allowInsecure=1&peer=example.com#Hong%20Kong%20%7C%2001'}
+          />
+        </Form.Item>
         <Form.Item name="enabled" label="状态" valuePropName="checked">
           <Switch checkedChildren="启用" unCheckedChildren="禁用" />
         </Form.Item>
@@ -580,9 +612,30 @@ function policyMatches(row: any, input: any) {
 
 function policyResultDescription(row: any) {
   const action = normalizePolicyAction(row?.action);
-  if (action === 'hide') return '结果：不下发所选节点';
-  if (action === 'original') return '结果：下发所选节点各自的原入口地址';
-  return `结果：下发独立入口 ${row?.entry_host || '-'}`;
+  const extraNodeCount = parseExtraNodes(row?.extra_nodes).length;
+  const extraDescription = extraNodeCount ? `；另下发 ${extraNodeCount} 个额外节点（保留 URI 原地址）` : '';
+  if (action === 'hide') return `结果：不下发所选节点${extraDescription}`;
+  if (action === 'original') return `结果：下发所选节点各自的原入口地址${extraDescription}`;
+  return `结果：下发独立入口 ${row?.entry_host || '-'}${extraDescription}`;
+}
+
+function ExtraNodesSummary({ value }: { value: any }) {
+  const nodes = parseExtraNodes(value);
+  if (!nodes.length) return <>-</>;
+  return <details className="client-entry-members">
+    <summary>额外下发 {nodes.length} 个节点</summary>
+    <div style={{ marginTop: 8, maxHeight: 180, maxWidth: 360, overflow: 'auto' }}>
+      {nodes.map((node, index) => <Typography.Text
+        key={`${index}-${node}`}
+        code
+        copyable={{ text: node }}
+        ellipsis={{ tooltip: node }}
+        style={{ display: 'block', maxWidth: 340, marginBottom: 6 }}
+      >
+        {index + 1}. {node}
+      </Typography.Text>)}
+    </div>
+  </details>;
 }
 
 function SimulationModal({
@@ -703,7 +756,11 @@ export default function ClientEntryUserPolicyPage() {
         apiGet('/server/manage/getNodes').catch(() => ({ data: [] })),
       ]);
       const policies = Array.isArray(policyRes.data) ? policyRes.data : [];
-      setRows(policies.map((row: any) => ({ ...row, conditions: parseConditions(row.conditions) })));
+      setRows(policies.map((row: any) => ({
+        ...row,
+        conditions: parseConditions(row.conditions),
+        extra_nodes: parseExtraNodes(row.extra_nodes),
+      })));
       setServerOptions(buildVisibleServerOptions(Array.isArray(nodeRes.data) ? nodeRes.data : []));
     } catch (error: any) {
       message.error(error?.message || '加载失败');
@@ -822,6 +879,12 @@ export default function ClientEntryUserPolicyPage() {
       },
     },
     {
+      title: '额外节点',
+      dataIndex: 'extra_nodes',
+      width: 190,
+      render: (value: any) => <ExtraNodesSummary value={value} />,
+    },
+    {
       title: '状态',
       dataIndex: 'enabled',
       width: 100,
@@ -870,7 +933,7 @@ export default function ClientEntryUserPolicyPage() {
           columns={columns}
           dataSource={rows}
           pagination={false}
-          scroll={{ x: 1900 }}
+          scroll={{ x: 2100 }}
           rowClassName={(row) => `sortable-row ${draggingKey === String(row.id) ? 'dragging-row' : ''}`}
           onRow={(row) => ({
             draggable: true,

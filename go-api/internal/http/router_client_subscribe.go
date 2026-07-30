@@ -16,6 +16,7 @@ import (
 
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/nodeapi"
+	"forest/go-api/internal/subscribelink"
 	usersvc "forest/go-api/internal/user"
 
 	"gopkg.in/yaml.v3"
@@ -50,6 +51,11 @@ func buildShadowrocketPayload(subscribe usersvc.Subscribe, servers []map[string]
 	var builder strings.Builder
 	builder.WriteString(buildShadowrocketStatusLine(subscribe))
 	for _, server := range servers {
+		if raw := subscribelink.RawURI(server); raw != "" {
+			builder.WriteString(strings.TrimRight(raw, "\r\n"))
+			builder.WriteString("\r\n")
+			continue
+		}
 		serverType, normalized := normalizeSubscribeServer(server)
 		if serverType == "vmess" {
 			builder.WriteString(buildShadowrocketVmessURI(subscribe.UUID, normalized))
@@ -279,6 +285,7 @@ func buildSurgeSubscribeInfo(cfg config.Config, subscribe usersvc.Subscribe) str
 
 func buildSurgeProxyLine(userUUID string, server map[string]any) (string, bool) {
 	serverType, normalized := normalizeSubscribeServer(server)
+	userUUID = subscribelink.Credential(userUUID, normalized)
 	switch serverType {
 	case "shadowsocks":
 		return buildSurgeShadowsocksLine(userUUID, normalized), true
@@ -515,6 +522,7 @@ func shouldInjectSingBoxProxyTags(outbound map[string]any) bool {
 
 func buildSingBoxOutbound(userUUID string, server map[string]any) (map[string]any, bool) {
 	serverType, normalized := normalizeSubscribeServer(server)
+	userUUID = subscribelink.Credential(userUUID, normalized)
 	resolver := singBoxNodeDomainResolver(normalized)
 	var proxy map[string]any
 	switch serverType {
@@ -682,13 +690,15 @@ func buildSingBoxTrojanOutbound(userUUID string, server map[string]any) map[stri
 
 func buildSingBoxTUICOutbound(userUUID string, server map[string]any) map[string]any {
 	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	uuid := subscribelink.UUID(userUUID, server)
+	password := subscribelink.Password(userUUID, server)
 	proxy := map[string]any{
 		"tag":                serverString(server, "name"),
 		"type":               "tuic",
 		"server":             serverString(server, "host"),
 		"server_port":        serverInt64(server, "port"),
-		"uuid":               userUUID,
-		"password":           userUUID,
+		"uuid":               uuid,
+		"password":           password,
 		"congestion_control": firstNonEmptyString(serverString(server, "congestion_control"), "cubic"),
 		"udp_relay_mode":     firstNonEmptyString(serverString(server, "udp_relay_mode"), "native"),
 		"zero_rtt_handshake": serverBoolValue(server["zero_rtt_handshake"]),
@@ -1004,6 +1014,7 @@ func compileProxyGroupEntryMatcher(raw string) (*regexp.Regexp, bool, error) {
 
 func buildClashStandardProxy(userUUID string, server map[string]any) (map[string]any, bool) {
 	serverType, normalized := normalizeSubscribeServer(server)
+	userUUID = subscribelink.Credential(userUUID, normalized)
 	switch serverType {
 	case "shadowsocks":
 		cipher := serverString(normalized, "cipher")
@@ -1235,13 +1246,15 @@ func buildClashVlessProxy(userUUID string, server map[string]any) map[string]any
 
 func buildClashTUICProxy(userUUID string, server map[string]any) map[string]any {
 	tlsSettings := firstNonEmptyMap(serverMap(server, "tls_settings"), serverMap(server, "tlsSettings"))
+	uuid := subscribelink.UUID(userUUID, server)
+	password := subscribelink.Password(userUUID, server)
 	proxy := map[string]any{
 		"name":     serverString(server, "name"),
 		"type":     "tuic",
 		"server":   serverString(server, "host"),
 		"port":     serverInt64(server, "port"),
-		"uuid":     userUUID,
-		"password": userUUID,
+		"uuid":     uuid,
+		"password": password,
 	}
 
 	if token := serverString(server, "token"); token != "" {
@@ -1373,6 +1386,9 @@ func buildClashAnyTLSProxy(userUUID string, server map[string]any) map[string]an
 }
 
 func buildSubscribeURI(userUUID string, server map[string]any) string {
+	if raw := subscribelink.RawURI(server); raw != "" {
+		return strings.TrimRight(raw, "\r\n") + "\r\n"
+	}
 	serverType, normalized := normalizeSubscribeServer(server)
 	switch serverType {
 	case "shadowsocks":

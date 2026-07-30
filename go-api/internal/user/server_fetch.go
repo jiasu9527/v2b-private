@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"forest/go-api/internal/cliententry"
+	"forest/go-api/internal/subscribelink"
 )
 
 type serverFetchUser struct {
@@ -122,13 +123,17 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 			item["port"] = port
 		}
 
-		lastCheckAt := mapInt64(item["last_check_at"])
-		isOnline := int64(0)
-		if now-300 <= lastCheckAt {
-			isOnline = 1
+		if subscribelink.IsExtra(item) {
+			item["is_online"] = int64(1)
+		} else {
+			lastCheckAt := mapInt64(item["last_check_at"])
+			isOnline := int64(0)
+			if now-300 <= lastCheckAt {
+				isOnline = 1
+			}
+			item["is_online"] = isOnline
+			item["cache_key"] = fmt.Sprintf("%s-%d-%v-%d", item["type"], mapInt64(item["id"]), item["updated_at"], isOnline)
 		}
-		item["is_online"] = isOnline
-		item["cache_key"] = fmt.Sprintf("%s-%d-%v-%d", item["type"], mapInt64(item["id"]), item["updated_at"], isOnline)
 		filtered = append(filtered, item)
 	}
 

@@ -6,15 +6,14 @@ import (
 	"strings"
 
 	"forest/go-api/internal/cliententry"
+	"forest/go-api/internal/subscribelink"
 )
 
-// clientEntryUserPolicy is a rule evaluated independently for every visible
-// node.  Its list order is the matching order; there is deliberately no
-// numeric "priority" exposed to users.
 type clientEntryUserPolicy struct {
 	ID         int64
 	Action     string
 	EntryHost  string
+	ExtraNodes []string
 	Conditions []cliententry.Condition
 	Members    []ClientEntryGroupMember
 }
@@ -24,7 +23,7 @@ func (s *DBService) loadClientEntryUserPolicies(ctx context.Context) ([]clientEn
 		return nil, err
 	}
 
-	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.action, p.conditions, p.entry_host, m.server_type, m.server_id, m.sort AS member_sort
+	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.action, p.conditions, p.entry_host, p.extra_nodes, m.server_type, m.server_id, m.sort AS member_sort
 FROM v2_client_entry_user_policy p
 JOIN v2_client_entry_user_policy_member m ON m.policy_id = p.id
 WHERE p.enabled = 1
@@ -50,10 +49,15 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC, m.sort ASC NULLS LAST, m.id ASC`)
 			if err != nil {
 				return nil, fmt.Errorf("decode client entry rule %d conditions: %w", id, err)
 			}
+			extraNodes, err := subscribelink.DecodeList(fmt.Sprint(row["extra_nodes"]))
+			if err != nil {
+				return nil, fmt.Errorf("decode client entry rule %d extra nodes: %w", id, err)
+			}
 			policy = &clientEntryUserPolicy{
 				ID:         id,
 				Action:     action,
 				EntryHost:  strings.TrimSpace(fmt.Sprint(row["entry_host"])),
+				ExtraNodes: extraNodes,
 				Conditions: conditions,
 				Members:    []ClientEntryGroupMember{},
 			}
@@ -88,18 +92,9 @@ func clientEntryPolicyHasMember(values []ClientEntryGroupMember, target ClientEn
 	return false
 }
 
-// applyClientEntryUserPolicies preserves the permission-filtered server set,
-// then resolves each remaining node against the first matching rule. A node
-// marked client_entry_only is denied by default and is retained only by a
-// matching delivery rule. An original-address rule grants the node without
-// changing its host, while an override rule grants it with a replacement
-// host. A rule never grants access to a node that was filtered by its group_id
-// earlier in Servers.
 func applyClientEntryUserPolicies(servers []map[string]any, subject cliententry.Subject, policies []clientEntryUserPolicy) []map[string]any {
-	if len(servers) == 0 {
-		return servers
-	}
 	result := make([]map[string]any, 0, len(servers))
+	matchedPolicyIDs := make(map[int64]struct{})
 	for _, server := range servers {
 		serverType := strings.ToLower(strings.TrimSpace(fmt.Sprint(server["type"])))
 		serverID := mapInt64(server["id"])
@@ -118,6 +113,7 @@ func applyClientEntryUserPolicies(servers []map[string]any, subject cliententry.
 				hide = true
 				break
 			}
+			matchedPolicyIDs[policy.ID] = struct{}{}
 			granted = true
 			if policy.Action == cliententry.ActionOverride {
 				server["host"] = policy.EntryHost
@@ -130,6 +126,26 @@ func applyClientEntryUserPolicies(servers []map[string]any, subject cliententry.
 			continue
 		}
 		result = append(result, server)
+	}
+	for _, policy := range policies {
+		if len(policy.ExtraNodes) == 0 {
+			continue
+		}
+		if _, matched := matchedPolicyIDs[policy.ID]; !matched {
+			continue
+		}
+		for index, raw := range policy.ExtraNodes {
+			extra, err := subscribelink.Parse(raw)
+			if err != nil {
+				continue
+			}
+			extra["id"] = -((policy.ID * 1000) + int64(index+1))
+			extra["sort"] = int64(len(result) + 1)
+			extra["client_entry_user_policy"] = 1
+			extra["client_entry_user_policy_id"] = policy.ID
+			result = append(result, extra)
+		}
+		break
 	}
 	return result
 }

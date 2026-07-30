@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"forest/go-api/internal/cliententry"
+	"forest/go-api/internal/subscribelink"
 )
 
 const clientEntryRuleSortStep int64 = 10
@@ -22,7 +23,7 @@ func (s *DBService) ListClientEntryUserPolicies(ctx context.Context) ([]ClientEn
 		return nil, err
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.name, p.sort, p.action, p.conditions, p.entry_host, p.enabled, p.remarks, p.created_at, p.updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.name, p.sort, p.action, p.conditions, p.entry_host, p.extra_nodes, p.enabled, p.remarks, p.created_at, p.updated_at
 FROM v2_client_entry_user_policy p
 ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 	if err != nil {
@@ -36,6 +37,7 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 		var (
 			record        ClientEntryUserPolicyRecord
 			conditionsRaw string
+			extraNodesRaw string
 		)
 		if err := rows.Scan(
 			&record.ID,
@@ -44,6 +46,7 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 			&record.Action,
 			&conditionsRaw,
 			&record.EntryHost,
+			&extraNodesRaw,
 			&record.Enabled,
 			&record.Remarks,
 			&record.CreatedAt,
@@ -62,6 +65,11 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 		record.Name = strings.TrimSpace(record.Name)
 		record.Action = action
 		record.EntryHost = strings.TrimSpace(record.EntryHost)
+		extraNodes, err := subscribelink.DecodeList(extraNodesRaw)
+		if err != nil {
+			return nil, fmt.Errorf("decode client entry rule %d extra nodes: %w", record.ID, err)
+		}
+		record.ExtraNodes = extraNodes
 		record.Remarks = strings.TrimSpace(record.Remarks)
 		record.Conditions = conditions
 		record.Members = []ClientEntryGroupMemberRecord{}
@@ -152,6 +160,10 @@ func (s *DBService) SaveClientEntryUserPolicy(ctx context.Context, req ClientEnt
 	if err != nil {
 		return false, err
 	}
+	extraNodes, err := subscribelink.EncodeList(prepared.ExtraNodes)
+	if err != nil {
+		return false, err
+	}
 	policyID := int64(0)
 	if prepared.ID == nil {
 		nextSort, err := nextClientEntryRuleSort(ctx, tx)
@@ -159,9 +171,9 @@ func (s *DBService) SaveClientEntryUserPolicy(ctx context.Context, req ClientEnt
 			return false, errors.New("保存失败")
 		}
 		if err := tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_user_policy
-(name, sort, action, conditions, entry_host, enabled, remarks, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
-RETURNING id`, prepared.Name, nextSort, prepared.Action, conditions, prepared.EntryHost, prepared.Enabled, prepared.Remarks, now).Scan(&policyID); err != nil {
+(name, sort, action, conditions, entry_host, extra_nodes, enabled, remarks, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+RETURNING id`, prepared.Name, nextSort, prepared.Action, conditions, prepared.EntryHost, extraNodes, prepared.Enabled, prepared.Remarks, now).Scan(&policyID); err != nil {
 			return false, errors.New("保存失败")
 		}
 	} else {
@@ -170,8 +182,8 @@ RETURNING id`, prepared.Name, nextSort, prepared.Action, conditions, prepared.En
 			return false, errors.New("规则不存在")
 		}
 		result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
-SET name = $2, action = $3, conditions = $4, entry_host = $5, enabled = $6, remarks = $7, updated_at = $8
-WHERE id = $1`, policyID, prepared.Name, prepared.Action, conditions, prepared.EntryHost, prepared.Enabled, prepared.Remarks, now)
+SET name = $2, action = $3, conditions = $4, entry_host = $5, extra_nodes = $6, enabled = $7, remarks = $8, updated_at = $9
+WHERE id = $1`, policyID, prepared.Name, prepared.Action, conditions, prepared.EntryHost, extraNodes, prepared.Enabled, prepared.Remarks, now)
 		if err != nil {
 			return false, errors.New("保存失败")
 		}
@@ -298,6 +310,7 @@ type preparedClientEntryRuleSaveRequest struct {
 	Conditions []cliententry.Condition
 	Members    []ClientEntryGroupMemberSaveRequest
 	EntryHost  string
+	ExtraNodes []string
 	Enabled    int64
 	Remarks    string
 }
@@ -341,6 +354,11 @@ func normalizeClientEntryUserPolicySaveRequest(req ClientEntryUserPolicySaveRequ
 		return result, err
 	}
 	result.Conditions = conditions
+	extraNodes, err := subscribelink.NormalizeList(req.ExtraNodes)
+	if err != nil {
+		return result, err
+	}
+	result.ExtraNodes = extraNodes
 	members, err := normalizePolicyMembers(req.Members)
 	if err != nil {
 		return result, err

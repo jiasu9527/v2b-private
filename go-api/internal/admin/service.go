@@ -1263,6 +1263,7 @@ type ClientEntryUserPolicyRecord struct {
 	Conditions []cliententry.Condition        `json:"conditions"`
 	Members    []ClientEntryGroupMemberRecord `json:"members,omitempty"`
 	EntryHost  string                         `json:"entry_host"`
+	ExtraNodes []string                       `json:"extra_nodes"`
 	Enabled    int64                          `json:"enabled"`
 	Remarks    string                         `json:"remarks"`
 	CreatedAt  int64                          `json:"created_at,omitempty"`
@@ -1276,6 +1277,7 @@ type ClientEntryUserPolicySaveRequest struct {
 	Conditions []cliententry.Condition
 	Members    []ClientEntryGroupMemberSaveRequest
 	EntryHost  string
+	ExtraNodes []string
 	Enabled    *int64
 	Remarks    string
 }

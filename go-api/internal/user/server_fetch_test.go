@@ -222,6 +222,60 @@ func TestApplyClientEntryUserPolicyDeliversMultipleOriginalHostsOnlyToMatchedUse
 	}
 }
 
+func TestApplyClientEntryUserPolicyAppendsExtraNodesInConfiguredOrder(t *testing.T) {
+	servers := []map[string]any{{"id": int64(11), "type": "vmess", "host": "original.example.com"}}
+	policies := []clientEntryUserPolicy{{
+		ID: 15, Action: cliententry.ActionOverride, EntryHost: "assigned.example.com",
+		Conditions: []cliententry.Condition{{Field: "user_id", Operator: "in", Values: []json.RawMessage{json.RawMessage("100")}}},
+		Members:    []ClientEntryGroupMember{{ServerType: "vmess", ServerID: 11}},
+		ExtraNodes: []string{
+			"trojan://first-secret@first.example.com:443#First",
+			"vless://second-secret@second.example.com:8443?security=tls&sni=second.example.com#Second",
+		},
+	}}
+
+	unmatched := applyClientEntryUserPolicies(cloneServerMapsForTest(servers), cliententry.Subject{UserID: 99}, policies)
+	if len(unmatched) != 1 {
+		t.Fatalf("unmatched user received extra nodes: %#v", unmatched)
+	}
+
+	matched := applyClientEntryUserPolicies(cloneServerMapsForTest(servers), cliententry.Subject{UserID: 100}, policies)
+	if len(matched) != 3 {
+		t.Fatalf("matched result = %#v", matched)
+	}
+	if matched[0]["host"] != "assigned.example.com" || matched[1]["host"] != "first.example.com" || matched[2]["host"] != "second.example.com" {
+		t.Fatalf("unexpected result order or host override: %#v", matched)
+	}
+	if matched[1]["client_entry_extra_password"] != "first-secret" || matched[2]["client_entry_extra_uuid"] != "second-secret" {
+		t.Fatalf("extra credentials were not retained: %#v", matched)
+	}
+}
+
+func TestApplyClientEntryUserPolicyDoesNotDeliverExtrasWithoutVisibleMatchedMembers(t *testing.T) {
+	policies := []clientEntryUserPolicy{{
+		ID: 16, Action: cliententry.ActionHide,
+		Conditions: []cliententry.Condition{{Field: "email", Operator: "in", Values: []json.RawMessage{json.RawMessage(`"target@example.com"`)}}},
+		Members:    []ClientEntryGroupMember{{ServerType: "vmess", ServerID: 99}},
+		ExtraNodes: []string{"trojan://secret@extra.example.com:443#Extra"},
+	}}
+	result := applyClientEntryUserPolicies(nil, cliententry.Subject{Email: "target@example.com"}, policies)
+	if len(result) != 0 {
+		t.Fatalf("extra node requires its rule to win for a visible member: %#v", result)
+	}
+}
+
+func TestApplyClientEntryUserPolicyUsesOnlyFirstMatchingExtraNodeRule(t *testing.T) {
+	servers := []map[string]any{{"id": int64(11), "type": "vmess", "host": "managed.example.com"}}
+	policies := []clientEntryUserPolicy{
+		{ID: 20, Action: cliententry.ActionOriginal, Members: []ClientEntryGroupMember{{ServerType: "vmess", ServerID: 11}}, ExtraNodes: []string{"trojan://first@first.example.com:443#First"}},
+		{ID: 21, Action: cliententry.ActionOriginal, Members: []ClientEntryGroupMember{{ServerType: "vmess", ServerID: 11}}, ExtraNodes: []string{"trojan://second@second.example.com:443#Second"}},
+	}
+	result := applyClientEntryUserPolicies(servers, cliententry.Subject{UserID: 100}, policies)
+	if len(result) != 2 || result[1]["host"] != "first.example.com" {
+		t.Fatalf("only the first matching rule should append extras: %#v", result)
+	}
+}
+
 func TestApplyClientEntryUserPolicyKeepsOriginalServersWhenNoPolicy(t *testing.T) {
 	servers := []map[string]any{{"id": int64(11), "type": "vmess", "host": "default.example.com"}}
 
@@ -338,9 +392,9 @@ func expectServerFetchUserForVisibilityTest(mock sqlmock.Sqlmock, userID, groupI
 
 func expectMatchingOverridePolicyForVisibilityTest(mock sqlmock.Sqlmock, serverType string, serverID, userID int64) {
 	conditions := `[{"field":"user_id","operator":"in","values":[` + fmt.Sprint(userID) + `]}]`
-	mock.ExpectQuery(`SELECT p.id, p.action, p.conditions, p.entry_host, m.server_type, m.server_id, m.sort AS member_sort\s+FROM v2_client_entry_user_policy p\s+JOIN v2_client_entry_user_policy_member m ON m.policy_id = p.id\s+WHERE p.enabled = 1`).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "action", "conditions", "entry_host", "server_type", "server_id", "member_sort"}).
-			AddRow(int64(7), cliententry.ActionOverride, conditions, "assigned.example.com", serverType, serverID, int64(1)))
+	mock.ExpectQuery(`SELECT p.id, p.action, p.conditions, p.entry_host, p.extra_nodes, m.server_type, m.server_id, m.sort AS member_sort\s+FROM v2_client_entry_user_policy p\s+JOIN v2_client_entry_user_policy_member m ON m.policy_id = p.id\s+WHERE p.enabled = 1`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "action", "conditions", "entry_host", "extra_nodes", "server_type", "server_id", "member_sort"}).
+			AddRow(int64(7), cliententry.ActionOverride, conditions, "assigned.example.com", `[]`, serverType, serverID, int64(1)))
 }
 
 func expectServerFetchTableQueriesForVisibilityTest(mock sqlmock.Sqlmock, visibleType string, visibleID int64, visibleGroupIDs string) {
