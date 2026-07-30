@@ -461,6 +461,28 @@ ORDER BY id DESC LIMIT $2`, time.Now().Add(-clientEntryMonitorRetention).Unix(),
 	return runs, nil
 }
 
+// ClearClientEntryMonitorRuns removes completed on-demand check history. An
+// active run is deliberately retained so clearing the table cannot interrupt
+// probe reporting or the final result calculation. Run results are removed by
+// the run_result foreign key's ON DELETE CASCADE rule.
+func (s *DBService) ClearClientEntryMonitorRuns(ctx context.Context) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, ErrUnavailable
+	}
+	if err := s.ensureDNSFailoverSchema(ctx); err != nil {
+		return 0, err
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM v2_client_entry_monitor_run WHERE status <> 'running'`)
+	if err != nil {
+		return 0, fmt.Errorf("clear client entry monitor runs: %w", err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count cleared client entry monitor runs: %w", err)
+	}
+	return deleted, nil
+}
+
 func (s *DBService) RecentClientEntryMonitorReport(ctx context.Context) (string, error) {
 	runs, err := s.ListClientEntryMonitorRuns(ctx, 1)
 	if err != nil {

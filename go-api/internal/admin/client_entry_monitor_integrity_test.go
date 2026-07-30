@@ -569,6 +569,29 @@ func TestListClientEntryMonitorRunsCapsEachRunResultSet(t *testing.T) {
 	}
 }
 
+func TestClearClientEntryMonitorRunsKeepsActiveRun(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	mock.ExpectExec(`DELETE FROM v2_client_entry_monitor_run WHERE status <> 'running'`).
+		WillReturnResult(sqlmock.NewResult(0, 4))
+
+	deleted, err := service.ClearClientEntryMonitorRuns(context.Background())
+	if err != nil {
+		t.Fatalf("ClearClientEntryMonitorRuns: %v", err)
+	}
+	if deleted != 4 {
+		t.Fatalf("deleted = %d, want 4", deleted)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func TestLoadClientEntryMonitorRunCapsTelegramResultSet(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

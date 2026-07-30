@@ -24,6 +24,8 @@ type fakeClientEntryMonitorAdminService struct {
 	lastRunUserID int64
 	lastRunChatID int64
 	lastRunsLimit int64
+	clearDeleted  int64
+	clearCalled   bool
 }
 
 func (f *fakeClientEntryMonitorAdminService) ListClientEntryMonitors(context.Context) (admin.ClientEntryMonitorOverview, error) {
@@ -47,6 +49,11 @@ func (f *fakeClientEntryMonitorAdminService) ListClientEntryMonitorRuns(_ contex
 	return f.runs, f.err
 }
 
+func (f *fakeClientEntryMonitorAdminService) ClearClientEntryMonitorRuns(context.Context) (int64, error) {
+	f.clearCalled = true
+	return f.clearDeleted, f.err
+}
+
 func clientEntryMonitorRouter(service *fakeClientEntryMonitorAdminService) http.Handler {
 	return NewRouter(
 		config.Config{AdminPath: "control"},
@@ -65,6 +72,7 @@ func TestClientEntryMonitorRoutesMapConfigurationRunAndHistory(t *testing.T) {
 		savedOverview: admin.ClientEntryMonitorOverview{Revision: 8},
 		runs:          []admin.ClientEntryMonitorRun{{ID: 91, Status: "completed"}},
 		runID:         92,
+		clearDeleted:  3,
 	}
 	router := clientEntryMonitorRouter(service)
 
@@ -89,6 +97,12 @@ func TestClientEntryMonitorRoutesMapConfigurationRunAndHistory(t *testing.T) {
 	if service.lastRunsLimit != 5 {
 		t.Fatalf("runs limit = %d, want 5", service.lastRunsLimit)
 	}
+	if rec := dnsFailoverRequest(router, http.MethodDelete, "/api/v1/control/dns-failover/entry-monitors/runs", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"deleted":3`) {
+		t.Fatalf("DELETE runs: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !service.clearCalled {
+		t.Fatal("DELETE runs did not call the clear service")
+	}
 }
 
 func TestClientEntryMonitorRoutesRejectInvalidContracts(t *testing.T) {
@@ -105,6 +119,7 @@ func TestClientEntryMonitorRoutesRejectInvalidContracts(t *testing.T) {
 		{http.MethodPut, "/api/v1/control/dns-failover/entry-monitors", `{"revision":1,"items":[{"policy_id":9,"enabled":true,"probe_ids":[7],"targets":[]}]}`, http.StatusBadRequest},
 		{http.MethodPut, "/api/v1/control/dns-failover/entry-monitors", `{"revision":1}`, http.StatusBadRequest},
 		{http.MethodGet, "/api/v1/control/dns-failover/entry-monitors/runs?limit=bad", "", http.StatusBadRequest},
+		{http.MethodPost, "/api/v1/control/dns-failover/entry-monitors/runs", `{}`, http.StatusMethodNotAllowed},
 		{http.MethodDelete, "/api/v1/control/dns-failover/entry-monitors", "", http.StatusMethodNotAllowed},
 	} {
 		rec := dnsFailoverRequest(router, test.method, test.path, test.body)

@@ -73,12 +73,20 @@ func handleClientEntryMonitorRun(w http.ResponseWriter, r *http.Request, service
 }
 
 func handleClientEntryMonitorRuns(w http.ResponseWriter, r *http.Request, service admin.Service) bool {
-	if r.Method != http.MethodGet {
-		return dnsFailoverMethodNotAllowed(w, r, http.MethodGet)
-	}
 	monitorService, ok := clientEntryMonitorService(w, service)
 	if !ok {
 		return true
+	}
+	if r.Method == http.MethodDelete {
+		deleted, err := monitorService.ClearClientEntryMonitorRuns(r.Context())
+		if err != nil {
+			return writeClientEntryMonitorError(w, err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"deleted": deleted}})
+		return true
+	}
+	if r.Method != http.MethodGet {
+		return dnsFailoverMethodNotAllowed(w, r, http.MethodGet+", "+http.MethodDelete)
 	}
 	limit := int64(20)
 	if raw := r.URL.Query().Get("limit"); raw != "" {

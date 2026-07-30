@@ -3,6 +3,7 @@ import {
   Button,
   Divider,
   InputNumber,
+  Popconfirm,
   Space,
   Spin,
   Switch,
@@ -12,11 +13,12 @@ import {
   message,
 } from 'antd';
 import {
+  DeleteOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
   SaveOutlined,
 } from '@ant-design/icons';
-import { apiGet, apiJsonPost, apiPut, unwrapData } from '../lib/api';
+import { apiDelete, apiGet, apiJsonPost, apiPut, unwrapData } from '../lib/api';
 import './DNSFailoverEntryMonitorTab.css';
 
 const ENTRY_MONITOR_PATH = '/dns-failover/entry-monitors';
@@ -363,6 +365,7 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
+  const [clearingRuns, setClearingRuns] = useState(false);
 
   const policiesRef = useRef<EntryPolicy[]>([]);
   const draftsRef = useRef<Record<number, EntryMonitorDraft>>({});
@@ -447,6 +450,29 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
       // Individual loaders surface non-background errors.
     } finally {
       if (!quiet && loadingRequestSequence === loadingRequestSequenceRef.current) setLoading(false);
+    }
+  };
+
+  const clearRuns = async () => {
+    if (clearingRuns) return;
+    setClearingRuns(true);
+    // Invalidate an older refresh so it cannot put deleted rows back into the
+    // table after the DELETE request has completed.
+    runsRequestSequenceRef.current += 1;
+    try {
+      const payload = unwrapData(await apiDelete(`${ENTRY_MONITOR_PATH}/runs`)) || {};
+      const deleted = numberValue(payload.deleted);
+      setRuns((current) => current.filter((run) => String(run.status || '').toLowerCase() === 'running'));
+      message.success(deleted > 0 ? `已清理 ${deleted} 条检测记录` : '没有可清理的检测记录');
+      try {
+        await fetchRuns(true);
+      } catch {
+        // The records are already cleared; the regular refresh will retry.
+      }
+    } catch (error: any) {
+      message.error(error?.message || '清理近期检测失败');
+    } finally {
+      setClearingRuns(false);
     }
   };
 
@@ -982,7 +1008,29 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
         locale={{ emptyText: loaded ? '暂无用户入口规则' : '正在加载' }}
       />
 
-      <Divider orientation="left">近期检测</Divider>
+      <Divider orientation="left">
+        <Space size={8}>
+          <span>近期检测</span>
+          <Popconfirm
+            title="确认清理近期检测记录？"
+            description="仅删除已经结束的检测任务及结果，不影响正在执行的任务、监控配置和告警状态。"
+            okText="清理"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => clearRuns()}
+          >
+            <Button
+              type="link"
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              loading={clearingRuns}
+            >
+              手动清理
+            </Button>
+          </Popconfirm>
+        </Space>
+      </Divider>
       <Table
         className="dns-entry-runs-table"
         rowKey={(run, index) => `${run.run_id ?? run.id ?? 'run'}-${run.target_id ?? run.source_key ?? index}-${run.probe_id ?? ''}`}

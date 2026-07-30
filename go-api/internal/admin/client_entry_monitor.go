@@ -156,6 +156,7 @@ type ClientEntryMonitorAdminService interface {
 	SaveClientEntryMonitors(context.Context, ClientEntryMonitorSaveRequest) (ClientEntryMonitorOverview, error)
 	StartClientEntryMonitorRunForPolicies(context.Context, []int64, int64, int64) (int64, error)
 	ListClientEntryMonitorRuns(context.Context, int64) ([]ClientEntryMonitorRun, error)
+	ClearClientEntryMonitorRuns(context.Context) (int64, error)
 }
 
 type clientEntryMonitorNode struct {
