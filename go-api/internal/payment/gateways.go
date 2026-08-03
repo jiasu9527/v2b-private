@@ -38,6 +38,10 @@ func buildGatewayCheckout(ctx context.Context, client *http.Client, gateway stri
 	case "EPay":
 		return buildEPayCheckout(cfg, order), nil
 	case "epaypro":
+		paymentType := strings.ToLower(configValue(cfg, "type"))
+		if paymentType != "alipay" && paymentType != "wxpay" {
+			return CheckoutResult{}, ErrInvalidParameter
+		}
 		return buildEPayProCheckout(cfg, order), nil
 	case "EpusdtPay":
 		return buildEpusdtCheckout(ctx, client, cfg, order)
@@ -73,9 +77,9 @@ func verifyGatewayNotify(ctx context.Context, client *http.Client, gateway strin
 	case "Coinbase":
 		return verifyCoinbaseNotify(cfg, req)
 	case "EPay":
-		return verifyEPayNotify(cfg, req)
+		return verifyEPayNotify(cfg, req, false)
 	case "epaypro":
-		return verifyEPayNotify(cfg, req)
+		return verifyEPayNotify(cfg, req, true)
 	case "EpusdtPay":
 		return verifyEpusdtNotify(cfg, req)
 	case "BEasyPaymentUSDT":
@@ -185,8 +189,9 @@ func buildCoinbaseCheckout(ctx context.Context, client *http.Client, cfg map[str
 		} `json:"data"`
 	}
 	headers := http.Header{
-		"X-CC-Api-Key": []string{configValue(cfg, "coinbase_api_key")},
-		"X-CC-Version": []string{"2018-03-22"},
+		"X-CC-Api-Key":         []string{configValue(cfg, "coinbase_api_key")},
+		"X-CC-Version":         []string{"2018-03-22"},
+		"X-CC-Idempotency-Key": []string{"forest:" + order.TradeNo},
 	}
 	if err := doJSON(ctx, client, http.MethodPost, configValue(cfg, "coinbase_url"), payload, headers, &response); err != nil {
 		return CheckoutResult{}, err
@@ -211,7 +216,8 @@ func buildBTCPayCheckout(ctx context.Context, client *http.Client, cfg map[strin
 		CheckoutLink string `json:"checkoutLink"`
 	}
 	headers := http.Header{
-		"Authorization": []string{"token " + configValue(cfg, "btcpay_api_key")},
+		"Authorization":   []string{"token " + configValue(cfg, "btcpay_api_key")},
+		"Idempotency-Key": []string{"forest:" + order.TradeNo},
 	}
 	endpoint := strings.TrimRight(configValue(cfg, "btcpay_url"), "/") + "/api/v1/stores/" + url.PathEscape(configValue(cfg, "btcpay_storeId")) + "/invoices"
 	if err := doJSON(ctx, client, http.MethodPost, endpoint, payload, headers, &response); err != nil {
@@ -232,15 +238,17 @@ func buildStripeSourceCheckout(ctx context.Context, client *http.Client, cfg map
 	if err != nil {
 		return CheckoutResult{}, err
 	}
+	gatewayAmount := stripeAmount(order.Total, exchange)
 
 	values := url.Values{}
-	values.Set("amount", strconv.FormatInt(stripeAmount(order.Total, exchange), 10))
+	values.Set("amount", strconv.FormatInt(gatewayAmount, 10))
 	values.Set("currency", currency)
 	values.Set("type", sourceType)
 	values.Set("statement_descriptor", stripeOrderName(order))
 	values.Set("metadata[user_id]", strconv.FormatInt(order.UserID, 10))
 	values.Set("metadata[out_trade_no]", order.TradeNo)
 	values.Set("metadata[identifier]", "")
+	setStripeConfirmationMetadata(values, "metadata", order.Total, gatewayAmount, currency)
 	values.Set("redirect[return_url]", order.ReturnURL)
 
 	var response struct {
@@ -254,7 +262,7 @@ func buildStripeSourceCheckout(ctx context.Context, client *http.Client, cfg map
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	headers := http.Header{"Authorization": []string{"Bearer " + configValue(cfg, "stripe_sk_live")}}
+	headers := stripeRequestHeaders(cfg, "source:"+order.TradeNo, values)
 	if err := doForm(ctx, client, http.MethodPost, "https://api.stripe.com/v1/sources", values, headers, &response); err != nil {
 		return CheckoutResult{}, err
 	}
@@ -385,7 +393,7 @@ func buildEpusdtCheckout(ctx context.Context, client *http.Client, cfg map[strin
 		} `json:"data"`
 		Message string `json:"message"`
 	}
-	if err := doJSON(ctx, client, http.MethodPost, strings.TrimRight(configValue(cfg, "epusdt_pay_url"), "/")+"/api/v1/order/create-transaction", params, nil, &response); err != nil {
+	if err := doJSON(ctx, client, http.MethodPost, strings.TrimRight(configValue(cfg, "epusdt_pay_url"), "/")+"/api/v1/order/create-transaction", params, http.Header{"Idempotency-Key": []string{"forest:" + order.TradeNo}}, &response); err != nil {
 		return CheckoutResult{}, err
 	}
 	if response.StatusCode != 200 || strings.TrimSpace(response.Data.PaymentURL) == "" {
@@ -414,7 +422,7 @@ func buildBEasyCheckout(ctx context.Context, client *http.Client, cfg map[string
 		} `json:"data"`
 		Message string `json:"message"`
 	}
-	if err := doJSON(ctx, client, http.MethodPost, strings.TrimRight(configValue(cfg, "bepusdt_url"), "/")+"/api/v1/order/create-transaction", params, nil, &response); err != nil {
+	if err := doJSON(ctx, client, http.MethodPost, strings.TrimRight(configValue(cfg, "bepusdt_url"), "/")+"/api/v1/order/create-transaction", params, http.Header{"Idempotency-Key": []string{"forest:" + order.TradeNo}}, &response); err != nil {
 		return CheckoutResult{}, err
 	}
 	if response.StatusCode != 200 || strings.TrimSpace(response.Data.PaymentURL) == "" {
@@ -451,7 +459,7 @@ func buildMGateCheckout(ctx context.Context, client *http.Client, cfg map[string
 		Message string              `json:"message"`
 		Errors  map[string][]string `json:"errors"`
 	}
-	if err := doForm(ctx, client, http.MethodPost, strings.TrimRight(configValue(cfg, "mgate_url"), "/")+"/v1/gateway/fetch", form, nil, &response); err != nil {
+	if err := doForm(ctx, client, http.MethodPost, strings.TrimRight(configValue(cfg, "mgate_url"), "/")+"/v1/gateway/fetch", form, http.Header{"Idempotency-Key": []string{"forest:" + order.TradeNo}}, &response); err != nil {
 		return CheckoutResult{}, err
 	}
 	if strings.TrimSpace(response.Data.PayURL) == "" {
@@ -479,6 +487,7 @@ func buildStripeCheckout(ctx context.Context, client *http.Client, cfg map[strin
 	if err != nil {
 		return CheckoutResult{}, err
 	}
+	gatewayAmount := stripeAmount(order.Total, exchange)
 	values := url.Values{}
 	values.Set("success_url", order.ReturnURL)
 	values.Set("cancel_url", order.ReturnURL)
@@ -488,8 +497,10 @@ func buildStripeCheckout(ctx context.Context, client *http.Client, cfg map[strin
 	values.Set("phone_number_collection[enabled]", "true")
 	values.Set("line_items[0][price_data][currency]", currency)
 	values.Set("line_items[0][price_data][product_data][name]", order.TradeNo)
-	values.Set("line_items[0][price_data][unit_amount]", strconv.FormatInt(stripeAmount(order.Total, exchange), 10))
+	values.Set("line_items[0][price_data][unit_amount]", strconv.FormatInt(gatewayAmount, 10))
 	values.Set("line_items[0][quantity]", "1")
+	setStripeConfirmationMetadata(values, "metadata", order.Total, gatewayAmount, currency)
+	setStripeConfirmationMetadata(values, "payment_intent_data[metadata]", order.Total, gatewayAmount, currency)
 
 	var response struct {
 		URL   string `json:"url"`
@@ -497,7 +508,7 @@ func buildStripeCheckout(ctx context.Context, client *http.Client, cfg map[strin
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	headers := http.Header{"Authorization": []string{"Bearer " + configValue(cfg, "stripe_sk_live")}}
+	headers := stripeRequestHeaders(cfg, "checkout-session:"+order.TradeNo, values)
 	if err := doForm(ctx, client, http.MethodPost, "https://api.stripe.com/v1/checkout/sessions", values, headers, &response); err != nil {
 		return CheckoutResult{}, err
 	}
@@ -519,6 +530,7 @@ func buildStripeAllCheckout(ctx context.Context, client *http.Client, cfg map[st
 	if err != nil {
 		return CheckoutResult{}, err
 	}
+	gatewayAmount := stripeAmount(order.Total, exchange)
 	paymentMethod := configValue(cfg, "payment_method")
 	switch paymentMethod {
 	case "", "cards":
@@ -533,9 +545,11 @@ func buildStripeAllCheckout(ctx context.Context, client *http.Client, cfg map[st
 			values.Set("customer_email", order.UserEmail)
 		}
 		values.Set("line_items[0][price_data][currency]", currency)
-		values.Set("line_items[0][price_data][unit_amount]", strconv.FormatInt(stripeAmount(order.Total, exchange), 10))
+		values.Set("line_items[0][price_data][unit_amount]", strconv.FormatInt(gatewayAmount, 10))
 		values.Set("line_items[0][price_data][product_data][name]", stripeOrderName(order))
 		values.Set("line_items[0][quantity]", "1")
+		setStripeConfirmationMetadata(values, "metadata", order.Total, gatewayAmount, currency)
+		setStripeConfirmationMetadata(values, "payment_intent_data[metadata]", order.Total, gatewayAmount, currency)
 
 		var response struct {
 			URL   string `json:"url"`
@@ -543,7 +557,7 @@ func buildStripeAllCheckout(ctx context.Context, client *http.Client, cfg map[st
 				Message string `json:"message"`
 			} `json:"error"`
 		}
-		headers := http.Header{"Authorization": []string{"Bearer " + configValue(cfg, "stripe_sk_live")}}
+		headers := stripeRequestHeaders(cfg, "all-session:"+order.TradeNo, values)
 		if err := doForm(ctx, client, http.MethodPost, "https://api.stripe.com/v1/checkout/sessions", values, headers, &response); err != nil {
 			return CheckoutResult{}, err
 		}
@@ -555,9 +569,9 @@ func buildStripeAllCheckout(ctx context.Context, client *http.Client, cfg map[st
 		}
 		return CheckoutResult{Type: 1, Data: response.URL}, nil
 	case "alipay", "wechat_pay":
-		headers := http.Header{"Authorization": []string{"Bearer " + configValue(cfg, "stripe_sk_live")}}
 		methodValues := url.Values{}
 		methodValues.Set("type", paymentMethod)
+		headers := stripeRequestHeaders(cfg, "all-method:"+order.TradeNo, methodValues)
 
 		var paymentMethodResp struct {
 			ID    string `json:"id"`
@@ -576,7 +590,7 @@ func buildStripeAllCheckout(ctx context.Context, client *http.Client, cfg map[st
 		}
 
 		intentValues := url.Values{}
-		intentValues.Set("amount", strconv.FormatInt(stripeAmount(order.Total, exchange), 10))
+		intentValues.Set("amount", strconv.FormatInt(gatewayAmount, 10))
 		intentValues.Set("currency", currency)
 		intentValues.Set("confirm", "true")
 		intentValues.Set("payment_method", paymentMethodResp.ID)
@@ -584,6 +598,7 @@ func buildStripeAllCheckout(ctx context.Context, client *http.Client, cfg map[st
 		intentValues.Set("statement_descriptor", stripeOrderName(order))
 		intentValues.Set("metadata[user_id]", strconv.FormatInt(order.UserID, 10))
 		intentValues.Set("metadata[out_trade_no]", order.TradeNo)
+		setStripeConfirmationMetadata(intentValues, "metadata", order.Total, gatewayAmount, currency)
 		if order.UserEmail != "" {
 			intentValues.Set("metadata[customer_email]", order.UserEmail)
 		}
@@ -605,7 +620,8 @@ func buildStripeAllCheckout(ctx context.Context, client *http.Client, cfg map[st
 				Message string `json:"message"`
 			} `json:"error"`
 		}
-		if err := doForm(ctx, client, http.MethodPost, "https://api.stripe.com/v1/payment_intents", intentValues, headers, &intentResp); err != nil {
+		intentHeaders := stripeRequestHeaders(cfg, "all-intent:"+order.TradeNo, intentValues)
+		if err := doForm(ctx, client, http.MethodPost, "https://api.stripe.com/v1/payment_intents", intentValues, intentHeaders, &intentResp); err != nil {
 			return CheckoutResult{}, err
 		}
 		switch paymentMethod {
@@ -643,13 +659,15 @@ func buildStripeCreditCheckout(ctx context.Context, client *http.Client, cfg map
 	if err != nil {
 		return CheckoutResult{}, err
 	}
+	gatewayAmount := stripeAmount(order.Total, exchange)
 	values := url.Values{}
-	values.Set("amount", strconv.FormatInt(stripeAmount(order.Total, exchange), 10))
+	values.Set("amount", strconv.FormatInt(gatewayAmount, 10))
 	values.Set("currency", currency)
 	values.Set("source", order.Token)
 	values.Set("metadata[user_id]", strconv.FormatInt(order.UserID, 10))
 	values.Set("metadata[out_trade_no]", order.TradeNo)
 	values.Set("metadata[identifier]", "")
+	setStripeConfirmationMetadata(values, "metadata", order.Total, gatewayAmount, currency)
 
 	var response struct {
 		ID    string `json:"id"`
@@ -658,7 +676,7 @@ func buildStripeCreditCheckout(ctx context.Context, client *http.Client, cfg map
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	headers := http.Header{"Authorization": []string{"Bearer " + configValue(cfg, "stripe_sk_live")}}
+	headers := stripeRequestHeaders(cfg, "credit-charge:"+order.TradeNo, values)
 	if err := doForm(ctx, client, http.MethodPost, "https://api.stripe.com/v1/charges", values, headers, &response); err != nil {
 		return CheckoutResult{}, err
 	}
@@ -671,7 +689,75 @@ func buildStripeCreditCheckout(ctx context.Context, client *http.Client, cfg map
 	return CheckoutResult{Type: 2, Data: true}, nil
 }
 
-func verifyEPayNotify(cfg map[string]string, req NotifyRequest) (notifyResult, error) {
+const (
+	stripeMetaOrderAmount   = "forest_order_amount"
+	stripeMetaGatewayAmount = "forest_gateway_amount"
+	stripeMetaCurrency      = "forest_gateway_currency"
+)
+
+func setStripeConfirmationMetadata(values url.Values, prefix string, orderAmount, gatewayAmount int64, currency string) {
+	values.Set(prefix+"["+stripeMetaOrderAmount+"]", strconv.FormatInt(orderAmount, 10))
+	values.Set(prefix+"["+stripeMetaGatewayAmount+"]", strconv.FormatInt(gatewayAmount, 10))
+	values.Set(prefix+"["+stripeMetaCurrency+"]", strings.ToLower(strings.TrimSpace(currency)))
+}
+
+func stripeRequestHeaders(cfg map[string]string, scope string, values url.Values) http.Header {
+	_ = values
+	return http.Header{
+		"Authorization": []string{"Bearer " + configValue(cfg, "stripe_sk_live")},
+		// The idempotency identity belongs to the station order, not to mutable
+		// request parameters. If a provider accepted the first request but the
+		// response or our database commit was lost, a changed token, exchange rate
+		// or return URL must fail closed at Stripe instead of becoming a second
+		// charge for the same order.
+		"Idempotency-Key": []string{"forest:" + scope},
+	}
+}
+
+func stripeConfirmationAmount(object map[string]any, amountField string) (*int64, error) {
+	metadata := nestedMap(object, "metadata")
+	if len(metadata) == 0 {
+		metadata = nestedMap(object, "source", "metadata")
+	}
+	orderAmount, orderErr := parsePositiveInteger(nestedString(metadata, stripeMetaOrderAmount))
+	expectedGatewayAmount, gatewayErr := parsePositiveInteger(nestedString(metadata, stripeMetaGatewayAmount))
+	actualGatewayAmount, actualErr := parsePositiveInteger(nestedString(object, amountField))
+	metadataCurrency := strings.ToLower(nestedString(metadata, stripeMetaCurrency))
+	actualCurrency := strings.ToLower(nestedString(object, "currency"))
+	if orderErr != nil || gatewayErr != nil || actualErr != nil || expectedGatewayAmount != actualGatewayAmount || metadataCurrency == "" || actualCurrency != metadataCurrency {
+		return nil, ErrVerifyFailed
+	}
+	return &orderAmount, nil
+}
+
+func verifyEPayNotify(cfg map[string]string, req NotifyRequest, requireType bool) (notifyResult, error) {
+	if strings.TrimSpace(req.Params["trade_status"]) != "TRADE_SUCCESS" {
+		return notifyResult{}, ErrVerifyFailed
+	}
+	if !strings.EqualFold(strings.TrimSpace(req.Params["sign_type"]), "MD5") {
+		return notifyResult{}, ErrVerifyFailed
+	}
+	expectedPID := configValue(cfg, "pid")
+	key := configValue(cfg, "key")
+	if expectedPID == "" || key == "" || strings.TrimSpace(req.Params["pid"]) != expectedPID {
+		return notifyResult{}, ErrVerifyFailed
+	}
+	if requireType {
+		expectedType := strings.ToLower(configValue(cfg, "type"))
+		if (expectedType != "alipay" && expectedType != "wxpay") || !strings.EqualFold(strings.TrimSpace(req.Params["type"]), expectedType) {
+			return notifyResult{}, ErrVerifyFailed
+		}
+	}
+	tradeNo := strings.TrimSpace(req.Params["out_trade_no"])
+	callbackNo := strings.TrimSpace(req.Params["trade_no"])
+	if tradeNo == "" || callbackNo == "" {
+		return notifyResult{}, ErrVerifyFailed
+	}
+	amount, err := parsePositiveMoneyCents(req.Params["money"])
+	if err != nil {
+		return notifyResult{}, ErrVerifyFailed
+	}
+
 	sign := strings.TrimSpace(req.Params["sign"])
 	if sign == "" {
 		return notifyResult{}, ErrVerifyFailed
@@ -679,77 +765,186 @@ func verifyEPayNotify(cfg map[string]string, req NotifyRequest) (notifyResult, e
 	params := cloneStringMap(req.Params)
 	delete(params, "sign")
 	delete(params, "sign_type")
-	if sign != md5Hex(decodedQuery(params)+configValue(cfg, "key")) {
+	expectedSign := md5Hex(decodedQuery(params) + key)
+	if !constantTimeEqualFold(sign, expectedSign) {
 		return notifyResult{}, ErrVerifyFailed
 	}
 	return notifyResult{
-		TradeNo:    strings.TrimSpace(req.Params["out_trade_no"]),
-		CallbackNo: strings.TrimSpace(req.Params["trade_no"]),
+		TradeNo:    tradeNo,
+		CallbackNo: callbackNo,
+		Amount:     &amount,
 	}, nil
+}
+
+func parsePositiveMoneyCents(raw string) (int64, error) {
+	return parsePositiveMoneyCentsWithPrecision(raw, false)
+}
+
+// Some providers serialize a two-decimal fiat amount using a fixed-width
+// decimal (for example, CoinPayments commonly sends "12.34000000"). Accept
+// that representation only when every digit beyond cents is zero. A value
+// carrying any real sub-cent precision still fails closed.
+func parsePositiveMoneyCentsAllowTrailingZeros(raw string) (int64, error) {
+	return parsePositiveMoneyCentsWithPrecision(raw, true)
+}
+
+func parsePositiveMoneyCentsWithPrecision(raw string, allowTrailingZeros bool) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	parts := strings.Split(raw, ".")
+	if raw == "" || len(parts) > 2 || parts[0] == "" {
+		return 0, ErrVerifyFailed
+	}
+	for _, char := range parts[0] {
+		if char < '0' || char > '9' {
+			return 0, ErrVerifyFailed
+		}
+	}
+	whole, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return 0, ErrVerifyFailed
+	}
+
+	fraction := int64(0)
+	if len(parts) == 2 {
+		if len(parts[1]) < 1 {
+			return 0, ErrVerifyFailed
+		}
+		for _, char := range parts[1] {
+			if char < '0' || char > '9' {
+				return 0, ErrVerifyFailed
+			}
+		}
+		if len(parts[1]) > 2 {
+			if !allowTrailingZeros || strings.Trim(parts[1][2:], "0") != "" {
+				return 0, ErrVerifyFailed
+			}
+			parts[1] = parts[1][:2]
+		}
+		fraction, err = strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			return 0, ErrVerifyFailed
+		}
+		if len(parts[1]) == 1 {
+			fraction *= 10
+		}
+	}
+	if whole > (math.MaxInt64-fraction)/100 {
+		return 0, ErrVerifyFailed
+	}
+	amount := whole*100 + fraction
+	if amount <= 0 {
+		return 0, ErrVerifyFailed
+	}
+	return amount, nil
+}
+
+func parsePositiveInteger(raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, ErrVerifyFailed
+	}
+	for _, char := range raw {
+		if char < '0' || char > '9' {
+			return 0, ErrVerifyFailed
+		}
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 {
+		return 0, ErrVerifyFailed
+	}
+	return value, nil
 }
 
 func verifyEpusdtNotify(cfg map[string]string, req NotifyRequest) (notifyResult, error) {
 	if strings.TrimSpace(req.Params["status"]) != "2" {
 		return notifyResult{}, ErrVerifyFailed
 	}
-	if epusdtSign(cfg, stringMapToAny(req.Params)) != strings.TrimSpace(req.Params["signature"]) {
+	if configValue(cfg, "epusdt_pay_apitoken") == "" || !constantTimeEqualFold(req.Params["signature"], epusdtSign(cfg, stringMapToAny(req.Params))) {
+		return notifyResult{}, ErrVerifyFailed
+	}
+	tradeNo := strings.TrimSpace(req.Params["order_id"])
+	callbackNo := strings.TrimSpace(req.Params["trade_id"])
+	amount, err := parsePositiveMoneyCentsAllowTrailingZeros(req.Params["amount"])
+	if tradeNo == "" || callbackNo == "" || err != nil {
 		return notifyResult{}, ErrVerifyFailed
 	}
 	return notifyResult{
-		TradeNo:      strings.TrimSpace(req.Params["order_id"]),
-		CallbackNo:   strings.TrimSpace(req.Params["trade_id"]),
+		TradeNo:      tradeNo,
+		CallbackNo:   callbackNo,
 		CustomResult: "ok",
+		Amount:       &amount,
 	}, nil
 }
 
 func verifyBEasyNotify(cfg map[string]string, req NotifyRequest) (notifyResult, error) {
 	sign := strings.TrimSpace(req.Params["signature"])
-	if sign == "" {
+	token := configValue(cfg, "bepusdt_apitoken")
+	if sign == "" || token == "" {
 		return notifyResult{}, ErrVerifyFailed
 	}
 	params := cloneStringMap(req.Params)
 	delete(params, "signature")
-	if sign != md5Hex(decodedQuery(params)+configValue(cfg, "bepusdt_apitoken")) {
+	if !constantTimeEqualFold(sign, md5Hex(decodedQuery(params)+token)) {
 		return notifyResult{}, ErrVerifyFailed
 	}
 	if strings.TrimSpace(req.Params["status"]) != "2" {
 		return notifyResult{}, ErrVerifyFailed
 	}
+	tradeNo := strings.TrimSpace(req.Params["order_id"])
+	callbackNo := strings.TrimSpace(req.Params["trade_id"])
+	amount, err := parsePositiveMoneyCentsAllowTrailingZeros(req.Params["amount"])
+	if tradeNo == "" || callbackNo == "" || err != nil {
+		return notifyResult{}, ErrVerifyFailed
+	}
 	return notifyResult{
-		TradeNo:      strings.TrimSpace(req.Params["order_id"]),
-		CallbackNo:   strings.TrimSpace(req.Params["trade_id"]),
+		TradeNo:      tradeNo,
+		CallbackNo:   callbackNo,
 		CustomResult: "ok",
+		Amount:       &amount,
 	}, nil
 }
 
 func verifyMGateNotify(cfg map[string]string, req NotifyRequest) (notifyResult, error) {
 	sign := strings.TrimSpace(req.Params["sign"])
-	if sign == "" {
+	secret := configValue(cfg, "mgate_app_secret")
+	if sign == "" || secret == "" {
 		return notifyResult{}, ErrVerifyFailed
 	}
 	params := cloneStringMap(req.Params)
 	delete(params, "sign")
-	if sign != md5Hex(encodedQuery(params)+configValue(cfg, "mgate_app_secret")) {
+	if !constantTimeEqualFold(sign, md5Hex(encodedQuery(params)+secret)) {
+		return notifyResult{}, ErrVerifyFailed
+	}
+	tradeNo := strings.TrimSpace(req.Params["out_trade_no"])
+	callbackNo := strings.TrimSpace(req.Params["trade_no"])
+	amount, err := parsePositiveInteger(req.Params["total_amount"])
+	if tradeNo == "" || callbackNo == "" || err != nil {
 		return notifyResult{}, ErrVerifyFailed
 	}
 	return notifyResult{
-		TradeNo:    strings.TrimSpace(req.Params["out_trade_no"]),
-		CallbackNo: strings.TrimSpace(req.Params["trade_no"]),
+		TradeNo:    tradeNo,
+		CallbackNo: callbackNo,
+		Amount:     &amount,
 	}, nil
 }
 
 func verifyCoinPaymentsNotify(cfg map[string]string, req NotifyRequest) (notifyResult, error) {
-	if strings.TrimSpace(req.Params["merchant"]) != strings.TrimSpace(configValue(cfg, "coinpayments_merchant_id")) {
+	expectedMerchant := strings.TrimSpace(configValue(cfg, "coinpayments_merchant_id"))
+	secret := configValue(cfg, "coinpayments_ipn_secret")
+	if expectedMerchant == "" || secret == "" || strings.TrimSpace(req.Params["merchant"]) != expectedMerchant {
 		return notifyResult{}, ErrVerifyFailed
 	}
 	headerSign := strings.TrimSpace(req.Headers.Get("Hmac"))
-	if headerSign == "" {
+	if headerSign == "" || len(req.Body) == 0 {
 		return notifyResult{}, ErrVerifyFailed
 	}
-	mac := hmac.New(sha512.New, []byte(configValue(cfg, "coinpayments_ipn_secret")))
-	_, _ = mac.Write([]byte(encodedQuery(req.Params)))
+	mac := hmac.New(sha512.New, []byte(secret))
+	// CoinPayments defines the IPN HMAC over the exact raw POST body. Rebuilding
+	// it from parsed form values can change field ordering, escaping, duplicate
+	// keys, or spaces and would reject a legitimate notification.
+	_, _ = mac.Write(req.Body)
 	expected := hex.EncodeToString(mac.Sum(nil))
-	if subtle.ConstantTimeCompare([]byte(strings.ToLower(headerSign)), []byte(strings.ToLower(expected))) != 1 {
+	if !constantTimeEqualFold(headerSign, expected) {
 		return notifyResult{}, ErrVerifyFailed
 	}
 
@@ -758,10 +953,19 @@ func verifyCoinPaymentsNotify(cfg map[string]string, req NotifyRequest) (notifyR
 		return notifyResult{}, ErrVerifyFailed
 	}
 	if status >= 100 || status == 2 {
+		tradeNo := strings.TrimSpace(req.Params["item_number"])
+		callbackNo := strings.TrimSpace(req.Params["txn_id"])
+		currency := strings.TrimSpace(req.Params["currency1"])
+		expectedCurrency := strings.TrimSpace(configValue(cfg, "coinpayments_currency"))
+		amount, amountErr := parsePositiveMoneyCentsAllowTrailingZeros(req.Params["amount1"])
+		if tradeNo == "" || callbackNo == "" || expectedCurrency == "" || !strings.EqualFold(currency, expectedCurrency) || amountErr != nil {
+			return notifyResult{}, ErrVerifyFailed
+		}
 		return notifyResult{
-			TradeNo:      strings.TrimSpace(req.Params["item_number"]),
-			CallbackNo:   strings.TrimSpace(req.Params["txn_id"]),
+			TradeNo:      tradeNo,
+			CallbackNo:   callbackNo,
 			CustomResult: "IPN OK",
+			Amount:       &amount,
 		}, nil
 	}
 	if status < 0 {
@@ -772,42 +976,50 @@ func verifyCoinPaymentsNotify(cfg map[string]string, req NotifyRequest) (notifyR
 
 func verifyCoinbaseNotify(cfg map[string]string, req NotifyRequest) (notifyResult, error) {
 	signature := strings.TrimSpace(req.Headers.Get("X-Cc-Webhook-Signature"))
-	if signature == "" || len(req.Body) == 0 {
+	secret := configValue(cfg, "coinbase_webhook_key")
+	if signature == "" || secret == "" || len(req.Body) == 0 {
 		return notifyResult{}, ErrVerifyFailed
 	}
-	mac := hmac.New(sha256.New, []byte(configValue(cfg, "coinbase_webhook_key")))
+	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write(req.Body)
 	expected := hex.EncodeToString(mac.Sum(nil))
-	if subtle.ConstantTimeCompare([]byte(strings.ToLower(signature)), []byte(strings.ToLower(expected))) != 1 {
+	if !constantTimeEqualFold(signature, expected) {
 		return notifyResult{}, ErrVerifyFailed
 	}
 
 	var event map[string]any
-	if err := json.Unmarshal(req.Body, &event); err != nil {
+	if err := decodeJSONPreserveNumbers(req.Body, &event); err != nil {
 		return notifyResult{}, fmt.Errorf("%w: decode coinbase event", ErrVerifyFailed)
 	}
-	tradeNo := nestedString(event, "event", "data", "metadata", "outTradeNo")
-	callbackNo := nestedString(event, "event", "id")
-	if tradeNo == "" || callbackNo == "" {
+	eventType := nestedString(event, "event", "type")
+	if eventType != "charge:confirmed" && eventType != "charge:resolved" {
 		return notifyResult{}, ErrVerifyFailed
 	}
-	return notifyResult{TradeNo: tradeNo, CallbackNo: callbackNo}, nil
+	tradeNo := nestedString(event, "event", "data", "metadata", "outTradeNo")
+	callbackNo := nestedString(event, "event", "data", "id")
+	currency := nestedString(event, "event", "data", "pricing", "local", "currency")
+	amount, amountErr := parsePositiveMoneyCentsAllowTrailingZeros(nestedString(event, "event", "data", "pricing", "local", "amount"))
+	if tradeNo == "" || callbackNo == "" || !strings.EqualFold(currency, "CNY") || amountErr != nil {
+		return notifyResult{}, ErrVerifyFailed
+	}
+	return notifyResult{TradeNo: tradeNo, CallbackNo: callbackNo, Amount: &amount}, nil
 }
 
 func verifyBTCPayNotify(ctx context.Context, client *http.Client, cfg map[string]string, req NotifyRequest) (notifyResult, error) {
 	signature := strings.TrimSpace(req.Headers.Get("Btcpay-Sig"))
-	if signature == "" || len(req.Body) == 0 {
+	secret := configValue(cfg, "btcpay_webhook_key")
+	if signature == "" || secret == "" || configValue(cfg, "btcpay_url") == "" || configValue(cfg, "btcpay_storeId") == "" || configValue(cfg, "btcpay_api_key") == "" || len(req.Body) == 0 {
 		return notifyResult{}, ErrVerifyFailed
 	}
-	mac := hmac.New(sha256.New, []byte(configValue(cfg, "btcpay_webhook_key")))
+	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write(req.Body)
 	expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-	if subtle.ConstantTimeCompare([]byte(strings.ToLower(signature)), []byte(strings.ToLower(expected))) != 1 {
+	if !constantTimeEqualFold(signature, expected) {
 		return notifyResult{}, ErrVerifyFailed
 	}
 
 	var payload map[string]any
-	if err := json.Unmarshal(req.Body, &payload); err != nil {
+	if err := decodeJSONPreserveNumbers(req.Body, &payload); err != nil {
 		return notifyResult{}, fmt.Errorf("%w: decode btcpay payload", ErrVerifyFailed)
 	}
 	invoiceID := nestedString(payload, "invoiceId")
@@ -819,6 +1031,9 @@ func verifyBTCPayNotify(ctx context.Context, client *http.Client, cfg map[string
 	}
 
 	var detail struct {
+		Status   string      `json:"status"`
+		Amount   json.Number `json:"amount"`
+		Currency string      `json:"currency"`
 		Metadata struct {
 			OrderID string `json:"orderId"`
 		} `json:"metadata"`
@@ -828,10 +1043,11 @@ func verifyBTCPayNotify(ctx context.Context, client *http.Client, cfg map[string
 	if err := doJSON(ctx, client, http.MethodGet, endpoint, nil, headers, &detail); err != nil {
 		return notifyResult{}, err
 	}
-	if strings.TrimSpace(detail.Metadata.OrderID) == "" {
+	amount, amountErr := parsePositiveMoneyCentsAllowTrailingZeros(detail.Amount.String())
+	if strings.TrimSpace(detail.Metadata.OrderID) == "" || !strings.EqualFold(strings.TrimSpace(detail.Status), "Settled") || !strings.EqualFold(strings.TrimSpace(detail.Currency), "CNY") || amountErr != nil {
 		return notifyResult{}, ErrVerifyFailed
 	}
-	return notifyResult{TradeNo: detail.Metadata.OrderID, CallbackNo: invoiceID}, nil
+	return notifyResult{TradeNo: detail.Metadata.OrderID, CallbackNo: invoiceID, Amount: &amount}, nil
 }
 
 func verifyStripeNotify(ctx context.Context, client *http.Client, gateway string, cfg map[string]string, req NotifyRequest) (notifyResult, error) {
@@ -839,7 +1055,7 @@ func verifyStripeNotify(ctx context.Context, client *http.Client, gateway string
 		return notifyResult{}, err
 	}
 	var event map[string]any
-	if err := json.Unmarshal(req.Body, &event); err != nil {
+	if err := decodeJSONPreserveNumbers(req.Body, &event); err != nil {
 		return notifyResult{}, fmt.Errorf("%w: decode stripe event", ErrVerifyFailed)
 	}
 
@@ -849,30 +1065,51 @@ func verifyStripeNotify(ctx context.Context, client *http.Client, gateway string
 		switch eventType {
 		case "checkout.session.completed", "checkout.session.async_payment_succeeded":
 			object := nestedMap(event, "data", "object")
-			if eventType == "checkout.session.completed" && nestedString(object, "payment_status") != "paid" {
+			if nestedString(object, "payment_status") != "paid" {
+				return notifyResult{}, ErrVerifyFailed
+			}
+			amount, err := stripeConfirmationAmount(object, "amount_total")
+			tradeNo := nestedString(object, "client_reference_id")
+			callbackNo := nestedString(object, "payment_intent")
+			if err != nil || tradeNo == "" || callbackNo == "" {
 				return notifyResult{}, ErrVerifyFailed
 			}
 			return notifyResult{
-				TradeNo:    nestedString(object, "client_reference_id"),
-				CallbackNo: nestedString(object, "payment_intent"),
+				TradeNo:    tradeNo,
+				CallbackNo: callbackNo,
+				Amount:     amount,
 			}, nil
 		}
 	case "StripeALL":
 		switch eventType {
 		case "payment_intent.succeeded":
 			object := nestedMap(event, "data", "object")
-			return notifyResult{
-				TradeNo:    nestedString(object, "metadata", "out_trade_no"),
-				CallbackNo: nestedString(object, "id"),
-			}, nil
-		case "checkout.session.completed", "checkout.session.async_payment_succeeded":
-			object := nestedMap(event, "data", "object")
-			if eventType == "checkout.session.completed" && nestedString(object, "payment_status") != "paid" {
+			amount, err := stripeConfirmationAmount(object, "amount_received")
+			tradeNo := nestedString(object, "metadata", "out_trade_no")
+			callbackNo := nestedString(object, "id")
+			if err != nil || tradeNo == "" || callbackNo == "" {
 				return notifyResult{}, ErrVerifyFailed
 			}
 			return notifyResult{
-				TradeNo:    nestedString(object, "client_reference_id"),
-				CallbackNo: nestedString(object, "payment_intent"),
+				TradeNo:    tradeNo,
+				CallbackNo: callbackNo,
+				Amount:     amount,
+			}, nil
+		case "checkout.session.completed", "checkout.session.async_payment_succeeded":
+			object := nestedMap(event, "data", "object")
+			if nestedString(object, "payment_status") != "paid" {
+				return notifyResult{}, ErrVerifyFailed
+			}
+			amount, err := stripeConfirmationAmount(object, "amount_total")
+			tradeNo := nestedString(object, "client_reference_id")
+			callbackNo := nestedString(object, "payment_intent")
+			if err != nil || tradeNo == "" || callbackNo == "" {
+				return notifyResult{}, ErrVerifyFailed
+			}
+			return notifyResult{
+				TradeNo:    tradeNo,
+				CallbackNo: callbackNo,
+				Amount:     amount,
 			}, nil
 		}
 	case "StripeCredit":
@@ -882,25 +1119,38 @@ func verifyStripeNotify(ctx context.Context, client *http.Client, gateway string
 			if tradeNo == "" {
 				tradeNo = nestedString(object, "source", "metadata", "out_trade_no")
 			}
+			callbackNo := nestedString(object, "id")
+			amount, err := stripeConfirmationAmount(object, "amount")
+			if err != nil || tradeNo == "" || callbackNo == "" {
+				return notifyResult{}, ErrVerifyFailed
+			}
 			return notifyResult{
 				TradeNo:    tradeNo,
-				CallbackNo: nestedString(object, "id"),
+				CallbackNo: callbackNo,
+				Amount:     amount,
 			}, nil
 		}
 	case "StripeAlipay", "StripeWepay":
 		switch eventType {
 		case "source.chargeable":
 			object := nestedMap(event, "data", "object")
-			headers := http.Header{"Authorization": []string{"Bearer " + configValue(cfg, "stripe_sk_live")}}
+			if _, err := stripeConfirmationAmount(object, "amount"); err != nil {
+				return notifyResult{}, err
+			}
+			sourceID := nestedString(object, "id")
+			if sourceID == "" {
+				return notifyResult{}, ErrVerifyFailed
+			}
 			values := url.Values{}
 			values.Set("amount", nestedString(object, "amount"))
 			values.Set("currency", nestedString(object, "currency"))
-			values.Set("source", nestedString(object, "id"))
+			values.Set("source", sourceID)
 			if metadata, ok := object["metadata"].(map[string]any); ok {
 				for key, value := range metadata {
 					values.Set("metadata["+key+"]", strings.TrimSpace(fmt.Sprint(value)))
 				}
 			}
+			headers := stripeRequestHeaders(cfg, "source-charge:"+sourceID, values)
 
 			var response struct {
 				ID    string `json:"id"`
@@ -911,8 +1161,11 @@ func verifyStripeNotify(ctx context.Context, client *http.Client, gateway string
 			if err := doForm(ctx, client, http.MethodPost, "https://api.stripe.com/v1/charges", values, headers, &response); err != nil {
 				return notifyResult{}, err
 			}
-			if response.ID == "" && response.Error.Message != "" {
-				return notifyResult{}, fmt.Errorf("%w: %s", ErrRequestFailed, response.Error.Message)
+			if response.ID == "" {
+				if response.Error.Message != "" {
+					return notifyResult{}, fmt.Errorf("%w: %s", ErrRequestFailed, response.Error.Message)
+				}
+				return notifyResult{}, ErrRequestFailed
 			}
 			return notifyResult{CustomResult: "success"}, nil
 		case "charge.succeeded":
@@ -921,9 +1174,15 @@ func verifyStripeNotify(ctx context.Context, client *http.Client, gateway string
 			if tradeNo == "" {
 				tradeNo = nestedString(object, "source", "metadata", "out_trade_no")
 			}
+			callbackNo := nestedString(object, "id")
+			amount, err := stripeConfirmationAmount(object, "amount")
+			if err != nil || tradeNo == "" || callbackNo == "" {
+				return notifyResult{}, ErrVerifyFailed
+			}
 			return notifyResult{
 				TradeNo:    tradeNo,
-				CallbackNo: nestedString(object, "id"),
+				CallbackNo: callbackNo,
+				Amount:     amount,
 			}, nil
 		}
 	}
@@ -932,6 +1191,9 @@ func verifyStripeNotify(ctx context.Context, client *http.Client, gateway string
 
 func verifyAlipayF2FNotify(cfg map[string]string, req NotifyRequest) (notifyResult, error) {
 	if strings.TrimSpace(req.Params["trade_status"]) != "TRADE_SUCCESS" {
+		return notifyResult{}, ErrVerifyFailed
+	}
+	if expectedAppID := configValue(cfg, "app_id"); expectedAppID == "" || strings.TrimSpace(req.Params["app_id"]) != expectedAppID {
 		return notifyResult{}, ErrVerifyFailed
 	}
 	signature := strings.TrimSpace(req.Params["sign"])
@@ -945,9 +1207,16 @@ func verifyAlipayF2FNotify(cfg map[string]string, req NotifyRequest) (notifyResu
 	if !ok {
 		return notifyResult{}, ErrVerifyFailed
 	}
+	tradeNo := strings.TrimSpace(req.Params["out_trade_no"])
+	callbackNo := strings.TrimSpace(req.Params["trade_no"])
+	amount, amountErr := parsePositiveMoneyCents(req.Params["total_amount"])
+	if tradeNo == "" || callbackNo == "" || amountErr != nil {
+		return notifyResult{}, ErrVerifyFailed
+	}
 	return notifyResult{
-		TradeNo:    strings.TrimSpace(req.Params["out_trade_no"]),
-		CallbackNo: strings.TrimSpace(req.Params["trade_no"]),
+		TradeNo:    tradeNo,
+		CallbackNo: callbackNo,
+		Amount:     &amount,
 	}, nil
 }
 
@@ -959,13 +1228,30 @@ func verifyWechatPayNativeNotify(cfg map[string]string, req NotifyRequest) (noti
 	if strings.TrimSpace(values["return_code"]) != "SUCCESS" || strings.TrimSpace(values["result_code"]) != "SUCCESS" {
 		return notifyResult{}, ErrVerifyFailed
 	}
-	if wechatPaySign(values, configValue(cfg, "api_key")) != strings.ToUpper(strings.TrimSpace(values["sign"])) {
+	apiKey := configValue(cfg, "api_key")
+	if apiKey == "" || !constantTimeEqualFold(values["sign"], wechatPaySign(values, apiKey)) {
+		return notifyResult{}, ErrVerifyFailed
+	}
+	if expectedAppID := configValue(cfg, "app_id"); expectedAppID == "" || strings.TrimSpace(values["appid"]) != expectedAppID {
+		return notifyResult{}, ErrVerifyFailed
+	}
+	if expectedMerchantID := configValue(cfg, "mch_id"); expectedMerchantID == "" || strings.TrimSpace(values["mch_id"]) != expectedMerchantID {
+		return notifyResult{}, ErrVerifyFailed
+	}
+	if feeType := strings.TrimSpace(values["fee_type"]); feeType != "" && !strings.EqualFold(feeType, "CNY") {
+		return notifyResult{}, ErrVerifyFailed
+	}
+	tradeNo := strings.TrimSpace(values["out_trade_no"])
+	callbackNo := strings.TrimSpace(values["transaction_id"])
+	amount, amountErr := parsePositiveInteger(values["total_fee"])
+	if tradeNo == "" || callbackNo == "" || amountErr != nil {
 		return notifyResult{}, ErrVerifyFailed
 	}
 	return notifyResult{
-		TradeNo:      strings.TrimSpace(values["out_trade_no"]),
-		CallbackNo:   strings.TrimSpace(values["transaction_id"]),
+		TradeNo:      tradeNo,
+		CallbackNo:   callbackNo,
 		CustomResult: `<xml><return_code><![CDATA[SUCCESS]]></return_code><return_msg><![CDATA[OK]]></return_msg></xml>`,
+		Amount:       &amount,
 	}, nil
 }
 
@@ -1004,6 +1290,12 @@ func verifyStripeSignature(secret, header string, body []byte) error {
 		}
 	}
 	return ErrVerifyFailed
+}
+
+func constantTimeEqualFold(left, right string) bool {
+	left = strings.ToLower(strings.TrimSpace(left))
+	right = strings.ToLower(strings.TrimSpace(right))
+	return subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
 }
 
 func stripeOrderName(order gatewayOrder) string {
@@ -1085,6 +1377,22 @@ func doJSON(ctx context.Context, client *http.Client, method, endpoint string, p
 	}
 	if err := json.Unmarshal(raw, target); err != nil {
 		return fmt.Errorf("decode response json: %w", err)
+	}
+	return nil
+}
+
+func decodeJSONPreserveNumbers(raw []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values")
+		}
+		return err
 	}
 	return nil
 }

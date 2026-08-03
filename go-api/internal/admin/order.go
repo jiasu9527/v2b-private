@@ -44,7 +44,7 @@ type OrderAssignRequest struct {
 }
 
 type orderRuntime interface {
-	MarkOrderPaid(ctx context.Context, tradeNo, callbackNo string, allowCancelled bool) error
+	MarkOrderPaid(ctx context.Context, tradeNo string, confirmation usersvc.OrderPaymentConfirmation) error
 	CancelOrder(ctx context.Context, userID int64, tradeNo string) (bool, error)
 	AssignAdminOrder(ctx context.Context, req usersvc.AdminAssignOrderRequest) (string, error)
 	RefundManagedOrder(ctx context.Context, tradeNo string) error
@@ -203,7 +203,11 @@ func (s *DBService) MarkOrderPaid(ctx context.Context, tradeNo string) (bool, er
 		return false, errors.New("当前订单不支持补单")
 	}
 
-	if err := s.orders.MarkOrderPaid(ctx, tradeNo, "manual_operation", true); err != nil {
+	if err := s.orders.MarkOrderPaid(ctx, tradeNo, usersvc.OrderPaymentConfirmation{
+		CallbackNo:     "manual_operation:" + tradeNo,
+		AllowCancelled: true,
+		Manual:         true,
+	}); err != nil {
 		switch {
 		case errors.Is(err, usersvc.ErrOrderNotFound):
 			return false, errors.New("订单不存在")

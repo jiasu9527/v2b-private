@@ -392,6 +392,9 @@ func TestRouterGuestPaymentNotifyEndpoint(t *testing.T) {
 	if paymentService.lastNotify.Params["out_trade_no"] != "T300" || paymentService.lastNotify.Params["trade_no"] != "P300" {
 		t.Fatalf("unexpected notify params: %#v", paymentService.lastNotify.Params)
 	}
+	if got := string(paymentService.lastNotify.Body); got != "out_trade_no=T300&trade_no=P300" {
+		t.Fatalf("expected exact raw callback body to be preserved, got %q", got)
+	}
 }
 
 type fakePassportService struct {
@@ -3277,6 +3280,25 @@ func TestRouterUserOrderCheckoutUnsupportedPaymentGatewayMessage(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"不支持当前支付网关"`) {
 		t.Fatalf("expected unsupported gateway message, got %s", rec.Body.String())
+	}
+}
+
+func TestRouterUserOrderCheckoutRejectsSwitchingLockedPaymentMethod(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 10}}
+	paymentService := &fakePaymentService{err: payment.ErrPaymentMethodLocked}
+	router := NewRouter(
+		config.Config{AppName: "forest-go"},
+		WithSessionService(sessionService),
+		WithPaymentService(paymentService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/user/order/checkout", strings.NewReader(`{"auth_data":"jwt-order","trade_no":"T201","method":"10"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

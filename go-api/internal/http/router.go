@@ -6676,6 +6676,9 @@ func handleUserError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, usersvc.ErrCheckoutFailed):
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "Request failed, please try again later"})
 		return true
+	case errors.Is(err, usersvc.ErrCheckoutInProgress):
+		writeJSON(w, http.StatusConflict, map[string]any{"message": "Payment checkout is being created. Please wait before cancelling the order."})
+		return true
 	case errors.Is(err, usersvc.ErrCancelPendingOnly):
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "You can only cancel pending orders"})
 		return true
@@ -6701,6 +6704,15 @@ func handlePaymentError(w http.ResponseWriter, err error) bool {
 		return true
 	case errors.Is(err, payment.ErrPaymentMethodUnavailable):
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "Payment method is not available"})
+		return true
+	case errors.Is(err, payment.ErrPaymentMethodLocked):
+		writeJSON(w, http.StatusConflict, map[string]any{"message": "This order is already linked to another payment method. Cancel it and create a new order to switch methods."})
+		return true
+	case errors.Is(err, payment.ErrCheckoutInProgress):
+		writeJSON(w, http.StatusConflict, map[string]any{"message": "Payment checkout is being created. Please wait and retry."})
+		return true
+	case errors.Is(err, payment.ErrCheckoutBusy):
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"message": "Too many payment checkouts are being created. Please retry shortly."})
 		return true
 	case errors.Is(err, payment.ErrUnsupportedGateway):
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "Payment gateway is unsupported"})

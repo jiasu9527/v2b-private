@@ -147,7 +147,8 @@ ORDER BY id DESC`, userID)
 	}
 	pendingCommission, err := s.sumInt64(ctx, `SELECT COALESCE(SUM(commission_balance), 0)
 FROM v2_order
-WHERE status = 3 AND commission_status = 0 AND invite_user_id = $1`, userID)
+WHERE status = 3 AND commission_status = 0 AND invite_user_id = $1
+  AND type <> 9 AND period <> 'deposit'`, userID)
 	if err != nil {
 		return nil, err
 	}

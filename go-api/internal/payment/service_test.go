@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,7 +27,21 @@ import (
 	"testing"
 
 	"forest/go-api/internal/config"
+	usersvc "forest/go-api/internal/user"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
+
+type recordingPaymentOrderManager struct {
+	tradeNo      string
+	confirmation usersvc.OrderPaymentConfirmation
+}
+
+func (m *recordingPaymentOrderManager) MarkOrderPaid(_ context.Context, tradeNo string, confirmation usersvc.OrderPaymentConfirmation) error {
+	m.tradeNo = tradeNo
+	m.confirmation = confirmation
+	return nil
+}
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
@@ -172,22 +187,24 @@ func TestVerifyGatewayNotifyEPayPro(t *testing.T) {
 		"out_trade_no": "T405",
 		"trade_no":     "P405",
 		"type":         "wxpay",
+		"money":        "12.34",
+		"pid":          "10001",
+		"trade_status": "TRADE_SUCCESS",
 	}
-	sum := md5.Sum([]byte("out_trade_no=T405&trade_no=P405&type=wxpaysecret"))
-	params["sign"] = hex.EncodeToString(sum[:])
+	params["sign"] = md5Hex(decodedQuery(params) + "secret")
 	params["sign_type"] = "MD5"
 
 	result, err := verifyGatewayNotify(
 		context.Background(),
 		http.DefaultClient,
 		"epaypro",
-		map[string]string{"key": "secret"},
+		map[string]string{"key": "secret", "pid": "10001", "type": "wxpay"},
 		NotifyRequest{Params: params},
 	)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if result.TradeNo != "T405" || result.CallbackNo != "P405" {
+	if result.TradeNo != "T405" || result.CallbackNo != "P405" || result.Amount == nil || *result.Amount != 1234 {
 		t.Fatalf("unexpected notify result: %#v", result)
 	}
 }
@@ -446,6 +463,12 @@ func TestBuildGatewayCheckoutStripeAlipayAndWepay(t *testing.T) {
 			if err := r.ParseForm(); err != nil {
 				t.Fatalf("parse stripe form: %v", err)
 			}
+			if !strings.HasPrefix(r.Header.Get("Idempotency-Key"), "forest:source:T40") {
+				t.Fatalf("missing stable Stripe idempotency key: %q", r.Header.Get("Idempotency-Key"))
+			}
+			if r.Form.Get("metadata[forest_order_amount]") == "" || r.Form.Get("metadata[forest_gateway_amount]") == "" || r.Form.Get("metadata[forest_gateway_currency]") != "usd" {
+				t.Fatalf("missing Stripe payment confirmation metadata: %#v", r.Form)
+			}
 			switch r.Form.Get("type") {
 			case "alipay":
 				return jsonResponse(http.StatusOK, `{"redirect":{"url":"https://stripe.example.com/alipay/T408"}}`), nil
@@ -603,29 +626,469 @@ func TestVerifyGatewayNotifyEPay(t *testing.T) {
 	params := map[string]string{
 		"out_trade_no": "T402",
 		"trade_no":     "P402",
+		"money":        "12.34",
+		"pid":          "10001",
+		"trade_status": "TRADE_SUCCESS",
 	}
-	signBase := "out_trade_no=T402&trade_no=P402secret"
-	sum := md5.Sum([]byte(signBase))
-	params["sign"] = hex.EncodeToString(sum[:])
+	params["sign"] = md5Hex(decodedQuery(params) + "secret")
 	params["sign_type"] = "MD5"
 
 	result, err := verifyGatewayNotify(
 		context.Background(),
 		http.DefaultClient,
 		"EPay",
-		map[string]string{"key": "secret"},
+		map[string]string{"key": "secret", "pid": "10001"},
 		NotifyRequest{Params: params},
 	)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if result.TradeNo != "T402" || result.CallbackNo != "P402" {
+	if result.TradeNo != "T402" || result.CallbackNo != "P402" || result.Amount == nil || *result.Amount != 1234 {
 		t.Fatalf("unexpected notify result: %#v", result)
 	}
 }
 
+func TestVerifyGatewayNotifyEPayRejectsInvalidBindingFields(t *testing.T) {
+	base := map[string]string{
+		"out_trade_no": "T402",
+		"trade_no":     "P402",
+		"money":        "12.34",
+		"pid":          "10001",
+		"trade_status": "TRADE_SUCCESS",
+		"sign_type":    "MD5",
+	}
+	tests := []struct {
+		name   string
+		mutate func(map[string]string)
+	}{
+		{name: "failed trade status", mutate: func(values map[string]string) { values["trade_status"] = "WAIT_BUYER_PAY" }},
+		{name: "wrong merchant", mutate: func(values map[string]string) { values["pid"] = "other" }},
+		{name: "zero amount", mutate: func(values map[string]string) { values["money"] = "0.00" }},
+		{name: "excess precision", mutate: func(values map[string]string) { values["money"] = "12.345" }},
+		{name: "wrong sign type", mutate: func(values map[string]string) { values["sign_type"] = "SHA256" }},
+		{name: "missing callback", mutate: func(values map[string]string) { delete(values, "trade_no") }},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			params := cloneStringMap(base)
+			test.mutate(params)
+			unsigned := cloneStringMap(params)
+			delete(unsigned, "sign_type")
+			params["sign"] = md5Hex(decodedQuery(unsigned) + "secret")
+			if _, err := verifyGatewayNotify(
+				context.Background(),
+				http.DefaultClient,
+				"EPay",
+				map[string]string{"key": "secret", "pid": "10001"},
+				NotifyRequest{Params: params},
+			); !errors.Is(err, ErrVerifyFailed) {
+				t.Fatalf("expected verification failure, got %v", err)
+			}
+		})
+	}
+}
+
+func TestVerifyGatewayNotifyRejectsMissingSigningSecret(t *testing.T) {
+	params := map[string]string{
+		"out_trade_no": "T402",
+		"trade_no":     "P402",
+		"money":        "12.34",
+		"pid":          "10001",
+		"trade_status": "TRADE_SUCCESS",
+	}
+	params["sign"] = md5Hex(decodedQuery(params))
+	params["sign_type"] = "MD5"
+
+	_, err := verifyGatewayNotify(
+		context.Background(),
+		http.DefaultClient,
+		"EPay",
+		map[string]string{"pid": "10001"},
+		NotifyRequest{Params: params},
+	)
+	if !errors.Is(err, ErrVerifyFailed) {
+		t.Fatalf("expected an empty configured secret to fail closed, got %v", err)
+	}
+}
+
+func TestParsePositiveMoneyCentsProviderPrecision(t *testing.T) {
+	tests := []struct {
+		name      string
+		raw       string
+		tolerant  bool
+		want      int64
+		wantError bool
+	}{
+		{name: "ordinary cents", raw: "12.34", want: 1234},
+		{name: "one decimal", raw: "12.3", want: 1230},
+		{name: "strict extra precision", raw: "12.34000000", wantError: true},
+		{name: "provider trailing zero precision", raw: "12.34000000", tolerant: true, want: 1234},
+		{name: "provider real sub-cent precision", raw: "12.34000001", tolerant: true, wantError: true},
+		{name: "provider third decimal", raw: "12.34500000", tolerant: true, wantError: true},
+		{name: "zero remains invalid", raw: "0.00000000", tolerant: true, wantError: true},
+		{name: "exponent remains invalid", raw: "1.234e1", tolerant: true, wantError: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var (
+				got int64
+				err error
+			)
+			if test.tolerant {
+				got, err = parsePositiveMoneyCentsAllowTrailingZeros(test.raw)
+			} else {
+				got, err = parsePositiveMoneyCents(test.raw)
+			}
+			if test.wantError {
+				if !errors.Is(err, ErrVerifyFailed) {
+					t.Fatalf("expected verification failure, got amount=%d err=%v", got, err)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("got amount=%d err=%v, want %d", got, err, test.want)
+			}
+		})
+	}
+}
+
+func TestStripeIdempotencyKeyRemainsStableWhenRetryParametersChange(t *testing.T) {
+	first := url.Values{"amount": {"1000"}, "currency": {"usd"}}
+	same := url.Values{"currency": {"usd"}, "amount": {"1000"}}
+	changed := url.Values{"amount": {"1001"}, "currency": {"usd"}}
+
+	firstKey := stripeRequestHeaders(map[string]string{"stripe_sk_live": "sk_test"}, "checkout:T1", first).Get("Idempotency-Key")
+	sameKey := stripeRequestHeaders(map[string]string{"stripe_sk_live": "sk_test"}, "checkout:T1", same).Get("Idempotency-Key")
+	changedKey := stripeRequestHeaders(map[string]string{"stripe_sk_live": "sk_test"}, "checkout:T1", changed).Get("Idempotency-Key")
+	if firstKey == "" || firstKey != sameKey {
+		t.Fatalf("identical canonical requests should share an idempotency key: first=%q same=%q", firstKey, sameKey)
+	}
+	if firstKey != changedKey {
+		t.Fatalf("one station order must keep one Stripe idempotency key across retries: first=%q changed=%q", firstKey, changedKey)
+	}
+}
+
+func TestVerifyGatewayNotifyEPayProRejectsWrongConfiguredType(t *testing.T) {
+	params := map[string]string{
+		"out_trade_no": "T405",
+		"trade_no":     "P405",
+		"type":         "alipay",
+		"money":        "12.34",
+		"pid":          "10001",
+		"trade_status": "TRADE_SUCCESS",
+	}
+	params["sign"] = md5Hex(decodedQuery(params) + "secret")
+	params["sign_type"] = "MD5"
+
+	_, err := verifyGatewayNotify(
+		context.Background(),
+		http.DefaultClient,
+		"epaypro",
+		map[string]string{"key": "secret", "pid": "10001", "type": "wxpay"},
+		NotifyRequest{Params: params},
+	)
+	if !errors.Is(err, ErrVerifyFailed) {
+		t.Fatalf("expected configured type mismatch, got %v", err)
+	}
+
+	_, err = verifyGatewayNotify(
+		context.Background(),
+		http.DefaultClient,
+		"epaypro",
+		map[string]string{"key": "secret", "pid": "10001"},
+		NotifyRequest{Params: params},
+	)
+	if !errors.Is(err, ErrVerifyFailed) {
+		t.Fatalf("expected missing epaypro type configuration to fail closed, got %v", err)
+	}
+}
+
+func TestVerifyGatewayNotifyBindsAmountsForSignedFormGateways(t *testing.T) {
+	tests := []struct {
+		name    string
+		gateway string
+		config  map[string]string
+		params  map[string]string
+		sign    func(map[string]string, map[string]string) string
+	}{
+		{
+			name:    "epusdt",
+			gateway: "EpusdtPay",
+			config:  map[string]string{"epusdt_pay_apitoken": "secret"},
+			params:  map[string]string{"status": "2", "order_id": "T-EPU", "trade_id": "P-EPU", "amount": "12.34"},
+			sign: func(cfg, params map[string]string) string {
+				return epusdtSign(cfg, stringMapToAny(params))
+			},
+		},
+		{
+			name:    "beasy",
+			gateway: "BEasyPaymentUSDT",
+			config:  map[string]string{"bepusdt_apitoken": "secret"},
+			params:  map[string]string{"status": "2", "order_id": "T-BE", "trade_id": "P-BE", "amount": "12.34"},
+			sign: func(cfg, params map[string]string) string {
+				return md5Hex(decodedQuery(params) + cfg["bepusdt_apitoken"])
+			},
+		},
+		{
+			name:    "mgate",
+			gateway: "MGate",
+			config:  map[string]string{"mgate_app_secret": "secret"},
+			params:  map[string]string{"out_trade_no": "T-MG", "trade_no": "P-MG", "total_amount": "1234"},
+			sign: func(cfg, params map[string]string) string {
+				return md5Hex(encodedQuery(params) + cfg["mgate_app_secret"])
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			params := cloneStringMap(test.params)
+			signature := test.sign(test.config, params)
+			if test.gateway == "MGate" {
+				params["sign"] = signature
+			} else {
+				params["signature"] = signature
+			}
+			result, err := verifyGatewayNotify(context.Background(), http.DefaultClient, test.gateway, test.config, NotifyRequest{Params: params})
+			if err != nil {
+				t.Fatalf("verify callback: %v", err)
+			}
+			if result.TradeNo == "" || result.CallbackNo == "" || result.Amount == nil || *result.Amount != 1234 {
+				t.Fatalf("callback fields were not bound: %#v", result)
+			}
+		})
+	}
+}
+
+func TestPaymentNotifyBindsMethodAndAmountToOrderConfirmation(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new sql mock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT id, uuid, payment, config, notify_domain, handling_fee_fixed, handling_fee_percent::float8, enable\s+FROM v2_payment\s+WHERE payment = \$1 AND uuid = \$2`).
+		WithArgs("EPay", "pay-uuid").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "uuid", "payment", "config", "notify_domain", "handling_fee_fixed", "handling_fee_percent", "enable"}).
+			AddRow(int64(7), "pay-uuid", "EPay", `{"pid":"10001","key":"secret"}`, nil, nil, nil, int64(1)))
+
+	params := map[string]string{
+		"out_trade_no": "T402",
+		"trade_no":     "P402",
+		"money":        "12.34",
+		"pid":          "10001",
+		"trade_status": "TRADE_SUCCESS",
+	}
+	params["sign"] = md5Hex(decodedQuery(params) + "secret")
+	params["sign_type"] = "MD5"
+
+	orders := &recordingPaymentOrderManager{}
+	service := NewDBService(config.Config{}, db, orders)
+	result, err := service.Notify(context.Background(), "EPay", "pay-uuid", NotifyRequest{Params: params})
+	if err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+	if result != "success" || orders.tradeNo != "T402" {
+		t.Fatalf("unexpected notify result=%q trade=%q", result, orders.tradeNo)
+	}
+	if orders.confirmation.PaymentID == nil || *orders.confirmation.PaymentID != 7 {
+		t.Fatalf("payment method was not bound: %#v", orders.confirmation)
+	}
+	if orders.confirmation.Amount == nil || *orders.confirmation.Amount != 1234 || orders.confirmation.CallbackNo != "P402" {
+		t.Fatalf("amount or callback was not bound: %#v", orders.confirmation)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestPaymentCheckoutRejectsNegativeOrderInsteadOfOpeningForFree(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new sql mock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, status\s+FROM v2_order\s+WHERE trade_no = \$1 AND user_id = \$2\s+FOR UPDATE`).
+		WithArgs("TNEG", int64(5)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "trade_no", "payment_id", "total_amount", "handling_amount", "checkout_result", "status"}).
+			AddRow(int64(9), int64(5), "TNEG", nil, int64(-1), nil, nil, int64(0)))
+	mock.ExpectRollback()
+
+	orders := &recordingPaymentOrderManager{}
+	service := NewDBService(config.Config{}, db, orders)
+	_, err = service.Checkout(context.Background(), 5, CheckoutRequest{TradeNo: "TNEG"})
+	if !errors.Is(err, ErrInvalidParameter) {
+		t.Fatalf("expected negative order to be rejected, got %v", err)
+	}
+	if orders.tradeNo != "" {
+		t.Fatalf("negative order reached free-open path: %q", orders.tradeNo)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestPaymentCheckoutDoesNotReplaceAnExistingPaymentMethod(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new sql mock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, status\s+FROM v2_order\s+WHERE trade_no = \$1 AND user_id = \$2\s+FOR UPDATE`).
+		WithArgs("TLOCKED", int64(5)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "trade_no", "payment_id", "total_amount", "handling_amount", "checkout_result", "status"}).
+			AddRow(int64(9), int64(5), "TLOCKED", int64(7), int64(1000), int64(100), nil, int64(0)))
+	mock.ExpectRollback()
+
+	service := NewDBService(config.Config{}, db, &recordingPaymentOrderManager{})
+	_, err = service.Checkout(context.Background(), 5, CheckoutRequest{TradeNo: "TLOCKED", MethodID: 8})
+	if !errors.Is(err, ErrPaymentMethodLocked) {
+		t.Fatalf("expected payment method lock error, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestPaymentCheckoutReusesLockedMethodAndStoredHandlingAmount(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new sql mock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, status\s+FROM v2_order\s+WHERE trade_no = \$1 AND user_id = \$2\s+FOR UPDATE`).
+		WithArgs("TRETRY", int64(5)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "trade_no", "payment_id", "total_amount", "handling_amount", "checkout_result", "status"}).
+			AddRow(int64(9), int64(5), "TRETRY", int64(7), int64(1000), int64(100), nil, int64(0)))
+	mock.ExpectQuery(`SELECT id, uuid, payment, config, notify_domain, handling_fee_fixed, handling_fee_percent::float8, enable\s+FROM v2_payment\s+WHERE id = \$1`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "uuid", "payment", "config", "notify_domain", "handling_fee_fixed", "handling_fee_percent", "enable"}).
+			AddRow(int64(7), "epay", "EPay", `{"url":"https://pay.example.com","pid":"10001","key":"secret"}`, nil, int64(9999), float64(99), int64(1)))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT pg_try_advisory_xact_lock`).
+		WithArgs("checkout:TRETRY").
+		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_xact_lock"}).AddRow(true))
+	mock.ExpectQuery(`SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, status\s+FROM v2_order\s+WHERE trade_no = \$1 AND user_id = \$2`).
+		WithArgs("TRETRY", int64(5)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "trade_no", "payment_id", "total_amount", "handling_amount", "checkout_result", "status"}).
+			AddRow(int64(9), int64(5), "TRETRY", int64(7), int64(1000), int64(100), nil, int64(0)))
+	mock.ExpectExec(`UPDATE v2_order\s+SET checkout_result = \$2, updated_at = \$3\s+WHERE id = \$1 AND status = 0 AND payment_id = \$4 AND total_amount = \$5\s+AND COALESCE\(handling_amount, 0\) = \$6 AND checkout_result IS NULL`).
+		WithArgs(int64(9), sqlmock.AnyArg(), sqlmock.AnyArg(), int64(7), int64(1000), int64(100)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	service := NewDBService(config.Config{AppURL: "https://app.example.com"}, db, &recordingPaymentOrderManager{})
+	result, err := service.Checkout(context.Background(), 5, CheckoutRequest{TradeNo: "TRETRY", MethodID: 7})
+	if err != nil {
+		t.Fatalf("retry checkout: %v", err)
+	}
+	parsed, err := url.Parse(fmt.Sprint(result.Data))
+	if err != nil {
+		t.Fatalf("parse checkout URL: %v", err)
+	}
+	if got := parsed.Query().Get("money"); got != "11.00" {
+		t.Fatalf("expected stored handling amount to remain 1.00, got money=%q", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestPaymentCheckoutReturnsImmediatelyWhenCreationIsAlreadyInProgress(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new sql mock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, status\s+FROM v2_order\s+WHERE trade_no = \$1 AND user_id = \$2\s+FOR UPDATE`).
+		WithArgs("TBUSY", int64(5)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "trade_no", "payment_id", "total_amount", "handling_amount", "checkout_result", "status"}).
+			AddRow(int64(9), int64(5), "TBUSY", int64(7), int64(1000), int64(100), nil, int64(0)))
+	mock.ExpectQuery(`SELECT id, uuid, payment, config, notify_domain, handling_fee_fixed, handling_fee_percent::float8, enable\s+FROM v2_payment\s+WHERE id = \$1`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "uuid", "payment", "config", "notify_domain", "handling_fee_fixed", "handling_fee_percent", "enable"}).
+			AddRow(int64(7), "epay", "EPay", `{"url":"https://pay.example.com","pid":"10001","key":"secret"}`, nil, nil, nil, int64(1)))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT pg_try_advisory_xact_lock`).
+		WithArgs("checkout:TBUSY").
+		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_xact_lock"}).AddRow(false))
+	mock.ExpectRollback()
+
+	service := NewDBService(config.Config{}, db, &recordingPaymentOrderManager{})
+	_, err = service.Checkout(context.Background(), 5, CheckoutRequest{TradeNo: "TBUSY", MethodID: 7})
+	if !errors.Is(err, ErrCheckoutInProgress) {
+		t.Fatalf("expected in-progress checkout error, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestCheckoutCreationLimiterLeavesDatabaseCapacityAvailable(t *testing.T) {
+	acquired := 0
+	defer func() {
+		for acquired > 0 {
+			releaseCheckoutCreationSlot()
+			acquired--
+		}
+	}()
+	for ; acquired < maxConcurrentCheckoutCreations; acquired++ {
+		if !tryAcquireCheckoutCreationSlot() {
+			t.Fatalf("slot %d should be available", acquired)
+		}
+	}
+
+	if tryAcquireCheckoutCreationSlot() {
+		releaseCheckoutCreationSlot()
+		t.Fatal("checkout creation beyond the safety limit should be rejected")
+	}
+}
+
+func TestPaymentCheckoutReturnsPersistedResultWithoutCreatingAnotherProviderOrder(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new sql mock: %v", err)
+	}
+	defer db.Close()
+
+	persisted, err := encodeCheckoutSnapshot(7, 1100, CheckoutResult{Type: 1, Data: "https://pay.example.com/original"})
+	if err != nil {
+		t.Fatalf("encode persisted checkout: %v", err)
+	}
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, status\s+FROM v2_order\s+WHERE trade_no = \$1 AND user_id = \$2\s+FOR UPDATE`).
+		WithArgs("TCACHED", int64(5)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "trade_no", "payment_id", "total_amount", "handling_amount", "checkout_result", "status"}).
+			AddRow(int64(9), int64(5), "TCACHED", int64(7), int64(1000), int64(100), persisted, int64(0)))
+	mock.ExpectRollback()
+
+	service := NewDBService(config.Config{}, db, &recordingPaymentOrderManager{})
+	result, err := service.Checkout(context.Background(), 5, CheckoutRequest{TradeNo: "TCACHED", MethodID: 7})
+	if err != nil {
+		t.Fatalf("cached checkout: %v", err)
+	}
+	if result.Type != 1 || result.Data != "https://pay.example.com/original" {
+		t.Fatalf("unexpected cached result: %#v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestVerifyGatewayNotifyStripeCheckout(t *testing.T) {
-	payload := `{"type":"checkout.session.completed","data":{"object":{"payment_status":"paid","client_reference_id":"T403","payment_intent":"pi_403"}}}`
+	payload := `{"type":"checkout.session.completed","data":{"object":{"payment_status":"paid","client_reference_id":"T403","payment_intent":"pi_403","amount_total":1234,"currency":"usd","metadata":{"forest_order_amount":"1234","forest_gateway_amount":"1234","forest_gateway_currency":"usd"}}}}`
 	secret := "whsec_test"
 	timestamp := int64(1700000000)
 	mac := hmac.New(sha256.New, []byte(secret))
@@ -636,7 +1099,7 @@ func TestVerifyGatewayNotifyStripeCheckout(t *testing.T) {
 		context.Background(),
 		http.DefaultClient,
 		"StripeCheckout",
-		map[string]string{"stripe_webhook_key": secret},
+		map[string]string{"stripe_webhook_key": secret, "currency": "EUR"},
 		NotifyRequest{
 			Headers: http.Header{
 				"Stripe-Signature": []string{fmt.Sprintf("t=%d,v1=%s", timestamp, signature)},
@@ -647,8 +1110,57 @@ func TestVerifyGatewayNotifyStripeCheckout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if result.TradeNo != "T403" || result.CallbackNo != "pi_403" {
+	if result.TradeNo != "T403" || result.CallbackNo != "pi_403" || result.Amount == nil || *result.Amount != 1234 {
 		t.Fatalf("unexpected stripe notify result: %#v", result)
+	}
+}
+
+func TestVerifyGatewayNotifyStripeRejectsProviderAmountMismatch(t *testing.T) {
+	payload := `{"type":"checkout.session.completed","data":{"object":{"payment_status":"paid","client_reference_id":"T403","payment_intent":"pi_403","amount_total":1200,"currency":"usd","metadata":{"forest_order_amount":"1234","forest_gateway_amount":"1234","forest_gateway_currency":"usd"}}}}`
+	secret := "whsec_test"
+	timestamp := int64(1700000000)
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(fmt.Sprintf("%d.%s", timestamp, payload)))
+	signature := hex.EncodeToString(mac.Sum(nil))
+
+	_, err := verifyGatewayNotify(
+		context.Background(),
+		http.DefaultClient,
+		"StripeCheckout",
+		map[string]string{"stripe_webhook_key": secret, "currency": "USD"},
+		NotifyRequest{
+			Headers: http.Header{"Stripe-Signature": []string{fmt.Sprintf("t=%d,v1=%s", timestamp, signature)}},
+			Body:    []byte(payload),
+		},
+	)
+	if !errors.Is(err, ErrVerifyFailed) {
+		t.Fatalf("expected Stripe amount mismatch to fail, got %v", err)
+	}
+}
+
+func TestVerifyGatewayNotifyStripePreservesLargeIntegerAmounts(t *testing.T) {
+	payload := `{"type":"checkout.session.completed","data":{"object":{"payment_status":"paid","client_reference_id":"T-LARGE","payment_intent":"pi_large","amount_total":1000000,"currency":"usd","metadata":{"forest_order_amount":"2147483647","forest_gateway_amount":"1000000","forest_gateway_currency":"usd"}}}}`
+	secret := "whsec_test"
+	timestamp := int64(1700000000)
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(fmt.Sprintf("%d.%s", timestamp, payload)))
+	signature := hex.EncodeToString(mac.Sum(nil))
+
+	result, err := verifyGatewayNotify(
+		context.Background(),
+		http.DefaultClient,
+		"StripeCheckout",
+		map[string]string{"stripe_webhook_key": secret, "currency": "USD"},
+		NotifyRequest{
+			Headers: http.Header{"Stripe-Signature": []string{fmt.Sprintf("t=%d,v1=%s", timestamp, signature)}},
+			Body:    []byte(payload),
+		},
+	)
+	if err != nil {
+		t.Fatalf("verify large Stripe callback: %v", err)
+	}
+	if result.Amount == nil || *result.Amount != int64(2147483647) {
+		t.Fatalf("large integer amount lost precision: %#v", result.Amount)
 	}
 }
 
@@ -658,9 +1170,12 @@ func TestVerifyGatewayNotifyCoinPayments(t *testing.T) {
 		"item_number": "T410",
 		"txn_id":      "CP-1",
 		"status":      "100",
+		"amount1":     "12.34000000",
+		"currency1":   "CNY",
 	}
+	rawBody := []byte("status=100&currency1=CNY&txn_id=CP-1&item_number=T410&amount1=12.34000000&merchant=merchant-1")
 	signed := hmac.New(sha512.New, []byte("ipn-secret"))
-	_, _ = signed.Write([]byte(encodedQuery(params)))
+	_, _ = signed.Write(rawBody)
 
 	result, err := verifyGatewayNotify(
 		context.Background(),
@@ -669,9 +1184,11 @@ func TestVerifyGatewayNotifyCoinPayments(t *testing.T) {
 		map[string]string{
 			"coinpayments_merchant_id": "merchant-1",
 			"coinpayments_ipn_secret":  "ipn-secret",
+			"coinpayments_currency":    "CNY",
 		},
 		NotifyRequest{
 			Params: params,
+			Body:   rawBody,
 			Headers: http.Header{
 				"Hmac": []string{hex.EncodeToString(signed.Sum(nil))},
 			},
@@ -680,13 +1197,13 @@ func TestVerifyGatewayNotifyCoinPayments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if result.TradeNo != "T410" || result.CallbackNo != "CP-1" || result.CustomResult != "IPN OK" {
+	if result.TradeNo != "T410" || result.CallbackNo != "CP-1" || result.CustomResult != "IPN OK" || result.Amount == nil || *result.Amount != 1234 {
 		t.Fatalf("unexpected coinpayments notify result: %#v", result)
 	}
 }
 
 func TestVerifyGatewayNotifyCoinbase(t *testing.T) {
-	payload := `{"event":{"id":"CB-1","data":{"metadata":{"outTradeNo":"T411"}}}}`
+	payload := `{"event":{"id":"event-CB-1","type":"charge:confirmed","data":{"id":"CB-1","metadata":{"outTradeNo":"T411"},"pricing":{"local":{"amount":"12.34","currency":"CNY"}}}}}`
 	signatureMac := hmac.New(sha256.New, []byte("cb-webhook"))
 	_, _ = signatureMac.Write([]byte(payload))
 
@@ -705,8 +1222,28 @@ func TestVerifyGatewayNotifyCoinbase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if result.TradeNo != "T411" || result.CallbackNo != "CB-1" {
+	if result.TradeNo != "T411" || result.CallbackNo != "CB-1" || result.Amount == nil || *result.Amount != 1234 {
 		t.Fatalf("unexpected coinbase notify result: %#v", result)
+	}
+}
+
+func TestVerifyGatewayNotifyCoinbaseRejectsNonFinalEvent(t *testing.T) {
+	payload := `{"event":{"id":"event-CB-1","type":"charge:pending","data":{"id":"CB-1","metadata":{"outTradeNo":"T411"},"pricing":{"local":{"amount":"12.34","currency":"CNY"}}}}}`
+	signatureMac := hmac.New(sha256.New, []byte("cb-webhook"))
+	_, _ = signatureMac.Write([]byte(payload))
+
+	_, err := verifyGatewayNotify(
+		context.Background(),
+		http.DefaultClient,
+		"Coinbase",
+		map[string]string{"coinbase_webhook_key": "cb-webhook"},
+		NotifyRequest{
+			Headers: http.Header{"X-Cc-Webhook-Signature": []string{hex.EncodeToString(signatureMac.Sum(nil))}},
+			Body:    []byte(payload),
+		},
+	)
+	if !errors.Is(err, ErrVerifyFailed) {
+		t.Fatalf("expected pending Coinbase event to fail, got %v", err)
 	}
 }
 
@@ -718,7 +1255,7 @@ func TestVerifyGatewayNotifyBTCPay(t *testing.T) {
 		if r.Header.Get("Authorization") != "token btc-key" {
 			t.Fatalf("unexpected btcpay detail auth: %#v", r.Header)
 		}
-		_, _ = w.Write([]byte(`{"metadata":{"orderId":"T412"}}`))
+		_, _ = w.Write([]byte(`{"status":"Settled","amount":"12.34","currency":"CNY","metadata":{"orderId":"T412"}}`))
 	}))
 	defer server.Close()
 
@@ -746,7 +1283,7 @@ func TestVerifyGatewayNotifyBTCPay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if result.TradeNo != "T412" || result.CallbackNo != "inv_412" {
+	if result.TradeNo != "T412" || result.CallbackNo != "inv_412" || result.Amount == nil || *result.Amount != 1234 {
 		t.Fatalf("unexpected btcpay notify result: %#v", result)
 	}
 }
@@ -765,7 +1302,7 @@ func TestVerifyGatewayNotifyStripeAlipayAndWepay(t *testing.T) {
 
 	secret := "whsec_test"
 	timestamp := int64(1700000000)
-	payload := `{"type":"source.chargeable","data":{"object":{"id":"src_1","amount":1234,"currency":"usd","metadata":{"out_trade_no":"T413"}}}}`
+	payload := `{"type":"source.chargeable","data":{"object":{"id":"src_1","amount":1234,"currency":"usd","metadata":{"out_trade_no":"T413","forest_order_amount":"1234","forest_gateway_amount":"1234","forest_gateway_currency":"usd"}}}}`
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write([]byte(fmt.Sprintf("%d.%s", timestamp, payload)))
 	signature := hex.EncodeToString(mac.Sum(nil))
@@ -777,6 +1314,7 @@ func TestVerifyGatewayNotifyStripeAlipayAndWepay(t *testing.T) {
 		map[string]string{
 			"stripe_sk_live":     "sk_live_test",
 			"stripe_webhook_key": secret,
+			"currency":           "USD",
 		},
 		NotifyRequest{
 			Headers: http.Header{
@@ -792,7 +1330,7 @@ func TestVerifyGatewayNotifyStripeAlipayAndWepay(t *testing.T) {
 		t.Fatalf("unexpected stripe alipay chargeable result: %#v", result)
 	}
 
-	payload = `{"type":"charge.succeeded","data":{"object":{"id":"ch_413","metadata":{"out_trade_no":"T413"}}}}`
+	payload = `{"type":"charge.succeeded","data":{"object":{"id":"ch_413","amount":1234,"currency":"usd","metadata":{"out_trade_no":"T413","forest_order_amount":"1234","forest_gateway_amount":"1234","forest_gateway_currency":"usd"}}}}`
 	mac = hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write([]byte(fmt.Sprintf("%d.%s", timestamp, payload)))
 	signature = hex.EncodeToString(mac.Sum(nil))
@@ -802,6 +1340,7 @@ func TestVerifyGatewayNotifyStripeAlipayAndWepay(t *testing.T) {
 		"StripeWepay",
 		map[string]string{
 			"stripe_webhook_key": secret,
+			"currency":           "USD",
 		},
 		NotifyRequest{
 			Headers: http.Header{
@@ -815,6 +1354,42 @@ func TestVerifyGatewayNotifyStripeAlipayAndWepay(t *testing.T) {
 	}
 	if result.TradeNo != "T413" || result.CallbackNo != "ch_413" {
 		t.Fatalf("unexpected stripe wepay notify result: %#v", result)
+	}
+	if result.Amount == nil || *result.Amount != 1234 {
+		t.Fatalf("expected stripe order amount 1234, got %#v", result.Amount)
+	}
+}
+
+func TestVerifyGatewayNotifyStripeSourceDoesNotAcknowledgeEmptyCharge(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host != "api.stripe.com" || r.URL.Path != "/v1/charges" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+		return jsonResponse(http.StatusOK, `{}`), nil
+	})}
+
+	secret := "whsec_test"
+	timestamp := int64(1700000000)
+	payload := `{"type":"source.chargeable","data":{"object":{"id":"src_empty","amount":1234,"currency":"usd","metadata":{"out_trade_no":"T-EMPTY","forest_order_amount":"1234","forest_gateway_amount":"1234","forest_gateway_currency":"usd"}}}}`
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(fmt.Sprintf("%d.%s", timestamp, payload)))
+	signature := hex.EncodeToString(mac.Sum(nil))
+
+	_, err := verifyGatewayNotify(
+		context.Background(),
+		client,
+		"StripeAlipay",
+		map[string]string{
+			"stripe_sk_live":     "sk_live_test",
+			"stripe_webhook_key": secret,
+		},
+		NotifyRequest{
+			Headers: http.Header{"Stripe-Signature": []string{fmt.Sprintf("t=%d,v1=%s", timestamp, signature)}},
+			Body:    []byte(payload),
+		},
+	)
+	if !errors.Is(err, ErrRequestFailed) {
+		t.Fatalf("empty Stripe charge must remain retryable, got %v", err)
 	}
 }
 
@@ -839,13 +1414,13 @@ func TestVerifyGatewayNotifyAlipayF2F(t *testing.T) {
 		context.Background(),
 		http.DefaultClient,
 		"AlipayF2F",
-		map[string]string{"public_key": publicPEM},
+		map[string]string{"app_id": "alipay-app", "public_key": publicPEM},
 		NotifyRequest{Params: params},
 	)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if result.TradeNo != "T416" || result.CallbackNo != "ALI-416" {
+	if result.TradeNo != "T416" || result.CallbackNo != "ALI-416" || result.Amount == nil || *result.Amount != 1234 {
 		t.Fatalf("unexpected alipay notify result: %#v", result)
 	}
 }
@@ -859,15 +1434,17 @@ func TestVerifyGatewayNotifyWechatPayNative(t *testing.T) {
 		"return_code":    "SUCCESS",
 		"out_trade_no":   "T417",
 		"transaction_id": "WX-417",
+		"total_fee":      "1234",
+		"fee_type":       "CNY",
 	}
 	fields["sign"] = testWechatSign(fields, "wx-key")
-	payload := `<xml><appid>` + fields["appid"] + `</appid><mch_id>` + fields["mch_id"] + `</mch_id><nonce_str>` + fields["nonce_str"] + `</nonce_str><result_code>` + fields["result_code"] + `</result_code><return_code>` + fields["return_code"] + `</return_code><out_trade_no>` + fields["out_trade_no"] + `</out_trade_no><transaction_id>` + fields["transaction_id"] + `</transaction_id><sign>` + fields["sign"] + `</sign></xml>`
+	payload := `<xml><appid>` + fields["appid"] + `</appid><mch_id>` + fields["mch_id"] + `</mch_id><nonce_str>` + fields["nonce_str"] + `</nonce_str><result_code>` + fields["result_code"] + `</result_code><return_code>` + fields["return_code"] + `</return_code><out_trade_no>` + fields["out_trade_no"] + `</out_trade_no><transaction_id>` + fields["transaction_id"] + `</transaction_id><total_fee>` + fields["total_fee"] + `</total_fee><fee_type>` + fields["fee_type"] + `</fee_type><sign>` + fields["sign"] + `</sign></xml>`
 
 	result, err := verifyGatewayNotify(
 		context.Background(),
 		http.DefaultClient,
 		"WechatPayNative",
-		map[string]string{"api_key": "wx-key"},
+		map[string]string{"app_id": "wx-app", "mch_id": "wx-mch", "api_key": "wx-key"},
 		NotifyRequest{Body: []byte(payload)},
 	)
 	if err != nil {
@@ -879,6 +1456,9 @@ func TestVerifyGatewayNotifyWechatPayNative(t *testing.T) {
 	if !strings.Contains(result.CustomResult, "<return_code><![CDATA[SUCCESS]]></return_code>") {
 		t.Fatalf("expected custom xml success response, got %q", result.CustomResult)
 	}
+	if result.Amount == nil || *result.Amount != 1234 {
+		t.Fatalf("expected callback amount 1234, got %#v", result.Amount)
+	}
 }
 
 func TestVerifyGatewayNotifyRejectsBadSignature(t *testing.T) {
@@ -886,11 +1466,14 @@ func TestVerifyGatewayNotifyRejectsBadSignature(t *testing.T) {
 		context.Background(),
 		http.DefaultClient,
 		"EPay",
-		map[string]string{"key": "secret"},
+		map[string]string{"key": "secret", "pid": "10001"},
 		NotifyRequest{
 			Params: map[string]string{
 				"out_trade_no": "T404",
 				"trade_no":     "P404",
+				"money":        "12.34",
+				"pid":          "10001",
+				"trade_status": "TRADE_SUCCESS",
 				"sign":         "bad",
 				"sign_type":    "MD5",
 			},

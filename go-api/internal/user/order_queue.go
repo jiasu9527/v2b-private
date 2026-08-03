@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -365,6 +364,13 @@ func (s *DBService) handleQueuedOrder(ctx context.Context, tradeNo string) error
 
 	switch {
 	case shouldAutoCancelOrder(order.Status, order.CreatedAt, time.Now().Unix()):
+		checkoutUnlocked, lockErr := tryLockCheckoutCreationTx(ctx, tx, tradeNo)
+		if lockErr != nil {
+			return lockErr
+		}
+		if !checkoutUnlocked {
+			return nil
+		}
 		order.Status = 2
 		order.UpdatedAt = time.Now().Unix()
 		if err := s.updateOrderStatusTx(ctx, tx, order); err != nil {
@@ -380,16 +386,41 @@ func (s *DBService) handleQueuedOrder(ctx context.Context, tradeNo string) error
 				return err
 			}
 		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit queued cancel order: %w", err)
-		}
 		ttl := s.currentConfig().OrderCancelRecoverTTL
 		if ttl <= 0 {
 			ttl = 1800
 		}
-		_ = s.kvSet(ctx, cancelRecoveryKey(tradeNo), strconv.FormatInt(time.Now().Unix(), 10), ttl)
+		if err := setCancelRecoveryTx(ctx, tx, tradeNo, ttl); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit queued cancel order: %w", err)
+		}
 	case order.Status == 1:
 		if err := s.openOrderTx(ctx, tx, &order); err != nil {
+			if errors.Is(err, ErrInvalidParameter) {
+				// Quarantine corrupt legacy paid-pending rows instead of either
+				// opening a negative order or blocking the whole queue forever.
+				order.Status = 2
+				order.UpdatedAt = time.Now().Unix()
+				if updateErr := s.updateOrderStatusTx(ctx, tx, order); updateErr != nil {
+					return updateErr
+				}
+				if order.BalanceAmount.Valid && order.BalanceAmount.Int64 > 0 {
+					userRow, lockErr := s.lockUserTx(ctx, tx, order.UserID)
+					if lockErr != nil {
+						return lockErr
+					}
+					userRow.Balance += order.BalanceAmount.Int64
+					if updateErr := s.updateUserBalanceTx(ctx, tx, order.UserID, userRow.Balance); updateErr != nil {
+						return updateErr
+					}
+				}
+				if commitErr := tx.Commit(); commitErr != nil {
+					return fmt.Errorf("commit invalid queued order quarantine: %w", commitErr)
+				}
+				return nil
+			}
 			return err
 		}
 		if err := tx.Commit(); err != nil {

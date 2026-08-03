@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -223,6 +222,9 @@ func (s *DBService) SaveOrder(ctx context.Context, userID int64, req OrderSaveRe
 	if !ok {
 		return "", ErrPeriodUnavailable
 	}
+	if price < 0 {
+		return "", ErrInvalidParameter
+	}
 	if req.Period == "reset_price" {
 		if !userRow.isAvailable(time.Now().Unix()) || !userRow.PlanID.Valid || userRow.PlanID.Int64 != plan.ID {
 			return "", ErrResetUnavailable
@@ -265,12 +267,18 @@ func (s *DBService) SaveOrder(ctx context.Context, userID int64, req OrderSaveRe
 		order.DiscountAmount += vipDiscount
 		order.TotalAmount -= vipDiscount
 	}
+	if order.TotalAmount < 0 {
+		return "", ErrInvalidParameter
+	}
 
 	if err := s.setOrderTypeTx(ctx, tx, userRow, &order); err != nil {
 		return "", err
 	}
 	if err := s.applyInviteCampaignDiscountTx(ctx, tx, userID, &order); err != nil {
 		return "", err
+	}
+	if order.TotalAmount < 0 {
+		return "", ErrInvalidParameter
 	}
 
 	if userRow.Balance > 0 && order.TotalAmount > 0 {
@@ -329,7 +337,10 @@ func (s *DBService) CheckoutOrder(ctx context.Context, userID int64, req OrderCh
 		return OrderCheckoutResult{}, ErrOrderPaidOrMissing
 	}
 
-	if order.TotalAmount <= 0 {
+	if order.TotalAmount < 0 {
+		return OrderCheckoutResult{}, ErrInvalidParameter
+	}
+	if order.TotalAmount == 0 {
 		if err := s.openOrderTx(ctx, tx, &order); err != nil {
 			return OrderCheckoutResult{}, err
 		}
@@ -388,6 +399,13 @@ func (s *DBService) CancelOrder(ctx context.Context, userID int64, tradeNo strin
 	if order.Status != 0 {
 		return false, ErrCancelPendingOnly
 	}
+	checkoutUnlocked, err := tryLockCheckoutCreationTx(ctx, tx, tradeNo)
+	if err != nil {
+		return false, err
+	}
+	if !checkoutUnlocked {
+		return false, ErrCheckoutInProgress
+	}
 
 	order.Status = 2
 	order.UpdatedAt = time.Now().Unix()
@@ -405,17 +423,26 @@ func (s *DBService) CancelOrder(ctx context.Context, userID int64, tradeNo strin
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit cancel order: %w", err)
-	}
-
 	ttl := s.currentConfig().OrderCancelRecoverTTL
 	if ttl <= 0 {
 		ttl = 1800
 	}
-	_ = s.kvSet(ctx, cancelRecoveryKey(tradeNo), strconv.FormatInt(time.Now().Unix(), 10), ttl)
+	if err := setCancelRecoveryTx(ctx, tx, tradeNo, ttl); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit cancel order: %w", err)
+	}
 
 	return true, nil
+}
+
+func tryLockCheckoutCreationTx(ctx context.Context, tx *sql.Tx, tradeNo string) (bool, error) {
+	var acquired bool
+	if err := tx.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0::bigint))`, "checkout:"+strings.TrimSpace(tradeNo)).Scan(&acquired); err != nil {
+		return false, fmt.Errorf("lock checkout creation state: %w", err)
+	}
+	return acquired, nil
 }
 
 func (s *DBService) AssignAdminOrder(ctx context.Context, req AdminAssignOrderRequest) (string, error) {
@@ -425,7 +452,7 @@ func (s *DBService) AssignAdminOrder(ctx context.Context, req AdminAssignOrderRe
 
 	req.Email = strings.TrimSpace(req.Email)
 	req.Period = strings.TrimSpace(req.Period)
-	if req.Email == "" || req.PlanID <= 0 || req.Period == "" {
+	if req.Email == "" || req.PlanID <= 0 || req.Period == "" || req.TotalAmount < 0 {
 		return "", ErrInvalidParameter
 	}
 	if _, ok := allowedOrderPeriods[req.Period]; !ok {
@@ -734,6 +761,9 @@ func (s *DBService) setInviteTx(ctx context.Context, tx *sql.Tx, userRow userRec
 	if userRow.InviteUserID.Valid {
 		order.InviteUserID = userRow.InviteUserID
 	}
+	if order.Period == "deposit" || order.Type == 9 {
+		return nil
+	}
 	if userRow.InviteUserID.Valid && order.TotalAmount <= 0 {
 		return nil
 	}
@@ -779,9 +809,16 @@ func (s *DBService) setInviteTx(ctx context.Context, tx *sql.Tx, userRow userRec
 }
 
 func (s *DBService) openOrderTx(ctx context.Context, tx *sql.Tx, order *orderRecord) error {
+	if !validOrderAmountState(*order) {
+		return ErrInvalidParameter
+	}
 	now := time.Now().Unix()
-	order.CallbackNo = sql.NullString{String: order.TradeNo, Valid: true}
-	order.PaidAt = sql.NullInt64{Int64: now, Valid: true}
+	if !order.CallbackNo.Valid || strings.TrimSpace(order.CallbackNo.String) == "" {
+		order.CallbackNo = sql.NullString{String: order.TradeNo, Valid: true}
+	}
+	if !order.PaidAt.Valid || order.PaidAt.Int64 <= 0 {
+		order.PaidAt = sql.NullInt64{Int64: now, Valid: true}
+	}
 
 	userRow, err := s.lockUserTx(ctx, tx, order.UserID)
 	if err != nil {
@@ -789,6 +826,9 @@ func (s *DBService) openOrderTx(ctx context.Context, tx *sql.Tx, order *orderRec
 	}
 
 	if order.Type == 9 {
+		if err := s.disableDepositCommissionTx(ctx, tx, order, now); err != nil {
+			return err
+		}
 		userRow.Balance += order.TotalAmount
 		if err := s.updateUserBalanceTx(ctx, tx, userRow.ID, userRow.Balance); err != nil {
 			return err
@@ -839,6 +879,11 @@ func (s *DBService) openOrderTx(ctx context.Context, tx *sql.Tx, order *orderRec
 	order.Status = 3
 	order.UpdatedAt = now
 	return s.updateOrderPaymentStateTx(ctx, tx, *order)
+}
+
+func validOrderAmountState(order orderRecord) bool {
+	handlingAmount := nullableInt64(order.HandlingAmount)
+	return order.TotalAmount >= 0 && handlingAmount >= 0 && order.TotalAmount <= math.MaxInt64-handlingAmount
 }
 
 func applyOrderPeriod(userRow *userRecord, order orderRecord, plan planRecord) {

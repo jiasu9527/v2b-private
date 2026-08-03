@@ -55,7 +55,10 @@ var (
 	ErrCreateOrderFailed              = errors.New("failed to create order")
 	ErrPaymentMethodUnavailable       = errors.New("payment method unavailable")
 	ErrCheckoutFailed                 = errors.New("checkout failed")
+	ErrCheckoutInProgress             = errors.New("payment checkout is already being created")
 	ErrCancelPendingOnly              = errors.New("cancel pending orders only")
+	ErrPaymentConfirmationMismatch    = errors.New("payment confirmation does not match order")
+	ErrPaymentCallbackConflict        = errors.New("payment callback already belongs to another order")
 	ErrRefundCompletedOnly            = errors.New("refund completed orders only")
 	ErrRefundLatestOnly               = errors.New("only latest completed order can be refunded")
 	ErrRefundTargetNotSupported       = errors.New("refund target not supported")
@@ -64,6 +67,14 @@ var (
 	ErrInviteLimitReached             = errors.New("invite limit reached")
 	ErrClientTokenInvalid             = errors.New("client token invalid")
 )
+
+type OrderPaymentConfirmation struct {
+	CallbackNo     string
+	AllowCancelled bool
+	Manual         bool
+	PaymentID      *int64
+	Amount         *int64
+}
 
 type Info struct {
 	Email             string         `json:"email"`
@@ -624,6 +635,7 @@ func (s *DBService) Orders(ctx context.Context, userID int64, status *int64) ([]
 		}
 		delete(order, "id")
 		delete(order, "user_id")
+		delete(order, "checkout_result")
 	}
 
 	return orders, nil
@@ -641,6 +653,7 @@ func (s *DBService) OrderDetail(ctx context.Context, userID int64, tradeNo strin
 	if order == nil {
 		return nil, ErrOrderPaidOrMissing
 	}
+	delete(order, "checkout_result")
 
 	if mapInt64(order["plan_id"]) == 0 {
 		order["plan"] = map[string]any{
@@ -671,6 +684,9 @@ func (s *DBService) OrderDetail(ctx context.Context, userID int64, tradeNo strin
 		surplusOrders, err := s.queryRowsAsMaps(ctx, query, args...)
 		if err != nil {
 			return nil, fmt.Errorf("query surplus orders: %w", err)
+		}
+		for _, surplusOrder := range surplusOrders {
+			delete(surplusOrder, "checkout_result")
 		}
 		order["surplus_orders"] = surplusOrders
 	}
@@ -962,6 +978,13 @@ ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = EXCLUDED.expire_at, up
 		key, value, expireAt, now, now)
 	if err != nil {
 		return fmt.Errorf("set runtime kv: %w", err)
+	}
+	return nil
+}
+
+func (s *DBService) kvDelete(ctx context.Context, key string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM v2_runtime_kv WHERE k = $1`, key); err != nil {
+		return fmt.Errorf("delete runtime kv: %w", err)
 	}
 	return nil
 }

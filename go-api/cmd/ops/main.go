@@ -141,7 +141,27 @@ func runUpdate(args []string) error {
 	if err := applyUpdateCompatFixes(context.Background(), db); err != nil {
 		return err
 	}
+	if err := verifyRequiredUpdateSchema(context.Background(), db); err != nil {
+		return err
+	}
 	fmt.Printf("schema update finished: success=%d failed=%d\n", ok, failed)
+	return nil
+}
+
+func verifyRequiredUpdateSchema(ctx context.Context, db *sql.DB) error {
+	var checkoutResultExists bool
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS (
+SELECT 1
+FROM information_schema.columns
+WHERE table_schema = ANY (current_schemas(false))
+  AND table_name = 'v2_order'
+  AND column_name = 'checkout_result'
+)`).Scan(&checkoutResultExists); err != nil {
+		return fmt.Errorf("verify required v2_order.checkout_result column: %w", err)
+	}
+	if !checkoutResultExists {
+		return fmt.Errorf("required database migration is incomplete: v2_order.checkout_result is missing")
+	}
 	return nil
 }
 
@@ -267,6 +287,9 @@ func applyUpdateCompatFixes(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if err := bestEffortEnsureUpdateIndex(ctx, db, `CREATE INDEX IF NOT EXISTS idx_v2_auth_session_user_id ON v2_auth_session(user_id)`); err != nil {
+		return err
+	}
+	if err := bestEffortEnsureUpdateIndex(ctx, db, `CREATE INDEX IF NOT EXISTS idx_v2_order_payment_callback ON v2_order(payment_id, callback_no) WHERE callback_no IS NOT NULL`); err != nil {
 		return err
 	}
 	if err := bestEffortEnsureUpdateColumn(

@@ -9,13 +9,13 @@ import (
 	"time"
 )
 
-func (s *DBService) MarkOrderPaid(ctx context.Context, tradeNo, callbackNo string, allowCancelled bool) error {
+func (s *DBService) MarkOrderPaid(ctx context.Context, tradeNo string, confirmation OrderPaymentConfirmation) error {
 	if s.db == nil {
 		return ErrUnavailable
 	}
 
 	tradeNo = strings.TrimSpace(tradeNo)
-	callbackNo = strings.TrimSpace(callbackNo)
+	callbackNo := strings.TrimSpace(confirmation.CallbackNo)
 	if tradeNo == "" || callbackNo == "" {
 		return ErrInvalidParameter
 	}
@@ -35,13 +35,38 @@ func (s *DBService) MarkOrderPaid(ctx context.Context, tradeNo, callbackNo strin
 	if !ok {
 		return ErrOrderNotFound
 	}
+	if err := validateOrderPaymentConfirmation(order, confirmation); err != nil {
+		return err
+	}
+	if err := s.lockPaymentCallbackTx(ctx, tx, tradeNo, callbackNo, confirmation.PaymentID); err != nil {
+		return err
+	}
 
 	switch order.Status {
 	case 1, 3, 4:
-		return nil
+		storedCallback := strings.TrimSpace(order.CallbackNo.String)
+		if order.CallbackNo.Valid && storedCallback == callbackNo {
+			return nil
+		}
+		// Older runtimes replaced the provider transaction number with trade_no
+		// while opening an order, and some migrated rows have no callback at all.
+		// Repair only that known legacy shape after the payment method and amount
+		// have been re-verified. This path never reopens or credits the order.
+		if confirmation.PaymentID != nil && (!order.CallbackNo.Valid || storedCallback == "" || storedCallback == order.TradeNo) {
+			order.CallbackNo = sql.NullString{String: callbackNo, Valid: true}
+			order.UpdatedAt = time.Now().Unix()
+			if err := s.updateOrderPaymentStateTx(ctx, tx, order); err != nil {
+				return err
+			}
+			if err := tx.Commit(); err != nil {
+				return fmt.Errorf("commit legacy callback repair: %w", err)
+			}
+			return nil
+		}
+		return ErrPaymentConfirmationMismatch
 	case 2:
-		if !allowCancelled {
-			recoverable, err := s.canRecoverCancelledOrder(ctx, tradeNo)
+		if !confirmation.AllowCancelled {
+			recoverable, err := s.canRecoverCancelledOrderTx(ctx, tx, tradeNo)
 			if err != nil {
 				return err
 			}
@@ -70,11 +95,13 @@ func (s *DBService) MarkOrderPaid(ctx context.Context, tradeNo, callbackNo strin
 	if err := s.openOrderTx(ctx, tx, &order); err != nil {
 		return err
 	}
+	if err := deleteCancelRecoveryTx(ctx, tx, tradeNo); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit pay order transaction: %w", err)
 	}
 
-	_ = s.kvDelete(ctx, cancelRecoveryKey(tradeNo))
 	_ = s.notifyOrderPaidAdmins(ctx, adminPaymentNotification{
 		TradeNo:     order.TradeNo,
 		TotalAmount: order.TotalAmount,
@@ -84,18 +111,98 @@ func (s *DBService) MarkOrderPaid(ctx context.Context, tradeNo, callbackNo strin
 	return nil
 }
 
-func (s *DBService) canRecoverCancelledOrder(ctx context.Context, tradeNo string) (bool, error) {
-	_, ok, err := s.kvGet(ctx, cancelRecoveryKey(tradeNo))
-	if err != nil {
-		return false, err
+func validateOrderPaymentConfirmation(order orderRecord, confirmation OrderPaymentConfirmation) error {
+	handlingAmount := nullableInt64(order.HandlingAmount)
+	if !validOrderAmountState(order) {
+		return ErrPaymentConfirmationMismatch
 	}
-	return ok, nil
+	if confirmation.Manual {
+		if confirmation.PaymentID != nil || confirmation.Amount != nil {
+			return ErrPaymentConfirmationMismatch
+		}
+		return nil
+	}
+	if confirmation.PaymentID == nil {
+		// The only non-manual confirmation without a provider is an actually
+		// free order. Do not let a future internal caller accidentally open a
+		// positive order by omitting gateway evidence.
+		if confirmation.Amount != nil || order.TotalAmount != 0 || handlingAmount != 0 {
+			return ErrPaymentConfirmationMismatch
+		}
+		return nil
+	}
+
+	if *confirmation.PaymentID <= 0 || confirmation.Amount == nil || *confirmation.Amount <= 0 || order.TotalAmount <= 0 || !order.PaymentID.Valid || order.PaymentID.Int64 != *confirmation.PaymentID {
+		return ErrPaymentConfirmationMismatch
+	}
+	if order.TotalAmount+handlingAmount != *confirmation.Amount {
+		return ErrPaymentConfirmationMismatch
+	}
+	return nil
 }
 
-func (s *DBService) kvDelete(ctx context.Context, key string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM v2_runtime_kv WHERE k = $1`, key)
+func (s *DBService) lockPaymentCallbackTx(ctx context.Context, tx *sql.Tx, tradeNo, callbackNo string, paymentID *int64) error {
+	lockKey := "internal:" + callbackNo
+	if paymentID != nil {
+		lockKey = fmt.Sprintf("payment:%d:%s", *paymentID, callbackNo)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0::bigint))`, lockKey); err != nil {
+		return fmt.Errorf("lock payment callback: %w", err)
+	}
+	// Internal confirmations derive their callback from the globally unique
+	// station order number. Gateway transaction numbers are only guaranteed to
+	// be unique inside one configured payment channel, so scope the conflict
+	// check to payment_id instead of treating callback_no as globally unique.
+	if paymentID == nil {
+		return nil
+	}
+
+	var conflict bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
+SELECT 1 FROM v2_order WHERE payment_id = $1 AND callback_no = $2 AND trade_no <> $3
+)`, *paymentID, callbackNo, tradeNo).Scan(&conflict); err != nil {
+		return fmt.Errorf("check payment callback conflict: %w", err)
+	}
+	if conflict {
+		return ErrPaymentCallbackConflict
+	}
+	return nil
+}
+
+func (s *DBService) canRecoverCancelledOrderTx(ctx context.Context, tx *sql.Tx, tradeNo string) (bool, error) {
+	var recoverable bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
+SELECT 1 FROM v2_runtime_kv
+WHERE k = $1 AND (expire_at = 0 OR expire_at > $2)
+)`, cancelRecoveryKey(tradeNo), time.Now().Unix()).Scan(&recoverable); err != nil {
+		return false, fmt.Errorf("query cancel recovery state: %w", err)
+	}
+	return recoverable, nil
+}
+
+func deleteCancelRecoveryTx(ctx context.Context, tx *sql.Tx, tradeNo string) error {
+	_, err := tx.ExecContext(ctx, `DELETE FROM v2_runtime_kv WHERE k = $1`, cancelRecoveryKey(tradeNo))
 	if err != nil {
-		return fmt.Errorf("delete runtime kv: %w", err)
+		return fmt.Errorf("delete cancel recovery state: %w", err)
+	}
+	return nil
+}
+
+func setCancelRecoveryTx(ctx context.Context, tx *sql.Tx, tradeNo string, ttl int64) error {
+	now := time.Now().Unix()
+	expireAt := int64(0)
+	if ttl > 0 {
+		expireAt = now + ttl
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_runtime_kv (k, v, expire_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $4)
+ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = EXCLUDED.expire_at, updated_at = EXCLUDED.updated_at`,
+		cancelRecoveryKey(tradeNo),
+		fmt.Sprintf("%d", now),
+		expireAt,
+		now,
+	); err != nil {
+		return fmt.Errorf("set cancel recovery state: %w", err)
 	}
 	return nil
 }

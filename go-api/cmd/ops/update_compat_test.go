@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -21,6 +22,8 @@ func TestApplyUpdateCompatFixesIgnoresOwnerOnlyIndexErrors(t *testing.T) {
 		WillReturnError(errors.New("ERROR: must be owner of table v2_runtime_kv (SQLSTATE 42501)"))
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_auth_session_user_id ON v2_auth_session\(user_id\)`).
 		WillReturnError(errors.New("ERROR: must be owner of table v2_auth_session (SQLSTATE 42501)"))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_order_payment_callback ON v2_order\(payment_id, callback_no\) WHERE callback_no IS NOT NULL`).
+		WillReturnError(errors.New("ERROR: must be owner of table v2_order (SQLSTATE 42501)"))
 	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
 		WithArgs("v2_server_v2node", "send_through").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
@@ -70,6 +73,8 @@ func TestApplyUpdateCompatFixesTrimsExistingInviteColumns(t *testing.T) {
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_runtime_kv_expire_at ON v2_runtime_kv\(expire_at\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_auth_session_user_id ON v2_auth_session\(user_id\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_order_payment_callback ON v2_order\(payment_id, callback_no\) WHERE callback_no IS NOT NULL`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
 		WithArgs("v2_server_v2node", "send_through").
@@ -125,6 +130,8 @@ func TestApplyUpdateCompatFixesAddsV2nodeSendThroughColumnWhenMissing(t *testing
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_auth_session_user_id ON v2_auth_session\(user_id\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_order_payment_callback ON v2_order\(payment_id, callback_no\) WHERE callback_no IS NOT NULL`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
 		WithArgs("v2_server_v2node", "send_through").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
@@ -175,6 +182,8 @@ func TestApplyUpdateCompatFixesMigratesPlanTransferEnableToBigint(t *testing.T) 
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_auth_session_user_id ON v2_auth_session\(user_id\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_order_payment_callback ON v2_order\(payment_id, callback_no\) WHERE callback_no IS NOT NULL`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
 		WithArgs("v2_server_v2node", "send_through").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
@@ -212,4 +221,45 @@ func expectColumnDataType(mock sqlmock.Sqlmock, table, column, dataType string) 
 	mock.ExpectQuery(`SELECT data_type FROM information_schema.columns`).
 		WithArgs(table, column).
 		WillReturnRows(sqlmock.NewRows([]string{"data_type"}).AddRow(dataType))
+}
+
+func TestVerifyRequiredUpdateSchemaRejectsMissingCheckoutResult(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1\s*FROM information_schema.columns\s*WHERE table_schema = ANY \(current_schemas\(false\)\)\s*AND table_name = 'v2_order'\s*AND column_name = 'checkout_result'`).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	err = verifyRequiredUpdateSchema(context.Background(), db)
+	if err == nil || !strings.Contains(err.Error(), "v2_order.checkout_result is missing") {
+		t.Fatalf("expected a required-schema error, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestVerifyRequiredUpdateSchemaAcceptsCheckoutResult(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1\s*FROM information_schema.columns\s*WHERE table_schema = ANY \(current_schemas\(false\)\)\s*AND table_name = 'v2_order'\s*AND column_name = 'checkout_result'`).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	if err := verifyRequiredUpdateSchema(context.Background(), db); err != nil {
+		t.Fatalf("verify required schema: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
 }

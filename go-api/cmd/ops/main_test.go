@@ -47,6 +47,33 @@ func TestInstallPostgresPlanTransferEnableUsesBigint(t *testing.T) {
 	}
 }
 
+func TestPostgresPaymentSecurityMigrationIsPresent(t *testing.T) {
+	t.Parallel()
+
+	root := repoRootFromTestFile(t)
+	installRaw, err := os.ReadFile(filepath.Join(root, "database", "install.pgsql.sql"))
+	if err != nil {
+		t.Fatalf("read install schema: %v", err)
+	}
+	if !strings.Contains(string(installRaw), `CREATE INDEX "idx_v2_order_payment_callback" ON "v2_order" ("payment_id", "callback_no")`) {
+		t.Fatal("install schema should index payment-scoped callback lookups")
+	}
+	if !strings.Contains(string(installRaw), `"checkout_result" text DEFAULT NULL`) {
+		t.Fatal("install schema should persist the first successful checkout result")
+	}
+
+	updateRaw, err := os.ReadFile(filepath.Join(root, "database", "update.pgsql.sql"))
+	if err != nil {
+		t.Fatalf("read update schema: %v", err)
+	}
+	updateSQL := string(updateRaw)
+	for _, fragment := range []string{`ADD COLUMN IF NOT EXISTS "checkout_result"`, `("type" = 9 OR "period" = 'deposit')`, `"commission_status" IN (0, 1)`, `"commission_balance" = 0`} {
+		if !strings.Contains(updateSQL, fragment) {
+			t.Fatalf("update schema should close unpaid legacy deposit commissions: missing %q", fragment)
+		}
+	}
+}
+
 func TestInstallPostgresManagedServersIncludeClientEntryOnly(t *testing.T) {
 	t.Parallel()
 

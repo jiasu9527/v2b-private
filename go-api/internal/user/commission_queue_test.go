@@ -73,6 +73,36 @@ func TestHandlePendingOrdersAutoConfirmsCommission(t *testing.T) {
 	}
 }
 
+func TestHandleQueuedCommissionClosesLegacyDepositCommission(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := NewDBService(config.Config{}, db)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FROM v2_order\s+WHERE trade_no = \$1\s+FOR UPDATE`).
+		WithArgs("T-DEPOSIT").
+		WillReturnRows(sqlmock.NewRows(paymentSecurityOrderColumns).AddRow(
+			int64(9), int64(12), int64(0), nil, int64(7), int64(9), "deposit", "T-DEPOSIT", "cb-deposit",
+			int64(1000), nil, nil, nil, nil, nil,
+			nil, int64(3), int64(0), int64(120), nil,
+			int64(88), nil, int64(0), time.Now().Unix(), time.Now().Unix(), time.Now().Unix(),
+		))
+	mock.ExpectExec(`UPDATE v2_order\s+SET commission_balance = 0, commission_status = 2, actual_commission_balance = 0, updated_at = \$2\s+WHERE id = \$1`).
+		WithArgs(int64(9), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	if err := service.handleQueuedCommission(context.Background(), "T-DEPOSIT"); err != nil {
+		t.Fatalf("clean legacy deposit commission: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func TestHandlePendingOrdersOffsetsCommissionDebtBeforeBalanceCredit(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

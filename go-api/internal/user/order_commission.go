@@ -21,11 +21,27 @@ func (s *DBService) handleQueuedCommission(ctx context.Context, tradeNo string) 
 	if err != nil {
 		return err
 	}
-	if !ok || order.Status != 3 || !order.InviteUserID.Valid || order.CommissionBalance <= 0 {
+	if !ok || order.Status != 3 {
 		return nil
 	}
 
 	now := time.Now().Unix()
+	if order.Type == 9 || order.Period == "deposit" {
+		if order.CommissionStatus == 2 && order.CommissionBalance == 0 {
+			return nil
+		}
+		if err := s.disableDepositCommissionTx(ctx, tx, &order, now); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit deposit commission cleanup: %w", err)
+		}
+		return nil
+	}
+	if !order.InviteUserID.Valid || order.CommissionBalance <= 0 {
+		return nil
+	}
+
 	cfg := s.currentConfig()
 	paidAt := order.CreatedAt
 	if order.PaidAt.Valid && order.PaidAt.Int64 > 0 {
@@ -96,6 +112,19 @@ VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit commission transaction: %w", err)
+	}
+	return nil
+}
+
+func (s *DBService) disableDepositCommissionTx(ctx context.Context, tx *sql.Tx, order *orderRecord, now int64) error {
+	order.CommissionBalance = 0
+	order.CommissionStatus = 2
+	order.ActualCommissionBalance = sql.NullInt64{Int64: 0, Valid: true}
+	order.UpdatedAt = now
+	if _, err := tx.ExecContext(ctx, `UPDATE v2_order
+SET commission_balance = 0, commission_status = 2, actual_commission_balance = 0, updated_at = $2
+WHERE id = $1`, order.ID, now); err != nil {
+		return fmt.Errorf("disable deposit commission: %w", err)
 	}
 	return nil
 }
