@@ -61,13 +61,16 @@ func TestPostgresPaymentSecurityMigrationIsPresent(t *testing.T) {
 	if !strings.Contains(string(installRaw), `"checkout_result" text DEFAULT NULL`) {
 		t.Fatal("install schema should persist the first successful checkout result")
 	}
+	if !strings.Contains(string(installRaw), `"checkout_claim" varchar(64) DEFAULT NULL`) || !strings.Contains(string(installRaw), `"checkout_claim_expires_at" BIGINT DEFAULT NULL`) || !strings.Contains(string(installRaw), `"checkout_fingerprint" varchar(64) DEFAULT NULL`) {
+		t.Fatal("install schema should support short-lived per-order checkout claims")
+	}
 
 	updateRaw, err := os.ReadFile(filepath.Join(root, "database", "update.pgsql.sql"))
 	if err != nil {
 		t.Fatalf("read update schema: %v", err)
 	}
 	updateSQL := string(updateRaw)
-	for _, fragment := range []string{`ADD COLUMN IF NOT EXISTS "checkout_result"`, `("type" = 9 OR "period" = 'deposit')`, `"commission_status" IN (0, 1)`, `"commission_balance" = 0`} {
+	for _, fragment := range []string{`ADD COLUMN IF NOT EXISTS "checkout_result"`, `ADD COLUMN IF NOT EXISTS "checkout_claim"`, `ADD COLUMN IF NOT EXISTS "checkout_claim_expires_at"`, `ADD COLUMN IF NOT EXISTS "checkout_fingerprint"`, `("type" = 9 OR "period" = 'deposit')`, `"commission_status" IN (0, 1)`, `"commission_balance" = 0`} {
 		if !strings.Contains(updateSQL, fragment) {
 			t.Fatalf("update schema should close unpaid legacy deposit commissions: missing %q", fragment)
 		}

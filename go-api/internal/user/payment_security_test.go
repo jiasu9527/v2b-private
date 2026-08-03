@@ -296,9 +296,9 @@ func TestCancelOrderCommitsRefundAndRecoveryMarkerTogether(t *testing.T) {
 	mock.ExpectQuery(`FROM v2_order\s+WHERE user_id = \$1 AND trade_no = \$2\s+FOR UPDATE`).
 		WithArgs(int64(5), "T900").
 		WillReturnRows(paymentSecurityOrderRow(0, nil))
-	mock.ExpectQuery(`SELECT pg_try_advisory_xact_lock`).
-		WithArgs("checkout:T900").
-		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_xact_lock"}).AddRow(true))
+	mock.ExpectQuery(`SELECT COALESCE\(\s*checkout_claim IS NOT NULL AND checkout_claim_expires_at > EXTRACT\(EPOCH FROM NOW\(\)\)::BIGINT,\s*FALSE\s*\)\s*FROM v2_order\s*WHERE id = \$1`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"active"}).AddRow(false))
 	mock.ExpectExec(`UPDATE v2_order SET status = \$2, updated_at = \$3 WHERE id = \$1`).
 		WithArgs(int64(9), int64(2), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -340,9 +340,9 @@ func TestCancelOrderRefusesWhileProviderCheckoutIsBeingCreated(t *testing.T) {
 	mock.ExpectQuery(`FROM v2_order\s+WHERE user_id = \$1 AND trade_no = \$2\s+FOR UPDATE`).
 		WithArgs(int64(5), "T900").
 		WillReturnRows(paymentSecurityOrderRow(0, nil))
-	mock.ExpectQuery(`SELECT pg_try_advisory_xact_lock`).
-		WithArgs("checkout:T900").
-		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_xact_lock"}).AddRow(false))
+	mock.ExpectQuery(`SELECT COALESCE\(\s*checkout_claim IS NOT NULL AND checkout_claim_expires_at > EXTRACT\(EPOCH FROM NOW\(\)\)::BIGINT,\s*FALSE\s*\)\s*FROM v2_order\s*WHERE id = \$1`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"active"}).AddRow(true))
 	mock.ExpectRollback()
 
 	service := &DBService{db: db}

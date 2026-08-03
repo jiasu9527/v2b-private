@@ -37,6 +37,18 @@ type recordingPaymentOrderManager struct {
 	confirmation usersvc.OrderPaymentConfirmation
 }
 
+const checkoutOrderLockPattern = `SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result,\s*checkout_claim,\s*checkout_fingerprint,\s*COALESCE\(checkout_claim IS NOT NULL AND checkout_claim_expires_at > EXTRACT\(EPOCH FROM NOW\(\)\)::BIGINT, FALSE\) AS checkout_claim_active,\s*status\s+FROM v2_order\s+WHERE trade_no = \$1 AND user_id = \$2\s+FOR UPDATE`
+
+var checkoutOrderColumns = []string{
+	"id", "user_id", "trade_no", "payment_id", "total_amount", "handling_amount", "checkout_result", "checkout_claim", "checkout_fingerprint", "checkout_claim_active", "status",
+}
+
+func checkoutOrderRow(tradeNo string, paymentID any, totalAmount int64, handlingAmount, checkoutResult, claim any, claimActive bool, status int64) *sqlmock.Rows {
+	return sqlmock.NewRows(checkoutOrderColumns).AddRow(
+		int64(9), int64(5), tradeNo, paymentID, totalAmount, handlingAmount, checkoutResult, claim, nil, claimActive, status,
+	)
+}
+
 func (m *recordingPaymentOrderManager) MarkOrderPaid(_ context.Context, tradeNo string, confirmation usersvc.OrderPaymentConfirmation) error {
 	m.tradeNo = tradeNo
 	m.confirmation = confirmation
@@ -912,10 +924,9 @@ func TestPaymentCheckoutRejectsNegativeOrderInsteadOfOpeningForFree(t *testing.T
 	defer db.Close()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, status\s+FROM v2_order\s+WHERE trade_no = \$1 AND user_id = \$2\s+FOR UPDATE`).
+	mock.ExpectQuery(checkoutOrderLockPattern).
 		WithArgs("TNEG", int64(5)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "trade_no", "payment_id", "total_amount", "handling_amount", "checkout_result", "status"}).
-			AddRow(int64(9), int64(5), "TNEG", nil, int64(-1), nil, nil, int64(0)))
+		WillReturnRows(checkoutOrderRow("TNEG", nil, -1, nil, nil, nil, false, 0))
 	mock.ExpectRollback()
 
 	orders := &recordingPaymentOrderManager{}
@@ -940,10 +951,9 @@ func TestPaymentCheckoutDoesNotReplaceAnExistingPaymentMethod(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, status\s+FROM v2_order\s+WHERE trade_no = \$1 AND user_id = \$2\s+FOR UPDATE`).
+	mock.ExpectQuery(checkoutOrderLockPattern).
 		WithArgs("TLOCKED", int64(5)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "trade_no", "payment_id", "total_amount", "handling_amount", "checkout_result", "status"}).
-			AddRow(int64(9), int64(5), "TLOCKED", int64(7), int64(1000), int64(100), nil, int64(0)))
+		WillReturnRows(checkoutOrderRow("TLOCKED", int64(7), 1000, int64(100), nil, nil, false, 0))
 	mock.ExpectRollback()
 
 	service := NewDBService(config.Config{}, db, &recordingPaymentOrderManager{})
@@ -962,32 +972,47 @@ func TestPaymentCheckoutReusesLockedMethodAndStoredHandlingAmount(t *testing.T) 
 		t.Fatalf("new sql mock: %v", err)
 	}
 	defer db.Close()
+	retryMethod := paymentRecord{
+		ID: 7, UUID: "epay", Payment: "EPay",
+		Config: `{"url":"https://pay.example.com","pid":"10001","key":"secret"}`,
+	}
+	retryRequest := CheckoutRequest{TradeNo: "TRETRY", MethodID: 7}
+	retryFingerprint := checkoutFingerprint(
+		retryMethod,
+		retryRequest,
+		5,
+		1100,
+		"https://app.example.com/api/v1/guest/payment/notify/EPay/epay",
+		"https://app.example.com/#/order/TRETRY",
+	)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, status\s+FROM v2_order\s+WHERE trade_no = \$1 AND user_id = \$2\s+FOR UPDATE`).
+	mock.ExpectQuery(checkoutOrderLockPattern).
 		WithArgs("TRETRY", int64(5)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "trade_no", "payment_id", "total_amount", "handling_amount", "checkout_result", "status"}).
-			AddRow(int64(9), int64(5), "TRETRY", int64(7), int64(1000), int64(100), nil, int64(0)))
+		WillReturnRows(sqlmock.NewRows(checkoutOrderColumns).AddRow(
+			int64(9), int64(5), "TRETRY", int64(7), int64(1000), int64(100), nil, "expired-claim", retryFingerprint, false, int64(0),
+		))
 	mock.ExpectQuery(`SELECT id, uuid, payment, config, notify_domain, handling_fee_fixed, handling_fee_percent::float8, enable\s+FROM v2_payment\s+WHERE id = \$1`).
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "uuid", "payment", "config", "notify_domain", "handling_fee_fixed", "handling_fee_percent", "enable"}).
 			AddRow(int64(7), "epay", "EPay", `{"url":"https://pay.example.com","pid":"10001","key":"secret"}`, nil, int64(9999), float64(99), int64(1)))
+	mock.ExpectExec(`UPDATE v2_order\s+SET payment_id = \$2,\s+handling_amount = \$3,\s+checkout_claim = \$4,\s+checkout_claim_expires_at = EXTRACT\(EPOCH FROM NOW\(\)\)::BIGINT \+ \$5,\s+checkout_fingerprint = \$6,\s+updated_at = \$7\s+WHERE id = \$1`).
+		WithArgs(int64(9), int64(7), int64(100), "claim-retry", int64(120), retryFingerprint, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT pg_try_advisory_xact_lock`).
-		WithArgs("checkout:TRETRY").
-		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_xact_lock"}).AddRow(true))
-	mock.ExpectQuery(`SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, status\s+FROM v2_order\s+WHERE trade_no = \$1 AND user_id = \$2`).
+	mock.ExpectQuery(`SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, checkout_claim, checkout_fingerprint, status\s+FROM v2_order\s+WHERE trade_no = \$1 AND user_id = \$2\s+FOR UPDATE`).
 		WithArgs("TRETRY", int64(5)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "trade_no", "payment_id", "total_amount", "handling_amount", "checkout_result", "status"}).
-			AddRow(int64(9), int64(5), "TRETRY", int64(7), int64(1000), int64(100), nil, int64(0)))
-	mock.ExpectExec(`UPDATE v2_order\s+SET checkout_result = \$2, updated_at = \$3\s+WHERE id = \$1 AND status = 0 AND payment_id = \$4 AND total_amount = \$5\s+AND COALESCE\(handling_amount, 0\) = \$6 AND checkout_result IS NULL`).
-		WithArgs(int64(9), sqlmock.AnyArg(), sqlmock.AnyArg(), int64(7), int64(1000), int64(100)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "trade_no", "payment_id", "total_amount", "handling_amount", "checkout_result", "checkout_claim", "checkout_fingerprint", "status"}).
+			AddRow(int64(9), int64(5), "TRETRY", int64(7), int64(1000), int64(100), nil, "claim-retry", retryFingerprint, int64(0)))
+	mock.ExpectExec(`UPDATE v2_order\s+SET checkout_result = \$2, checkout_claim = NULL, checkout_claim_expires_at = NULL, updated_at = \$3\s+WHERE id = \$1`).
+		WithArgs(int64(9), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	service := NewDBService(config.Config{AppURL: "https://app.example.com"}, db, &recordingPaymentOrderManager{})
-	result, err := service.Checkout(context.Background(), 5, CheckoutRequest{TradeNo: "TRETRY", MethodID: 7})
+	service.claimFn = func() (string, error) { return "claim-retry", nil }
+	result, err := service.Checkout(context.Background(), 5, retryRequest)
 	if err != nil {
 		t.Fatalf("retry checkout: %v", err)
 	}
@@ -1003,6 +1028,74 @@ func TestPaymentCheckoutReusesLockedMethodAndStoredHandlingAmount(t *testing.T) 
 	}
 }
 
+func TestPaymentCheckoutDoesNotHoldDatabaseConnectionDuringProviderRequest(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new sql mock: %v", err)
+	}
+	defer db.Close()
+	outsideMethod := paymentRecord{
+		ID: 7, UUID: "epusdt", Payment: "EpusdtPay",
+		Config: `{"epusdt_pay_url":"https://pay.example.test","epusdt_pay_apitoken":"secret"}`,
+	}
+	outsideRequest := CheckoutRequest{TradeNo: "TOUTSIDE", MethodID: 7}
+	outsideFingerprint := checkoutFingerprint(
+		outsideMethod,
+		outsideRequest,
+		5,
+		1000,
+		"https://app.example.test/api/v1/guest/payment/notify/EpusdtPay/epusdt",
+		"https://app.example.test/#/order/TOUTSIDE",
+	)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(checkoutOrderLockPattern).
+		WithArgs("TOUTSIDE", int64(5)).
+		WillReturnRows(checkoutOrderRow("TOUTSIDE", nil, 1000, nil, nil, nil, false, 0))
+	mock.ExpectQuery(`SELECT id, uuid, payment, config, notify_domain, handling_fee_fixed, handling_fee_percent::float8, enable\s+FROM v2_payment\s+WHERE id = \$1`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "uuid", "payment", "config", "notify_domain", "handling_fee_fixed", "handling_fee_percent", "enable"}).
+			AddRow(int64(7), "epusdt", "EpusdtPay", `{"epusdt_pay_url":"https://pay.example.test","epusdt_pay_apitoken":"secret"}`, nil, nil, nil, int64(1)))
+	mock.ExpectExec(`UPDATE v2_order\s+SET payment_id = \$2,\s+handling_amount = \$3,\s+checkout_claim = \$4,\s+checkout_claim_expires_at = EXTRACT\(EPOCH FROM NOW\(\)\)::BIGINT \+ \$5,\s+checkout_fingerprint = \$6,\s+updated_at = \$7\s+WHERE id = \$1`).
+		WithArgs(int64(9), int64(7), nil, "claim-outside", int64(120), outsideFingerprint, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, checkout_claim, checkout_fingerprint, status\s+FROM v2_order\s+WHERE trade_no = \$1 AND user_id = \$2\s+FOR UPDATE`).
+		WithArgs("TOUTSIDE", int64(5)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "trade_no", "payment_id", "total_amount", "handling_amount", "checkout_result", "checkout_claim", "checkout_fingerprint", "status"}).
+			AddRow(int64(9), int64(5), "TOUTSIDE", int64(7), int64(1000), nil, nil, "claim-outside", outsideFingerprint, int64(0)))
+	mock.ExpectExec(`UPDATE v2_order\s+SET checkout_result = \$2, checkout_claim = NULL, checkout_claim_expires_at = NULL, updated_at = \$3\s+WHERE id = \$1`).
+		WithArgs(int64(9), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	providerCalled := false
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	defer cancelRequest()
+	service := NewDBService(config.Config{AppURL: "https://app.example.test"}, db, &recordingPaymentOrderManager{})
+	service.claimFn = func() (string, error) { return "claim-outside", nil }
+	service.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		providerCalled = true
+		if inUse := db.Stats().InUse; inUse != 0 {
+			t.Fatalf("provider HTTP request held %d database connections", inUse)
+		}
+		cancelRequest()
+		return jsonResponse(http.StatusOK, `{"status_code":200,"data":{"payment_url":"https://pay.example.test/order/TOUTSIDE"}}`), nil
+	})}
+
+	result, err := service.Checkout(requestCtx, 5, outsideRequest)
+	if err != nil {
+		t.Fatalf("checkout: %v", err)
+	}
+	if !providerCalled || result.Data != "https://pay.example.test/order/TOUTSIDE" {
+		t.Fatalf("unexpected provider result: called=%v result=%#v", providerCalled, result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestPaymentCheckoutReturnsImmediatelyWhenCreationIsAlreadyInProgress(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -1011,19 +1104,9 @@ func TestPaymentCheckoutReturnsImmediatelyWhenCreationIsAlreadyInProgress(t *tes
 	defer db.Close()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, status\s+FROM v2_order\s+WHERE trade_no = \$1 AND user_id = \$2\s+FOR UPDATE`).
+	mock.ExpectQuery(checkoutOrderLockPattern).
 		WithArgs("TBUSY", int64(5)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "trade_no", "payment_id", "total_amount", "handling_amount", "checkout_result", "status"}).
-			AddRow(int64(9), int64(5), "TBUSY", int64(7), int64(1000), int64(100), nil, int64(0)))
-	mock.ExpectQuery(`SELECT id, uuid, payment, config, notify_domain, handling_fee_fixed, handling_fee_percent::float8, enable\s+FROM v2_payment\s+WHERE id = \$1`).
-		WithArgs(int64(7)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "uuid", "payment", "config", "notify_domain", "handling_fee_fixed", "handling_fee_percent", "enable"}).
-			AddRow(int64(7), "epay", "EPay", `{"url":"https://pay.example.com","pid":"10001","key":"secret"}`, nil, nil, nil, int64(1)))
-	mock.ExpectCommit()
-	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT pg_try_advisory_xact_lock`).
-		WithArgs("checkout:TBUSY").
-		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_xact_lock"}).AddRow(false))
+		WillReturnRows(checkoutOrderRow("TBUSY", int64(7), 1000, int64(100), nil, "active-claim", true, 0))
 	mock.ExpectRollback()
 
 	service := NewDBService(config.Config{}, db, &recordingPaymentOrderManager{})
@@ -1036,23 +1119,59 @@ func TestPaymentCheckoutReturnsImmediatelyWhenCreationIsAlreadyInProgress(t *tes
 	}
 }
 
-func TestCheckoutCreationLimiterLeavesDatabaseCapacityAvailable(t *testing.T) {
-	acquired := 0
-	defer func() {
-		for acquired > 0 {
-			releaseCheckoutCreationSlot()
-			acquired--
-		}
-	}()
-	for ; acquired < maxConcurrentCheckoutCreations; acquired++ {
-		if !tryAcquireCheckoutCreationSlot() {
-			t.Fatalf("slot %d should be available", acquired)
-		}
+func TestPaymentCheckoutRejectsChangedMerchantConfigurationAfterAttempt(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new sql mock: %v", err)
 	}
+	defer db.Close()
 
-	if tryAcquireCheckoutCreationSlot() {
-		releaseCheckoutCreationSlot()
-		t.Fatal("checkout creation beyond the safety limit should be rejected")
+	mock.ExpectBegin()
+	mock.ExpectQuery(checkoutOrderLockPattern).
+		WithArgs("TCHANGED", int64(5)).
+		WillReturnRows(sqlmock.NewRows(checkoutOrderColumns).AddRow(
+			int64(9), int64(5), "TCHANGED", int64(7), int64(1000), int64(100), nil, "expired-claim", "old-merchant-fingerprint", false, int64(0),
+		))
+	mock.ExpectQuery(`SELECT id, uuid, payment, config, notify_domain, handling_fee_fixed, handling_fee_percent::float8, enable\s+FROM v2_payment\s+WHERE id = \$1`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "uuid", "payment", "config", "notify_domain", "handling_fee_fixed", "handling_fee_percent", "enable"}).
+			AddRow(int64(7), "epay", "EPay", `{"url":"https://new-merchant.example","pid":"new","key":"new-secret"}`, nil, nil, nil, int64(1)))
+	mock.ExpectRollback()
+
+	service := NewDBService(config.Config{AppURL: "https://app.example.test"}, db, &recordingPaymentOrderManager{})
+	_, err = service.Checkout(context.Background(), 5, CheckoutRequest{TradeNo: "TCHANGED", MethodID: 7})
+	if !errors.Is(err, ErrCheckoutConfigChanged) {
+		t.Fatalf("expected changed merchant configuration to fail closed, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestPersistCheckoutResultRejectsExpiredOwnerAfterNewClaimTakesOver(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new sql mock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, checkout_claim, checkout_fingerprint, status\s+FROM v2_order\s+WHERE trade_no = \$1 AND user_id = \$2\s+FOR UPDATE`).
+		WithArgs("TFENCE", int64(5)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "trade_no", "payment_id", "total_amount", "handling_amount", "checkout_result", "checkout_claim", "checkout_fingerprint", "status"}).
+			AddRow(int64(9), int64(5), "TFENCE", int64(7), int64(1000), int64(100), nil, "new-claim", "same-fingerprint", int64(0)))
+	mock.ExpectRollback()
+
+	service := NewDBService(config.Config{}, db, &recordingPaymentOrderManager{})
+	_, err = service.persistCheckoutResult(
+		context.Background(), 5, "TFENCE", 7, 1100, 100,
+		"old-claim", "same-fingerprint", `{"version":1}`, CheckoutResult{Type: 1, Data: "https://pay.example/old"},
+	)
+	if !errors.Is(err, ErrCheckoutInProgress) {
+		t.Fatalf("expected stale checkout owner to be fenced out, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
 	}
 }
 
@@ -1068,10 +1187,9 @@ func TestPaymentCheckoutReturnsPersistedResultWithoutCreatingAnotherProviderOrde
 		t.Fatalf("encode persisted checkout: %v", err)
 	}
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, status\s+FROM v2_order\s+WHERE trade_no = \$1 AND user_id = \$2\s+FOR UPDATE`).
+	mock.ExpectQuery(checkoutOrderLockPattern).
 		WithArgs("TCACHED", int64(5)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "trade_no", "payment_id", "total_amount", "handling_amount", "checkout_result", "status"}).
-			AddRow(int64(9), int64(5), "TCACHED", int64(7), int64(1000), int64(100), persisted, int64(0)))
+		WillReturnRows(checkoutOrderRow("TCACHED", int64(7), 1000, int64(100), persisted, nil, false, 0))
 	mock.ExpectRollback()
 
 	service := NewDBService(config.Config{}, db, &recordingPaymentOrderManager{})

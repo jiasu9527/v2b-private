@@ -18,6 +18,9 @@ ALTER TABLE "v2_server_hysteria" ADD COLUMN IF NOT EXISTS "client_entry_only" SM
 ALTER TABLE "v2_server_anytls" ADD COLUMN IF NOT EXISTS "client_entry_only" SMALLINT NOT NULL DEFAULT 0;
 ALTER TABLE "v2_server_v2node" ADD COLUMN IF NOT EXISTS "client_entry_only" SMALLINT NOT NULL DEFAULT 0;
 ALTER TABLE "v2_order" ADD COLUMN IF NOT EXISTS "checkout_result" text DEFAULT NULL;
+ALTER TABLE "v2_order" ADD COLUMN IF NOT EXISTS "checkout_claim" varchar(64) DEFAULT NULL;
+ALTER TABLE "v2_order" ADD COLUMN IF NOT EXISTS "checkout_claim_expires_at" BIGINT DEFAULT NULL;
+ALTER TABLE "v2_order" ADD COLUMN IF NOT EXISTS "checkout_fingerprint" varchar(64) DEFAULT NULL;
 
 -- Recharge orders must never create withdrawable invite commission. Preserve
 -- already-settled history, but close legacy unpaid/approved recharge rewards.

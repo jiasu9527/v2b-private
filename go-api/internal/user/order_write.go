@@ -399,11 +399,11 @@ func (s *DBService) CancelOrder(ctx context.Context, userID int64, tradeNo strin
 	if order.Status != 0 {
 		return false, ErrCancelPendingOnly
 	}
-	checkoutUnlocked, err := tryLockCheckoutCreationTx(ctx, tx, tradeNo)
+	checkoutActive, err := checkoutCreationActiveTx(ctx, tx, order.ID)
 	if err != nil {
 		return false, err
 	}
-	if !checkoutUnlocked {
+	if checkoutActive {
 		return false, ErrCheckoutInProgress
 	}
 
@@ -437,12 +437,17 @@ func (s *DBService) CancelOrder(ctx context.Context, userID int64, tradeNo strin
 	return true, nil
 }
 
-func tryLockCheckoutCreationTx(ctx context.Context, tx *sql.Tx, tradeNo string) (bool, error) {
-	var acquired bool
-	if err := tx.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0::bigint))`, "checkout:"+strings.TrimSpace(tradeNo)).Scan(&acquired); err != nil {
-		return false, fmt.Errorf("lock checkout creation state: %w", err)
+func checkoutCreationActiveTx(ctx context.Context, tx *sql.Tx, orderID int64) (bool, error) {
+	var active bool
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(
+checkout_claim IS NOT NULL AND checkout_claim_expires_at > EXTRACT(EPOCH FROM NOW())::BIGINT,
+FALSE
+)
+FROM v2_order
+WHERE id = $1`, orderID).Scan(&active); err != nil {
+		return false, fmt.Errorf("query checkout creation state: %w", err)
 	}
-	return acquired, nil
+	return active, nil
 }
 
 func (s *DBService) AssignAdminOrder(ctx context.Context, req AdminAssignOrderRequest) (string, error) {

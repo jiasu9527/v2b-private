@@ -2,7 +2,10 @@ package payment
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,19 +27,13 @@ var (
 	ErrPaymentMethodUnavailable = errors.New("payment method unavailable")
 	ErrPaymentMethodLocked      = errors.New("payment method is already locked for this order")
 	ErrCheckoutInProgress       = errors.New("payment checkout is already being created")
-	ErrCheckoutBusy             = errors.New("too many payment checkouts are being created")
+	ErrCheckoutConfigChanged    = errors.New("payment checkout configuration changed after the first attempt")
 	ErrUnsupportedGateway       = errors.New("payment gateway unsupported")
 	ErrVerifyFailed             = errors.New("payment verify failed")
 	ErrRequestFailed            = errors.New("payment request failed")
 )
 
-// Provider checkout creation may spend tens of seconds across exchange-rate
-// and payment APIs. Bound the number of transactions that can hold a database
-// connection during that external work so unrelated application queries keep
-// enough of the 64-connection pool available under checkout floods.
-const maxConcurrentCheckoutCreations = 8
-
-var checkoutCreationSlots = make(chan struct{}, maxConcurrentCheckoutCreations)
+const checkoutClaimLease = 2 * time.Minute
 
 type CheckoutRequest struct {
 	TradeNo        string
@@ -78,6 +75,7 @@ type DBService struct {
 	db      *sql.DB
 	client  *http.Client
 	orders  orderManager
+	claimFn func() (string, error)
 }
 
 type paymentRecord struct {
@@ -99,6 +97,9 @@ type orderRecord struct {
 	TotalAmount    int64
 	HandlingAmount sql.NullInt64
 	CheckoutResult sql.NullString
+	CheckoutClaim  sql.NullString
+	Fingerprint    sql.NullString
+	ClaimActive    bool
 	Status         int64
 }
 
@@ -154,11 +155,6 @@ func (s *DBService) Checkout(ctx context.Context, userID int64, req CheckoutRequ
 	if req.TradeNo == "" {
 		return CheckoutResult{}, ErrInvalidParameter
 	}
-	if !tryAcquireCheckoutCreationSlot() {
-		return CheckoutResult{}, ErrCheckoutBusy
-	}
-	defer releaseCheckoutCreationSlot()
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return CheckoutResult{}, fmt.Errorf("begin checkout transaction: %w", err)
@@ -216,6 +212,10 @@ func (s *DBService) Checkout(ctx context.Context, userID int64, req CheckoutRequ
 		_ = tx.Rollback()
 		return result, err
 	}
+	if order.ClaimActive {
+		_ = tx.Rollback()
+		return CheckoutResult{}, ErrCheckoutInProgress
+	}
 
 	paymentMethod, ok, err := s.loadPaymentMethodTx(ctx, tx, req.MethodID)
 	if err != nil {
@@ -236,85 +236,67 @@ func (s *DBService) Checkout(ctx context.Context, userID int64, req CheckoutRequ
 			}
 			handlingAmount = int64(float64(order.TotalAmount)*(paymentMethod.HandlingFeePercent.Float64/100) + float64(paymentMethod.HandlingFeeFixed.Int64) + 0.5)
 		}
+	}
+	if handlingAmount < 0 || order.TotalAmount > math.MaxInt64-handlingAmount {
+		_ = tx.Rollback()
+		return CheckoutResult{}, ErrInvalidParameter
+	}
+	total = order.TotalAmount + handlingAmount
+	if total <= 0 {
+		_ = tx.Rollback()
+		return CheckoutResult{}, ErrInvalidParameter
+	}
+	notifyURL := s.notifyURL(paymentMethod)
+	returnURL := s.returnURL(req.RequestBaseURL, req.TradeNo)
+	fingerprint := checkoutFingerprint(paymentMethod, req, userID, total, notifyURL, returnURL)
+	if order.Fingerprint.Valid && strings.TrimSpace(order.Fingerprint.String) != "" && order.Fingerprint.String != fingerprint {
+		_ = tx.Rollback()
+		return CheckoutResult{}, ErrCheckoutConfigChanged
+	}
 
-		if _, err := tx.ExecContext(ctx, `UPDATE v2_order SET payment_id = $2, handling_amount = $3, updated_at = $4 WHERE id = $1`,
-			order.ID,
-			paymentMethod.ID,
-			nullInt64Value(handlingAmount),
-			time.Now().Unix(),
-		); err != nil {
-			_ = tx.Rollback()
-			return CheckoutResult{}, fmt.Errorf("update order payment method: %w", err)
-		}
-		if handlingAmount < 0 || order.TotalAmount > math.MaxInt64-handlingAmount {
-			_ = tx.Rollback()
-			return CheckoutResult{}, ErrInvalidParameter
-		}
-		total = order.TotalAmount + handlingAmount
-		if total <= 0 {
-			_ = tx.Rollback()
-			return CheckoutResult{}, ErrInvalidParameter
-		}
+	claim, err := s.newCheckoutClaim()
+	if err != nil {
+		_ = tx.Rollback()
+		return CheckoutResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE v2_order
+SET payment_id = $2,
+    handling_amount = $3,
+    checkout_claim = $4,
+    checkout_claim_expires_at = EXTRACT(EPOCH FROM NOW())::BIGINT + $5,
+    checkout_fingerprint = $6,
+    updated_at = $7
+WHERE id = $1`,
+		order.ID,
+		paymentMethod.ID,
+		nullInt64Value(handlingAmount),
+		claim,
+		int64(checkoutClaimLease/time.Second),
+		fingerprint,
+		time.Now().Unix(),
+	); err != nil {
+		_ = tx.Rollback()
+		return CheckoutResult{}, fmt.Errorf("claim checkout creation: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return CheckoutResult{}, fmt.Errorf("commit checkout payment selection: %w", err)
+		return CheckoutResult{}, fmt.Errorf("commit checkout creation claim: %w", err)
 	}
-	return s.createCheckoutOnce(ctx, userID, req, paymentMethod, total, handlingAmount)
+	return s.createCheckoutOnce(ctx, userID, req, paymentMethod, total, handlingAmount, claim, fingerprint, notifyURL, returnURL)
 }
 
-func (s *DBService) createCheckoutOnce(ctx context.Context, userID int64, req CheckoutRequest, paymentMethod paymentRecord, total, handlingAmount int64) (CheckoutResult, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return CheckoutResult{}, fmt.Errorf("begin checkout creation transaction: %w", err)
-	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
-
-	var acquired bool
-	if err := tx.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0::bigint))`, "checkout:"+req.TradeNo).Scan(&acquired); err != nil {
-		return CheckoutResult{}, fmt.Errorf("lock checkout creation: %w", err)
-	}
-	if !acquired {
-		return CheckoutResult{}, ErrCheckoutInProgress
-	}
-
-	var current orderRecord
-	err = tx.QueryRowContext(ctx, `SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, status
-FROM v2_order
-WHERE trade_no = $1 AND user_id = $2`, req.TradeNo, userID).Scan(
-		&current.ID,
-		&current.UserID,
-		&current.TradeNo,
-		&current.PaymentID,
-		&current.TotalAmount,
-		&current.HandlingAmount,
-		&current.CheckoutResult,
-		&current.Status,
-	)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return CheckoutResult{}, ErrOrderPaidOrMissing
-		}
-		return CheckoutResult{}, fmt.Errorf("reload checkout order: %w", err)
-	}
-	if current.Status != 0 || !current.PaymentID.Valid || current.PaymentID.Int64 != paymentMethod.ID || current.TotalAmount != total-handlingAmount || nullablePaymentInt64(current.HandlingAmount) != handlingAmount {
-		return CheckoutResult{}, ErrOrderPaidOrMissing
-	}
-	if current.CheckoutResult.Valid && strings.TrimSpace(current.CheckoutResult.String) != "" {
-		return decodeCheckoutSnapshot(current.CheckoutResult.String, paymentMethod.ID, total)
-	}
-
+func (s *DBService) createCheckoutOnce(ctx context.Context, userID int64, req CheckoutRequest, paymentMethod paymentRecord, total, handlingAmount int64, claim, fingerprint, notifyURL, returnURL string) (CheckoutResult, error) {
 	gatewayConfig, err := parseGatewayConfig(paymentMethod.Config)
 	if err != nil {
+		s.releaseCheckoutClaim(userID, req.TradeNo, claim)
 		return CheckoutResult{}, err
 	}
 
 	userEmail := ""
 	if needsUserEmail(paymentMethod.Payment) {
-		userEmail, err = findUserEmailTx(ctx, tx, userID)
+		userEmail, err = s.findUserEmail(ctx, userID)
 		if err != nil {
+			s.releaseCheckoutClaim(userID, req.TradeNo, claim)
 			return CheckoutResult{}, err
 		}
 	}
@@ -322,10 +304,10 @@ WHERE trade_no = $1 AND user_id = $2`, req.TradeNo, userID).Scan(
 	result, err := buildGatewayCheckout(ctx, s.client, paymentMethod.Payment, gatewayConfig, gatewayOrder{
 		UserID:    userID,
 		UserEmail: userEmail,
-		TradeNo:   current.TradeNo,
+		TradeNo:   req.TradeNo,
 		Total:     total,
-		NotifyURL: s.notifyURL(paymentMethod),
-		ReturnURL: s.returnURL(req.RequestBaseURL, current.TradeNo),
+		NotifyURL: notifyURL,
+		ReturnURL: returnURL,
 		Token:     strings.TrimSpace(req.Token),
 	})
 	if err != nil {
@@ -336,56 +318,123 @@ WHERE trade_no = $1 AND user_id = $2`, req.TradeNo, userID).Scan(
 	if err != nil {
 		return CheckoutResult{}, err
 	}
-	update, err := tx.ExecContext(ctx, `UPDATE v2_order
-SET checkout_result = $2, updated_at = $3
-WHERE id = $1 AND status = 0 AND payment_id = $4 AND total_amount = $5
-  AND COALESCE(handling_amount, 0) = $6 AND checkout_result IS NULL`,
-		current.ID,
-		encoded,
-		time.Now().Unix(),
-		paymentMethod.ID,
-		current.TotalAmount,
-		handlingAmount,
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return s.persistCheckoutResult(persistCtx, userID, req.TradeNo, paymentMethod.ID, total, handlingAmount, claim, fingerprint, encoded, result)
+}
+
+func checkoutFingerprint(paymentMethod paymentRecord, req CheckoutRequest, userID, total int64, notifyURL, returnURL string) string {
+	tokenHash := sha256.Sum256([]byte(strings.TrimSpace(req.Token)))
+	payload := struct {
+		PaymentID int64  `json:"payment_id"`
+		Gateway   string `json:"gateway"`
+		Config    string `json:"config"`
+		UserID    int64  `json:"user_id"`
+		TradeNo   string `json:"trade_no"`
+		Total     int64  `json:"total"`
+		NotifyURL string `json:"notify_url"`
+		ReturnURL string `json:"return_url"`
+		TokenHash string `json:"token_hash"`
+	}{
+		PaymentID: paymentMethod.ID,
+		Gateway:   strings.TrimSpace(paymentMethod.Payment),
+		Config:    strings.TrimSpace(paymentMethod.Config),
+		UserID:    userID,
+		TradeNo:   strings.TrimSpace(req.TradeNo),
+		Total:     total,
+		NotifyURL: strings.TrimSpace(notifyURL),
+		ReturnURL: strings.TrimSpace(returnURL),
+		TokenHash: hex.EncodeToString(tokenHash[:]),
+	}
+	encoded, _ := json.Marshal(payload)
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
+func (s *DBService) newCheckoutClaim() (string, error) {
+	if s.claimFn != nil {
+		return s.claimFn()
+	}
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("generate checkout claim: %w", err)
+	}
+	return hex.EncodeToString(raw), nil
+}
+
+func (s *DBService) releaseCheckoutClaim(userID int64, tradeNo, claim string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, _ = s.db.ExecContext(ctx, `UPDATE v2_order
+SET checkout_claim = NULL,
+    checkout_claim_expires_at = NULL,
+    checkout_fingerprint = NULL,
+    updated_at = $4
+WHERE user_id = $1 AND trade_no = $2 AND checkout_claim = $3
+  AND status = 0 AND checkout_result IS NULL`, userID, tradeNo, claim, time.Now().Unix())
+}
+
+func (s *DBService) persistCheckoutResult(ctx context.Context, userID int64, tradeNo string, paymentID, total, handlingAmount int64, claim, fingerprint, encoded string, result CheckoutResult) (CheckoutResult, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return CheckoutResult{}, fmt.Errorf("begin checkout result transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	var current orderRecord
+	err = tx.QueryRowContext(ctx, `SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, checkout_claim, checkout_fingerprint, status
+FROM v2_order
+WHERE trade_no = $1 AND user_id = $2
+FOR UPDATE`, tradeNo, userID).Scan(
+		&current.ID,
+		&current.UserID,
+		&current.TradeNo,
+		&current.PaymentID,
+		&current.TotalAmount,
+		&current.HandlingAmount,
+		&current.CheckoutResult,
+		&current.CheckoutClaim,
+		&current.Fingerprint,
+		&current.Status,
 	)
 	if err != nil {
-		return CheckoutResult{}, fmt.Errorf("persist checkout result: %w", err)
-	}
-	affected, err := update.RowsAffected()
-	if err != nil {
-		return CheckoutResult{}, fmt.Errorf("count persisted checkout result: %w", err)
-	}
-	if affected != 1 {
-		// A provider can synchronously deliver its signed callback before the
-		// checkout-create response reaches us. In that case the order is already
-		// safely paid and the status guard above intentionally prevents writing a
-		// now-useless payment link. Return the provider result instead of showing a
-		// false checkout failure to the user.
-		var status int64
-		if queryErr := tx.QueryRowContext(ctx, `SELECT status FROM v2_order WHERE id = $1`, current.ID).Scan(&status); queryErr == nil && (status == 1 || status == 3 || status == 4) {
-			if commitErr := tx.Commit(); commitErr != nil {
-				return CheckoutResult{}, fmt.Errorf("commit completed checkout observation: %w", commitErr)
-			}
-			return result, nil
+		if errors.Is(err, sql.ErrNoRows) {
+			return CheckoutResult{}, ErrOrderPaidOrMissing
 		}
+		return CheckoutResult{}, fmt.Errorf("lock checkout result order: %w", err)
+	}
+	if current.CheckoutResult.Valid && strings.TrimSpace(current.CheckoutResult.String) != "" {
+		return decodeCheckoutSnapshot(current.CheckoutResult.String, paymentID, total)
+	}
+	if current.Status == 1 || current.Status == 3 || current.Status == 4 {
+		if current.CheckoutClaim.Valid && current.CheckoutClaim.String == claim {
+			if _, err := tx.ExecContext(ctx, `UPDATE v2_order SET checkout_claim = NULL, checkout_claim_expires_at = NULL WHERE id = $1`, current.ID); err != nil {
+				return CheckoutResult{}, fmt.Errorf("clear completed checkout claim: %w", err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return CheckoutResult{}, fmt.Errorf("commit completed checkout observation: %w", err)
+		}
+		return result, nil
+	}
+	if current.Status != 0 || !current.PaymentID.Valid || current.PaymentID.Int64 != paymentID || current.TotalAmount != total-handlingAmount || nullablePaymentInt64(current.HandlingAmount) != handlingAmount || !current.Fingerprint.Valid || current.Fingerprint.String != fingerprint {
 		return CheckoutResult{}, ErrOrderPaidOrMissing
+	}
+	if !current.CheckoutClaim.Valid || current.CheckoutClaim.String != claim {
+		return CheckoutResult{}, ErrCheckoutInProgress
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE v2_order
+SET checkout_result = $2, checkout_claim = NULL, checkout_claim_expires_at = NULL, updated_at = $3
+WHERE id = $1`, current.ID, encoded, time.Now().Unix()); err != nil {
+		return CheckoutResult{}, fmt.Errorf("persist checkout result: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return CheckoutResult{}, fmt.Errorf("commit checkout result: %w", err)
 	}
 	return result, nil
-}
-
-func tryAcquireCheckoutCreationSlot() bool {
-	select {
-	case checkoutCreationSlots <- struct{}{}:
-		return true
-	default:
-		return false
-	}
-}
-
-func releaseCheckoutCreationSlot() {
-	<-checkoutCreationSlots
 }
 
 func (s *DBService) Notify(ctx context.Context, method, uuid string, req NotifyRequest) (string, error) {
@@ -446,7 +495,11 @@ func (s *DBService) Notify(ctx context.Context, method, uuid string, req NotifyR
 
 func (s *DBService) lockPendingOrderTx(ctx context.Context, tx *sql.Tx, userID int64, tradeNo string) (orderRecord, bool, error) {
 	var order orderRecord
-	err := tx.QueryRowContext(ctx, `SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result, status
+	err := tx.QueryRowContext(ctx, `SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result,
+	       checkout_claim,
+	       checkout_fingerprint,
+	       COALESCE(checkout_claim IS NOT NULL AND checkout_claim_expires_at > EXTRACT(EPOCH FROM NOW())::BIGINT, FALSE) AS checkout_claim_active,
+       status
 FROM v2_order
 WHERE trade_no = $1 AND user_id = $2
 FOR UPDATE`, tradeNo, userID).Scan(
@@ -457,6 +510,9 @@ FOR UPDATE`, tradeNo, userID).Scan(
 		&order.TotalAmount,
 		&order.HandlingAmount,
 		&order.CheckoutResult,
+		&order.CheckoutClaim,
+		&order.Fingerprint,
+		&order.ClaimActive,
 		&order.Status,
 	)
 	if err != nil {
@@ -625,9 +681,9 @@ func normalizePublicBase(raw string) string {
 	}
 }
 
-func findUserEmailTx(ctx context.Context, tx *sql.Tx, userID int64) (string, error) {
+func (s *DBService) findUserEmail(ctx context.Context, userID int64) (string, error) {
 	var email string
-	if err := tx.QueryRowContext(ctx, `SELECT email FROM v2_user WHERE id = $1 LIMIT 1`, userID).Scan(&email); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT email FROM v2_user WHERE id = $1 LIMIT 1`, userID).Scan(&email); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", nil
 		}

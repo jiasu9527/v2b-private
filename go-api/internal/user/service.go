@@ -636,6 +636,9 @@ func (s *DBService) Orders(ctx context.Context, userID int64, status *int64) ([]
 		delete(order, "id")
 		delete(order, "user_id")
 		delete(order, "checkout_result")
+		delete(order, "checkout_claim")
+		delete(order, "checkout_claim_expires_at")
+		delete(order, "checkout_fingerprint")
 	}
 
 	return orders, nil
@@ -654,6 +657,9 @@ func (s *DBService) OrderDetail(ctx context.Context, userID int64, tradeNo strin
 		return nil, ErrOrderPaidOrMissing
 	}
 	delete(order, "checkout_result")
+	delete(order, "checkout_claim")
+	delete(order, "checkout_claim_expires_at")
+	delete(order, "checkout_fingerprint")
 
 	if mapInt64(order["plan_id"]) == 0 {
 		order["plan"] = map[string]any{
@@ -687,6 +693,9 @@ func (s *DBService) OrderDetail(ctx context.Context, userID int64, tradeNo strin
 		}
 		for _, surplusOrder := range surplusOrders {
 			delete(surplusOrder, "checkout_result")
+			delete(surplusOrder, "checkout_claim")
+			delete(surplusOrder, "checkout_claim_expires_at")
+			delete(surplusOrder, "checkout_fingerprint")
 		}
 		order["surplus_orders"] = surplusOrders
 	}

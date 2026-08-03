@@ -364,11 +364,11 @@ func (s *DBService) handleQueuedOrder(ctx context.Context, tradeNo string) error
 
 	switch {
 	case shouldAutoCancelOrder(order.Status, order.CreatedAt, time.Now().Unix()):
-		checkoutUnlocked, lockErr := tryLockCheckoutCreationTx(ctx, tx, tradeNo)
+		checkoutActive, lockErr := checkoutCreationActiveTx(ctx, tx, order.ID)
 		if lockErr != nil {
 			return lockErr
 		}
-		if !checkoutUnlocked {
+		if checkoutActive {
 			return nil
 		}
 		order.Status = 2

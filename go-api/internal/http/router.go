@@ -6711,8 +6711,8 @@ func handlePaymentError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, payment.ErrCheckoutInProgress):
 		writeJSON(w, http.StatusConflict, map[string]any{"message": "Payment checkout is being created. Please wait and retry."})
 		return true
-	case errors.Is(err, payment.ErrCheckoutBusy):
-		writeJSON(w, http.StatusTooManyRequests, map[string]any{"message": "Too many payment checkouts are being created. Please retry shortly."})
+	case errors.Is(err, payment.ErrCheckoutConfigChanged):
+		writeJSON(w, http.StatusConflict, map[string]any{"message": "Payment configuration changed after this order's first checkout attempt. Cancel it and create a new order."})
 		return true
 	case errors.Is(err, payment.ErrUnsupportedGateway):
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "Payment gateway is unsupported"})

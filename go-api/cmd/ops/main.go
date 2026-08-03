@@ -149,18 +149,14 @@ func runUpdate(args []string) error {
 }
 
 func verifyRequiredUpdateSchema(ctx context.Context, db *sql.DB) error {
-	var checkoutResultExists bool
-	if err := db.QueryRowContext(ctx, `SELECT EXISTS (
-SELECT 1
-FROM information_schema.columns
-WHERE table_schema = ANY (current_schemas(false))
-  AND table_name = 'v2_order'
-  AND column_name = 'checkout_result'
-)`).Scan(&checkoutResultExists); err != nil {
-		return fmt.Errorf("verify required v2_order.checkout_result column: %w", err)
-	}
-	if !checkoutResultExists {
-		return fmt.Errorf("required database migration is incomplete: v2_order.checkout_result is missing")
+	for _, column := range []string{"checkout_result", "checkout_claim", "checkout_claim_expires_at", "checkout_fingerprint"} {
+		exists, err := postgresColumnExists(ctx, db, "v2_order", column)
+		if err != nil {
+			return fmt.Errorf("verify required v2_order.%s column: %w", column, err)
+		}
+		if !exists {
+			return fmt.Errorf("required database migration is incomplete: v2_order.%s is missing", column)
+		}
 	}
 	return nil
 }

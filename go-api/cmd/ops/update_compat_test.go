@@ -232,7 +232,8 @@ func TestVerifyRequiredUpdateSchemaRejectsMissingCheckoutResult(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1\s*FROM information_schema.columns\s*WHERE table_schema = ANY \(current_schemas\(false\)\)\s*AND table_name = 'v2_order'\s*AND column_name = 'checkout_result'`).
+	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+		WithArgs("v2_order", "checkout_result").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 
 	err = verifyRequiredUpdateSchema(context.Background(), db)
@@ -253,8 +254,11 @@ func TestVerifyRequiredUpdateSchemaAcceptsCheckoutResult(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1\s*FROM information_schema.columns\s*WHERE table_schema = ANY \(current_schemas\(false\)\)\s*AND table_name = 'v2_order'\s*AND column_name = 'checkout_result'`).
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	for _, column := range []string{"checkout_result", "checkout_claim", "checkout_claim_expires_at", "checkout_fingerprint"} {
+		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+			WithArgs("v2_order", column).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	}
 
 	if err := verifyRequiredUpdateSchema(context.Background(), db); err != nil {
 		t.Fatalf("verify required schema: %v", err)
