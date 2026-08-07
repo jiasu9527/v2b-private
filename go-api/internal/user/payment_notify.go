@@ -4,12 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
 )
 
 const unknownPaymentChannel = "余额支付 / 未知通道"
+
+// Admin statistics and Telegram delivery are best-effort side effects. Keep
+// them off the provider callback response path and bound the number of helper
+// goroutines if the shared queue is saturated. This limit never delays or
+// rejects payment settlement itself.
+var orderPaidNotificationSlots = make(chan struct{}, 8)
 
 type adminPaymentNotification struct {
 	TradeNo     string
@@ -36,6 +43,27 @@ func (s *DBService) notifyOrderPaidAdmins(ctx context.Context, notice adminPayme
 
 	message := s.buildOrderPaidAdminMessage(ctx, notice)
 	return s.notifier.NotifyAdmins(ctx, message, false)
+}
+
+func (s *DBService) dispatchOrderPaidAdminNotification(notice adminPaymentNotification) {
+	if s == nil || s.notifier == nil {
+		return
+	}
+	select {
+	case orderPaidNotificationSlots <- struct{}{}:
+	default:
+		log.Printf("payment admin notification skipped: queue saturated trade_no=%q", strings.TrimSpace(notice.TradeNo))
+		return
+	}
+
+	go func() {
+		defer func() { <-orderPaidNotificationSlots }()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := s.notifyOrderPaidAdmins(ctx, notice); err != nil {
+			log.Printf("payment admin notification failed trade_no=%q err=%q", strings.TrimSpace(notice.TradeNo), err.Error())
+		}
+	}()
 }
 
 func (s *DBService) buildOrderPaidAdminMessage(ctx context.Context, notice adminPaymentNotification) string {

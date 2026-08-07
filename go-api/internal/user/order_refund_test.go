@@ -16,7 +16,10 @@ func TestRefundManagedOrderRestoresPreviousSubscription(t *testing.T) {
 	}
 	defer db.Close()
 
-	now := time.Now()
+	// Keep the monthly round-trip away from month-end normalization (for
+	// example, August 31 + one month). The behavior under test is restoration,
+	// not Go's calendar overflow rules, and must not depend on the CI date.
+	now := time.Date(2026, time.June, 15, 12, 0, 0, 0, time.Local)
 	targetPaidAt := now.AddDate(0, 0, -5).Unix()
 	expectedExpiredAt := now.AddDate(0, 0, 25).Unix()
 	currentExpiredAt := time.Unix(expectedExpiredAt, 0).AddDate(0, 1, 0).Unix()

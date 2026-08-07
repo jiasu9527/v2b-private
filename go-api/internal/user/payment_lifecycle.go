@@ -63,7 +63,7 @@ func (s *DBService) MarkOrderPaid(ctx context.Context, tradeNo string, confirmat
 			}
 			return nil
 		}
-		return ErrPaymentConfirmationMismatch
+		return fmt.Errorf("%w: completed order callback differs (status=%d)", ErrPaymentConfirmationMismatch, order.Status)
 	case 2:
 		if !confirmation.AllowCancelled {
 			recoverable, err := s.canRecoverCancelledOrderTx(ctx, tx, tradeNo)
@@ -71,7 +71,7 @@ func (s *DBService) MarkOrderPaid(ctx context.Context, tradeNo string, confirmat
 				return err
 			}
 			if !recoverable {
-				return ErrOrderPaidOrMissing
+				return fmt.Errorf("%w: cancelled order recovery window expired", ErrOrderPaidOrMissing)
 			}
 		}
 		if order.BalanceAmount.Valid && order.BalanceAmount.Int64 > 0 {
@@ -81,7 +81,7 @@ func (s *DBService) MarkOrderPaid(ctx context.Context, tradeNo string, confirmat
 			}
 			userRow.Balance -= order.BalanceAmount.Int64
 			if err := s.updateUserBalanceTx(ctx, tx, order.UserID, userRow.Balance); err != nil {
-				return err
+				return fmt.Errorf("recover cancelled payment balance refund: %w", err)
 			}
 		}
 	case 0:
@@ -102,7 +102,7 @@ func (s *DBService) MarkOrderPaid(ctx context.Context, tradeNo string, confirmat
 		return fmt.Errorf("commit pay order transaction: %w", err)
 	}
 
-	_ = s.notifyOrderPaidAdmins(ctx, adminPaymentNotification{
+	s.dispatchOrderPaidAdminNotification(adminPaymentNotification{
 		TradeNo:     order.TradeNo,
 		TotalAmount: order.TotalAmount,
 		PaymentID:   order.PaymentID,
@@ -114,11 +114,11 @@ func (s *DBService) MarkOrderPaid(ctx context.Context, tradeNo string, confirmat
 func validateOrderPaymentConfirmation(order orderRecord, confirmation OrderPaymentConfirmation) error {
 	handlingAmount := nullableInt64(order.HandlingAmount)
 	if !validOrderAmountState(order) {
-		return ErrPaymentConfirmationMismatch
+		return fmt.Errorf("%w: stored order amount state is invalid", ErrPaymentConfirmationMismatch)
 	}
 	if confirmation.Manual {
 		if confirmation.PaymentID != nil || confirmation.Amount != nil {
-			return ErrPaymentConfirmationMismatch
+			return fmt.Errorf("%w: manual confirmation contains gateway evidence", ErrPaymentConfirmationMismatch)
 		}
 		return nil
 	}
@@ -127,16 +127,22 @@ func validateOrderPaymentConfirmation(order orderRecord, confirmation OrderPayme
 		// free order. Do not let a future internal caller accidentally open a
 		// positive order by omitting gateway evidence.
 		if confirmation.Amount != nil || order.TotalAmount != 0 || handlingAmount != 0 {
-			return ErrPaymentConfirmationMismatch
+			return fmt.Errorf("%w: positive order is missing gateway evidence", ErrPaymentConfirmationMismatch)
 		}
 		return nil
 	}
 
-	if *confirmation.PaymentID <= 0 || confirmation.Amount == nil || *confirmation.Amount <= 0 || order.TotalAmount <= 0 || !order.PaymentID.Valid || order.PaymentID.Int64 != *confirmation.PaymentID {
-		return ErrPaymentConfirmationMismatch
+	if *confirmation.PaymentID <= 0 || confirmation.Amount == nil || *confirmation.Amount <= 0 || order.TotalAmount <= 0 {
+		return fmt.Errorf("%w: gateway confirmation amount or payment ID is invalid", ErrPaymentConfirmationMismatch)
+	}
+	if !order.PaymentID.Valid {
+		return fmt.Errorf("%w: order has no selected payment method", ErrPaymentConfirmationMismatch)
+	}
+	if order.PaymentID.Int64 != *confirmation.PaymentID {
+		return fmt.Errorf("%w: payment method differs (order=%d callback=%d)", ErrPaymentConfirmationMismatch, order.PaymentID.Int64, *confirmation.PaymentID)
 	}
 	if order.TotalAmount+handlingAmount != *confirmation.Amount {
-		return ErrPaymentConfirmationMismatch
+		return fmt.Errorf("%w: amount differs (order=%d callback=%d)", ErrPaymentConfirmationMismatch, order.TotalAmount+handlingAmount, *confirmation.Amount)
 	}
 	return nil
 }

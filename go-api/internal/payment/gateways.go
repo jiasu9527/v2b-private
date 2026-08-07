@@ -730,44 +730,54 @@ func stripeConfirmationAmount(object map[string]any, amountField string) (*int64
 	return &orderAmount, nil
 }
 
+func callbackVerifyError(reason string) error {
+	return fmt.Errorf("%w: %s", ErrVerifyFailed, strings.TrimSpace(reason))
+}
+
 func verifyEPayNotify(cfg map[string]string, req NotifyRequest, requireType bool) (notifyResult, error) {
 	if strings.TrimSpace(req.Params["trade_status"]) != "TRADE_SUCCESS" {
-		return notifyResult{}, ErrVerifyFailed
+		return notifyResult{}, callbackVerifyError("epay status is not TRADE_SUCCESS")
 	}
 	if !strings.EqualFold(strings.TrimSpace(req.Params["sign_type"]), "MD5") {
-		return notifyResult{}, ErrVerifyFailed
+		return notifyResult{}, callbackVerifyError("epay sign_type is not MD5")
 	}
 	expectedPID := configValue(cfg, "pid")
 	key := configValue(cfg, "key")
-	if expectedPID == "" || key == "" || strings.TrimSpace(req.Params["pid"]) != expectedPID {
-		return notifyResult{}, ErrVerifyFailed
+	if expectedPID == "" || key == "" {
+		return notifyResult{}, callbackVerifyError("epay merchant configuration is incomplete")
+	}
+	if strings.TrimSpace(req.Params["pid"]) != expectedPID {
+		return notifyResult{}, callbackVerifyError("epay merchant pid mismatch")
 	}
 	if requireType {
 		expectedType := strings.ToLower(configValue(cfg, "type"))
-		if (expectedType != "alipay" && expectedType != "wxpay") || !strings.EqualFold(strings.TrimSpace(req.Params["type"]), expectedType) {
-			return notifyResult{}, ErrVerifyFailed
+		if expectedType != "alipay" && expectedType != "wxpay" {
+			return notifyResult{}, callbackVerifyError("epaypro configured type is invalid")
+		}
+		if !strings.EqualFold(strings.TrimSpace(req.Params["type"]), expectedType) {
+			return notifyResult{}, callbackVerifyError("epaypro callback type mismatch")
 		}
 	}
 	tradeNo := strings.TrimSpace(req.Params["out_trade_no"])
 	callbackNo := strings.TrimSpace(req.Params["trade_no"])
 	if tradeNo == "" || callbackNo == "" {
-		return notifyResult{}, ErrVerifyFailed
+		return notifyResult{}, callbackVerifyError("epay order or provider transaction number is missing")
 	}
 	amount, err := parsePositiveMoneyCents(req.Params["money"])
 	if err != nil {
-		return notifyResult{}, ErrVerifyFailed
+		return notifyResult{}, callbackVerifyError("epay money is not a positive two-decimal amount")
 	}
 
 	sign := strings.TrimSpace(req.Params["sign"])
 	if sign == "" {
-		return notifyResult{}, ErrVerifyFailed
+		return notifyResult{}, callbackVerifyError("epay signature is missing")
 	}
 	params := cloneStringMap(req.Params)
 	delete(params, "sign")
 	delete(params, "sign_type")
 	expectedSign := md5Hex(decodedQuery(params) + key)
 	if !constantTimeEqualFold(sign, expectedSign) {
-		return notifyResult{}, ErrVerifyFailed
+		return notifyResult{}, callbackVerifyError("epay signature mismatch")
 	}
 	return notifyResult{
 		TradeNo:    tradeNo,
@@ -857,16 +867,19 @@ func parsePositiveInteger(raw string) (int64, error) {
 
 func verifyEpusdtNotify(cfg map[string]string, req NotifyRequest) (notifyResult, error) {
 	if strings.TrimSpace(req.Params["status"]) != "2" {
-		return notifyResult{}, ErrVerifyFailed
+		return notifyResult{}, callbackVerifyError("epusdt status is not paid")
 	}
-	if configValue(cfg, "epusdt_pay_apitoken") == "" || !constantTimeEqualFold(req.Params["signature"], epusdtSign(cfg, stringMapToAny(req.Params))) {
-		return notifyResult{}, ErrVerifyFailed
+	if configValue(cfg, "epusdt_pay_apitoken") == "" {
+		return notifyResult{}, callbackVerifyError("epusdt API token is missing")
+	}
+	if !constantTimeEqualFold(req.Params["signature"], epusdtSign(cfg, stringMapToAny(req.Params))) {
+		return notifyResult{}, callbackVerifyError("epusdt signature mismatch")
 	}
 	tradeNo := strings.TrimSpace(req.Params["order_id"])
 	callbackNo := strings.TrimSpace(req.Params["trade_id"])
 	amount, err := parsePositiveMoneyCentsAllowTrailingZeros(req.Params["amount"])
 	if tradeNo == "" || callbackNo == "" || err != nil {
-		return notifyResult{}, ErrVerifyFailed
+		return notifyResult{}, callbackVerifyError("epusdt order, transaction number, or amount is invalid")
 	}
 	return notifyResult{
 		TradeNo:      tradeNo,
@@ -880,21 +893,21 @@ func verifyBEasyNotify(cfg map[string]string, req NotifyRequest) (notifyResult, 
 	sign := strings.TrimSpace(req.Params["signature"])
 	token := configValue(cfg, "bepusdt_apitoken")
 	if sign == "" || token == "" {
-		return notifyResult{}, ErrVerifyFailed
+		return notifyResult{}, callbackVerifyError("beasy signature or API token is missing")
 	}
 	params := cloneStringMap(req.Params)
 	delete(params, "signature")
 	if !constantTimeEqualFold(sign, md5Hex(decodedQuery(params)+token)) {
-		return notifyResult{}, ErrVerifyFailed
+		return notifyResult{}, callbackVerifyError("beasy signature mismatch")
 	}
 	if strings.TrimSpace(req.Params["status"]) != "2" {
-		return notifyResult{}, ErrVerifyFailed
+		return notifyResult{}, callbackVerifyError("beasy status is not paid")
 	}
 	tradeNo := strings.TrimSpace(req.Params["order_id"])
 	callbackNo := strings.TrimSpace(req.Params["trade_id"])
 	amount, err := parsePositiveMoneyCentsAllowTrailingZeros(req.Params["amount"])
 	if tradeNo == "" || callbackNo == "" || err != nil {
-		return notifyResult{}, ErrVerifyFailed
+		return notifyResult{}, callbackVerifyError("beasy order, transaction number, or amount is invalid")
 	}
 	return notifyResult{
 		TradeNo:      tradeNo,
@@ -908,18 +921,18 @@ func verifyMGateNotify(cfg map[string]string, req NotifyRequest) (notifyResult, 
 	sign := strings.TrimSpace(req.Params["sign"])
 	secret := configValue(cfg, "mgate_app_secret")
 	if sign == "" || secret == "" {
-		return notifyResult{}, ErrVerifyFailed
+		return notifyResult{}, callbackVerifyError("mgate signature or app secret is missing")
 	}
 	params := cloneStringMap(req.Params)
 	delete(params, "sign")
 	if !constantTimeEqualFold(sign, md5Hex(encodedQuery(params)+secret)) {
-		return notifyResult{}, ErrVerifyFailed
+		return notifyResult{}, callbackVerifyError("mgate signature mismatch")
 	}
 	tradeNo := strings.TrimSpace(req.Params["out_trade_no"])
 	callbackNo := strings.TrimSpace(req.Params["trade_no"])
 	amount, err := parsePositiveInteger(req.Params["total_amount"])
 	if tradeNo == "" || callbackNo == "" || err != nil {
-		return notifyResult{}, ErrVerifyFailed
+		return notifyResult{}, callbackVerifyError("mgate order, transaction number, or amount is invalid")
 	}
 	return notifyResult{
 		TradeNo:    tradeNo,
@@ -993,7 +1006,10 @@ func verifyCoinbaseNotify(cfg map[string]string, req NotifyRequest) (notifyResul
 	}
 	eventType := nestedString(event, "event", "type")
 	if eventType != "charge:confirmed" && eventType != "charge:resolved" {
-		return notifyResult{}, ErrVerifyFailed
+		// The signature is valid, but this event does not represent final
+		// settlement. Acknowledge it so Coinbase does not report harmless
+		// lifecycle notifications as failed webhooks.
+		return notifyResult{CustomResult: "success"}, nil
 	}
 	tradeNo := nestedString(event, "event", "data", "metadata", "outTradeNo")
 	callbackNo := nestedString(event, "event", "data", "id")
@@ -1021,6 +1037,12 @@ func verifyBTCPayNotify(ctx context.Context, client *http.Client, cfg map[string
 	var payload map[string]any
 	if err := decodeJSONPreserveNumbers(req.Body, &payload); err != nil {
 		return notifyResult{}, fmt.Errorf("%w: decode btcpay payload", ErrVerifyFailed)
+	}
+	if eventType := nestedString(payload, "type"); eventType != "" && !strings.EqualFold(eventType, "InvoiceSettled") {
+		// BTCPay emits several signed invoice lifecycle events. Only the final
+		// InvoiceSettled event should open the order; earlier events are valid
+		// callbacks and should be acknowledged without being retried as errors.
+		return notifyResult{CustomResult: "success"}, nil
 	}
 	invoiceID := nestedString(payload, "invoiceId")
 	if invoiceID == "" {
@@ -1186,7 +1208,11 @@ func verifyStripeNotify(ctx context.Context, client *http.Client, gateway string
 			}, nil
 		}
 	}
-	return notifyResult{}, ErrUnsupportedGateway
+	// Stripe sends all selected webhook event types to the same endpoint. Once
+	// the signature is valid, unrelated/non-final events are safe to acknowledge
+	// without mutating an order. Actual verification failures above still return
+	// an error and remain retryable.
+	return notifyResult{CustomResult: "success"}, nil
 }
 
 func verifyAlipayF2FNotify(cfg map[string]string, req NotifyRequest) (notifyResult, error) {

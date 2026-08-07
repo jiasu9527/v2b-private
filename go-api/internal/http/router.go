@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -1191,41 +1192,77 @@ func validTelegramWebhookAccessToken(accessToken string, cfg config.Config) bool
 
 func handleGuestPaymentNotify(w http.ResponseWriter, r *http.Request, service payment.Service) bool {
 	if service == nil {
-		http.Error(w, "fail", http.StatusInternalServerError)
+		writePaymentNotifyFailure(w, r, "service", "", "", "", errors.New("payment service unavailable"))
 		return true
 	}
 
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/guest/payment/notify/")
 	parts := strings.Split(path, "/")
 	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-		http.Error(w, "fail", http.StatusInternalServerError)
+		writePaymentNotifyFailure(w, r, "route", "", "", "", errors.New("invalid payment callback path"))
 		return true
 	}
+	method := strings.TrimSpace(parts[0])
+	uuid := strings.TrimSpace(parts[1])
 
 	rawBody, err := readRequestBody(r)
 	if err != nil {
-		http.Error(w, "fail", http.StatusInternalServerError)
+		writePaymentNotifyFailure(w, r, "read_body", method, uuid, "", err)
 		return true
 	}
 	inputs, err := readInputs(r)
 	if err != nil {
-		http.Error(w, "fail", http.StatusInternalServerError)
+		writePaymentNotifyFailure(w, r, "parse_input", method, uuid, "", err)
 		return true
 	}
+	tradeHint := paymentNotifyTradeHint(inputs)
 
-	result, err := service.Notify(r.Context(), parts[0], parts[1], payment.NotifyRequest{
+	result, err := service.Notify(r.Context(), method, uuid, payment.NotifyRequest{
 		Params:  inputs,
 		Headers: r.Header.Clone(),
 		Body:    rawBody,
 	})
 	if err != nil {
-		http.Error(w, "fail", http.StatusInternalServerError)
+		writePaymentNotifyFailure(w, r, "process", method, uuid, tradeHint, err)
 		return true
 	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte(result))
 	return true
+}
+
+func writePaymentNotifyFailure(w http.ResponseWriter, r *http.Request, stage, method, uuid, tradeHint string, err error) {
+	reason := "unknown error"
+	if err != nil {
+		reason = err.Error()
+	}
+	log.Printf("payment callback failed stage=%q gateway=%q uuid=%q trade_hint=%q remote_ip=%q err=%q",
+		paymentNotifyLogValue(stage, 32),
+		paymentNotifyLogValue(method, 64),
+		paymentNotifyLogValue(uuid, 96),
+		paymentNotifyLogValue(tradeHint, 128),
+		paymentNotifyLogValue(requestIP(r), 64),
+		paymentNotifyLogValue(reason, 512),
+	)
+	http.Error(w, "fail", http.StatusInternalServerError)
+}
+
+func paymentNotifyTradeHint(inputs map[string]string) string {
+	for _, key := range []string{"out_trade_no", "order_id", "item_number"} {
+		if value := strings.TrimSpace(inputs[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func paymentNotifyLogValue(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit > 0 && len(value) > limit {
+		return value[:limit] + "…"
+	}
+	return value
 }
 
 func handleServerUniProxyPush(w http.ResponseWriter, r *http.Request, cfg config.Config, service nodeapi.Service) bool {

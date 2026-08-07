@@ -12,6 +12,54 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
+type blockingOrderPaidNotifier struct {
+	started chan struct{}
+	release chan struct{}
+	done    chan struct{}
+}
+
+func (n *blockingOrderPaidNotifier) NotifyAdmins(ctx context.Context, _ string, _ bool) error {
+	close(n.started)
+	defer close(n.done)
+	select {
+	case <-n.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestDispatchOrderPaidAdminNotificationDoesNotBlockPaymentCallback(t *testing.T) {
+	notifier := &blockingOrderPaidNotifier{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+	service := NewDBService(config.Config{}, nil).WithAdminNotifier(notifier)
+
+	returned := make(chan struct{})
+	go func() {
+		service.dispatchOrderPaidAdminNotification(adminPaymentNotification{TradeNo: "T-ASYNC", TotalAmount: 100})
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("notification dispatcher blocked the payment callback")
+	}
+	select {
+	case <-notifier.started:
+	case <-time.After(time.Second):
+		t.Fatal("notification was not started asynchronously")
+	}
+	close(notifier.release)
+	select {
+	case <-notifier.done:
+	case <-time.After(time.Second):
+		t.Fatal("notification goroutine did not finish")
+	}
+}
+
 func TestNotifyOrderPaidAdminsUsesTelegramNotifier(t *testing.T) {
 	notifier := &captureTicketNotifier{}
 	service := NewDBService(config.Config{}, nil).WithAdminNotifier(notifier)

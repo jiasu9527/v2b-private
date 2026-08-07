@@ -35,6 +35,7 @@ import (
 type recordingPaymentOrderManager struct {
 	tradeNo      string
 	confirmation usersvc.OrderPaymentConfirmation
+	onMark       func(context.Context)
 }
 
 const checkoutOrderLockPattern = `SELECT id, user_id, trade_no, payment_id, total_amount, handling_amount, checkout_result,\s*checkout_claim,\s*checkout_fingerprint,\s*COALESCE\(checkout_claim IS NOT NULL AND checkout_claim_expires_at > EXTRACT\(EPOCH FROM NOW\(\)\)::BIGINT, FALSE\) AS checkout_claim_active,\s*status\s+FROM v2_order\s+WHERE trade_no = \$1 AND user_id = \$2\s+FOR UPDATE`
@@ -49,7 +50,10 @@ func checkoutOrderRow(tradeNo string, paymentID any, totalAmount int64, handling
 	)
 }
 
-func (m *recordingPaymentOrderManager) MarkOrderPaid(_ context.Context, tradeNo string, confirmation usersvc.OrderPaymentConfirmation) error {
+func (m *recordingPaymentOrderManager) MarkOrderPaid(ctx context.Context, tradeNo string, confirmation usersvc.OrderPaymentConfirmation) error {
+	if m.onMark != nil {
+		m.onMark(ctx)
+	}
 	m.tradeNo = tradeNo
 	m.confirmation = confirmation
 	return nil
@@ -916,6 +920,49 @@ func TestPaymentNotifyBindsMethodAndAmountToOrderConfirmation(t *testing.T) {
 	}
 }
 
+func TestPaymentNotifySettlementSurvivesProviderRequestCancellation(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new sql mock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT id, uuid, payment, config, notify_domain, handling_fee_fixed, handling_fee_percent::float8, enable\s+FROM v2_payment\s+WHERE payment = \$1 AND uuid = \$2`).
+		WithArgs("EPay", "pay-uuid").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "uuid", "payment", "config", "notify_domain", "handling_fee_fixed", "handling_fee_percent", "enable"}).
+			AddRow(int64(7), "pay-uuid", "EPay", `{"pid":"10001","key":"secret"}`, nil, nil, nil, int64(1)))
+
+	params := map[string]string{
+		"out_trade_no": "T-CANCELLED-CONTEXT",
+		"trade_no":     "P-CANCELLED-CONTEXT",
+		"money":        "12.34",
+		"pid":          "10001",
+		"trade_status": "TRADE_SUCCESS",
+	}
+	params["sign"] = md5Hex(decodedQuery(params) + "secret")
+	params["sign_type"] = "MD5"
+
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	orders := &recordingPaymentOrderManager{}
+	orders.onMark = func(settleCtx context.Context) {
+		cancelRequest()
+		if err := settleCtx.Err(); err != nil {
+			t.Fatalf("settlement context inherited provider cancellation: %v", err)
+		}
+	}
+	service := NewDBService(config.Config{}, db, orders)
+	result, err := service.Notify(requestCtx, "EPay", "pay-uuid", NotifyRequest{Params: params})
+	if err != nil || result != "success" {
+		t.Fatalf("notify result=%q err=%v", result, err)
+	}
+	if requestCtx.Err() == nil {
+		t.Fatal("test did not cancel the original provider request context")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestPaymentCheckoutRejectsNegativeOrderInsteadOfOpeningForFree(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -1345,12 +1392,12 @@ func TestVerifyGatewayNotifyCoinbase(t *testing.T) {
 	}
 }
 
-func TestVerifyGatewayNotifyCoinbaseRejectsNonFinalEvent(t *testing.T) {
+func TestVerifyGatewayNotifyCoinbaseAcknowledgesSignedNonFinalEvent(t *testing.T) {
 	payload := `{"event":{"id":"event-CB-1","type":"charge:pending","data":{"id":"CB-1","metadata":{"outTradeNo":"T411"},"pricing":{"local":{"amount":"12.34","currency":"CNY"}}}}}`
 	signatureMac := hmac.New(sha256.New, []byte("cb-webhook"))
 	_, _ = signatureMac.Write([]byte(payload))
 
-	_, err := verifyGatewayNotify(
+	result, err := verifyGatewayNotify(
 		context.Background(),
 		http.DefaultClient,
 		"Coinbase",
@@ -1360,8 +1407,31 @@ func TestVerifyGatewayNotifyCoinbaseRejectsNonFinalEvent(t *testing.T) {
 			Body:    []byte(payload),
 		},
 	)
-	if !errors.Is(err, ErrVerifyFailed) {
-		t.Fatalf("expected pending Coinbase event to fail, got %v", err)
+	if err != nil || result.CustomResult != "success" || result.TradeNo != "" {
+		t.Fatalf("expected pending Coinbase event to be acknowledged without settlement, result=%#v err=%v", result, err)
+	}
+}
+
+func TestVerifyGatewayNotifyStripeAcknowledgesSignedUnrelatedEvent(t *testing.T) {
+	secret := "whsec_test"
+	timestamp := int64(1700000000)
+	payload := `{"type":"customer.updated","data":{"object":{"id":"cus_1"}}}`
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(fmt.Sprintf("%d.%s", timestamp, payload)))
+	signature := hex.EncodeToString(mac.Sum(nil))
+
+	result, err := verifyGatewayNotify(
+		context.Background(),
+		http.DefaultClient,
+		"StripeCheckout",
+		map[string]string{"stripe_webhook_key": secret},
+		NotifyRequest{
+			Headers: http.Header{"Stripe-Signature": []string{fmt.Sprintf("t=%d,v1=%s", timestamp, signature)}},
+			Body:    []byte(payload),
+		},
+	)
+	if err != nil || result.CustomResult != "success" || result.TradeNo != "" {
+		t.Fatalf("expected unrelated signed Stripe event to be acknowledged, result=%#v err=%v", result, err)
 	}
 }
 
@@ -1403,6 +1473,35 @@ func TestVerifyGatewayNotifyBTCPay(t *testing.T) {
 	}
 	if result.TradeNo != "T412" || result.CallbackNo != "inv_412" || result.Amount == nil || *result.Amount != 1234 {
 		t.Fatalf("unexpected btcpay notify result: %#v", result)
+	}
+}
+
+func TestVerifyGatewayNotifyBTCPayAcknowledgesSignedNonFinalEvent(t *testing.T) {
+	payload := `{"type":"InvoiceProcessing","invoiceId":"inv_processing"}`
+	signatureMac := hmac.New(sha256.New, []byte("btc-webhook"))
+	_, _ = signatureMac.Write([]byte(payload))
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Fatalf("non-final BTCPay event unexpectedly queried provider: %s", r.URL)
+		return nil, nil
+	})}
+
+	result, err := verifyGatewayNotify(
+		context.Background(),
+		client,
+		"BTCPay",
+		map[string]string{
+			"btcpay_url":         "https://btcpay.example.com",
+			"btcpay_storeId":     "store-1",
+			"btcpay_api_key":     "btc-key",
+			"btcpay_webhook_key": "btc-webhook",
+		},
+		NotifyRequest{
+			Headers: http.Header{"Btcpay-Sig": []string{"sha256=" + hex.EncodeToString(signatureMac.Sum(nil))}},
+			Body:    []byte(payload),
+		},
+	)
+	if err != nil || result.CustomResult != "success" || result.TradeNo != "" {
+		t.Fatalf("expected non-final BTCPay event to be acknowledged, result=%#v err=%v", result, err)
 	}
 }
 

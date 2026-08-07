@@ -35,6 +35,8 @@ var (
 
 const checkoutClaimLease = 2 * time.Minute
 
+const paymentCallbackSettlementTimeout = 10 * time.Second
+
 type CheckoutRequest struct {
 	TradeNo        string
 	MethodID       int64
@@ -449,23 +451,23 @@ func (s *DBService) Notify(ctx context.Context, method, uuid string, req NotifyR
 
 	paymentMethod, ok, err := s.loadPaymentByGateway(ctx, method, uuid)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("load payment callback method=%q uuid=%q: %w", method, uuid, err)
 	}
 	// Disabling a method stops new checkouts, but a previously issued payment
 	// link can still settle. Keep accepting its cryptographically verified
 	// callback as long as the configured payment record still exists.
 	if !ok {
-		return "", ErrPaymentMethodUnavailable
+		return "", fmt.Errorf("load payment callback method=%q uuid=%q: %w", method, uuid, ErrPaymentMethodUnavailable)
 	}
 
 	gatewayConfig, err := parseGatewayConfig(paymentMethod.Config)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("parse payment callback configuration payment_id=%d gateway=%q: %w", paymentMethod.ID, paymentMethod.Payment, err)
 	}
 
 	result, err := verifyGatewayNotify(ctx, s.client, paymentMethod.Payment, gatewayConfig, req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("verify payment callback payment_id=%d gateway=%q: %w", paymentMethod.ID, paymentMethod.Payment, err)
 	}
 	if strings.TrimSpace(result.TradeNo) == "" {
 		if result.CustomResult != "" {
@@ -474,18 +476,20 @@ func (s *DBService) Notify(ctx context.Context, method, uuid string, req NotifyR
 		return "success", nil
 	}
 	if result.Amount == nil {
-		return "", ErrVerifyFailed
+		return "", fmt.Errorf("verify payment callback payment_id=%d gateway=%q: missing trusted amount: %w", paymentMethod.ID, paymentMethod.Payment, ErrVerifyFailed)
 	}
 	if s.orders == nil {
-		return "", ErrUnavailable
+		return "", fmt.Errorf("settle payment callback trade_no=%q: %w", result.TradeNo, ErrUnavailable)
 	}
 	paymentID := paymentMethod.ID
-	if err := s.orders.MarkOrderPaid(ctx, result.TradeNo, usersvc.OrderPaymentConfirmation{
+	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), paymentCallbackSettlementTimeout)
+	defer cancel()
+	if err := s.orders.MarkOrderPaid(settleCtx, result.TradeNo, usersvc.OrderPaymentConfirmation{
 		CallbackNo: result.CallbackNo,
 		PaymentID:  &paymentID,
 		Amount:     result.Amount,
 	}); err != nil {
-		return "", err
+		return "", fmt.Errorf("settle payment callback trade_no=%q callback_no=%q payment_id=%d amount=%d: %w", result.TradeNo, result.CallbackNo, paymentID, *result.Amount, err)
 	}
 	if result.CustomResult != "" {
 		return result.CustomResult, nil
