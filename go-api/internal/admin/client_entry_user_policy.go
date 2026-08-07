@@ -95,7 +95,95 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 	for index := range result {
 		result[index].Members = members[result[index].ID]
 	}
+	if err := s.attachClientEntryUserPolicyIDRangeCounts(ctx, result); err != nil {
+		return nil, err
+	}
 	return result, nil
+}
+
+type clientEntryUserIDRange struct {
+	PolicyID int64
+	Minimum  int64
+	Maximum  int64
+}
+
+// attachClientEntryUserPolicyIDRangeCounts reports actual user rows inside the
+// combined user_id/between bounds. It intentionally does not call this a full
+// rule match count: UA and registration-day conditions are evaluated at
+// subscription time and cannot be represented by a static database count.
+func (s *DBService) attachClientEntryUserPolicyIDRangeCounts(ctx context.Context, policies []ClientEntryUserPolicyRecord) error {
+	ranges := make([]clientEntryUserIDRange, 0, len(policies))
+	policyIndexes := make(map[int64]int, len(policies))
+	for index := range policies {
+		minimum, maximum, ok := combinedClientEntryUserIDRange(policies[index].Conditions)
+		if !ok {
+			continue
+		}
+		ranges = append(ranges, clientEntryUserIDRange{PolicyID: policies[index].ID, Minimum: minimum, Maximum: maximum})
+		policyIndexes[policies[index].ID] = index
+		count := int64(0)
+		policies[index].IDRangeUserCount = &count
+	}
+	if len(ranges) == 0 {
+		return nil
+	}
+
+	values := make([]string, 0, len(ranges))
+	args := make([]any, 0, len(ranges)*3)
+	for _, item := range ranges {
+		start := len(args) + 1
+		values = append(values, fmt.Sprintf("($%d::BIGINT, $%d::BIGINT, $%d::BIGINT)", start, start+1, start+2))
+		args = append(args, item.PolicyID, item.Minimum, item.Maximum)
+	}
+	rows, err := s.db.QueryContext(ctx, `WITH ranges(policy_id, min_id, max_id) AS (VALUES `+strings.Join(values, ",")+`)
+SELECT ranges.policy_id, COUNT(users.id)::BIGINT
+FROM ranges
+LEFT JOIN v2_user users ON users.id BETWEEN ranges.min_id AND ranges.max_id
+GROUP BY ranges.policy_id`, args...)
+	if err != nil {
+		return fmt.Errorf("count users in client entry ID ranges: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var policyID, count int64
+		if err := rows.Scan(&policyID, &count); err != nil {
+			return fmt.Errorf("scan client entry ID range user count: %w", err)
+		}
+		if index, ok := policyIndexes[policyID]; ok {
+			value := count
+			policies[index].IDRangeUserCount = &value
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate client entry ID range user counts: %w", err)
+	}
+	return nil
+}
+
+func combinedClientEntryUserIDRange(conditions []cliententry.Condition) (int64, int64, bool) {
+	var minimum, maximum int64
+	found := false
+	for _, condition := range conditions {
+		if condition.Field != "user_id" || condition.Operator != "between" {
+			continue
+		}
+		nextMinimum, minErr := strconv.ParseInt(strings.TrimSpace(string(condition.Min)), 10, 64)
+		nextMaximum, maxErr := strconv.ParseInt(strings.TrimSpace(string(condition.Max)), 10, 64)
+		if minErr != nil || maxErr != nil {
+			continue
+		}
+		if !found {
+			minimum, maximum, found = nextMinimum, nextMaximum, true
+			continue
+		}
+		if nextMinimum > minimum {
+			minimum = nextMinimum
+		}
+		if nextMaximum < maximum {
+			maximum = nextMaximum
+		}
+	}
+	return minimum, maximum, found
 }
 
 func (s *DBService) loadClientEntryUserPolicyMembers(ctx context.Context, ids []int64) (map[int64][]ClientEntryGroupMemberRecord, error) {

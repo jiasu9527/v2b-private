@@ -58,6 +58,53 @@ func TestDBServiceListClientEntryUserPoliciesReturnsRulesInStoredOrder(t *testin
 	}
 }
 
+func TestDBServiceListClientEntryUserPoliciesCountsActualUsersInIDRange(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := &DBService{db: db}
+	readyClientEntrySchemaForPolicyTest(service)
+	rows := sqlmock.NewRows([]string{"id", "name", "sort", "action", "conditions", "entry_host", "extra_nodes", "extra_nodes_position", "enabled", "remarks", "created_at", "updated_at"}).
+		AddRow(int64(4), "ID range", int64(10), "original", `[{"field":"user_id","operator":"between","min":100,"max":200}]`, "", `[]`, "after", int64(1), "", int64(100), int64(200))
+	mock.ExpectQuery(`SELECT p.id, p.name, p.sort, p.action, p.conditions, p.entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at\s+FROM v2_client_entry_user_policy p\s+ORDER BY p.sort ASC NULLS LAST, p.id ASC`).
+		WillReturnRows(rows)
+	mock.ExpectQuery(`SELECT policy_id, server_type, server_id, sort\s+FROM v2_client_entry_user_policy_member\s+WHERE policy_id IN \(\$1\)`).
+		WithArgs(int64(4)).
+		WillReturnRows(sqlmock.NewRows([]string{"policy_id", "server_type", "server_id", "sort"}))
+	mock.ExpectQuery(`WITH ranges\(policy_id, min_id, max_id\) AS \(VALUES \(\$1::BIGINT, \$2::BIGINT, \$3::BIGINT\)\)\s+SELECT ranges.policy_id, COUNT\(users.id\)::BIGINT\s+FROM ranges\s+LEFT JOIN v2_user users ON users.id BETWEEN ranges.min_id AND ranges.max_id\s+GROUP BY ranges.policy_id`).
+		WithArgs(int64(4), int64(100), int64(200)).
+		WillReturnRows(sqlmock.NewRows([]string{"policy_id", "count"}).AddRow(int64(4), int64(73)))
+
+	policies, err := service.ListClientEntryUserPolicies(context.Background())
+	if err != nil {
+		t.Fatalf("list policies: %v", err)
+	}
+	if len(policies) != 1 || policies[0].IDRangeUserCount == nil || *policies[0].IDRangeUserCount != 73 {
+		t.Fatalf("unexpected ID range count: %#v", policies)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestCombinedClientEntryUserIDRangeIntersectsMultipleBounds(t *testing.T) {
+	conditions, err := cliententry.NormalizeConditions([]cliententry.Condition{
+		{Field: "user_id", Operator: "between", Min: json.RawMessage("10"), Max: json.RawMessage("100")},
+		{Field: "user_id", Operator: "between", Min: json.RawMessage("40"), Max: json.RawMessage("80")},
+		{Field: "plan_id", Operator: "between", Min: json.RawMessage("1"), Max: json.RawMessage("9")},
+	})
+	if err != nil {
+		t.Fatalf("normalize conditions: %v", err)
+	}
+	minimum, maximum, ok := combinedClientEntryUserIDRange(conditions)
+	if !ok || minimum != 40 || maximum != 80 {
+		t.Fatalf("combined range = %d..%d ok=%v", minimum, maximum, ok)
+	}
+}
+
 func TestDBServiceSaveClientEntryUserPolicyCreatesStructuredRule(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

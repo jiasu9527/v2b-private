@@ -1261,6 +1261,7 @@ type ClientEntryUserPolicyRecord struct {
 	Sort               int64                          `json:"sort"`
 	Action             string                         `json:"action"`
 	Conditions         []cliententry.Condition        `json:"conditions"`
+	IDRangeUserCount   *int64                         `json:"id_range_user_count,omitempty"`
 	Members            []ClientEntryGroupMemberRecord `json:"members,omitempty"`
 	EntryHost          string                         `json:"entry_host"`
 	ExtraNodes         []string                       `json:"extra_nodes"`

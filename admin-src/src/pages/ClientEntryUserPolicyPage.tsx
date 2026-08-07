@@ -864,15 +864,23 @@ export default function ClientEntryUserPolicyPage() {
       title: '匹配条件（全部 AND）',
       dataIndex: 'conditions',
       width: 620,
-      render: (value: any) => {
+      render: (value: any, row: any) => {
         const conditions = parseConditions(value);
         if (!conditions.length) return <Tag>全部用户</Tag>;
         const hasEmailList = conditions.some((condition) => condition.field === 'email' && condition.operator === 'in' && (condition.values || []).length > 1);
-        return <div className={`client-entry-condition-list${hasEmailList ? ' client-entry-condition-list--expandable' : ''}`}>{conditions.map((condition, index) => {
-          const text = conditionSummary(condition);
-          if (condition.field === 'email' && condition.operator === 'in') return <EmailConditionSummary condition={condition} key={`${condition.field}-${condition.operator}-${index}`} />;
-          return <Tag className="client-entry-condition-tag" title={text} key={`${condition.field}-${condition.operator}-${index}`}>{text}</Tag>;
-        })}</div>;
+        const hasIDRange = conditions.some((condition) => condition.field === 'user_id' && condition.operator === 'between');
+        const idRangeUserCount = finiteNumber(row?.id_range_user_count);
+        return <div className={`client-entry-condition-list${hasEmailList ? ' client-entry-condition-list--expandable' : ''}`}>
+          {conditions.map((condition, index) => {
+            const text = conditionSummary(condition);
+            if (condition.field === 'email' && condition.operator === 'in') return <EmailConditionSummary condition={condition} key={`${condition.field}-${condition.operator}-${index}`} />;
+            return <Tag className="client-entry-condition-tag" title={text} key={`${condition.field}-${condition.operator}-${index}`}>{text}</Tag>;
+          })}
+          {hasIDRange && idRangeUserCount !== undefined && <Tag
+            color="cyan"
+            title="按当前数据库中实际存在的用户统计；已删除的用户 ID 不计入"
+          >ID 范围内实际 {idRangeUserCount} 人</Tag>}
+        </div>;
       },
     },
     {
