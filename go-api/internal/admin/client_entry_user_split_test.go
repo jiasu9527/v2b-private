@@ -49,7 +49,7 @@ func TestCreateClientEntryUserPolicySplitSnapshotsAndBalancesUsers(t *testing.T)
 	mock.ExpectQuery(`SELECT sort FROM v2_client_entry_user_policy\s+ORDER BY sort DESC NULLS LAST, id DESC\s+LIMIT 1\s+FOR UPDATE`).
 		WillReturnRows(sqlmock.NewRows([]string{"sort"}))
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy\s+\(name, sort, mode, action, conditions, entry_host, resolve_entry_host, extra_nodes, extra_nodes_position, snapshot_from, snapshot_to, enabled, remarks, created_at, updated_at\)`).
-		WithArgs("最近活跃用户", int64(10), int64(1), sqlmock.AnyArg(), sqlmock.AnyArg(), int64(1), "排查").
+		WithArgs("最近活跃用户", int64(10), int64(1), sqlmock.AnyArg(), sqlmock.AnyArg(), int64(1), "排查", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
 	mock.ExpectExec(`INSERT INTO v2_client_entry_user_policy_member`).
 		WithArgs(int64(9), "vmess", int64(11), int64(10), sqlmock.AnyArg()).

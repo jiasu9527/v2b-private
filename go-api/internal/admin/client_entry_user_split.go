@@ -82,8 +82,8 @@ func (s *DBService) CreateClientEntryUserPolicySplit(ctx context.Context, req Cl
 	var policyID int64
 	if err := tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_user_policy
 (name, sort, mode, action, conditions, entry_host, resolve_entry_host, extra_nodes, extra_nodes_position, snapshot_from, snapshot_to, enabled, remarks, created_at, updated_at)
-VALUES ($1, $2, 'split', 'override', '[]', '', $3, '[]', 'after', $4, $5, $6, $7, $5, $5)
-RETURNING id`, prepared.Name, nextSort, prepared.ResolveEntryHost, from, now, prepared.Enabled, prepared.Remarks).Scan(&policyID); err != nil {
+VALUES ($1, $2, 'split', 'override', '[]', '', $3, '[]', 'after', $4, $5, $6, $7, $8, $8)
+RETURNING id`, prepared.Name, nextSort, prepared.ResolveEntryHost, from, now, prepared.Enabled, prepared.Remarks, now).Scan(&policyID); err != nil {
 		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("写入规则", err)
 	}
 	for index, member := range prepared.Members {
