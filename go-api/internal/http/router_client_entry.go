@@ -1172,33 +1172,26 @@ func handleAdminClientEntryUserPolicySort(w http.ResponseWriter, r *http.Request
 		return true
 	}
 	var payload struct {
-		IDs []json.Number `json:"ids"`
+		Items []struct {
+			Kind string       `json:"kind"`
+			ID   *json.Number `json:"id"`
+		} `json:"items"`
 	}
-	if strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
-		if err := readJSONBody(r, &payload); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
-			return true
-		}
-	} else {
-		inputs, err := readInputs(r)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
-			return true
-		}
-		for _, raw := range strings.FieldsFunc(inputs["ids"], func(r rune) bool { return r == ',' || r == ';' || r == '\n' || r == '\r' || r == ' ' || r == '\t' }) {
-			payload.IDs = append(payload.IDs, json.Number(raw))
-		}
+	if err := readJSONBody(r, &payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
 	}
-	ids := make([]int64, 0, len(payload.IDs))
-	for _, raw := range payload.IDs {
-		id, err := strconv.ParseInt(strings.TrimSpace(raw.String()), 10, 64)
-		if err != nil || id <= 0 {
+	items := make([]admin.ClientEntryUserPolicySortItem, 0, len(payload.Items))
+	for _, raw := range payload.Items {
+		id, err := jsonNumberToInt64Pointer(raw.ID)
+		kind := strings.ToLower(strings.TrimSpace(raw.Kind))
+		if err != nil || id == nil || *id <= 0 || (kind != "policy" && kind != "split_group") {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"message": "规则顺序无效"})
 			return true
 		}
-		ids = append(ids, id)
+		items = append(items, admin.ClientEntryUserPolicySortItem{Kind: kind, ID: *id})
 	}
-	sorted, err := adminService.SortClientEntryUserPolicies(r.Context(), ids)
+	sorted, err := adminService.SortClientEntryUserPolicyRows(r.Context(), items)
 	if err != nil {
 		return handleAdminError(w, err)
 	}

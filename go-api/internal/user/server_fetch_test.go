@@ -331,6 +331,52 @@ func TestApplyClientEntryUserPolicyUsesFixedSplitAssignment(t *testing.T) {
 	}
 }
 
+func TestLoadClientEntryUserPoliciesPreservesLeafGlobalOrderForFirstMatch(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := NewDBService(config.Config{}, db)
+	service.clientEntryEnsureOnce.Do(func() {})
+	policyRows := sqlmock.NewRows([]string{
+		"id", "mode", "action", "conditions", "entry_host", "resolve_entry_host",
+		"extra_nodes", "extra_nodes_position", "assigned_entry_host", "server_type", "server_id", "member_sort",
+	}).
+		// The split leaf has the earlier global_sort even though its policy ID is
+		// greater than the following standard policy ID.
+		AddRow(int64(90), "split", cliententry.ActionOverride, `[]`, "", int64(0), `[]`, "after", "split-first.example.com", "vmess", int64(11), int64(10)).
+		AddRow(int64(10), "standard", cliententry.ActionOverride, `[]`, "standard-later.example.com", int64(0), `[]`, "after", "", "vmess", int64(11), int64(10))
+	mock.ExpectQuery(`(?s)SELECT p\.id, p\.mode, p\.action, p\.conditions, p\.entry_host,.*LEFT JOIN v2_client_entry_user_policy_split_assignment split_assignment.*split_assignment\.user_id = \$1.*LEFT JOIN v2_client_entry_user_policy_split_group split_group.*WHERE p\.enabled = 1\s+AND \(p\.mode <> 'split' OR split_group\.id IS NOT NULL\)\s+ORDER BY CASE WHEN p\.mode = 'split' THEN COALESCE\(split_group\.global_sort, p\.sort\) ELSE p\.sort END ASC NULLS LAST,\s+p\.id ASC, m\.sort ASC NULLS LAST, m\.id ASC`).
+		WithArgs(int64(100)).
+		WillReturnRows(policyRows)
+
+	policies, err := service.loadClientEntryUserPolicies(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("load globally ordered policies: %v", err)
+	}
+	if len(policies) != 2 || policies[0].ID != 90 || policies[0].AssignedEntryHost != "split-first.example.com" || policies[1].ID != 10 {
+		t.Fatalf("leaf global order was not preserved: %#v", policies)
+	}
+	for _, policy := range policies {
+		if policy.ID == 91 {
+			t.Fatalf("unassigned split policy entered the loaded rule list: %#v", policies)
+		}
+	}
+
+	servers := []map[string]any{{
+		"id": int64(11), "type": "vmess", "host": "original.example.com", "client_entry_only": int64(1),
+	}}
+	result := applyClientEntryUserPolicies(servers, cliententry.Subject{UserID: 100}, policies)
+	if len(result) != 1 || result[0]["host"] != "split-first.example.com" || mapInt64(result[0]["client_entry_user_policy_id"]) != 90 {
+		t.Fatalf("first globally ordered leaf did not win: %#v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestApplyClientEntryUserPolicyRequiresMatchingOverrideForEntryOnlyNode(t *testing.T) {
 	servers := []map[string]any{
 		{"id": int64(11), "type": "vmess", "host": "private.example.com", "client_entry_only": int64(1)},

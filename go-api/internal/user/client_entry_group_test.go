@@ -48,6 +48,7 @@ func expectEnsureClientEntrySchema(mock sqlmock.Sqlmock) {
 		{"v2_client_entry_user_policy", "extra_nodes_position"},
 		{"v2_client_entry_user_policy", "snapshot_from"},
 		{"v2_client_entry_user_policy", "snapshot_to"},
+		{"v2_client_entry_user_policy_split_group", "global_sort"},
 		{"v2_server_shadowsocks", "client_entry_only"},
 		{"v2_server_vmess", "client_entry_only"},
 		{"v2_server_vless", "client_entry_only"},
@@ -61,6 +62,8 @@ func expectEnsureClientEntrySchema(mock sqlmock.Sqlmock) {
 			WithArgs(item.table, item.column).
 			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	}
+	mock.ExpectExec(`WITH needs_backfill AS MATERIALIZED`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	for _, legacyColumn := range []string{"email", "entry_group_id", "server_type", "server_id"} {
 		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
@@ -86,6 +89,8 @@ func expectEnsureClientEntrySchema(mock sqlmock.Sqlmock) {
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_user_subscribe_activity_last_subscribe_at ON v2_user_subscribe_activity\(last_subscribe_at\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_group_policy ON v2_client_entry_user_policy_split_group\(policy_id, sort, id\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_group_global_sort ON v2_client_entry_user_policy_split_group\(global_sort, id\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_group_parent ON v2_client_entry_user_policy_split_group\(parent_id\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))

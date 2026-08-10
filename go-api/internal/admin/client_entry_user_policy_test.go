@@ -14,6 +14,18 @@ func readyClientEntrySchemaForPolicyTest(service *DBService) {
 	service.clientEntryEnsureOnce.Do(func() {})
 }
 
+func expectClientEntryVisibleOrderLock(mock sqlmock.Sqlmock) {
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock\(\$1\)`).
+		WithArgs(clientEntryVisibleOrderLockKey).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+}
+
+func expectNextClientEntryVisibleSort(mock sqlmock.Sqlmock, last int64) {
+	expectClientEntryVisibleOrderLock(mock)
+	mock.ExpectQuery(`(?s)SELECT COALESCE\(MAX\(visible_sort\), 0\)::BIGINT.*v2_client_entry_user_policy_split_group`).
+		WillReturnRows(sqlmock.NewRows([]string{"max"}).AddRow(last))
+}
+
 func TestDBServiceListClientEntryUserPoliciesReturnsRulesInStoredOrder(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -124,8 +136,7 @@ func TestDBServiceSaveClientEntryUserPolicyCreatesStructuredRule(t *testing.T) {
 	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM "v2_server_vmess" WHERE id = \$1\)`).
 		WithArgs(int64(11)).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
-	mock.ExpectQuery(`SELECT sort FROM v2_client_entry_user_policy\s+ORDER BY sort DESC NULLS LAST, id DESC\s+LIMIT 1\s+FOR UPDATE`).
-		WillReturnRows(sqlmock.NewRows([]string{"sort"}))
+	expectNextClientEntryVisibleSort(mock, 0)
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy`).
 		WithArgs("VIP Clash", int64(10), "override", `[{"field":"user_id","operator":"in","values":[1001]}]`, "vip-entry.example.com", int64(1), `["trojan://secret@extra.example.com:443#Extra"]`, "before", int64(1), "VIP", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
@@ -269,6 +280,55 @@ func TestDBServiceSortClientEntryUserPoliciesRequiresExactRuleSet(t *testing.T) 
 	ok, err := service.SortClientEntryUserPolicies(context.Background(), []int64{3, 8})
 	if err != nil || !ok {
 		t.Fatalf("sort rules: ok=%v err=%v", ok, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDBServiceSortClientEntryUserPolicyRowsMixesStandardPoliciesAndSplitLeaves(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := &DBService{db: db}
+	readyClientEntrySchemaForPolicyTest(service)
+	mock.ExpectBegin()
+	expectClientEntryVisibleOrderLock(mock)
+	mock.ExpectQuery(`SELECT id, mode FROM v2_client_entry_user_policy ORDER BY id ASC FOR UPDATE`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "mode"}).
+			AddRow(int64(3), ClientEntryUserPolicyModeStandard).
+			AddRow(int64(7), ClientEntryUserPolicyModeStandard).
+			AddRow(int64(9), ClientEntryUserPolicyModeSplit))
+	mock.ExpectQuery(`(?s)SELECT split_group\.id\s+FROM v2_client_entry_user_policy_split_group split_group.*WHERE policy\.mode = 'split'.*NOT EXISTS \(.*child\.parent_id = split_group\.id.*\).*FOR UPDATE OF split_group`).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(201)).AddRow(int64(202)))
+	mock.ExpectExec(`(?s)UPDATE v2_client_entry_user_policy\s+SET sort = \$2, updated_at = \$3\s+WHERE id = \$1 AND mode <> 'split'`).
+		WithArgs(int64(7), int64(10), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`(?s)UPDATE v2_client_entry_user_policy_split_group split_group\s+SET global_sort = \$2, updated_at = \$3.*WHERE split_group\.id = \$1.*policy\.mode = 'split'.*NOT EXISTS`).
+		WithArgs(int64(202), int64(20), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`(?s)UPDATE v2_client_entry_user_policy\s+SET sort = \$2, updated_at = \$3\s+WHERE id = \$1 AND mode <> 'split'`).
+		WithArgs(int64(3), int64(30), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`(?s)UPDATE v2_client_entry_user_policy_split_group split_group\s+SET global_sort = \$2, updated_at = \$3.*WHERE split_group\.id = \$1.*policy\.mode = 'split'.*NOT EXISTS`).
+		WithArgs(int64(201), int64(40), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// The split container is not a visible row of its own. Its compatibility
+	// sort must track the earliest leaf after this mixed global reorder (20).
+	expectSyncClientEntrySplitPolicySorts(mock)
+	mock.ExpectCommit()
+
+	ok, err := service.SortClientEntryUserPolicyRows(context.Background(), []ClientEntryUserPolicySortItem{
+		{Kind: "policy", ID: 7},
+		{Kind: "split_group", ID: 202},
+		{Kind: "policy", ID: 3},
+		{Kind: "split_group", ID: 201},
+	})
+	if err != nil || !ok {
+		t.Fatalf("sort mixed visible rows: ok=%v err=%v", ok, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)

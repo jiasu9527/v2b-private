@@ -340,6 +340,7 @@ type Service interface {
 	MoveClientEntryUserPolicySplitGroupToRoot(ctx context.Context, req ClientEntryUserPolicyGroupMoveRequest) (bool, error)
 	SetClientEntryUserPolicyEnabled(ctx context.Context, id, enabled int64) (bool, error)
 	SortClientEntryUserPolicies(ctx context.Context, ids []int64) (bool, error)
+	SortClientEntryUserPolicyRows(ctx context.Context, items []ClientEntryUserPolicySortItem) (bool, error)
 	DeleteClientEntryUserPolicy(ctx context.Context, id int64) (bool, error)
 	ListServerRoutes(ctx context.Context) ([]ServerRouteRecord, error)
 	SaveServerRoute(ctx context.Context, req ServerRouteSaveRequest) (bool, error)
@@ -1300,23 +1301,29 @@ type ClientEntryUserPolicySaveRequest struct {
 	Remarks            string
 }
 
+type ClientEntryUserPolicySortItem struct {
+	Kind string `json:"kind"`
+	ID   int64  `json:"id"`
+}
+
 const (
 	ClientEntryUserPolicyModeStandard = "standard"
 	ClientEntryUserPolicyModeSplit    = "split"
 )
 
 type ClientEntryUserPolicySplitGroupRecord struct {
-	ID        int64  `json:"id"`
-	PolicyID  int64  `json:"policy_id"`
-	ParentID  *int64 `json:"parent_id,omitempty"`
-	Name      string `json:"name"`
-	Path      string `json:"path"`
-	EntryHost string `json:"entry_host"`
-	Sort      int64  `json:"sort"`
-	UserCount int64  `json:"user_count"`
-	IsLeaf    bool   `json:"is_leaf"`
-	CreatedAt int64  `json:"created_at,omitempty"`
-	UpdatedAt int64  `json:"updated_at,omitempty"`
+	ID         int64  `json:"id"`
+	PolicyID   int64  `json:"policy_id"`
+	ParentID   *int64 `json:"parent_id,omitempty"`
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	EntryHost  string `json:"entry_host"`
+	Sort       int64  `json:"sort"`
+	GlobalSort *int64 `json:"global_sort,omitempty"`
+	UserCount  int64  `json:"user_count"`
+	IsLeaf     bool   `json:"is_leaf"`
+	CreatedAt  int64  `json:"created_at,omitempty"`
+	UpdatedAt  int64  `json:"updated_at,omitempty"`
 }
 
 type ClientEntryUserPolicySplitPreviewRequest struct {

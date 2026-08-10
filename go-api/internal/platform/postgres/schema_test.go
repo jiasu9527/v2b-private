@@ -16,7 +16,7 @@ func expectCurrentClientEntrySchema(mock sqlmock.Sqlmock, columnsExist bool, leg
 		`(?s)CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy \(.*mode varchar\(16\) NOT NULL DEFAULT 'standard'.*snapshot_from BIGINT DEFAULT NULL.*snapshot_to BIGINT DEFAULT NULL`,
 		`CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy_member`,
 		`(?s)CREATE TABLE IF NOT EXISTS v2_user_subscribe_activity \(.*user_id INTEGER NOT NULL.*last_subscribe_at BIGINT NOT NULL.*PRIMARY KEY \(user_id\)`,
-		`(?s)CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy_split_group \(.*policy_id INTEGER NOT NULL.*parent_id BIGINT DEFAULT NULL.*path varchar\(255\) NOT NULL DEFAULT ''.*entry_host varchar\(255\) NOT NULL DEFAULT ''.*FOREIGN KEY \(policy_id\).*ON DELETE CASCADE.*FOREIGN KEY \(parent_id\).*ON DELETE CASCADE`,
+		`(?s)CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy_split_group \(.*policy_id INTEGER NOT NULL.*parent_id BIGINT DEFAULT NULL.*path varchar\(255\) NOT NULL DEFAULT ''.*entry_host varchar\(255\) NOT NULL DEFAULT ''.*global_sort BIGINT DEFAULT NULL.*FOREIGN KEY \(policy_id\).*ON DELETE CASCADE.*FOREIGN KEY \(parent_id\).*ON DELETE CASCADE`,
 		`(?s)CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy_split_assignment \(.*policy_id INTEGER NOT NULL.*user_id INTEGER NOT NULL.*group_id BIGINT NOT NULL.*UNIQUE \(policy_id, user_id\).*FOREIGN KEY \(policy_id\).*ON DELETE CASCADE.*FOREIGN KEY \(group_id\).*ON DELETE CASCADE`,
 	} {
 		mock.ExpectExec(tablePattern).
@@ -46,6 +46,7 @@ func expectCurrentClientEntrySchema(mock sqlmock.Sqlmock, columnsExist bool, leg
 		{"v2_client_entry_user_policy", "extra_nodes_position", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN extra_nodes_position varchar\(16\) NOT NULL DEFAULT 'after'`},
 		{"v2_client_entry_user_policy", "snapshot_from", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN snapshot_from BIGINT DEFAULT NULL`},
 		{"v2_client_entry_user_policy", "snapshot_to", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN snapshot_to BIGINT DEFAULT NULL`},
+		{"v2_client_entry_user_policy_split_group", "global_sort", `ALTER TABLE v2_client_entry_user_policy_split_group ADD COLUMN global_sort BIGINT DEFAULT NULL`},
 		{"v2_server_shadowsocks", "client_entry_only", `ALTER TABLE v2_server_shadowsocks ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
 		{"v2_server_vmess", "client_entry_only", `ALTER TABLE v2_server_vmess ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
 		{"v2_server_vless", "client_entry_only", `ALTER TABLE v2_server_vless ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
@@ -63,6 +64,7 @@ func expectCurrentClientEntrySchema(mock sqlmock.Sqlmock, columnsExist bool, leg
 			mock.ExpectExec(column.stmt).WillReturnResult(sqlmock.NewResult(0, 0))
 		}
 	}
+	mock.ExpectExec(`WITH needs_backfill AS MATERIALIZED`).WillReturnResult(sqlmock.NewResult(0, 0))
 	legacyDefaults := []struct {
 		column       string
 		defaultValue string
@@ -115,6 +117,7 @@ func expectCurrentClientEntrySchema(mock sqlmock.Sqlmock, columnsExist bool, leg
 		`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_member_server ON v2_client_entry_user_policy_member\(server_type, server_id\)`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_user_subscribe_activity_last_subscribe_at ON v2_user_subscribe_activity\(last_subscribe_at\)`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_group_policy ON v2_client_entry_user_policy_split_group\(policy_id, sort, id\)`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_group_global_sort ON v2_client_entry_user_policy_split_group\(global_sort, id\)`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_group_parent ON v2_client_entry_user_policy_split_group\(parent_id\)`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_assignment_group ON v2_client_entry_user_policy_split_assignment\(group_id\)`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_assignment_user ON v2_client_entry_user_policy_split_assignment\(user_id, policy_id\)`,

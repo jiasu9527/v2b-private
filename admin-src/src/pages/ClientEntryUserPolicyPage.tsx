@@ -20,7 +20,6 @@ import {
   message,
 } from 'antd';
 import {
-  ArrowUpOutlined,
   BranchesOutlined,
   CopyOutlined,
   DeleteOutlined,
@@ -58,6 +57,7 @@ type SplitGroup = {
   path: string;
   entry_host: string;
   sort: number;
+  global_sort?: number;
   user_count: number;
   is_leaf: boolean;
 };
@@ -81,6 +81,38 @@ function sortSplitLeaves(groups: SplitGroup[]) {
       if (sortDifference !== 0) return sortDifference;
       return String(left.path).localeCompare(String(right.path), undefined, { numeric: true });
     });
+}
+
+function isSplitGroupDisplayRow(row: any) {
+  return row?.__row_kind === 'split_group' && row?.__split_group;
+}
+
+function displayRowKey(row: any) {
+  if (isSplitGroupDisplayRow(row)) return `split_group:${Number(row.__split_group.id)}`;
+  return `policy:${Number(row?.id)}`;
+}
+
+function buildPolicyDisplayRows(policies: any[]) {
+  const visible: any[] = [];
+  policies.forEach((policy) => {
+    if (!isSplitPolicy(policy)) {
+      visible.push({ ...policy, __row_kind: 'policy', __visible_sort: Number(policy.sort || 0) });
+      return;
+    }
+    sortSplitLeaves(Array.isArray(policy?.split_groups) ? policy.split_groups : []).forEach((group) => {
+      visible.push({
+        ...policy,
+        __row_kind: 'split_group',
+        __split_group: group,
+        __visible_sort: Number(group.global_sort ?? policy.sort ?? 0),
+      });
+    });
+  });
+  return visible.sort((left, right) => {
+    const difference = Number(left.__visible_sort || 0) - Number(right.__visible_sort || 0);
+    if (difference !== 0) return difference;
+    return displayRowKey(left).localeCompare(displayRowKey(right), undefined, { numeric: true });
+  });
 }
 
 const fieldOptions = [
@@ -932,140 +964,53 @@ function RangePolicySplitConverter({ row, onDone }: { row: any; onDone: () => vo
   </>;
 }
 
-function SplitGroupManager({ row, onDone, inline = false }: { row: any; onDone: () => void | Promise<void>; inline?: boolean }) {
-  const [splitGroup, setSplitGroup] = useState<SplitGroup>();
-  const [editGroup, setEditGroup] = useState<SplitGroup>();
-  const [managerOpen, setManagerOpen] = useState(false);
-  const [orderedLeaves, setOrderedLeaves] = useState<SplitGroup[]>([]);
-  const [draggingGroupID, setDraggingGroupID] = useState<number>();
-  const draggingGroupRef = useRef<number>();
-  const [dropTargetGroupID, setDropTargetGroupID] = useState<number>();
+function SplitGroupRowActions({ row, group, onDone }: { row: any; group: SplitGroup; onDone: () => void | Promise<void> }) {
+  const [splitOpen, setSplitOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [sorting, setSorting] = useState(false);
   const [splitForm] = Form.useForm();
   const [editForm] = Form.useForm();
-  const groups = (Array.isArray(row?.split_groups) ? row.split_groups : []) as SplitGroup[];
-  const leaves = sortSplitLeaves(groups);
 
-  useEffect(() => {
-    setOrderedLeaves(sortSplitLeaves(groups));
-  }, [row?.split_groups]);
-
-  const openSplit = (group: SplitGroup) => {
+  const openSplit = () => {
     splitForm.resetFields();
-    setSplitGroup(group);
+    setSplitOpen(true);
   };
-
-  const openManager = () => {
-    setOrderedLeaves(sortSplitLeaves(groups));
-    setManagerOpen(true);
-  };
-
-  const handleGroupDrop = async (targetGroup: SplitGroup) => {
-    const sourceGroupID = draggingGroupRef.current ?? draggingGroupID;
-    if (sourceGroupID === undefined || sourceGroupID === targetGroup.id || sorting) {
-      draggingGroupRef.current = undefined;
-      setDraggingGroupID(undefined);
-      setDropTargetGroupID(undefined);
-      return;
-    }
-    const fromIndex = orderedLeaves.findIndex((group) => group.id === sourceGroupID);
-    const toIndex = orderedLeaves.findIndex((group) => group.id === targetGroup.id);
-    if (fromIndex < 0 || toIndex < 0) {
-      draggingGroupRef.current = undefined;
-      setDraggingGroupID(undefined);
-      setDropTargetGroupID(undefined);
-      return;
-    }
-    const previous = orderedLeaves;
-    const next = moveItem(orderedLeaves, fromIndex, toIndex).map((group, index) => ({
-      ...group,
-      sort: (index + 1) * 10,
-    }));
-    setOrderedLeaves(next);
-    draggingGroupRef.current = undefined;
-    setDraggingGroupID(undefined);
-    setDropTargetGroupID(undefined);
-    setSorting(true);
-    try {
-      await apiPost('/server/client-entry-user-policy/split-group-sort', {
-        policy_id: row.id,
-        ids: next.map((group) => group.id),
-      });
-      message.success('二分组顺序已保存');
-    } catch (error: any) {
-      setOrderedLeaves(previous);
-      message.error(error?.message || '二分组排序保存失败');
-    } finally {
-      setSorting(false);
-    }
-  };
-
-  const moveGroupToRoot = async (requestedGroupID?: number) => {
-    // Native drag events can fire before React has committed the state update from
-    // onDragStart. Read the ID from the ref/dataTransfer path so dropping outside
-    // the table cannot silently resolve to an empty selection.
-    const groupID = requestedGroupID ?? draggingGroupRef.current ?? draggingGroupID;
-    if (groupID === undefined || sorting) return;
-    const group = orderedLeaves.find((item) => item.id === groupID);
-    setDraggingGroupID(undefined);
-    draggingGroupRef.current = undefined;
-    setDropTargetGroupID(undefined);
-    if (!group?.parent_id) return;
-    setSorting(true);
-    try {
-      await apiPost('/server/client-entry-user-policy/split-group-root', {
-        policy_id: row.id,
-        group_id: group.id,
-      });
-      message.success(`${group.path} 组已移到根级`);
-      await onDone();
-    } catch (error: any) {
-      message.error(error?.message || '移出父分组失败');
-    } finally {
-      setSorting(false);
-    }
-  };
-  const openEdit = (group: SplitGroup) => {
+  const openEdit = () => {
     editForm.resetFields();
     editForm.setFieldsValue({ entry_host: group.entry_host });
-    setEditGroup(group);
+    setEditOpen(true);
   };
-
   const submitSplit = async () => {
-    if (!splitGroup) return;
     setSaving(true);
     try {
       const values = await splitForm.validateFields();
       await apiPost('/server/client-entry-user-policy/split-group', {
         policy_id: row.id,
-        group_id: splitGroup.id,
+        group_id: group.id,
         entry_host_a: String(values.entry_host_a || '').trim(),
         entry_host_b: String(values.entry_host_b || '').trim(),
       });
-      message.success(`${splitGroup.path} 组已继续二分`);
-      setSplitGroup(undefined);
-      onDone();
+      message.success(`${group.path} 组已继续二分，新分组已在原位置展开`);
+      setSplitOpen(false);
+      await onDone();
     } catch (error: any) {
       if (!error?.errorFields) message.error(error?.message || '继续二分失败');
     } finally {
       setSaving(false);
     }
   };
-
   const submitEdit = async () => {
-    if (!editGroup) return;
     setSaving(true);
     try {
       const values = await editForm.validateFields();
       await apiPost('/server/client-entry-user-policy/split-group-host', {
         policy_id: row.id,
-        group_id: editGroup.id,
+        group_id: group.id,
         entry_host: String(values.entry_host || '').trim(),
       });
       message.success('分组入口已更新');
-      setEditGroup(undefined);
-      onDone();
+      setEditOpen(false);
+      await onDone();
     } catch (error: any) {
       if (!error?.errorFields) message.error(error?.message || '更新入口失败');
     } finally {
@@ -1073,107 +1018,17 @@ function SplitGroupManager({ row, onDone, inline = false }: { row: any; onDone: 
     }
   };
 
-  const rootDropZone = orderedLeaves.some((group) => group.parent_id) && <div
-    className="split-group-root-drop-zone"
-    onDragEnter={(event) => { event.preventDefault(); event.currentTarget.classList.add('split-group-root-drop-zone-active'); }}
-    onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; event.currentTarget.classList.add('split-group-root-drop-zone-active'); }}
-    onDragLeave={(event) => event.currentTarget.classList.remove('split-group-root-drop-zone-active')}
-    onDrop={(event) => {
-      event.preventDefault();
-      event.currentTarget.classList.remove('split-group-root-drop-zone-active');
-      const rawGroupID = event.dataTransfer.getData('text/plain');
-      const groupID = Number(rawGroupID);
-      void moveGroupToRoot(Number.isFinite(groupID) && groupID > 0 ? groupID : undefined);
-    }}
-  >
-    <ArrowUpOutlined /> 拖到这里移出父分组，放到根级
-  </div>;
-
-  const groupTable = <Table
-    className="split-group-manager-table"
-    rowKey="id"
-    size="small"
-    tableLayout="fixed"
-    pagination={false}
-    loading={sorting}
-    dataSource={orderedLeaves}
-    columns={[
-      {
-        title: '顺序',
-        key: 'sort',
-        width: 82,
-        render: (_: any, group: SplitGroup, index: number) => <Space size={6}><MenuOutlined className="drag-handle" title="拖动调整分组顺序" /><span>{index + 1}</span></Space>,
-      },
-      {
-        title: '分组',
-        key: 'group',
-        width: 160,
-        render: (_: any, group: SplitGroup) => <Space wrap><Tag color="purple">{group.path} 组</Tag><Tag>{Number(group.user_count || 0)} 人</Tag></Space>,
-      },
-      {
-        title: '入口地址',
-        dataIndex: 'entry_host',
-        render: (value: any) => <Typography.Text code copyable={{ text: String(value || '') }} ellipsis={{ tooltip: value }} style={{ maxWidth: 360 }}>{value || '-'}</Typography.Text>,
-      },
-      {
-        title: '操作',
-        key: 'action',
-        width: 280,
-        render: (_: any, group: SplitGroup) => <Space size={10} wrap className="split-group-actions">
-          <a onClick={() => openEdit(group)}><EditOutlined /> 修改入口</a>
-          {Number(group.user_count) >= 2
-            ? <a onClick={() => openSplit(group)}><BranchesOutlined /> 继续二分</a>
-            : <Typography.Text type="secondary">不足 2 人</Typography.Text>}
-          {group.parent_id && <a onClick={() => { void moveGroupToRoot(group.id); }}><ArrowUpOutlined /> 移出父组</a>}
-        </Space>,
-      },
-    ]}
-    rowClassName={(group: SplitGroup) => `split-group-sort-row ${draggingGroupID === group.id ? 'dragging-row' : ''} ${dropTargetGroupID === group.id ? 'split-group-drop-target' : ''}`}
-    onRow={(group: SplitGroup) => ({
-      draggable: !sorting,
-      onDragStart: (event) => {
-        draggingGroupRef.current = group.id;
-        event.dataTransfer.effectAllowed = 'move';
-        event.dataTransfer.setData('text/plain', String(group.id));
-        setDraggingGroupID(group.id);
-      },
-      onDragEnter: () => setDropTargetGroupID(group.id),
-      onDragOver: (event) => event.preventDefault(),
-      onDrop: () => handleGroupDrop(group),
-      onDragEnd: () => {
-        draggingGroupRef.current = undefined;
-        setDraggingGroupID(undefined);
-        setDropTargetGroupID(undefined);
-      },
-    })}
-  />;
-
   return <>
-    {!inline && <Space direction="vertical" size={4}>
-      <Button type="link" size="small" icon={<BranchesOutlined />} onClick={(event) => { event.stopPropagation(); openManager(); }}>
-        管理 {leaves.length} 个二分组
-      </Button>
-      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        {Number(row?.snapshot_user_count || 0)} 人 · 独立排序
-      </Typography.Text>
-    </Space>}
-
-    {inline ? <div className="split-group-manager-inline">{rootDropZone}{groupTable}</div> : <Modal
-      title={`管理“${String(row?.name || `规则 #${row?.id}`)}”二分组`}
-      open={managerOpen}
-      onCancel={() => setManagerOpen(false)}
-      footer={null}
-      width={920}
-      destroyOnHidden
-    >
-      {rootDropZone}
-      {groupTable}
-    </Modal>}
-
+    <Space className="client-entry-actions" size={10}>
+      <a onClick={openEdit}><EditOutlined /> 修改入口</a>
+      {Number(group.user_count) >= 2
+        ? <a onClick={openSplit}><BranchesOutlined /> 继续二分</a>
+        : <Typography.Text type="secondary">不足 2 人</Typography.Text>}
+    </Space>
     <Modal
-      title={`继续二分 ${splitGroup?.path || ''} 组`}
-      open={Boolean(splitGroup)}
-      onCancel={() => setSplitGroup(undefined)}
+      title={`继续二分 ${group.path} 组`}
+      open={splitOpen}
+      onCancel={() => setSplitOpen(false)}
       onOk={submitSplit}
       confirmLoading={saving}
       okText="确认二分"
@@ -1182,24 +1037,23 @@ function SplitGroupManager({ row, onDone, inline = false }: { row: any; onDone: 
       <Alert
         type="info"
         showIcon
-        message={`${splitGroup?.path || '-'} 组当前 ${Number(splitGroup?.user_count || 0)} 人`}
-        description="节点、解析设置和规则顺序全部继承，只需要填写两个子组的新入口。原组用户会固定平均分配到两个子组。"
+        message={`${group.path} 组当前 ${Number(group.user_count || 0)} 人`}
+        description="当前行会被两个新叶子组原地替换；节点、解析设置和全局优先级都会继承。"
         style={{ marginBottom: 16 }}
       />
       <Form form={splitForm} layout="vertical">
-        <Form.Item name="entry_host_a" label={`${splitGroup?.path || ''}.1 组入口`} rules={[{ required: true, whitespace: true, message: '请输入第一个子组入口' }]}>
+        <Form.Item name="entry_host_a" label={`${group.path}.1 组入口`} rules={[{ required: true, whitespace: true, message: '请输入第一个子组入口' }]}>
           <Input placeholder="域名或 IP" />
         </Form.Item>
-        <Form.Item name="entry_host_b" label={`${splitGroup?.path || ''}.2 组入口`} rules={[{ required: true, whitespace: true, message: '请输入第二个子组入口' }]}>
+        <Form.Item name="entry_host_b" label={`${group.path}.2 组入口`} rules={[{ required: true, whitespace: true, message: '请输入第二个子组入口' }]}>
           <Input placeholder="域名或 IP" />
         </Form.Item>
       </Form>
     </Modal>
-
     <Modal
-      title={`修改 ${editGroup?.path || ''} 组入口`}
-      open={Boolean(editGroup)}
-      onCancel={() => setEditGroup(undefined)}
+      title={`修改 ${group.path} 组入口`}
+      open={editOpen}
+      onCancel={() => setEditOpen(false)}
       onOk={submitEdit}
       confirmLoading={saving}
       okText="保存入口"
@@ -1212,39 +1066,6 @@ function SplitGroupManager({ row, onDone, inline = false }: { row: any; onDone: 
       </Form>
     </Modal>
   </>;
-}
-
-function SplitGroupsOutside({ rows, onDone }: { rows: any[]; onDone: () => void | Promise<void> }) {
-  const splitRows = rows.filter((row) => isSplitPolicy(row) && sortSplitLeaves(Array.isArray(row?.split_groups) ? row.split_groups : []).length > 0);
-  if (!splitRows.length) return null;
-
-  return <section className="client-entry-split-groups-outside">
-    <div className="client-entry-split-groups-heading">
-      <Space wrap size={8}>
-        <BranchesOutlined />
-        <Typography.Text strong>固定二分组</Typography.Text>
-        <Tag color="purple">外置管理</Tag>
-      </Space>
-      <Typography.Text type="secondary">
-        分组不再藏在规则行里。直接拖动分组行调整顺序；修改入口、继续二分也都在这里操作。
-      </Typography.Text>
-    </div>
-    {splitRows.map((row) => {
-      const leaves = sortSplitLeaves(Array.isArray(row?.split_groups) ? row.split_groups : []);
-      return <div className="client-entry-split-rule-outside" key={row.id}>
-        <div className="client-entry-split-rule-heading">
-          <Space wrap size={8}>
-            <Typography.Text strong>{String(row?.name || `规则 #${row?.id}`)}</Typography.Text>
-            <Tag>{leaves.length} 个分组</Tag>
-            <Tag color="cyan">{Number(row?.snapshot_user_count || 0)} 人</Tag>
-            <Tag color={Number(row?.enabled) !== 0 ? 'green' : 'default'}>{Number(row?.enabled) !== 0 ? '规则已启用' : '规则已停用'}</Tag>
-          </Space>
-          <Typography.Text type="secondary">组内顺序独立保存，不改变上方规则的匹配优先级。</Typography.Text>
-        </div>
-        <SplitGroupManager row={row} onDone={onDone} inline />
-      </div>;
-    })}
-  </section>;
 }
 
 function SimulationModal({
@@ -1358,6 +1179,7 @@ function SimulationModal({
 }
 
 export default function ClientEntryUserPolicyPage() {
+  const [policyRows, setPolicyRows] = useState<any[]>([]);
   const [rows, setRows] = useState<any[]>([]);
   const [serverOptions, setServerOptions] = useState<ClientEntryServerOption[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1372,7 +1194,7 @@ export default function ClientEntryUserPolicyPage() {
         apiGet('/server/manage/getNodes').catch(() => ({ data: [] })),
       ]);
       const policies = Array.isArray(policyRes.data) ? policyRes.data : [];
-      setRows(policies.map((row: any) => ({
+      const normalizedPolicies = policies.map((row: any) => ({
         ...row,
         mode: isSplitPolicy(row) ? 'split' : 'standard',
         resolve_entry_host: normalizeResolveEntryHost(row.resolve_entry_host),
@@ -1383,12 +1205,15 @@ export default function ClientEntryUserPolicyPage() {
           parent_id: group.parent_id === undefined || group.parent_id === null ? undefined : Number(group.parent_id),
           user_count: Number(group.user_count || 0),
           sort: Number(group.sort || 0),
+          global_sort: group.global_sort === undefined || group.global_sort === null ? undefined : Number(group.global_sort),
           is_leaf: group.is_leaf === true || Number(group.is_leaf) !== 0,
         })) : [],
         conditions: parseConditions(row.conditions),
         extra_nodes: parseExtraNodes(row.extra_nodes),
         extra_nodes_position: normalizeExtraNodePosition(row.extra_nodes_position),
-      })));
+      }));
+      setPolicyRows(normalizedPolicies);
+      setRows(buildPolicyDisplayRows(normalizedPolicies));
       setServerOptions(buildVisibleServerOptions(Array.isArray(nodeRes.data) ? nodeRes.data : []));
     } catch (error: any) {
       message.error(error?.message || '加载失败');
@@ -1426,18 +1251,22 @@ export default function ClientEntryUserPolicyPage() {
   };
 
   const saveSort = async (nextRows: any[]) => {
-    await apiPost('/server/client-entry-user-policy/sort', { ids: nextRows.map((row) => row.id) });
+    await apiPost('/server/client-entry-user-policy/sort', {
+      items: nextRows.map((row) => isSplitGroupDisplayRow(row)
+        ? { kind: 'split_group', id: Number(row.__split_group.id) }
+        : { kind: 'policy', id: Number(row.id) }),
+    });
   };
 
   const handleDrop = async (targetRow: any) => {
     if (!draggingKey) return;
-    const targetKey = String(targetRow.id);
+    const targetKey = displayRowKey(targetRow);
     if (draggingKey === targetKey) {
       setDraggingKey(null);
       return;
     }
-    const fromIndex = rows.findIndex((row) => String(row.id) === draggingKey);
-    const toIndex = rows.findIndex((row) => String(row.id) === targetKey);
+    const fromIndex = rows.findIndex((row) => displayRowKey(row) === draggingKey);
+    const toIndex = rows.findIndex((row) => displayRowKey(row) === targetKey);
     if (fromIndex < 0 || toIndex < 0) {
       setDraggingKey(null);
       return;
@@ -1468,6 +1297,10 @@ export default function ClientEntryUserPolicyPage() {
       width: 210,
       render: (value: any, row: any) => {
         const text = String(value || `规则 #${row.id}`);
+        if (isSplitGroupDisplayRow(row)) return <Space size={6} wrap>
+          <Tag color="purple">{row.__split_group.path} 组</Tag>
+          <span className="client-entry-rule-name" title={text}>{text}</span>
+        </Space>;
         return <span className="client-entry-rule-name" title={text}>{text}</span>;
       },
     },
@@ -1477,14 +1310,15 @@ export default function ClientEntryUserPolicyPage() {
       width: 620,
       render: (value: any, row: any) => {
         if (isSplitPolicy(row)) {
+          const group = isSplitGroupDisplayRow(row) ? row.__split_group as SplitGroup : undefined;
           const range = singleUserIDRange(value);
           const from = Number(row.snapshot_from || 0);
           const to = Number(row.snapshot_to || 0);
           const minutes = from > 0 && to >= from ? Math.max(1, Math.round((to - from) / 60)) : 0;
           if (range) return <Space direction="vertical" size={4}>
             <Space wrap>
-              <Tag color="purple" icon={<BranchesOutlined />}>固定二分快照</Tag>
-              <Tag color="cyan">{Number(row.snapshot_user_count || 0)} 人</Tag>
+              <Tag color="purple" icon={<BranchesOutlined />}>{group?.path || '-'} 组固定名单</Tag>
+              <Tag color="cyan">{Number(group?.user_count || 0)} 人</Tag>
               <Tag>ID 范围固定快照 #{range.min} ～ #{range.max}</Tag>
             </Space>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -1494,8 +1328,8 @@ export default function ClientEntryUserPolicyPage() {
           </Space>;
           return <Space direction="vertical" size={4}>
             <Space wrap>
-              <Tag color="purple" icon={<BranchesOutlined />}>固定二分快照</Tag>
-              <Tag color="cyan">{Number(row.snapshot_user_count || 0)} 人</Tag>
+              <Tag color="purple" icon={<BranchesOutlined />}>{group?.path || '-'} 组固定名单</Tag>
+              <Tag color="cyan">{Number(group?.user_count || 0)} 人</Tag>
               {minutes > 0 && <Tag>最近 {minutes} 分钟</Tag>}
             </Space>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -1526,16 +1360,10 @@ export default function ClientEntryUserPolicyPage() {
       key: 'result',
       width: 410,
       render: (_: any, row: any) => {
-        if (isSplitPolicy(row)) {
-          const leafCount = sortSplitLeaves(Array.isArray(row?.split_groups) ? row.split_groups : []).length;
-          return <Space direction="vertical" size={5}>
-          <Space wrap>
-            <Tag color="purple">固定二分 {leafCount} 组</Tag>
-            <Typography.Text type="secondary">请在下方外置列表管理</Typography.Text>
-          </Space>
-          {normalizeResolveEntryHost(row.resolve_entry_host) && <Tag color="cyan" style={{ width: 'fit-content', marginInlineEnd: 0 }}>域名解析为 IP</Tag>}
+        if (isSplitGroupDisplayRow(row)) return <Space direction="vertical" size={4}>
+          <Typography.Text code copyable={{ text: String(row.__split_group.entry_host || '') }}>{row.__split_group.entry_host || '-'}</Typography.Text>
+          {normalizeResolveEntryHost(row.resolve_entry_host) && <Tag color="cyan" style={{ width: 'fit-content', marginInlineEnd: 0 }}>解析为 IP</Tag>}
         </Space>;
-        }
         const action = normalizePolicyAction(row.action);
         if (action === 'hide') return <Tag color="red">不下发节点</Tag>;
         if (action === 'original') return <Tag color="blue">下发原入口地址</Tag>;
@@ -1578,9 +1406,9 @@ export default function ClientEntryUserPolicyPage() {
       align: 'right',
       width: 310,
       render: (_: any, row: any) => {
-        if (isSplitPolicy(row)) return <Space className="client-entry-actions" size={10}>
-          <Tag color="purple">固定分组</Tag>
-          <Popconfirm title="确认删除整条二分规则及其固定用户名单？" onConfirm={() => drop(row)}><a>删除</a></Popconfirm>
+        if (isSplitGroupDisplayRow(row)) return <Space className="client-entry-actions" size={10}>
+          <SplitGroupRowActions row={row} group={row.__split_group} onDone={load} />
+          <Popconfirm title={`确认删除“${row.name || `规则 #${row.id}`}”整条二分规则及全部固定名单？`} onConfirm={() => drop(row)}><a>删除整组</a></Popconfirm>
         </Space>;
         const copyRow = { ...row, id: undefined, name: `${row.name || `规则 #${row.id}`} - 副本` };
         return <Space className="client-entry-actions" size={10}>
@@ -1601,7 +1429,7 @@ export default function ClientEntryUserPolicyPage() {
         type="info"
         showIcon
         message="仅入口分配节点的下发规则"
-        description="节点编辑中标记为“仅入口分配”的节点，请先保持节点“显示”为“显示”。固定二分既可从近期成功拉取订阅的用户创建，也可把只有一个用户 ID 范围条件、没有额外节点的覆盖规则原地转换；转换会沿用原规则的节点、解析设置、顺序、名称和启停状态。名单固定后可继续二分任意叶子组。未命中规则的用户看不到仅入口分配节点，节点权限组仍然生效。"
+        description="节点编辑中标记为“仅入口分配”的节点，请先保持节点“显示”为“显示”。固定二分的每个当前叶子组都会直接显示为主表独立行，不再显示父容器；这些行可与普通规则一起拖动，页面顺序就是实际订阅匹配优先级。名单固定后可继续二分任意叶子组。"
       />
       <Card className="block-card" styles={{ body: { padding: 0 } }}>
         <div className="forest-table-action">
@@ -1609,29 +1437,28 @@ export default function ClientEntryUserPolicyPage() {
             <PolicyEditor onDone={load} serverOptions={serverOptions}><Button type="primary" icon={<PlusOutlined />}>新增入口规则</Button></PolicyEditor>
             <SplitPolicyCreator onDone={load} serverOptions={serverOptions}><Button icon={<BranchesOutlined />}>近期用户固定二分</Button></SplitPolicyCreator>
             <Button icon={<PlayCircleOutlined />} onClick={() => setSimulatorOpen(true)}>模拟匹配</Button>
-            <Typography.Text type="secondary">规则从上到下匹配，拖动行即可调整顺序；第一条命中的规则生效。</Typography.Text>
+            <Typography.Text type="secondary">普通规则和二分叶子组统一从上到下匹配；拖动任意行即可调整全局优先级。</Typography.Text>
           </Space>
         </div>
         <Table
           className="forest-table"
-          rowKey="id"
+          rowKey={displayRowKey}
           tableLayout="fixed"
           columns={columns}
           dataSource={rows}
           pagination={false}
           scroll={{ x: 2405 }}
-          rowClassName={(row) => `sortable-row ${draggingKey === String(row.id) ? 'dragging-row' : ''}`}
+          rowClassName={(row) => `sortable-row ${draggingKey === displayRowKey(row) ? 'dragging-row' : ''} ${isSplitGroupDisplayRow(row) ? 'split-group-main-row' : ''}`}
           onRow={(row) => ({
             draggable: true,
-            onDragStart: () => setDraggingKey(String(row.id)),
+            onDragStart: () => setDraggingKey(displayRowKey(row)),
             onDragOver: (event) => event.preventDefault(),
             onDrop: () => handleDrop(row),
             onDragEnd: () => setDraggingKey(null),
           })}
         />
       </Card>
-      <SplitGroupsOutside rows={rows} onDone={load} />
     </Spin>
-    <SimulationModal open={simulatorOpen} onClose={() => setSimulatorOpen(false)} rows={rows} serverOptions={serverOptions} />
+    <SimulationModal open={simulatorOpen} onClose={() => setSimulatorOpen(false)} rows={policyRows} serverOptions={serverOptions} />
   </div>;
 }

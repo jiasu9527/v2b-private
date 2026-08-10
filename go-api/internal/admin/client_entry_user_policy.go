@@ -14,6 +14,7 @@ import (
 )
 
 const clientEntryRuleSortStep int64 = 10
+const clientEntryVisibleOrderLockKey int64 = 2026081001
 
 func (s *DBService) ListClientEntryUserPolicies(ctx context.Context) ([]ClientEntryUserPolicyRecord, error) {
 	if s.db == nil {
@@ -400,6 +401,137 @@ func (s *DBService) SortClientEntryUserPolicies(ctx context.Context, ids []int64
 	return true, nil
 }
 
+// SortClientEntryUserPolicyRows persists the exact flattened rows rendered by
+// the admin table: standard policies and current split leaves share one global
+// ordering namespace. Split policy containers and non-leaf history rows are
+// deliberately excluded.
+func (s *DBService) SortClientEntryUserPolicyRows(ctx context.Context, items []ClientEntryUserPolicySortItem) (bool, error) {
+	if s.db == nil {
+		return false, ErrUnavailable
+	}
+	if err := s.ensureClientEntrySchema(ctx); err != nil {
+		return false, err
+	}
+	type rowKey struct {
+		kind string
+		id   int64
+	}
+	seen := make(map[rowKey]struct{}, len(items))
+	for index := range items {
+		items[index].Kind = strings.ToLower(strings.TrimSpace(items[index].Kind))
+		if (items[index].Kind != "policy" && items[index].Kind != "split_group") || items[index].ID <= 0 {
+			return false, errors.New("规则顺序无效")
+		}
+		key := rowKey{kind: items[index].Kind, id: items[index].ID}
+		if _, exists := seen[key]; exists {
+			return false, errors.New("规则顺序包含重复项")
+		}
+		seen[key] = struct{}{}
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, errors.New("保存排序失败")
+	}
+	defer tx.Rollback()
+	if err := lockClientEntryVisibleOrder(ctx, tx); err != nil {
+		return false, errors.New("保存排序失败")
+	}
+
+	actual := make(map[rowKey]struct{}, len(items))
+	policyRows, err := tx.QueryContext(ctx, `SELECT id, mode FROM v2_client_entry_user_policy ORDER BY id ASC FOR UPDATE`)
+	if err != nil {
+		return false, errors.New("保存排序失败")
+	}
+	for policyRows.Next() {
+		var id int64
+		var mode string
+		if err := policyRows.Scan(&id, &mode); err != nil {
+			policyRows.Close()
+			return false, errors.New("保存排序失败")
+		}
+		if !strings.EqualFold(strings.TrimSpace(mode), ClientEntryUserPolicyModeSplit) {
+			actual[rowKey{kind: "policy", id: id}] = struct{}{}
+		}
+	}
+	if err := policyRows.Err(); err != nil {
+		policyRows.Close()
+		return false, errors.New("保存排序失败")
+	}
+	if err := policyRows.Close(); err != nil {
+		return false, errors.New("保存排序失败")
+	}
+
+	groupRows, err := tx.QueryContext(ctx, `SELECT split_group.id
+FROM v2_client_entry_user_policy_split_group split_group
+JOIN v2_client_entry_user_policy policy ON policy.id = split_group.policy_id
+WHERE policy.mode = 'split'
+  AND NOT EXISTS (
+	SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = split_group.id
+  )
+ORDER BY split_group.id ASC
+FOR UPDATE OF split_group`)
+	if err != nil {
+		return false, errors.New("保存排序失败")
+	}
+	for groupRows.Next() {
+		var id int64
+		if err := groupRows.Scan(&id); err != nil {
+			groupRows.Close()
+			return false, errors.New("保存排序失败")
+		}
+		actual[rowKey{kind: "split_group", id: id}] = struct{}{}
+	}
+	if err := groupRows.Err(); err != nil {
+		groupRows.Close()
+		return false, errors.New("保存排序失败")
+	}
+	if err := groupRows.Close(); err != nil {
+		return false, errors.New("保存排序失败")
+	}
+	if len(actual) != len(seen) {
+		return false, errors.New("规则列表已变化，请刷新后重试")
+	}
+	for key := range seen {
+		if _, exists := actual[key]; !exists {
+			return false, errors.New("规则列表已变化，请刷新后重试")
+		}
+	}
+
+	now := time.Now().Unix()
+	for index, item := range items {
+		nextSort := int64(index+1) * clientEntryRuleSortStep
+		var result sql.Result
+		if item.Kind == "policy" {
+			result, err = tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
+SET sort = $2, updated_at = $3
+WHERE id = $1 AND mode <> 'split'`, item.ID, nextSort, now)
+		} else {
+			result, err = tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy_split_group split_group
+SET global_sort = $2, updated_at = $3
+WHERE split_group.id = $1
+  AND EXISTS (
+	SELECT 1 FROM v2_client_entry_user_policy policy
+	WHERE policy.id = split_group.policy_id AND policy.mode = 'split'
+  )
+  AND NOT EXISTS (
+	SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = split_group.id
+  )`, item.ID, nextSort, now)
+		}
+		if err != nil || requireClientEntryRuleAffected(result, "规则") != nil {
+			return false, errors.New("保存排序失败")
+		}
+	}
+	if err := syncClientEntrySplitPolicySorts(ctx, tx); err != nil {
+		return false, errors.New("保存排序失败")
+	}
+	if err := tx.Commit(); err != nil {
+		return false, errors.New("保存排序失败")
+	}
+	s.markClientEntryMonitorTargetsDirty()
+	return true, nil
+}
+
 func (s *DBService) DeleteClientEntryUserPolicy(ctx context.Context, id int64) (bool, error) {
 	if s.db == nil {
 		return false, ErrUnavailable
@@ -581,21 +713,72 @@ func validateClientEntryRuleMembers(ctx context.Context, tx *sql.Tx, members []C
 }
 
 func nextClientEntryRuleSort(ctx context.Context, tx *sql.Tx) (int64, error) {
-	var last sql.NullInt64
-	err := tx.QueryRowContext(ctx, `SELECT sort FROM v2_client_entry_user_policy
-ORDER BY sort DESC NULLS LAST, id DESC
-LIMIT 1
-FOR UPDATE`).Scan(&last)
-	if errors.Is(err, sql.ErrNoRows) {
-		return clientEntryRuleSortStep, nil
+	if err := lockClientEntryVisibleOrder(ctx, tx); err != nil {
+		return 0, err
 	}
+	var last int64
+	err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(visible_sort), 0)::BIGINT
+FROM (
+	SELECT policy.sort::BIGINT AS visible_sort
+	FROM v2_client_entry_user_policy policy
+	WHERE policy.mode <> 'split'
+	UNION ALL
+	SELECT split_group.global_sort AS visible_sort
+	FROM v2_client_entry_user_policy_split_group split_group
+	JOIN v2_client_entry_user_policy policy ON policy.id = split_group.policy_id
+	WHERE policy.mode = 'split' AND split_group.global_sort IS NOT NULL
+	  AND NOT EXISTS (
+		SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = split_group.id
+	  )
+) visible`).Scan(&last)
 	if err != nil {
 		return 0, err
 	}
-	if !last.Valid || last.Int64 < 0 || last.Int64 > (1<<62) {
+	if last < 0 || last > (1<<62) {
 		return clientEntryRuleSortStep, nil
 	}
-	return last.Int64 + clientEntryRuleSortStep, nil
+	return last + clientEntryRuleSortStep, nil
+}
+
+func lockClientEntryVisibleOrder(ctx context.Context, tx *sql.Tx) error {
+	if tx == nil {
+		return errors.New("排序事务不存在")
+	}
+	_, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, clientEntryVisibleOrderLockKey)
+	return err
+}
+
+func shiftClientEntryVisibleSortsAfter(ctx context.Context, tx *sql.Tx, position, delta int64) error {
+	if delta <= 0 {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
+SET sort = sort + $2
+WHERE mode <> 'split' AND sort > $1`, position, delta); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy_split_group
+SET global_sort = global_sort + $2
+WHERE global_sort IS NOT NULL AND global_sort > $1`, position, delta); err != nil {
+		return err
+	}
+	return syncClientEntrySplitPolicySorts(ctx, tx)
+}
+
+func syncClientEntrySplitPolicySorts(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy policy
+SET sort = positions.global_sort::INTEGER
+FROM (
+	SELECT split_group.policy_id, MIN(split_group.global_sort) AS global_sort
+	FROM v2_client_entry_user_policy_split_group split_group
+	WHERE split_group.global_sort IS NOT NULL
+	  AND NOT EXISTS (
+		SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = split_group.id
+	  )
+	GROUP BY split_group.policy_id
+) positions
+WHERE policy.id = positions.policy_id AND policy.mode = 'split'`)
+	return err
 }
 
 func requireClientEntryRuleAffected(result sql.Result, label string) error {

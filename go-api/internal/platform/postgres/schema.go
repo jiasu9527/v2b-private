@@ -102,6 +102,7 @@ name varchar(255) NOT NULL DEFAULT '',
 path varchar(255) NOT NULL DEFAULT '',
 entry_host varchar(255) NOT NULL DEFAULT '',
 sort INTEGER NOT NULL DEFAULT 0,
+global_sort BIGINT DEFAULT NULL,
 created_at BIGINT NOT NULL,
 updated_at BIGINT NOT NULL,
 PRIMARY KEY (id),
@@ -151,6 +152,7 @@ CONSTRAINT fk_v2_client_entry_user_policy_split_assignment_group FOREIGN KEY (gr
 		{"v2_client_entry_user_policy", "extra_nodes_position", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN extra_nodes_position varchar(16) NOT NULL DEFAULT 'after'`},
 		{"v2_client_entry_user_policy", "snapshot_from", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN snapshot_from BIGINT DEFAULT NULL`},
 		{"v2_client_entry_user_policy", "snapshot_to", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN snapshot_to BIGINT DEFAULT NULL`},
+		{"v2_client_entry_user_policy_split_group", "global_sort", `ALTER TABLE v2_client_entry_user_policy_split_group ADD COLUMN global_sort BIGINT DEFAULT NULL`},
 		{"v2_server_shadowsocks", "client_entry_only", `ALTER TABLE v2_server_shadowsocks ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
 		{"v2_server_vmess", "client_entry_only", `ALTER TABLE v2_server_vmess ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
 		{"v2_server_vless", "client_entry_only", `ALTER TABLE v2_server_vless ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
@@ -169,6 +171,10 @@ CONSTRAINT fk_v2_client_entry_user_policy_split_assignment_group FOREIGN KEY (gr
 				return fmt.Errorf("ensure client entry column %s.%s: %w", item.table, item.column, err)
 			}
 		}
+	}
+
+	if err := backfillClientEntrySplitGlobalSort(ctx, db); err != nil {
+		return err
 	}
 
 	// The updater needs stable relation rows before converting legacy policy
@@ -257,6 +263,7 @@ $client_entry_split$;`, constraint.table, constraint.name, constraint.definition
 		`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_member_server ON v2_client_entry_user_policy_member(server_type, server_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_user_subscribe_activity_last_subscribe_at ON v2_user_subscribe_activity(last_subscribe_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_group_policy ON v2_client_entry_user_policy_split_group(policy_id, sort, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_group_global_sort ON v2_client_entry_user_policy_split_group(global_sort, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_group_parent ON v2_client_entry_user_policy_split_group(parent_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_assignment_group ON v2_client_entry_user_policy_split_assignment(group_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_assignment_user ON v2_client_entry_user_policy_split_assignment(user_id, policy_id)`,
@@ -264,6 +271,73 @@ $client_entry_split$;`, constraint.table, constraint.name, constraint.definition
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("ensure client entry index: %w", err)
 		}
+	}
+	return nil
+}
+
+// backfillClientEntrySplitGlobalSort expands legacy split policies into the
+// same visible ordering namespace as standard policies. It only runs when a
+// visible split leaf has no global position, so normal schema checks never
+// rewrite an administrator's saved cross-rule ordering.
+func backfillClientEntrySplitGlobalSort(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `WITH needs_backfill AS MATERIALIZED (
+  SELECT EXISTS (
+    SELECT 1
+    FROM v2_client_entry_user_policy_split_group split_group
+    JOIN v2_client_entry_user_policy policy ON policy.id = split_group.policy_id
+    WHERE policy.mode = 'split'
+      AND split_group.global_sort IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = split_group.id
+      )
+  ) AS needed
+), visible AS MATERIALIZED (
+  SELECT 'policy'::text AS kind, policy.id::BIGINT AS id, policy.id::BIGINT AS policy_id,
+         policy.sort::BIGINT AS policy_sort, 0::BIGINT AS local_sort, ''::text AS path
+  FROM v2_client_entry_user_policy policy
+  CROSS JOIN needs_backfill
+  WHERE needs_backfill.needed AND policy.mode <> 'split'
+  UNION ALL
+  SELECT 'split_group'::text, split_group.id, split_group.policy_id::BIGINT,
+         policy.sort::BIGINT, split_group.sort::BIGINT, split_group.path::text
+  FROM v2_client_entry_user_policy policy
+  JOIN v2_client_entry_user_policy_split_group split_group ON split_group.policy_id = policy.id
+  CROSS JOIN needs_backfill
+  WHERE needs_backfill.needed AND policy.mode = 'split'
+    AND NOT EXISTS (
+      SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = split_group.id
+    )
+), ranked AS MATERIALIZED (
+  SELECT kind, id, policy_id,
+         ROW_NUMBER() OVER (
+           ORDER BY policy_sort ASC, CASE WHEN kind = 'policy' THEN 0 ELSE 1 END ASC,
+                    local_sort ASC, path ASC, id ASC
+         ) * 10 AS next_sort
+  FROM visible
+), updated_standard AS (
+  UPDATE v2_client_entry_user_policy policy
+  SET sort = ranked.next_sort::INTEGER
+  FROM ranked
+  WHERE ranked.kind = 'policy' AND policy.id = ranked.id
+  RETURNING policy.id
+), updated_split AS (
+  UPDATE v2_client_entry_user_policy policy
+  SET sort = positions.next_sort::INTEGER
+  FROM (
+    SELECT policy_id, MIN(next_sort) AS next_sort
+    FROM ranked
+    WHERE kind = 'split_group'
+    GROUP BY policy_id
+  ) positions
+  WHERE policy.id = positions.policy_id AND policy.mode = 'split'
+  RETURNING policy.id
+)
+UPDATE v2_client_entry_user_policy_split_group split_group
+SET global_sort = ranked.next_sort
+FROM ranked
+WHERE ranked.kind = 'split_group' AND split_group.id = ranked.id`)
+	if err != nil {
+		return fmt.Errorf("backfill client entry split global sort: %w", err)
 	}
 	return nil
 }

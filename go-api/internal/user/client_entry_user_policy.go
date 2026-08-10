@@ -39,7 +39,9 @@ LEFT JOIN v2_client_entry_user_policy_split_assignment split_assignment
 LEFT JOIN v2_client_entry_user_policy_split_group split_group
   ON split_group.id = split_assignment.group_id AND split_group.policy_id = p.id
 WHERE p.enabled = 1
-ORDER BY p.sort ASC NULLS LAST, p.id ASC, m.sort ASC NULLS LAST, m.id ASC`, userID)
+  AND (p.mode <> 'split' OR split_group.id IS NOT NULL)
+ORDER BY CASE WHEN p.mode = 'split' THEN COALESCE(split_group.global_sort, p.sort) ELSE p.sort END ASC NULLS LAST,
+         p.id ASC, m.sort ASC NULLS LAST, m.id ASC`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("query client entry rules: %w", err)
 	}

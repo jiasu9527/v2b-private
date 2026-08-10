@@ -913,7 +913,7 @@ type fakeAdminService struct {
 	lastClientEntryGroupSort      admin.ClientEntryUserPolicyGroupSortRequest
 	lastClientEntryGroupMove      admin.ClientEntryUserPolicyGroupMoveRequest
 	lastClientEntryPolicyEnabled  [2]int64
-	lastClientEntryUserPolicySort []int64
+	lastClientEntryUserPolicySort []admin.ClientEntryUserPolicySortItem
 	lastClientEntryUserPolicyDrop int64
 	lastRouteSave                 admin.ServerRouteSaveRequest
 	lastRouteDrop                 int64
@@ -1184,7 +1184,11 @@ func (f *fakeAdminService) SetClientEntryUserPolicyEnabled(_ context.Context, id
 }
 
 func (f *fakeAdminService) SortClientEntryUserPolicies(_ context.Context, ids []int64) (bool, error) {
-	f.lastClientEntryUserPolicySort = append([]int64(nil), ids...)
+	return true, f.err
+}
+
+func (f *fakeAdminService) SortClientEntryUserPolicyRows(_ context.Context, items []admin.ClientEntryUserPolicySortItem) (bool, error) {
+	f.lastClientEntryUserPolicySort = append([]admin.ClientEntryUserPolicySortItem(nil), items...)
 	return true, f.err
 }
 
@@ -4514,15 +4518,15 @@ func TestRouterAdminClientEntryUserPolicySortEndpoint(t *testing.T) {
 		WithAdminService(adminService),
 	)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/sort", strings.NewReader(`{"auth_data":"jwt-admin","ids":[8,3,12]}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/sort", strings.NewReader(`{"items":[{"kind":"policy","id":8},{"kind":"split_group","id":201},{"kind":"policy","id":12}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if got := adminService.lastClientEntryUserPolicySort; len(got) != 3 || got[0] != 8 || got[1] != 3 || got[2] != 12 {
-		t.Fatalf("unexpected sorted ids: %#v", got)
+	if got := adminService.lastClientEntryUserPolicySort; len(got) != 3 || got[0].Kind != "policy" || got[0].ID != 8 || got[1].Kind != "split_group" || got[1].ID != 201 || got[2].ID != 12 {
+		t.Fatalf("unexpected sorted rows: %#v", got)
 	}
 }
 
