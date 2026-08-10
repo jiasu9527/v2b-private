@@ -932,12 +932,13 @@ function RangePolicySplitConverter({ row, onDone }: { row: any; onDone: () => vo
   </>;
 }
 
-function SplitGroupManager({ row, onDone }: { row: any; onDone: () => void }) {
+function SplitGroupManager({ row, onDone, inline = false }: { row: any; onDone: () => void | Promise<void>; inline?: boolean }) {
   const [splitGroup, setSplitGroup] = useState<SplitGroup>();
   const [editGroup, setEditGroup] = useState<SplitGroup>();
   const [managerOpen, setManagerOpen] = useState(false);
   const [orderedLeaves, setOrderedLeaves] = useState<SplitGroup[]>([]);
   const [draggingGroupID, setDraggingGroupID] = useState<number>();
+  const draggingGroupRef = useRef<number>();
   const [dropTargetGroupID, setDropTargetGroupID] = useState<number>();
   const [saving, setSaving] = useState(false);
   const [sorting, setSorting] = useState(false);
@@ -961,14 +962,17 @@ function SplitGroupManager({ row, onDone }: { row: any; onDone: () => void }) {
   };
 
   const handleGroupDrop = async (targetGroup: SplitGroup) => {
-    if (draggingGroupID === undefined || draggingGroupID === targetGroup.id || sorting) {
+    const sourceGroupID = draggingGroupRef.current ?? draggingGroupID;
+    if (sourceGroupID === undefined || sourceGroupID === targetGroup.id || sorting) {
+      draggingGroupRef.current = undefined;
       setDraggingGroupID(undefined);
       setDropTargetGroupID(undefined);
       return;
     }
-    const fromIndex = orderedLeaves.findIndex((group) => group.id === draggingGroupID);
+    const fromIndex = orderedLeaves.findIndex((group) => group.id === sourceGroupID);
     const toIndex = orderedLeaves.findIndex((group) => group.id === targetGroup.id);
     if (fromIndex < 0 || toIndex < 0) {
+      draggingGroupRef.current = undefined;
       setDraggingGroupID(undefined);
       setDropTargetGroupID(undefined);
       return;
@@ -979,6 +983,7 @@ function SplitGroupManager({ row, onDone }: { row: any; onDone: () => void }) {
       sort: (index + 1) * 10,
     }));
     setOrderedLeaves(next);
+    draggingGroupRef.current = undefined;
     setDraggingGroupID(undefined);
     setDropTargetGroupID(undefined);
     setSorting(true);
@@ -997,10 +1002,14 @@ function SplitGroupManager({ row, onDone }: { row: any; onDone: () => void }) {
   };
 
   const moveGroupToRoot = async (requestedGroupID?: number) => {
-    const groupID = requestedGroupID ?? draggingGroupID;
+    // Native drag events can fire before React has committed the state update from
+    // onDragStart. Read the ID from the ref/dataTransfer path so dropping outside
+    // the table cannot silently resolve to an empty selection.
+    const groupID = requestedGroupID ?? draggingGroupRef.current ?? draggingGroupID;
     if (groupID === undefined || sorting) return;
     const group = orderedLeaves.find((item) => item.id === groupID);
     setDraggingGroupID(undefined);
+    draggingGroupRef.current = undefined;
     setDropTargetGroupID(undefined);
     if (!group?.parent_id) return;
     setSorting(true);
@@ -1010,7 +1019,7 @@ function SplitGroupManager({ row, onDone }: { row: any; onDone: () => void }) {
         group_id: group.id,
       });
       message.success(`${group.path} 组已移到根级`);
-      onDone();
+      await onDone();
     } catch (error: any) {
       message.error(error?.message || '移出父分组失败');
     } finally {
@@ -1064,17 +1073,92 @@ function SplitGroupManager({ row, onDone }: { row: any; onDone: () => void }) {
     }
   };
 
+  const rootDropZone = orderedLeaves.some((group) => group.parent_id) && <div
+    className="split-group-root-drop-zone"
+    onDragEnter={(event) => { event.preventDefault(); event.currentTarget.classList.add('split-group-root-drop-zone-active'); }}
+    onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; event.currentTarget.classList.add('split-group-root-drop-zone-active'); }}
+    onDragLeave={(event) => event.currentTarget.classList.remove('split-group-root-drop-zone-active')}
+    onDrop={(event) => {
+      event.preventDefault();
+      event.currentTarget.classList.remove('split-group-root-drop-zone-active');
+      const rawGroupID = event.dataTransfer.getData('text/plain');
+      const groupID = Number(rawGroupID);
+      void moveGroupToRoot(Number.isFinite(groupID) && groupID > 0 ? groupID : undefined);
+    }}
+  >
+    <ArrowUpOutlined /> 拖到这里移出父分组，放到根级
+  </div>;
+
+  const groupTable = <Table
+    className="split-group-manager-table"
+    rowKey="id"
+    size="small"
+    tableLayout="fixed"
+    pagination={false}
+    loading={sorting}
+    dataSource={orderedLeaves}
+    columns={[
+      {
+        title: '顺序',
+        key: 'sort',
+        width: 82,
+        render: (_: any, group: SplitGroup, index: number) => <Space size={6}><MenuOutlined className="drag-handle" title="拖动调整分组顺序" /><span>{index + 1}</span></Space>,
+      },
+      {
+        title: '分组',
+        key: 'group',
+        width: 160,
+        render: (_: any, group: SplitGroup) => <Space wrap><Tag color="purple">{group.path} 组</Tag><Tag>{Number(group.user_count || 0)} 人</Tag></Space>,
+      },
+      {
+        title: '入口地址',
+        dataIndex: 'entry_host',
+        render: (value: any) => <Typography.Text code copyable={{ text: String(value || '') }} ellipsis={{ tooltip: value }} style={{ maxWidth: 360 }}>{value || '-'}</Typography.Text>,
+      },
+      {
+        title: '操作',
+        key: 'action',
+        width: 280,
+        render: (_: any, group: SplitGroup) => <Space size={10} wrap className="split-group-actions">
+          <a onClick={() => openEdit(group)}><EditOutlined /> 修改入口</a>
+          {Number(group.user_count) >= 2
+            ? <a onClick={() => openSplit(group)}><BranchesOutlined /> 继续二分</a>
+            : <Typography.Text type="secondary">不足 2 人</Typography.Text>}
+          {group.parent_id && <a onClick={() => { void moveGroupToRoot(group.id); }}><ArrowUpOutlined /> 移出父组</a>}
+        </Space>,
+      },
+    ]}
+    rowClassName={(group: SplitGroup) => `split-group-sort-row ${draggingGroupID === group.id ? 'dragging-row' : ''} ${dropTargetGroupID === group.id ? 'split-group-drop-target' : ''}`}
+    onRow={(group: SplitGroup) => ({
+      draggable: !sorting,
+      onDragStart: (event) => {
+        draggingGroupRef.current = group.id;
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', String(group.id));
+        setDraggingGroupID(group.id);
+      },
+      onDragEnter: () => setDropTargetGroupID(group.id),
+      onDragOver: (event) => event.preventDefault(),
+      onDrop: () => handleGroupDrop(group),
+      onDragEnd: () => {
+        draggingGroupRef.current = undefined;
+        setDraggingGroupID(undefined);
+        setDropTargetGroupID(undefined);
+      },
+    })}
+  />;
+
   return <>
-    <Space direction="vertical" size={4}>
+    {!inline && <Space direction="vertical" size={4}>
       <Button type="link" size="small" icon={<BranchesOutlined />} onClick={(event) => { event.stopPropagation(); openManager(); }}>
         管理 {leaves.length} 个二分组
       </Button>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         {Number(row?.snapshot_user_count || 0)} 人 · 独立排序
       </Typography.Text>
-    </Space>
+    </Space>}
 
-    <Modal
+    {inline ? <div className="split-group-manager-inline">{rootDropZone}{groupTable}</div> : <Modal
       title={`管理“${String(row?.name || `规则 #${row?.id}`)}”二分组`}
       open={managerOpen}
       onCancel={() => setManagerOpen(false)}
@@ -1082,64 +1166,9 @@ function SplitGroupManager({ row, onDone }: { row: any; onDone: () => void }) {
       width={920}
       destroyOnHidden
     >
-      {orderedLeaves.some((group) => group.parent_id) && <div
-        className="split-group-root-drop-zone"
-        onDragOver={(event) => { event.preventDefault(); event.currentTarget.classList.add('split-group-root-drop-zone-active'); }}
-        onDragLeave={(event) => event.currentTarget.classList.remove('split-group-root-drop-zone-active')}
-        onDrop={(event) => { event.preventDefault(); event.currentTarget.classList.remove('split-group-root-drop-zone-active'); void moveGroupToRoot(); }}
-      >
-        <ArrowUpOutlined /> 拖到这里移出父分组，放到根级
-      </div>}
-      <Table
-        className="split-group-manager-table"
-        rowKey="id"
-        size="small"
-        tableLayout="fixed"
-        pagination={false}
-        loading={sorting}
-        dataSource={orderedLeaves}
-        columns={[
-          {
-            title: '顺序',
-            key: 'sort',
-            width: 82,
-            render: (_: any, group: SplitGroup, index: number) => <Space size={6}><MenuOutlined className="drag-handle" title="拖动调整分组顺序" /><span>{index + 1}</span></Space>,
-          },
-          {
-            title: '分组',
-            key: 'group',
-            width: 160,
-            render: (_: any, group: SplitGroup) => <Space wrap><Tag color="purple">{group.path} 组</Tag><Tag>{Number(group.user_count || 0)} 人</Tag></Space>,
-          },
-          {
-            title: '入口地址',
-            dataIndex: 'entry_host',
-            render: (value: any) => <Typography.Text code copyable={{ text: String(value || '') }} ellipsis={{ tooltip: value }} style={{ maxWidth: 360 }}>{value || '-'}</Typography.Text>,
-          },
-          {
-            title: '操作',
-            key: 'action',
-            width: 280,
-            render: (_: any, group: SplitGroup) => <Space size={10} wrap className="split-group-actions">
-              <a onClick={() => openEdit(group)}><EditOutlined /> 修改入口</a>
-              {Number(group.user_count) >= 2
-                ? <a onClick={() => openSplit(group)}><BranchesOutlined /> 继续二分</a>
-                : <Typography.Text type="secondary">不足 2 人</Typography.Text>}
-              {group.parent_id && <a onClick={() => { void moveGroupToRoot(group.id); }}><ArrowUpOutlined /> 移出父组</a>}
-            </Space>,
-          },
-        ]}
-        rowClassName={(group: SplitGroup) => `split-group-sort-row ${draggingGroupID === group.id ? 'dragging-row' : ''} ${dropTargetGroupID === group.id ? 'split-group-drop-target' : ''}`}
-        onRow={(group: SplitGroup) => ({
-          draggable: !sorting,
-          onDragStart: () => setDraggingGroupID(group.id),
-          onDragEnter: () => setDropTargetGroupID(group.id),
-          onDragOver: (event) => event.preventDefault(),
-          onDrop: () => handleGroupDrop(group),
-          onDragEnd: () => { setDraggingGroupID(undefined); setDropTargetGroupID(undefined); },
-        })}
-      />
-    </Modal>
+      {rootDropZone}
+      {groupTable}
+    </Modal>}
 
     <Modal
       title={`继续二分 ${splitGroup?.path || ''} 组`}
@@ -1183,6 +1212,39 @@ function SplitGroupManager({ row, onDone }: { row: any; onDone: () => void }) {
       </Form>
     </Modal>
   </>;
+}
+
+function SplitGroupsOutside({ rows, onDone }: { rows: any[]; onDone: () => void | Promise<void> }) {
+  const splitRows = rows.filter((row) => isSplitPolicy(row) && sortSplitLeaves(Array.isArray(row?.split_groups) ? row.split_groups : []).length > 0);
+  if (!splitRows.length) return null;
+
+  return <section className="client-entry-split-groups-outside">
+    <div className="client-entry-split-groups-heading">
+      <Space wrap size={8}>
+        <BranchesOutlined />
+        <Typography.Text strong>固定二分组</Typography.Text>
+        <Tag color="purple">外置管理</Tag>
+      </Space>
+      <Typography.Text type="secondary">
+        分组不再藏在规则行里。直接拖动分组行调整顺序；修改入口、继续二分也都在这里操作。
+      </Typography.Text>
+    </div>
+    {splitRows.map((row) => {
+      const leaves = sortSplitLeaves(Array.isArray(row?.split_groups) ? row.split_groups : []);
+      return <div className="client-entry-split-rule-outside" key={row.id}>
+        <div className="client-entry-split-rule-heading">
+          <Space wrap size={8}>
+            <Typography.Text strong>{String(row?.name || `规则 #${row?.id}`)}</Typography.Text>
+            <Tag>{leaves.length} 个分组</Tag>
+            <Tag color="cyan">{Number(row?.snapshot_user_count || 0)} 人</Tag>
+            <Tag color={Number(row?.enabled) !== 0 ? 'green' : 'default'}>{Number(row?.enabled) !== 0 ? '规则已启用' : '规则已停用'}</Tag>
+          </Space>
+          <Typography.Text type="secondary">组内顺序独立保存，不改变上方规则的匹配优先级。</Typography.Text>
+        </div>
+        <SplitGroupManager row={row} onDone={onDone} inline />
+      </div>;
+    })}
+  </section>;
 }
 
 function SimulationModal({
@@ -1464,10 +1526,16 @@ export default function ClientEntryUserPolicyPage() {
       key: 'result',
       width: 410,
       render: (_: any, row: any) => {
-        if (isSplitPolicy(row)) return <Space direction="vertical" size={5}>
-          <SplitGroupManager row={row} onDone={load} />
+        if (isSplitPolicy(row)) {
+          const leafCount = sortSplitLeaves(Array.isArray(row?.split_groups) ? row.split_groups : []).length;
+          return <Space direction="vertical" size={5}>
+          <Space wrap>
+            <Tag color="purple">固定二分 {leafCount} 组</Tag>
+            <Typography.Text type="secondary">请在下方外置列表管理</Typography.Text>
+          </Space>
           {normalizeResolveEntryHost(row.resolve_entry_host) && <Tag color="cyan" style={{ width: 'fit-content', marginInlineEnd: 0 }}>域名解析为 IP</Tag>}
         </Space>;
+        }
         const action = normalizePolicyAction(row.action);
         if (action === 'hide') return <Tag color="red">不下发节点</Tag>;
         if (action === 'original') return <Tag color="blue">下发原入口地址</Tag>;
@@ -1562,6 +1630,7 @@ export default function ClientEntryUserPolicyPage() {
           })}
         />
       </Card>
+      <SplitGroupsOutside rows={rows} onDone={load} />
     </Spin>
     <SimulationModal open={simulatorOpen} onClose={() => setSimulatorOpen(false)} rows={rows} serverOptions={serverOptions} />
   </div>;
