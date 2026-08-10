@@ -62,12 +62,11 @@ func expectEnsureClientEntrySchema(mock sqlmock.Sqlmock) {
 			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	}
 
-	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
-		WithArgs("v2_client_entry_user_policy", "email").
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
-		WithArgs("v2_client_entry_user_policy", "server_type").
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	for _, legacyColumn := range []string{"email", "entry_group_id", "server_type", "server_id"} {
+		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+			WithArgs("v2_client_entry_user_policy", legacyColumn).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	}
 
 	for range 6 {
 		mock.ExpectExec(`DO \$client_entry_split\$`).

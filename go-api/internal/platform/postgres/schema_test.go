@@ -8,7 +8,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func expectCurrentClientEntrySchema(mock sqlmock.Sqlmock, columnsExist bool) {
+func expectCurrentClientEntrySchema(mock sqlmock.Sqlmock, columnsExist bool, legacyColumnsExist bool) {
 	for _, tablePattern := range []string{
 		`CREATE TABLE IF NOT EXISTS v2_client_entry_group`,
 		`CREATE TABLE IF NOT EXISTS v2_client_entry_group_member`,
@@ -63,10 +63,33 @@ func expectCurrentClientEntrySchema(mock sqlmock.Sqlmock, columnsExist bool) {
 			mock.ExpectExec(column.stmt).WillReturnResult(sqlmock.NewResult(0, 0))
 		}
 	}
-	for _, legacyColumn := range []string{"email", "server_type"} {
+	legacyDefaults := []struct {
+		column       string
+		defaultValue string
+	}{
+		{column: "email", defaultValue: `''`},
+		{column: "entry_group_id", defaultValue: `0`},
+		{column: "server_type", defaultValue: `''`},
+		{column: "server_id", defaultValue: `0`},
+	}
+	for _, legacyColumn := range legacyDefaults {
 		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
-			WithArgs("v2_client_entry_user_policy", legacyColumn).
-			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+			WithArgs("v2_client_entry_user_policy", legacyColumn.column).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(legacyColumnsExist))
+		if legacyColumnsExist {
+			mock.ExpectExec(regexp.QuoteMeta(`ALTER TABLE v2_client_entry_user_policy ALTER COLUMN ` + legacyColumn.column + ` SET DEFAULT ` + legacyColumn.defaultValue)).
+				WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+	}
+	if legacyColumnsExist {
+		mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy_user`).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_user_email`).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_user_policy_user .*SELECT id, lower\(trim\(email\)\).*ON CONFLICT DO NOTHING`).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_user_policy_member .*SELECT id, server_type, server_id.*ON CONFLICT DO NOTHING`).
+			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 	for _, constraint := range []struct {
 		table      string
@@ -106,7 +129,7 @@ func TestEnsureClientEntrySchemaCreatesCurrentTablesAndColumns(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	expectCurrentClientEntrySchema(mock, false)
+	expectCurrentClientEntrySchema(mock, false, false)
 
 	if err := EnsureClientEntrySchema(context.Background(), db); err != nil {
 		t.Fatalf("EnsureClientEntrySchema: %v", err)
@@ -122,7 +145,23 @@ func TestEnsureClientEntrySchemaDoesNotCreateRetiredEmailTableOnFreshSchema(t *t
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	expectCurrentClientEntrySchema(mock, true)
+	expectCurrentClientEntrySchema(mock, true, false)
+
+	if err := EnsureClientEntrySchema(context.Background(), db); err != nil {
+		t.Fatalf("EnsureClientEntrySchema: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestEnsureClientEntrySchemaUnblocksLegacyNotNullPolicyColumns(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	expectCurrentClientEntrySchema(mock, true, true)
 
 	if err := EnsureClientEntrySchema(context.Background(), db); err != nil {
 		t.Fatalf("EnsureClientEntrySchema: %v", err)

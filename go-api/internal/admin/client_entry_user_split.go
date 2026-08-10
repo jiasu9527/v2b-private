@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -67,7 +68,7 @@ func (s *DBService) CreateClientEntryUserPolicySplit(ctx context.Context, req Cl
 	from := now - prepared.Minutes*60
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("创建二分规则失败")
+		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("开启数据库事务", err)
 	}
 	defer tx.Rollback()
 	if err := validateClientEntryRuleMembers(ctx, tx, prepared.Members); err != nil {
@@ -75,7 +76,7 @@ func (s *DBService) CreateClientEntryUserPolicySplit(ctx context.Context, req Cl
 	}
 	nextSort, err := nextClientEntryRuleSort(ctx, tx)
 	if err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("创建二分规则失败")
+		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("读取规则顺序", err)
 	}
 
 	var policyID int64
@@ -83,24 +84,24 @@ func (s *DBService) CreateClientEntryUserPolicySplit(ctx context.Context, req Cl
 (name, sort, mode, action, conditions, entry_host, resolve_entry_host, extra_nodes, extra_nodes_position, snapshot_from, snapshot_to, enabled, remarks, created_at, updated_at)
 VALUES ($1, $2, 'split', 'override', '[]', '', $3, '[]', 'after', $4, $5, $6, $7, $5, $5)
 RETURNING id`, prepared.Name, nextSort, prepared.ResolveEntryHost, from, now, prepared.Enabled, prepared.Remarks).Scan(&policyID); err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("创建二分规则失败")
+		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("写入规则", err)
 	}
 	for index, member := range prepared.Members {
 		memberSort := int64(index+1) * clientEntryRuleSortStep
 		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_user_policy_member
 (policy_id, server_type, server_id, sort, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $5)`, policyID, member.ServerType, member.ServerID, memberSort, now); err != nil {
-			return ClientEntryUserPolicyRecord{}, errors.New("创建二分规则失败")
+			return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("写入生效节点", err)
 		}
 	}
 
 	groupA, err := insertClientEntryUserPolicySplitGroup(ctx, tx, policyID, nil, "A", "A", prepared.EntryHostA, clientEntryRuleSortStep, now)
 	if err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("创建二分规则失败")
+		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("创建 A 组", err)
 	}
 	groupB, err := insertClientEntryUserPolicySplitGroup(ctx, tx, policyID, nil, "B", "B", prepared.EntryHostB, 2*clientEntryRuleSortStep, now)
 	if err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("创建二分规则失败")
+		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("创建 B 组", err)
 	}
 
 	rows, err := tx.QueryContext(ctx, `WITH eligible AS (
@@ -118,7 +119,7 @@ FROM eligible
 ORDER BY user_id ASC
 RETURNING group_id`, from, now, policyID, groupA, groupB)
 	if err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("创建二分规则失败")
+		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("固定用户名单", err)
 	}
 	userCount := int64(0)
 	groupCounts := map[int64]int64{groupA: 0, groupB: 0}
@@ -126,17 +127,17 @@ RETURNING group_id`, from, now, policyID, groupA, groupB)
 		var groupID int64
 		if err := rows.Scan(&groupID); err != nil {
 			rows.Close()
-			return ClientEntryUserPolicyRecord{}, errors.New("创建二分规则失败")
+			return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("读取分组结果", err)
 		}
 		userCount++
 		groupCounts[groupID]++
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return ClientEntryUserPolicyRecord{}, errors.New("创建二分规则失败")
+		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("读取分组结果", err)
 	}
 	if err := rows.Close(); err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("创建二分规则失败")
+		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("关闭分组结果", err)
 	}
 	if userCount < 2 || groupCounts[groupA] == 0 || groupCounts[groupB] == 0 {
 		return ClientEntryUserPolicyRecord{}, errors.New("近期成功拉取订阅的用户不足 2 人，无法创建二分规则")
@@ -145,7 +146,7 @@ RETURNING group_id`, from, now, policyID, groupA, groupB)
 		return ClientEntryUserPolicyRecord{}, errors.New("二分用户人数异常，请重试")
 	}
 	if err := tx.Commit(); err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("创建二分规则失败")
+		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("提交数据库事务", err)
 	}
 	s.markClientEntryMonitorTargetsDirty()
 	members := make([]ClientEntryGroupMemberRecord, 0, len(prepared.Members))
@@ -165,6 +166,18 @@ RETURNING group_id`, from, now, policyID, groupA, groupB)
 		EntryHost: "", ResolveEntryHost: prepared.ResolveEntryHost, ExtraNodes: []string{}, ExtraNodesPosition: "after",
 		Enabled: prepared.Enabled, Remarks: prepared.Remarks, CreatedAt: now, UpdatedAt: now,
 	}, nil
+}
+
+func clientEntryUserPolicySplitCreateFailure(stage string, err error) error {
+	stage = strings.TrimSpace(stage)
+	if stage == "" {
+		stage = "未知阶段"
+	}
+	if err == nil {
+		err = errors.New("unknown error")
+	}
+	log.Printf("client entry user policy split create failed stage=%q err=%q", stage, err)
+	return fmt.Errorf("创建二分规则失败（%s）：%w", stage, err)
 }
 
 // ConvertClientEntryUserPolicyToSplit turns one existing, pure user-ID range

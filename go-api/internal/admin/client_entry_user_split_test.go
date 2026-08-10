@@ -2,6 +2,8 @@ package admin
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -113,6 +115,36 @@ func TestCreateClientEntryUserPolicySplitRejectsSnapshotWithOneUser(t *testing.T
 	})
 	if err == nil || record.ID != 0 {
 		t.Fatalf("create split: record=%#v err=%v", record, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestCreateClientEntryUserPolicySplitReportsDatabaseStage(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db}
+	readyClientEntrySchemaForPolicyTest(service)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM "v2_server_vmess" WHERE id = \$1\)`).
+		WithArgs(int64(11)).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT sort FROM v2_client_entry_user_policy`).
+		WillReturnRows(sqlmock.NewRows([]string{"sort"}))
+	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy`).
+		WillReturnError(errors.New(`null value in column "server_type" violates not-null constraint`))
+	mock.ExpectRollback()
+
+	_, err = service.CreateClientEntryUserPolicySplit(context.Background(), ClientEntryUserPolicySplitCreateRequest{
+		Name: "活跃用户", Members: []ClientEntryGroupMemberSaveRequest{{ServerType: "vmess", ServerID: 11}}, EntryHostA: "a.example.com", EntryHostB: "b.example.com",
+	})
+	if err == nil || !strings.Contains(err.Error(), "写入规则") || !strings.Contains(err.Error(), "server_type") {
+		t.Fatalf("expected staged database error, got %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)

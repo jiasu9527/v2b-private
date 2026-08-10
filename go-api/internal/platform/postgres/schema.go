@@ -172,21 +172,39 @@ CONSTRAINT fk_v2_client_entry_user_policy_split_assignment_group FOREIGN KEY (gr
 	}
 
 	// The updater needs stable relation rows before converting legacy policy
-	// fields.  A fresh current schema has no email column and never creates the
-	// retired table.
-	legacyEmail, err := columnExists(ctx, db, "v2_client_entry_user_policy", "email")
-	if err != nil {
-		return fmt.Errorf("check legacy client entry policy email: %w", err)
+	// fields. A fresh current schema has none of these columns and never creates
+	// the retired email map table.
+	legacyColumns := []struct {
+		name         string
+		defaultValue string
+	}{
+		{name: "email", defaultValue: `''`},
+		{name: "entry_group_id", defaultValue: `0`},
+		{name: "server_type", defaultValue: `''`},
+		{name: "server_id", defaultValue: `0`},
 	}
+	legacyExists := make(map[string]bool, len(legacyColumns))
+	for _, column := range legacyColumns {
+		exists, err := columnExists(ctx, db, "v2_client_entry_user_policy", column.name)
+		if err != nil {
+			return fmt.Errorf("check legacy client entry policy %s: %w", column.name, err)
+		}
+		legacyExists[column.name] = exists
+		if !exists {
+			continue
+		}
+		// Some old installations keep these retired columns as NOT NULL without
+		// defaults. New structured rules do not write them, so keep inserts
+		// possible until the one-time migration removes the columns.
+		stmt := fmt.Sprintf(`ALTER TABLE v2_client_entry_user_policy ALTER COLUMN %s SET DEFAULT %s`, column.name, column.defaultValue)
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("ensure legacy client entry policy %s default: %w", column.name, err)
+		}
+	}
+	legacyEmail := legacyExists["email"]
 	if legacyEmail {
 		if err := ensureLegacyClientEntryPolicyEmailTable(ctx, db); err != nil {
 			return err
-		}
-		// Some old installations have email as NOT NULL without a default.  The
-		// one-time node-host migration inserts new structured rules before it
-		// drops this retired column, so make the legacy placeholder explicit.
-		if _, err := db.ExecContext(ctx, `ALTER TABLE v2_client_entry_user_policy ALTER COLUMN email SET DEFAULT ''`); err != nil {
-			return fmt.Errorf("ensure legacy client entry policy email default: %w", err)
 		}
 		if _, err := db.ExecContext(ctx, `INSERT INTO v2_client_entry_user_policy_user (policy_id, email, created_at, updated_at)
 SELECT id, lower(trim(email)), created_at, updated_at
@@ -196,10 +214,7 @@ ON CONFLICT DO NOTHING`); err != nil {
 			return fmt.Errorf("backfill legacy client entry policy users: %w", err)
 		}
 	}
-	legacyServerType, err := columnExists(ctx, db, "v2_client_entry_user_policy", "server_type")
-	if err != nil {
-		return fmt.Errorf("check legacy client entry policy member: %w", err)
-	}
+	legacyServerType := legacyExists["server_type"]
 	if legacyServerType {
 		if _, err := db.ExecContext(ctx, `INSERT INTO v2_client_entry_user_policy_member (policy_id, server_type, server_id, sort, created_at, updated_at)
 SELECT id, server_type, server_id, NULL, created_at, updated_at
