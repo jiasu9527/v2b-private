@@ -182,6 +182,7 @@ func handleAdminClientEntryUserPolicySplitGroupHost(w http.ResponseWriter, r *ht
 	var payload struct {
 		PolicyID  *json.Number `json:"policy_id"`
 		GroupID   *json.Number `json:"group_id"`
+		Name      string       `json:"name"`
 		EntryHost string       `json:"entry_host"`
 	}
 	if err := readJSONBody(r, &payload); err != nil {
@@ -193,7 +194,7 @@ func handleAdminClientEntryUserPolicySplitGroupHost(w http.ResponseWriter, r *ht
 		return true
 	}
 	result, err := adminService.UpdateClientEntryUserPolicySplitGroupHost(r.Context(), admin.ClientEntryUserPolicyGroupHostUpdateRequest{
-		PolicyID: policyID, GroupID: groupID, EntryHost: payload.EntryHost,
+		PolicyID: policyID, GroupID: groupID, Name: payload.Name, EntryHost: payload.EntryHost,
 	})
 	if err != nil {
 		return handleAdminError(w, err)

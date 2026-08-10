@@ -201,9 +201,16 @@ func (s *DBService) resolveClientEntryMonitorPolicies(ctx context.Context) ([]Cl
 					if path == "" {
 						path = strconv.FormatInt(group.ID, 10)
 					}
+					name := strings.TrimSpace(group.Name)
+					if name == "" || name == path {
+						name = strings.TrimSpace(policy.Name)
+					}
+					if name == "" {
+						name = path + " 组"
+					}
 					item.Targets = append(item.Targets, ClientEntryMonitorCandidateTarget{
 						SourceKey:     fmt.Sprintf("policy:%d:split-group:%d", policy.ID, group.ID),
-						Name:          truncateClientEntryMonitorReportText(policy.Name+" · "+path+" 组入口", 255),
+						Name:          truncateClientEntryMonitorReportText(name+" · "+path+" 组入口", 255),
 						Host:          host,
 						SuggestedPort: 443,
 					})

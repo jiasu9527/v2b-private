@@ -431,7 +431,7 @@ func TestMoveClientEntryUserPolicySplitGroupToRootRenamesAndCleansEmptyParent(t 
 			AddRow(int64(101), nil, "A", int64(10)).
 			AddRow(int64(102), nil, "B", int64(20)).
 			AddRow(int64(202), int64(101), "A.1", int64(10)))
-	mock.ExpectExec(`UPDATE v2_client_entry_user_policy_split_group\s+SET parent_id = NULL, name = \$3, path = \$3, sort = \$4, updated_at = \$5\s+WHERE id = \$1 AND policy_id = \$2`).
+	mock.ExpectExec(`UPDATE v2_client_entry_user_policy_split_group\s+SET parent_id = NULL, path = \$3, sort = \$4, updated_at = \$5\s+WHERE id = \$1 AND policy_id = \$2`).
 		WithArgs(int64(202), int64(9), "C", int64(30), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM v2_client_entry_user_policy_split_assignment WHERE policy_id = \$1 AND group_id = \$2`).
@@ -507,7 +507,7 @@ func TestResolveClientEntryMonitorPoliciesIncludesEverySplitLeaf(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"policy_id", "server_type", "server_id", "sort"}).AddRow(int64(9), "vmess", int64(11), int64(10)))
 	groupRows := sqlmock.NewRows([]string{"id", "policy_id", "parent_id", "name", "path", "entry_host", "sort", "global_sort", "user_count", "is_leaf", "created_at", "updated_at"}).
 		AddRow(int64(101), int64(9), nil, "A", "A", "", int64(10), nil, int64(0), false, int64(100), int64(200)).
-		AddRow(int64(201), int64(9), int64(101), "A.1", "A.1", "a1.example.com", int64(10), int64(10), int64(3), true, int64(100), int64(200)).
+		AddRow(int64(201), int64(9), int64(101), "内鬼入口一", "A.1", "a1.example.com", int64(10), int64(10), int64(3), true, int64(100), int64(200)).
 		AddRow(int64(202), int64(9), int64(101), "A.2", "A.2", "a2.example.com", int64(20), int64(20), int64(2), true, int64(100), int64(200))
 	mock.ExpectQuery(`(?s)SELECT split_group.id, split_group.policy_id.*FROM v2_client_entry_user_policy_split_group split_group.*WHERE split_group.policy_id IN \(\$1\)`).
 		WithArgs(int64(9)).WillReturnRows(groupRows)
@@ -519,7 +519,7 @@ func TestResolveClientEntryMonitorPoliciesIncludesEverySplitLeaf(t *testing.T) {
 	if len(policies) != 1 || len(policies[0].Targets) != 2 {
 		t.Fatalf("unexpected monitor policies: %#v", policies)
 	}
-	if policies[0].Targets[0].SourceKey != "policy:9:split-group:201" || policies[0].Targets[0].Host != "a1.example.com" || policies[0].Targets[1].SourceKey != "policy:9:split-group:202" || policies[0].Targets[1].Host != "a2.example.com" {
+	if policies[0].Targets[0].SourceKey != "policy:9:split-group:201" || policies[0].Targets[0].Name != "内鬼入口一 · A.1 组入口" || policies[0].Targets[0].Host != "a1.example.com" || policies[0].Targets[1].SourceKey != "policy:9:split-group:202" || policies[0].Targets[1].Host != "a2.example.com" {
 		t.Fatalf("unexpected split targets: %#v", policies[0].Targets)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -527,7 +527,7 @@ func TestResolveClientEntryMonitorPoliciesIncludesEverySplitLeaf(t *testing.T) {
 	}
 }
 
-func TestUpdateClientEntryUserPolicySplitGroupHostOnlyUpdatesLeaf(t *testing.T) {
+func TestUpdateClientEntryUserPolicySplitGroupDetailsOnlyUpdatesLeaf(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -537,8 +537,8 @@ func TestUpdateClientEntryUserPolicySplitGroupHostOnlyUpdatesLeaf(t *testing.T) 
 	readyClientEntrySchemaForPolicyTest(service)
 
 	mock.ExpectBegin()
-	mock.ExpectExec(`(?s)UPDATE v2_client_entry_user_policy_split_group split_group.*NOT EXISTS.*policy.mode = 'split'`).
-		WithArgs(int64(101), int64(9), "new.example.com", sqlmock.AnyArg()).
+	mock.ExpectExec(`(?s)UPDATE v2_client_entry_user_policy_split_group split_group.*SET name = \$3, entry_host = \$4, updated_at = \$5.*NOT EXISTS.*policy.mode = 'split'`).
+		WithArgs(int64(101), int64(9), "内鬼入口 B", "new.example.com", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE v2_client_entry_user_policy SET updated_at = \$2 WHERE id = \$1 AND mode = 'split'`).
 		WithArgs(int64(9), sqlmock.AnyArg()).
@@ -546,13 +546,30 @@ func TestUpdateClientEntryUserPolicySplitGroupHostOnlyUpdatesLeaf(t *testing.T) 
 	mock.ExpectCommit()
 
 	record, err := service.UpdateClientEntryUserPolicySplitGroupHost(context.Background(), ClientEntryUserPolicyGroupHostUpdateRequest{
-		PolicyID: 9, GroupID: 101, EntryHost: "NEW.EXAMPLE.COM",
+		PolicyID: 9, GroupID: 101, Name: " 内鬼入口 B ", EntryHost: "NEW.EXAMPLE.COM",
 	})
 	if err != nil || record.ID != 9 || record.Mode != ClientEntryUserPolicyModeSplit {
-		t.Fatalf("update host: record=%#v err=%v", record, err)
+		t.Fatalf("update details: record=%#v err=%v", record, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestUpdateClientEntryUserPolicySplitGroupDetailsRejectsBlankName(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db}
+	readyClientEntrySchemaForPolicyTest(service)
+
+	_, err = service.UpdateClientEntryUserPolicySplitGroupHost(context.Background(), ClientEntryUserPolicyGroupHostUpdateRequest{
+		PolicyID: 9, GroupID: 101, Name: "   ", EntryHost: "new.example.com",
+	})
+	if err == nil || !strings.Contains(err.Error(), "规则名称不能为空") {
+		t.Fatalf("expected blank name to be rejected, got %v", err)
 	}
 }
 

@@ -457,6 +457,13 @@ func (s *DBService) UpdateClientEntryUserPolicySplitGroupHost(ctx context.Contex
 	if req.PolicyID <= 0 || req.GroupID <= 0 {
 		return ClientEntryUserPolicyRecord{}, errors.New("二分组不存在")
 	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		return ClientEntryUserPolicyRecord{}, errors.New("规则名称不能为空")
+	}
+	if len([]rune(name)) > 255 {
+		return ClientEntryUserPolicyRecord{}, errors.New("规则名称不能超过 255 个字符")
+	}
 	host, err := cliententry.NormalizeHost(req.EntryHost)
 	if err != nil {
 		return ClientEntryUserPolicyRecord{}, fmt.Errorf("分组入口地址无效: %w", err)
@@ -464,29 +471,29 @@ func (s *DBService) UpdateClientEntryUserPolicySplitGroupHost(ctx context.Contex
 	now := time.Now().Unix()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("更新分组入口失败")
+		return ClientEntryUserPolicyRecord{}, errors.New("更新二分规则失败")
 	}
 	defer tx.Rollback()
 	result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy_split_group split_group
-SET entry_host = $3, updated_at = $4
+SET name = $3, entry_host = $4, updated_at = $5
 WHERE split_group.id = $1 AND split_group.policy_id = $2
   AND NOT EXISTS (
 	SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = split_group.id
   )
   AND EXISTS (
 	SELECT 1 FROM v2_client_entry_user_policy policy WHERE policy.id = split_group.policy_id AND policy.mode = 'split'
-  )`, req.GroupID, req.PolicyID, host, now)
+  )`, req.GroupID, req.PolicyID, name, host, now)
 	if err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("更新分组入口失败")
+		return ClientEntryUserPolicyRecord{}, errors.New("更新二分规则失败")
 	}
 	if err := requireClientEntryRuleAffected(result, "二分组"); err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("只能修改当前叶子组的入口地址")
+		return ClientEntryUserPolicyRecord{}, errors.New("只能编辑当前叶子组")
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy SET updated_at = $2 WHERE id = $1 AND mode = 'split'`, req.PolicyID, now); err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("更新分组入口失败")
+		return ClientEntryUserPolicyRecord{}, errors.New("更新二分规则失败")
 	}
 	if err := tx.Commit(); err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("更新分组入口失败")
+		return ClientEntryUserPolicyRecord{}, errors.New("更新二分规则失败")
 	}
 	s.markClientEntryMonitorTargetsDirty()
 	return ClientEntryUserPolicyRecord{ID: req.PolicyID, Mode: ClientEntryUserPolicyModeSplit}, nil
@@ -666,7 +673,7 @@ FOR UPDATE`, req.PolicyID)
 
 	newPath := nextClientEntrySplitRootPath(paths)
 	if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy_split_group
-SET parent_id = NULL, name = $3, path = $3, sort = $4, updated_at = $5
+SET parent_id = NULL, path = $3, sort = $4, updated_at = $5
 WHERE id = $1 AND policy_id = $2`, req.GroupID, req.PolicyID, newPath, maxRootSort+clientEntryRuleSortStep, time.Now().Unix()); err != nil {
 		return false, errors.New("移出父分组失败")
 	}

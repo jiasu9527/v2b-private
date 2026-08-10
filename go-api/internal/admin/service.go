@@ -1364,6 +1364,7 @@ type ClientEntryUserPolicyGroupSplitRequest struct {
 type ClientEntryUserPolicyGroupHostUpdateRequest struct {
 	PolicyID  int64
 	GroupID   int64
+	Name      string
 	EntryHost string
 }
 

@@ -977,7 +977,7 @@ function SplitGroupRowActions({ row, group, onDone }: { row: any; group: SplitGr
   };
   const openEdit = () => {
     editForm.resetFields();
-    editForm.setFieldsValue({ entry_host: group.entry_host });
+    editForm.setFieldsValue({ name: group.name || group.path, entry_host: group.entry_host });
     setEditOpen(true);
   };
   const submitSplit = async () => {
@@ -1006,13 +1006,14 @@ function SplitGroupRowActions({ row, group, onDone }: { row: any; group: SplitGr
       await apiPost('/server/client-entry-user-policy/split-group-host', {
         policy_id: row.id,
         group_id: group.id,
+        name: String(values.name || '').trim(),
         entry_host: String(values.entry_host || '').trim(),
       });
-      message.success('分组入口已更新');
+      message.success('二分规则已更新');
       setEditOpen(false);
       await onDone();
     } catch (error: any) {
-      if (!error?.errorFields) message.error(error?.message || '更新入口失败');
+      if (!error?.errorFields) message.error(error?.message || '更新二分规则失败');
     } finally {
       setSaving(false);
     }
@@ -1020,7 +1021,7 @@ function SplitGroupRowActions({ row, group, onDone }: { row: any; group: SplitGr
 
   return <>
     <Space className="client-entry-actions" size={10}>
-      <a onClick={openEdit}><EditOutlined /> 修改入口</a>
+      <a onClick={openEdit}><EditOutlined /> 编辑</a>
       {Number(group.user_count) >= 2
         ? <a onClick={openSplit}><BranchesOutlined /> 继续二分</a>
         : <Typography.Text type="secondary">不足 2 人</Typography.Text>}
@@ -1051,15 +1052,25 @@ function SplitGroupRowActions({ row, group, onDone }: { row: any; group: SplitGr
       </Form>
     </Modal>
     <Modal
-      title={`修改 ${group.path} 组入口`}
+      title={`编辑 ${group.path} 组规则`}
       open={editOpen}
       onCancel={() => setEditOpen(false)}
       onOk={submitEdit}
       confirmLoading={saving}
-      okText="保存入口"
+      okText="保存"
       destroyOnHidden
     >
+      <Alert
+        type="info"
+        showIcon
+        message="名称和入口地址只影响当前这一行"
+        description="固定用户名单、共同生效节点和解析设置仍由原二分规则继承，不会影响兄弟分组。"
+        style={{ marginBottom: 16 }}
+      />
       <Form form={editForm} layout="vertical">
+        <Form.Item name="name" label="规则名称" rules={[{ required: true, whitespace: true, message: '请输入规则名称' }]}>
+          <Input placeholder="例如：内鬼入口 B" maxLength={255} showCount />
+        </Form.Item>
         <Form.Item name="entry_host" label="入口地址" rules={[{ required: true, whitespace: true, message: '请输入入口地址' }]}>
           <Input placeholder="域名或 IP" />
         </Form.Item>
@@ -1296,11 +1307,15 @@ export default function ClientEntryUserPolicyPage() {
       dataIndex: 'name',
       width: 210,
       render: (value: any, row: any) => {
+        if (isSplitGroupDisplayRow(row)) {
+          const group = row.__split_group as SplitGroup;
+          const text = String(group.name || group.path || `分组 #${group.id}`);
+          return <Space size={6} wrap>
+            <Tag color="purple">{group.path} 组</Tag>
+            <span className="client-entry-rule-name" title={text}>{text}</span>
+          </Space>;
+        }
         const text = String(value || `规则 #${row.id}`);
-        if (isSplitGroupDisplayRow(row)) return <Space size={6} wrap>
-          <Tag color="purple">{row.__split_group.path} 组</Tag>
-          <span className="client-entry-rule-name" title={text}>{text}</span>
-        </Space>;
         return <span className="client-entry-rule-name" title={text}>{text}</span>;
       },
     },
