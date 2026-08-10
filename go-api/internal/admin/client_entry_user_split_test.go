@@ -119,6 +119,127 @@ func TestCreateClientEntryUserPolicySplitRejectsSnapshotWithOneUser(t *testing.T
 	}
 }
 
+func TestConvertClientEntryUserPolicyToSplitKeepsOnePolicyAndBalancesCurrentUsers(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db}
+	readyClientEntrySchemaForPolicyTest(service)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT action, conditions, extra_nodes\s+FROM v2_client_entry_user_policy\s+WHERE id = \$1 AND mode = 'standard'\s+FOR UPDATE`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"action", "conditions", "extra_nodes"}).
+			AddRow("override", `[{"field":"user_id","operator":"between","min":100,"max":200}]`, `[]`))
+	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
+		WithArgs(int64(9), nil, "A", "A", "a.example.com", int64(10), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(101)))
+	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
+		WithArgs(int64(9), nil, "B", "B", "b.example.com", int64(20), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(102)))
+	mock.ExpectQuery(`(?s)WITH eligible AS \(.*FROM v2_user users.*WHERE users.id BETWEEN \$1 AND \$2.*INSERT INTO v2_client_entry_user_policy_split_assignment.*RETURNING group_id`).
+		WithArgs(int64(100), int64(200), int64(9), int64(101), int64(102), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"group_id"}).
+			AddRow(int64(101)).AddRow(int64(101)).AddRow(int64(101)).AddRow(int64(102)).AddRow(int64(102)))
+	mock.ExpectExec(`UPDATE v2_client_entry_user_policy\s+SET mode = 'split', entry_host = '', extra_nodes = '\[\]', snapshot_from = NULL, snapshot_to = NULL, updated_at = \$2\s+WHERE id = \$1 AND mode = 'standard'`).
+		WithArgs(int64(9), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	record, err := service.ConvertClientEntryUserPolicyToSplit(context.Background(), ClientEntryUserPolicySplitConvertRequest{
+		PolicyID: 9, EntryHostA: "A.EXAMPLE.COM", EntryHostB: "B.EXAMPLE.COM",
+	})
+	if err != nil || record.ID != 9 || record.Mode != ClientEntryUserPolicyModeSplit || record.SnapshotUserCount != 5 || len(record.Conditions) != 1 || len(record.SplitGroups) != 2 || record.SplitGroups[0].UserCount != 3 || record.SplitGroups[1].UserCount != 2 {
+		t.Fatalf("convert split: record=%#v err=%v", record, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestConvertClientEntryUserPolicyToSplitRejectsAdditionalCondition(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db}
+	readyClientEntrySchemaForPolicyTest(service)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT action, conditions, extra_nodes`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"action", "conditions", "extra_nodes"}).
+			AddRow("override", `[{"field":"user_id","operator":"between","min":100,"max":200},{"field":"ua","operator":"contains_any","values":["Clash"]}]`, `[]`))
+	mock.ExpectRollback()
+
+	if _, err := service.ConvertClientEntryUserPolicyToSplit(context.Background(), ClientEntryUserPolicySplitConvertRequest{
+		PolicyID: 9, EntryHostA: "a.example.com", EntryHostB: "b.example.com",
+	}); err == nil {
+		t.Fatal("expected rule with an additional condition to be rejected")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestConvertClientEntryUserPolicyToSplitRejectsExtraNodes(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db}
+	readyClientEntrySchemaForPolicyTest(service)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT action, conditions, extra_nodes`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"action", "conditions", "extra_nodes"}).
+			AddRow("override", `[{"field":"user_id","operator":"between","min":100,"max":200}]`, `["trojan://secret@example.com:443"]`))
+	mock.ExpectRollback()
+
+	if _, err := service.ConvertClientEntryUserPolicyToSplit(context.Background(), ClientEntryUserPolicySplitConvertRequest{
+		PolicyID: 9, EntryHostA: "a.example.com", EntryHostB: "b.example.com",
+	}); err == nil {
+		t.Fatal("expected rule with extra nodes to be rejected")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestConvertClientEntryUserPolicyToSplitRollsBackWhenRangeHasOneUser(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db}
+	readyClientEntrySchemaForPolicyTest(service)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT action, conditions, extra_nodes`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"action", "conditions", "extra_nodes"}).
+			AddRow("override", `[{"field":"user_id","operator":"between","min":100,"max":200}]`, `[]`))
+	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(101)))
+	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(102)))
+	mock.ExpectQuery(`(?s)WITH eligible AS .*RETURNING group_id`).
+		WillReturnRows(sqlmock.NewRows([]string{"group_id"}).AddRow(int64(101)))
+	mock.ExpectRollback()
+
+	if _, err := service.ConvertClientEntryUserPolicyToSplit(context.Background(), ClientEntryUserPolicySplitConvertRequest{
+		PolicyID: 9, EntryHostA: "a.example.com", EntryHostB: "b.example.com",
+	}); err == nil {
+		t.Fatal("expected a one-user range to be rejected")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func TestSplitClientEntryUserPolicyGroupKeepsParentAndMovesAssignments(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

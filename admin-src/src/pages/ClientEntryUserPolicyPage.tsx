@@ -131,6 +131,24 @@ function parseConditions(value: any): EntryCondition[] {
     .filter((item) => fieldOptions.some((option) => option.value === item.field) && item.operator) as EntryCondition[];
 }
 
+function singleUserIDRange(value: any): { min: number; max: number } | undefined {
+  const conditions = parseConditions(value);
+  if (conditions.length !== 1) return undefined;
+  const condition = conditions[0];
+  if (condition.field !== 'user_id' || condition.operator !== 'between') return undefined;
+  const min = finiteNumber(condition.min);
+  const max = finiteNumber(condition.max);
+  if (min === undefined || max === undefined || min > max) return undefined;
+  return { min, max };
+}
+
+function canConvertRangeToSplit(row: any) {
+  if (String(row?.mode || 'standard').toLowerCase() !== 'standard') return false;
+  if (normalizePolicyAction(row?.action) !== 'override') return false;
+  if (parseExtraNodes(row?.extra_nodes).length !== 0) return false;
+  return Boolean(singleUserIDRange(row?.conditions));
+}
+
 function finiteNumber(value: any) {
   if (value === '' || value === null || value === undefined) return undefined;
   const number = Number(value);
@@ -837,6 +855,70 @@ function SplitPolicyCreator({
   </>;
 }
 
+function RangePolicySplitConverter({ row, onDone }: { row: any; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form] = Form.useForm();
+  const range = singleUserIDRange(row?.conditions);
+  if (!range) return null;
+
+  const show = () => {
+    form.resetFields();
+    setOpen(true);
+  };
+
+  const convert = async () => {
+    try {
+      const values = await form.validateFields();
+      setSaving(true);
+      await apiPost('/server/client-entry-user-policy/split-convert', {
+        policy_id: row.id,
+        entry_host_a: String(values.entry_host_a || '').trim(),
+        entry_host_b: String(values.entry_host_b || '').trim(),
+      });
+      message.success('已将 ID 范围规则转换为固定二分');
+      setOpen(false);
+      onDone();
+    } catch (error: any) {
+      if (!error?.errorFields) message.error(error?.message || '转换固定二分失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <>
+    <a onClick={show}><BranchesOutlined /> 固定二分</a>
+    <Modal
+      title={`将“${String(row?.name || `规则 #${row?.id}`)}”转换为固定二分`}
+      open={open}
+      onCancel={() => setOpen(false)}
+      onOk={convert}
+      okText="确认转换并固定"
+      confirmLoading={saving}
+      destroyOnHidden
+      width={680}
+    >
+      <Alert
+        type="info"
+        showIcon
+        message={`固定用户 ID #${range.min} ～ #${range.max} 范围内当前实际存在的用户`}
+        description={`转换后仍沿用原规则的名称、${Array.isArray(row?.members) ? row.members.length : 0} 个生效节点、规则顺序、启停状态和${normalizeResolveEntryHost(row?.resolve_entry_host) ? '已开启的' : '未开启的'}域名解析设置。用户名单会固定为静态快照；只要当前叶子组仍有至少 2 人，就可以继续逐层二分。这里只需填写 A、B 两组入口。`}
+        style={{ marginBottom: 18 }}
+      />
+      <Form form={form} layout="vertical">
+        <Space align="start" wrap style={{ width: '100%' }}>
+          <Form.Item name="entry_host_a" label="A 组入口" rules={[{ required: true, whitespace: true, message: '请输入 A 组入口' }]} style={{ minWidth: 290, flex: 1 }}>
+            <Input placeholder="a.example.com 或 IP" />
+          </Form.Item>
+          <Form.Item name="entry_host_b" label="B 组入口" rules={[{ required: true, whitespace: true, message: '请输入 B 组入口' }]} style={{ minWidth: 290, flex: 1 }}>
+            <Input placeholder="b.example.com 或 IP" />
+          </Form.Item>
+        </Space>
+      </Form>
+    </Modal>
+  </>;
+}
+
 function SplitGroupManager({ row, onDone }: { row: any; onDone: () => void }) {
   const [splitGroup, setSplitGroup] = useState<SplitGroup>();
   const [editGroup, setEditGroup] = useState<SplitGroup>();
@@ -1194,9 +1276,21 @@ export default function ClientEntryUserPolicyPage() {
       width: 620,
       render: (value: any, row: any) => {
         if (isSplitPolicy(row)) {
+          const range = singleUserIDRange(value);
           const from = Number(row.snapshot_from || 0);
           const to = Number(row.snapshot_to || 0);
           const minutes = from > 0 && to >= from ? Math.max(1, Math.round((to - from) / 60)) : 0;
+          if (range) return <Space direction="vertical" size={4}>
+            <Space wrap>
+              <Tag color="purple" icon={<BranchesOutlined />}>固定二分快照</Tag>
+              <Tag color="cyan">{Number(row.snapshot_user_count || 0)} 人</Tag>
+              <Tag>ID 范围固定快照 #{range.min} ～ #{range.max}</Tag>
+            </Space>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              来源：用户 ID {range.min}～{range.max} 固定快照
+              {to > 0 && <> · 固定于 {formatSnapshotTime(to)}</>}
+            </Typography.Text>
+          </Space>;
           return <Space direction="vertical" size={4}>
             <Space wrap>
               <Tag color="purple" icon={<BranchesOutlined />}>固定二分快照</Tag>
@@ -1275,7 +1369,7 @@ export default function ClientEntryUserPolicyPage() {
       key: 'action',
       fixed: 'right',
       align: 'right',
-      width: 205,
+      width: 310,
       render: (_: any, row: any) => {
         if (isSplitPolicy(row)) return <Space className="client-entry-actions" size={10}>
           <Tag color="purple">固定分组</Tag>
@@ -1284,6 +1378,7 @@ export default function ClientEntryUserPolicyPage() {
         const copyRow = { ...row, id: undefined, name: `${row.name || `规则 #${row.id}`} - 副本` };
         return <Space className="client-entry-actions" size={10}>
           <PolicyEditor row={row} onDone={load} serverOptions={serverOptions}><a>编辑</a></PolicyEditor>
+          {canConvertRangeToSplit(row) && <RangePolicySplitConverter row={row} onDone={load} />}
           <PolicyEditor row={copyRow} onDone={load} serverOptions={serverOptions}><a><CopyOutlined /> 复制</a></PolicyEditor>
           <Popconfirm title="确认删除这条入口规则？" onConfirm={() => drop(row)}><a>删除</a></Popconfirm>
         </Space>;
@@ -1299,7 +1394,7 @@ export default function ClientEntryUserPolicyPage() {
         type="info"
         showIcon
         message="仅入口分配节点的下发规则"
-        description="节点编辑中标记为“仅入口分配”的节点，请先保持节点“显示”为“显示”。普通规则按条件匹配；固定二分会把创建时的近期订阅用户平均锁定到不同入口，继续二分时自动继承同一批节点。未命中规则的用户看不到仅入口分配节点，节点权限组仍然生效。"
+        description="节点编辑中标记为“仅入口分配”的节点，请先保持节点“显示”为“显示”。固定二分既可从近期成功拉取订阅的用户创建，也可把只有一个用户 ID 范围条件、没有额外节点的覆盖规则原地转换；转换会沿用原规则的节点、解析设置、顺序、名称和启停状态。名单固定后可继续二分任意叶子组。未命中规则的用户看不到仅入口分配节点，节点权限组仍然生效。"
       />
       <Card className="block-card" styles={{ body: { padding: 0 } }}>
         <div className="forest-table-action">
@@ -1317,7 +1412,7 @@ export default function ClientEntryUserPolicyPage() {
           columns={columns}
           dataSource={rows}
           pagination={false}
-          scroll={{ x: 2300 }}
+          scroll={{ x: 2405 }}
           rowClassName={(row) => `sortable-row ${draggingKey === String(row.id) ? 'dragging-row' : ''}`}
           onRow={(row) => ({
             draggable: true,

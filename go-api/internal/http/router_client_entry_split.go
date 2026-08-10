@@ -102,6 +102,43 @@ func handleAdminClientEntryUserPolicySplitCreate(w http.ResponseWriter, r *http.
 	return true
 }
 
+func handleAdminClientEntryUserPolicySplitConvert(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"message": "请求方式不支持"})
+		return true
+	}
+	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+	var payload struct {
+		PolicyID   *json.Number `json:"policy_id"`
+		EntryHostA string       `json:"entry_host_a"`
+		EntryHostB string       `json:"entry_host_b"`
+	}
+	if err := readJSONBody(r, &payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+	policyID, err := jsonNumberToInt64Pointer(payload.PolicyID)
+	if err != nil || policyID == nil || *policyID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "规则不存在"})
+		return true
+	}
+	result, err := adminService.ConvertClientEntryUserPolicyToSplit(r.Context(), admin.ClientEntryUserPolicySplitConvertRequest{
+		PolicyID: *policyID, EntryHostA: payload.EntryHostA, EntryHostB: payload.EntryHostB,
+	})
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": result})
+	return true
+}
+
 func handleAdminClientEntryUserPolicySplitGroup(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
 	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
 		return true

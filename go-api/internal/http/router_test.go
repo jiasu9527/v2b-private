@@ -907,6 +907,7 @@ type fakeAdminService struct {
 	clientEntrySplitPolicy        admin.ClientEntryUserPolicyRecord
 	lastClientEntrySplitPreview   admin.ClientEntryUserPolicySplitPreviewRequest
 	lastClientEntrySplitCreate    admin.ClientEntryUserPolicySplitCreateRequest
+	lastClientEntrySplitConvert   admin.ClientEntryUserPolicySplitConvertRequest
 	lastClientEntryGroupSplit     admin.ClientEntryUserPolicyGroupSplitRequest
 	lastClientEntryGroupHost      admin.ClientEntryUserPolicyGroupHostUpdateRequest
 	lastClientEntryPolicyEnabled  [2]int64
@@ -1147,6 +1148,11 @@ func (f *fakeAdminService) PreviewClientEntryUserPolicySplit(_ context.Context, 
 
 func (f *fakeAdminService) CreateClientEntryUserPolicySplit(_ context.Context, req admin.ClientEntryUserPolicySplitCreateRequest) (admin.ClientEntryUserPolicyRecord, error) {
 	f.lastClientEntrySplitCreate = req
+	return f.clientEntrySplitPolicy, f.err
+}
+
+func (f *fakeAdminService) ConvertClientEntryUserPolicyToSplit(_ context.Context, req admin.ClientEntryUserPolicySplitConvertRequest) (admin.ClientEntryUserPolicyRecord, error) {
+	f.lastClientEntrySplitConvert = req
 	return f.clientEntrySplitPolicy, f.err
 }
 
@@ -4445,6 +4451,37 @@ func TestRouterAdminClientEntryUserPolicySplitEndpoints(t *testing.T) {
 	}
 	if adminService.lastClientEntryPolicyEnabled != [2]int64{9, 0} {
 		t.Fatalf("enabled request = %#v", adminService.lastClientEntryPolicyEnabled)
+	}
+}
+
+func TestRouterAdminClientEntryUserPolicySplitConvertEndpoint(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{
+		clientEntrySplitPolicy: admin.ClientEntryUserPolicyRecord{ID: 9, Mode: admin.ClientEntryUserPolicyModeSplit},
+	}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/split-convert?auth_data=jwt-admin", strings.NewReader(`{"policy_id":9,"entry_host_a":"a.example.com","entry_host_b":"b.example.com"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"mode":"split"`) {
+		t.Fatalf("convert: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := adminService.lastClientEntrySplitConvert; got.PolicyID != 9 || got.EntryHostA != "a.example.com" || got.EntryHostB != "b.example.com" {
+		t.Fatalf("convert request = %#v", got)
+	}
+
+	wrongMethodReq := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/server/client-entry-user-policy/split-convert?auth_data=jwt-admin", nil)
+	wrongMethodRec := httptest.NewRecorder()
+	router.ServeHTTP(wrongMethodRec, wrongMethodReq)
+	if wrongMethodRec.Code != http.StatusMethodNotAllowed || wrongMethodRec.Header().Get("Allow") != http.MethodPost {
+		t.Fatalf("wrong method: status=%d allow=%q body=%s", wrongMethodRec.Code, wrongMethodRec.Header().Get("Allow"), wrongMethodRec.Body.String())
 	}
 }
 

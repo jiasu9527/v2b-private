@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"forest/go-api/internal/cliententry"
+	"forest/go-api/internal/subscribelink"
 )
 
 const (
@@ -163,6 +164,138 @@ RETURNING group_id`, from, now, policyID, groupA, groupB)
 		Action: cliententry.ActionOverride, Conditions: []cliententry.Condition{}, Members: members,
 		EntryHost: "", ResolveEntryHost: prepared.ResolveEntryHost, ExtraNodes: []string{}, ExtraNodesPosition: "after",
 		Enabled: prepared.Enabled, Remarks: prepared.Remarks, CreatedAt: now, UpdatedAt: now,
+	}, nil
+}
+
+// ConvertClientEntryUserPolicyToSplit turns one existing, pure user-ID range
+// rule into a fixed two-way snapshot without creating another policy row. The
+// original condition is intentionally retained as conversion provenance; at
+// subscription time split assignments, rather than conditions, decide matches.
+func (s *DBService) ConvertClientEntryUserPolicyToSplit(ctx context.Context, req ClientEntryUserPolicySplitConvertRequest) (ClientEntryUserPolicyRecord, error) {
+	if s.db == nil {
+		return ClientEntryUserPolicyRecord{}, ErrUnavailable
+	}
+	if err := s.ensureClientEntrySchema(ctx); err != nil {
+		return ClientEntryUserPolicyRecord{}, err
+	}
+	if req.PolicyID <= 0 {
+		return ClientEntryUserPolicyRecord{}, errors.New("规则不存在")
+	}
+	hostA, hostB, err := normalizeClientEntryUserPolicySplitHosts(req.EntryHostA, req.EntryHostB)
+	if err != nil {
+		return ClientEntryUserPolicyRecord{}, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
+	}
+	defer tx.Rollback()
+
+	var action, conditionsRaw, extraNodesRaw string
+	if err := tx.QueryRowContext(ctx, `SELECT action, conditions, extra_nodes
+FROM v2_client_entry_user_policy
+WHERE id = $1 AND mode = 'standard'
+FOR UPDATE`, req.PolicyID).Scan(&action, &conditionsRaw, &extraNodesRaw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ClientEntryUserPolicyRecord{}, errors.New("只能转换现有的标准规则")
+		}
+		return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
+	}
+	if !strings.EqualFold(strings.TrimSpace(action), cliententry.ActionOverride) {
+		return ClientEntryUserPolicyRecord{}, errors.New("只有覆盖入口地址的规则可以转换为固定二分")
+	}
+	conditions, err := cliententry.DecodeConditions(conditionsRaw)
+	if err != nil {
+		return ClientEntryUserPolicyRecord{}, errors.New("规则匹配条件无效，无法转换")
+	}
+	if len(conditions) != 1 || conditions[0].Field != "user_id" || conditions[0].Operator != "between" {
+		return ClientEntryUserPolicyRecord{}, errors.New("只能转换仅包含一个用户 ID 范围条件的规则")
+	}
+	minimum, minErr := clientEntryRuleRawInt64(conditions[0].Min)
+	maximum, maxErr := clientEntryRuleRawInt64(conditions[0].Max)
+	if minErr != nil || maxErr != nil || minimum <= 0 || maximum < minimum {
+		return ClientEntryUserPolicyRecord{}, errors.New("用户 ID 范围无效，无法转换")
+	}
+	extraNodes, err := subscribelink.DecodeList(extraNodesRaw)
+	if err != nil {
+		return ClientEntryUserPolicyRecord{}, errors.New("规则额外节点无效，无法转换")
+	}
+	if len(extraNodes) != 0 {
+		return ClientEntryUserPolicyRecord{}, errors.New("包含额外下发节点的规则不能转换为固定二分")
+	}
+
+	now := time.Now().Unix()
+	groupA, err := insertClientEntryUserPolicySplitGroup(ctx, tx, req.PolicyID, nil, "A", "A", hostA, clientEntryRuleSortStep, now)
+	if err != nil {
+		return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
+	}
+	groupB, err := insertClientEntryUserPolicySplitGroup(ctx, tx, req.PolicyID, nil, "B", "B", hostB, 2*clientEntryRuleSortStep, now)
+	if err != nil {
+		return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
+	}
+
+	rows, err := tx.QueryContext(ctx, `WITH eligible AS (
+	SELECT users.id AS user_id,
+	       ROW_NUMBER() OVER (ORDER BY users.id ASC) AS position,
+	       COUNT(*) OVER () AS total
+	FROM v2_user users
+	WHERE users.id BETWEEN $1 AND $2
+)
+INSERT INTO v2_client_entry_user_policy_split_assignment
+(policy_id, user_id, group_id, created_at, updated_at)
+SELECT $3, user_id, CASE WHEN position <= (total + 1) / 2 THEN $4 ELSE $5 END, $6, $6
+FROM eligible
+ORDER BY user_id ASC
+RETURNING group_id`, minimum, maximum, req.PolicyID, groupA, groupB, now)
+	if err != nil {
+		return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
+	}
+	userCount := int64(0)
+	groupCounts := map[int64]int64{groupA: 0, groupB: 0}
+	for rows.Next() {
+		var groupID int64
+		if err := rows.Scan(&groupID); err != nil {
+			rows.Close()
+			return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
+		}
+		userCount++
+		groupCounts[groupID]++
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
+	}
+	if err := rows.Close(); err != nil {
+		return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
+	}
+	if userCount < 2 || groupCounts[groupA] == 0 || groupCounts[groupB] == 0 {
+		return ClientEntryUserPolicyRecord{}, errors.New("用户 ID 范围内的现有用户不足 2 人，无法转换")
+	}
+	if difference := groupCounts[groupA] - groupCounts[groupB]; difference < -1 || difference > 1 {
+		return ClientEntryUserPolicyRecord{}, errors.New("二分用户人数异常，请重试")
+	}
+
+	result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
+SET mode = 'split', entry_host = '', extra_nodes = '[]', snapshot_from = NULL, snapshot_to = NULL, updated_at = $2
+WHERE id = $1 AND mode = 'standard'`, req.PolicyID, now)
+	if err != nil {
+		return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
+	}
+	if err := requireClientEntryRuleAffected(result, "规则"); err != nil {
+		return ClientEntryUserPolicyRecord{}, errors.New("规则已变化，请刷新后重试")
+	}
+	if err := tx.Commit(); err != nil {
+		return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
+	}
+	s.markClientEntryMonitorTargetsDirty()
+	return ClientEntryUserPolicyRecord{
+		ID: req.PolicyID, Mode: ClientEntryUserPolicyModeSplit, Action: cliententry.ActionOverride,
+		Conditions: conditions, SnapshotUserCount: userCount,
+		SplitGroups: []ClientEntryUserPolicySplitGroupRecord{
+			{ID: groupA, PolicyID: req.PolicyID, Name: "A", Path: "A", EntryHost: hostA, Sort: clientEntryRuleSortStep, UserCount: groupCounts[groupA], IsLeaf: true, CreatedAt: now, UpdatedAt: now},
+			{ID: groupB, PolicyID: req.PolicyID, Name: "B", Path: "B", EntryHost: hostB, Sort: 2 * clientEntryRuleSortStep, UserCount: groupCounts[groupB], IsLeaf: true, CreatedAt: now, UpdatedAt: now},
+		},
 	}, nil
 }
 

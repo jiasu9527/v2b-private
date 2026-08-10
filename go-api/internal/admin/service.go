@@ -333,6 +333,7 @@ type Service interface {
 	SaveClientEntryUserPolicy(ctx context.Context, req ClientEntryUserPolicySaveRequest) (bool, error)
 	PreviewClientEntryUserPolicySplit(ctx context.Context, req ClientEntryUserPolicySplitPreviewRequest) (ClientEntryUserPolicySplitPreviewResult, error)
 	CreateClientEntryUserPolicySplit(ctx context.Context, req ClientEntryUserPolicySplitCreateRequest) (ClientEntryUserPolicyRecord, error)
+	ConvertClientEntryUserPolicyToSplit(ctx context.Context, req ClientEntryUserPolicySplitConvertRequest) (ClientEntryUserPolicyRecord, error)
 	SplitClientEntryUserPolicyGroup(ctx context.Context, req ClientEntryUserPolicyGroupSplitRequest) (ClientEntryUserPolicyRecord, error)
 	UpdateClientEntryUserPolicySplitGroupHost(ctx context.Context, req ClientEntryUserPolicyGroupHostUpdateRequest) (ClientEntryUserPolicyRecord, error)
 	SetClientEntryUserPolicyEnabled(ctx context.Context, id, enabled int64) (bool, error)
@@ -1336,6 +1337,12 @@ type ClientEntryUserPolicySplitCreateRequest struct {
 	ResolveEntryHost *int64
 	Enabled          *int64
 	Remarks          string
+}
+
+type ClientEntryUserPolicySplitConvertRequest struct {
+	PolicyID   int64
+	EntryHostA string
+	EntryHostB string
 }
 
 type ClientEntryUserPolicyGroupSplitRequest struct {
