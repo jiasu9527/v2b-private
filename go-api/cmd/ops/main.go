@@ -272,8 +272,8 @@ func execSQLFile(ctx context.Context, db *sql.DB, path string) (int, int, error)
 		ok++
 	}
 
-	if ok == 0 {
-		return ok, failed, fmt.Errorf("all SQL statements failed for %s", path)
+	if failed > 0 {
+		return ok, failed, fmt.Errorf("%d of %d SQL statements failed for %s", failed, len(stmts), path)
 	}
 	return ok, failed, nil
 }
@@ -446,38 +446,183 @@ func isIgnorableOwnerError(err error) bool {
 }
 
 func splitSQLStatements(raw string) []string {
-	lines := strings.Split(raw, "\n")
-	stmts := make([]string, 0, len(lines))
+	stmts := make([]string, 0)
 	var builder strings.Builder
+	var singleQuoted bool
+	var singleQuoteBackslashEscapes bool
+	var doubleQuoted bool
+	var lineComment bool
+	var blockCommentDepth int
+	var dollarTag string
 
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
-			continue
-		}
-
-		if builder.Len() > 0 {
-			builder.WriteByte('\n')
-		}
-		builder.WriteString(line)
-
-		if strings.HasSuffix(trimmed, ";") {
-			stmt := strings.TrimSpace(builder.String())
-			if stmt != "" {
-				stmts = append(stmts, stmt)
-			}
-			builder.Reset()
-		}
-	}
-
-	if builder.Len() > 0 {
+	appendStatement := func() {
 		stmt := strings.TrimSpace(builder.String())
 		if stmt != "" {
 			stmts = append(stmts, stmt)
 		}
+		builder.Reset()
 	}
 
+	for i := 0; i < len(raw); {
+		if lineComment {
+			if raw[i] == '\n' {
+				builder.WriteByte('\n')
+				lineComment = false
+			}
+			i++
+			continue
+		}
+
+		if blockCommentDepth > 0 {
+			switch {
+			case i+1 < len(raw) && raw[i:i+2] == "/*":
+				blockCommentDepth++
+				i += 2
+			case i+1 < len(raw) && raw[i:i+2] == "*/":
+				blockCommentDepth--
+				i += 2
+				if blockCommentDepth == 0 {
+					builder.WriteByte(' ')
+				}
+			case raw[i] == '\n':
+				builder.WriteByte('\n')
+				i++
+			default:
+				i++
+			}
+			continue
+		}
+
+		if dollarTag != "" {
+			if strings.HasPrefix(raw[i:], dollarTag) {
+				builder.WriteString(dollarTag)
+				i += len(dollarTag)
+				dollarTag = ""
+				continue
+			}
+			builder.WriteByte(raw[i])
+			i++
+			continue
+		}
+
+		if singleQuoted {
+			builder.WriteByte(raw[i])
+			if singleQuoteBackslashEscapes && raw[i] == '\\' && i+1 < len(raw) {
+				builder.WriteByte(raw[i+1])
+				i += 2
+				continue
+			}
+			if raw[i] == '\'' {
+				if i+1 < len(raw) && raw[i+1] == '\'' {
+					builder.WriteByte(raw[i+1])
+					i += 2
+					continue
+				}
+				singleQuoted = false
+				singleQuoteBackslashEscapes = false
+			}
+			i++
+			continue
+		}
+
+		if doubleQuoted {
+			builder.WriteByte(raw[i])
+			if raw[i] == '"' {
+				if i+1 < len(raw) && raw[i+1] == '"' {
+					builder.WriteByte(raw[i+1])
+					i += 2
+					continue
+				}
+				doubleQuoted = false
+			}
+			i++
+			continue
+		}
+
+		switch {
+		case i+1 < len(raw) && raw[i:i+2] == "--":
+			builder.WriteByte(' ')
+			lineComment = true
+			i += 2
+		case i+1 < len(raw) && raw[i:i+2] == "/*":
+			builder.WriteByte(' ')
+			blockCommentDepth = 1
+			i += 2
+		case raw[i] == '\'':
+			builder.WriteByte(raw[i])
+			singleQuoted = true
+			singleQuoteBackslashEscapes = postgresEscapeStringPrefix(raw, i)
+			i++
+		case raw[i] == '"':
+			builder.WriteByte(raw[i])
+			doubleQuoted = true
+			i++
+		case raw[i] == '$':
+			tag, ok := postgresDollarQuoteTag(raw, i)
+			if !ok {
+				builder.WriteByte(raw[i])
+				i++
+				continue
+			}
+			builder.WriteString(tag)
+			dollarTag = tag
+			i += len(tag)
+		case raw[i] == ';':
+			builder.WriteByte(raw[i])
+			i++
+			appendStatement()
+		default:
+			builder.WriteByte(raw[i])
+			i++
+		}
+	}
+
+	appendStatement()
 	return stmts
+}
+
+func postgresDollarQuoteTag(raw string, start int) (string, bool) {
+	if start < 0 || start >= len(raw) || raw[start] != '$' || start+1 >= len(raw) {
+		return "", false
+	}
+	if start > 0 && isPostgresIdentifierContinue(raw[start-1]) {
+		return "", false
+	}
+	if raw[start+1] == '$' {
+		return "$$", true
+	}
+	if !isPostgresDollarTagStart(raw[start+1]) {
+		return "", false
+	}
+
+	for i := start + 2; i < len(raw); i++ {
+		if raw[i] == '$' {
+			return raw[start : i+1], true
+		}
+		if !isPostgresDollarTagContinue(raw[i]) {
+			return "", false
+		}
+	}
+	return "", false
+}
+
+func isPostgresDollarTagStart(value byte) bool {
+	return value == '_' || value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z'
+}
+
+func isPostgresDollarTagContinue(value byte) bool {
+	return isPostgresDollarTagStart(value) || value >= '0' && value <= '9'
+}
+
+func postgresEscapeStringPrefix(raw string, quote int) bool {
+	if quote < 1 || raw[quote-1] != 'e' && raw[quote-1] != 'E' {
+		return false
+	}
+	return quote == 1 || !isPostgresIdentifierContinue(raw[quote-2])
+}
+
+func isPostgresIdentifierContinue(value byte) bool {
+	return isPostgresDollarTagContinue(value) || value == '$' || value >= 0x80
 }
 
 func upsertAdmin(ctx context.Context, db *sql.DB, email, password string) (string, error) {
