@@ -1264,6 +1264,7 @@ type ClientEntryUserPolicyRecord struct {
 	IDRangeUserCount   *int64                         `json:"id_range_user_count,omitempty"`
 	Members            []ClientEntryGroupMemberRecord `json:"members,omitempty"`
 	EntryHost          string                         `json:"entry_host"`
+	ResolveEntryHost   int64                          `json:"resolve_entry_host"`
 	ExtraNodes         []string                       `json:"extra_nodes"`
 	ExtraNodesPosition string                         `json:"extra_nodes_position"`
 	Enabled            int64                          `json:"enabled"`
@@ -1279,6 +1280,7 @@ type ClientEntryUserPolicySaveRequest struct {
 	Conditions         []cliententry.Condition
 	Members            []ClientEntryGroupMemberSaveRequest
 	EntryHost          string
+	ResolveEntryHost   *int64
 	ExtraNodes         []string
 	ExtraNodesPosition string
 	Enabled            *int64

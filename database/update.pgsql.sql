@@ -152,6 +152,7 @@ CREATE TABLE IF NOT EXISTS "v2_client_entry_user_policy" (
   "action" varchar(16) NOT NULL DEFAULT 'override',
   "conditions" text NOT NULL DEFAULT '[]',
   "entry_host" varchar(255) NOT NULL DEFAULT '',
+  "resolve_entry_host" SMALLINT NOT NULL DEFAULT '0',
   "extra_nodes" text NOT NULL DEFAULT '[]',
   "extra_nodes_position" varchar(16) NOT NULL DEFAULT 'after',
   "enabled" SMALLINT NOT NULL DEFAULT '1',
@@ -166,6 +167,7 @@ ALTER TABLE "v2_client_entry_user_policy" ADD COLUMN IF NOT EXISTS "sort" INTEGE
 ALTER TABLE "v2_client_entry_user_policy" ADD COLUMN IF NOT EXISTS "action" varchar(16) NOT NULL DEFAULT 'override';
 ALTER TABLE "v2_client_entry_user_policy" ADD COLUMN IF NOT EXISTS "conditions" text NOT NULL DEFAULT '[]';
 ALTER TABLE "v2_client_entry_user_policy" ADD COLUMN IF NOT EXISTS "entry_host" varchar(255) NOT NULL DEFAULT '';
+ALTER TABLE "v2_client_entry_user_policy" ADD COLUMN IF NOT EXISTS "resolve_entry_host" SMALLINT NOT NULL DEFAULT '0';
 ALTER TABLE "v2_client_entry_user_policy" ADD COLUMN IF NOT EXISTS "extra_nodes" text NOT NULL DEFAULT '[]';
 ALTER TABLE "v2_client_entry_user_policy" ADD COLUMN IF NOT EXISTS "extra_nodes_position" varchar(16) NOT NULL DEFAULT 'after';
 

@@ -417,9 +417,9 @@ func expectServerFetchUserForVisibilityTest(mock sqlmock.Sqlmock, userID, groupI
 
 func expectMatchingOverridePolicyForVisibilityTest(mock sqlmock.Sqlmock, serverType string, serverID, userID int64) {
 	conditions := `[{"field":"user_id","operator":"in","values":[` + fmt.Sprint(userID) + `]}]`
-	mock.ExpectQuery(`SELECT p.id, p.action, p.conditions, p.entry_host, p.extra_nodes, p.extra_nodes_position, m.server_type, m.server_id, m.sort AS member_sort\s+FROM v2_client_entry_user_policy p\s+JOIN v2_client_entry_user_policy_member m ON m.policy_id = p.id\s+WHERE p.enabled = 1`).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "action", "conditions", "entry_host", "extra_nodes", "extra_nodes_position", "server_type", "server_id", "member_sort"}).
-			AddRow(int64(7), cliententry.ActionOverride, conditions, "assigned.example.com", `[]`, "after", serverType, serverID, int64(1)))
+	mock.ExpectQuery(`SELECT p.id, p.action, p.conditions, p.entry_host, p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position, m.server_type, m.server_id, m.sort AS member_sort\s+FROM v2_client_entry_user_policy p\s+JOIN v2_client_entry_user_policy_member m ON m.policy_id = p.id\s+WHERE p.enabled = 1`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "action", "conditions", "entry_host", "resolve_entry_host", "extra_nodes", "extra_nodes_position", "server_type", "server_id", "member_sort"}).
+			AddRow(int64(7), cliententry.ActionOverride, conditions, "assigned.example.com", int64(0), `[]`, "after", serverType, serverID, int64(1)))
 }
 
 func expectServerFetchTableQueriesForVisibilityTest(mock sqlmock.Sqlmock, visibleType string, visibleID int64, visibleGroupIDs string) {

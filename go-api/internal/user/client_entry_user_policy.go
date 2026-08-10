@@ -14,6 +14,7 @@ type clientEntryUserPolicy struct {
 	ID                 int64
 	Action             string
 	EntryHost          string
+	ResolveEntryHost   bool
 	ExtraNodes         []string
 	ExtraNodesPosition string
 	Conditions         []cliententry.Condition
@@ -25,7 +26,7 @@ func (s *DBService) loadClientEntryUserPolicies(ctx context.Context) ([]clientEn
 		return nil, err
 	}
 
-	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.action, p.conditions, p.entry_host, p.extra_nodes, p.extra_nodes_position, m.server_type, m.server_id, m.sort AS member_sort
+	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.action, p.conditions, p.entry_host, p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position, m.server_type, m.server_id, m.sort AS member_sort
 FROM v2_client_entry_user_policy p
 JOIN v2_client_entry_user_policy_member m ON m.policy_id = p.id
 WHERE p.enabled = 1
@@ -63,6 +64,7 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC, m.sort ASC NULLS LAST, m.id ASC`)
 				ID:                 id,
 				Action:             action,
 				EntryHost:          strings.TrimSpace(fmt.Sprint(row["entry_host"])),
+				ResolveEntryHost:   mapInt64(row["resolve_entry_host"]) != 0,
 				ExtraNodes:         extraNodes,
 				ExtraNodesPosition: extraNodesPosition,
 				Conditions:         conditions,
@@ -100,6 +102,10 @@ func clientEntryPolicyHasMember(values []ClientEntryGroupMember, target ClientEn
 }
 
 func applyClientEntryUserPolicies(servers []map[string]any, subject cliententry.Subject, policies []clientEntryUserPolicy) []map[string]any {
+	return applyClientEntryUserPoliciesWithResolver(context.Background(), servers, subject, policies, nil)
+}
+
+func applyClientEntryUserPoliciesWithResolver(ctx context.Context, servers []map[string]any, subject cliententry.Subject, policies []clientEntryUserPolicy, resolver *clientEntryHostResolver) []map[string]any {
 	result := make([]map[string]any, 0, len(servers))
 	matchedPolicyIDs := make(map[int64]struct{})
 	for _, server := range servers {
@@ -123,7 +129,12 @@ func applyClientEntryUserPolicies(servers []map[string]any, subject cliententry.
 			matchedPolicyIDs[policy.ID] = struct{}{}
 			granted = true
 			if policy.Action == cliententry.ActionOverride {
-				server["host"] = policy.EntryHost
+				entryHost := policy.EntryHost
+				if policy.ResolveEntryHost && resolver != nil {
+					selectionKey := fmt.Sprintf("%d:%d", subject.UserID, policy.ID)
+					entryHost = resolver.Resolve(ctx, entryHost, selectionKey)
+				}
+				server["host"] = entryHost
 			}
 			server["client_entry_user_policy"] = 1
 			server["client_entry_user_policy_id"] = policy.ID

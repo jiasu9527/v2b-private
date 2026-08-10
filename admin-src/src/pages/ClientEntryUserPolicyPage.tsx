@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Form,
   Input,
   InputNumber,
@@ -206,6 +207,12 @@ function normalizeExtraNodePosition(value: any): ExtraNodePosition {
   return value === 'before' ? 'before' : 'after';
 }
 
+function normalizeResolveEntryHost(value: any) {
+  if (value === true || value === 'true') return true;
+  const number = Number(value);
+  return Number.isFinite(number) && number !== 0;
+}
+
 function policyPayload(row: any, overrides: Record<string, any> = {}) {
   const source = { ...row, ...overrides };
   const action = normalizePolicyAction(source.action);
@@ -213,6 +220,7 @@ function policyPayload(row: any, overrides: Record<string, any> = {}) {
     id: source.id,
     name: String(source.name || '').trim(),
     entry_host: action === 'override' ? String(source.entry_host || '').trim() : '',
+    resolve_entry_host: action === 'override' && normalizeResolveEntryHost(source.resolve_entry_host) ? 1 : 0,
     action,
     conditions: cleanConditions(source.conditions),
     members: (Array.isArray(source.members) ? source.members : [])
@@ -374,6 +382,7 @@ function PolicyEditor({
       id: row?.id,
       name: row?.name || '',
       entry_host: row?.entry_host || '',
+      resolve_entry_host: normalizeResolveEntryHost(row?.resolve_entry_host),
       action: normalizePolicyAction(row?.action),
       conditions,
       members: normalizedMembers(row),
@@ -495,17 +504,26 @@ function PolicyEditor({
           description="可以在下方一次选择多个节点。节点需在编辑页开启“仅入口分配用户可见”，这样未命中本规则的用户不会收到这些节点。"
           style={{ marginBottom: 24 }}
         />}
-        {action === 'override' && <Form.Item
-          name="entry_host"
-          label="独立入口地址"
-          rules={[
-            { required: true, whitespace: true, message: '请输入独立入口地址' },
-            { validator: (_, value) => /[,，()]/.test(String(value || '')) ? Promise.reject(new Error('这里只能填写单个普通域名或 IP，条件请在下方配置')) : Promise.resolve() },
-          ]}
-          tooltip="规则命中时，所选节点会下发这个地址。这里只填写普通域名或 IP。"
-        >
-          <Input placeholder="例如 vip.example.com 或 1.2.3.4" />
-        </Form.Item>}
+        {action === 'override' && <>
+          <Form.Item
+            name="entry_host"
+            label="独立入口地址"
+            rules={[
+              { required: true, whitespace: true, message: '请输入独立入口地址' },
+              { validator: (_, value) => /[,，()]/.test(String(value || '')) ? Promise.reject(new Error('这里只能填写单个普通域名或 IP，条件请在下方配置')) : Promise.resolve() },
+            ]}
+            tooltip="规则命中时，所选节点会下发这个地址。这里只填写普通域名或 IP。"
+          >
+            <Input placeholder="例如 vip.example.com 或 1.2.3.4" />
+          </Form.Item>
+          <Form.Item
+            name="resolve_entry_host"
+            valuePropName="checked"
+            extra="勾选后，用户拉取订阅时由后端解析上方域名并下发 IP；上方填写 IP 时会原样下发。解析暂时失败时仍下发原域名，避免节点缺失。"
+          >
+            <Checkbox>解析域名下发 IP</Checkbox>
+          </Form.Item>
+        </>}
         <Form.Item label="匹配条件" extra="同一条规则中的所有条件必须同时满足（AND）。不添加条件表示匹配全部用户。">
           <Form.List name="conditions">
             {(fields, { add, remove }) => <Space direction="vertical" size={10} style={{ width: '100%' }}>
@@ -635,7 +653,8 @@ function policyResultDescription(row: any) {
   const extraDescription = extraNodeCount ? `；另下发 ${extraNodeCount} 个额外节点（${position}，保留 URI 原地址）` : '';
   if (action === 'hide') return `结果：不下发所选节点${extraDescription}`;
   if (action === 'original') return `结果：下发所选节点各自的原入口地址${extraDescription}`;
-  return `结果：下发独立入口 ${row?.entry_host || '-'}${extraDescription}`;
+  const resolveDescription = normalizeResolveEntryHost(row?.resolve_entry_host) ? '（后端解析域名后下发 IP）' : '';
+  return `结果：下发独立入口 ${row?.entry_host || '-'}${resolveDescription}${extraDescription}`;
 }
 
 function ExtraNodesSummary({ value, position }: { value: any; position: any }) {
@@ -778,6 +797,7 @@ export default function ClientEntryUserPolicyPage() {
       const policies = Array.isArray(policyRes.data) ? policyRes.data : [];
       setRows(policies.map((row: any) => ({
         ...row,
+        resolve_entry_host: normalizeResolveEntryHost(row.resolve_entry_host),
         conditions: parseConditions(row.conditions),
         extra_nodes: parseExtraNodes(row.extra_nodes),
         extra_nodes_position: normalizeExtraNodePosition(row.extra_nodes_position),
@@ -891,7 +911,10 @@ export default function ClientEntryUserPolicyPage() {
         const action = normalizePolicyAction(row.action);
         if (action === 'hide') return <Tag color="red">不下发节点</Tag>;
         if (action === 'original') return <Tag color="blue">下发原入口地址</Tag>;
-        return <Typography.Text code copyable={{ text: String(row.entry_host || '') }}>{row.entry_host || '-'}</Typography.Text>;
+        return <Space direction="vertical" size={4}>
+          <Typography.Text code copyable={{ text: String(row.entry_host || '') }}>{row.entry_host || '-'}</Typography.Text>
+          {normalizeResolveEntryHost(row.resolve_entry_host) && <Tag color="cyan" style={{ width: 'fit-content', marginInlineEnd: 0 }}>解析为 IP</Tag>}
+        </Space>;
       },
     },
     {

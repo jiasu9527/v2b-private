@@ -256,12 +256,14 @@ type DBService struct {
 	jobs      queue.Enqueuer
 	authCache *session.AuthCache
 
+	clientEntryHostResolver *clientEntryHostResolver
+
 	clientEntryEnsureOnce sync.Once
 	clientEntryEnsureErr  error
 }
 
 func NewDBService(cfg config.Config, db *sql.DB) *DBService {
-	return &DBService{cfg: cfg, db: db}
+	return &DBService{cfg: cfg, db: db, clientEntryHostResolver: newClientEntryHostResolver()}
 }
 
 func (s *DBService) WithAdminNotifier(notifier ticketAdminNotifier) *DBService {

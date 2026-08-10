@@ -107,13 +107,13 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 		return mapInt64(servers[i]["id"]) < mapInt64(servers[j]["id"])
 	})
 
-	servers = applyClientEntryUserPolicies(servers, cliententry.Subject{
+	servers = applyClientEntryUserPoliciesWithResolver(ctx, servers, cliententry.Subject{
 		UserID:           userRow.ID,
 		Email:            userRow.Email,
 		RegistrationDays: serverFetchRegistrationDays(userRow.CreatedAt, now),
 		PlanID:           userRow.PlanID,
 		UA:               ua,
-	}, userPolicies)
+	}, userPolicies, s.clientEntryHostResolver)
 
 	filtered := make([]map[string]any, 0, len(servers))
 	for _, item := range servers {

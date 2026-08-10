@@ -1054,6 +1054,7 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		Action             string                  `json:"action"`
 		Conditions         []cliententry.Condition `json:"conditions"`
 		EntryHost          string                  `json:"entry_host"`
+		ResolveEntryHost   *json.Number            `json:"resolve_entry_host"`
 		ExtraNodes         []string                `json:"extra_nodes"`
 		ExtraNodesPosition string                  `json:"extra_nodes_position"`
 		Members            []struct {
@@ -1082,6 +1083,10 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		payload.Name = strings.TrimSpace(inputs["name"])
 		payload.Action = strings.TrimSpace(inputs["action"])
 		payload.EntryHost = strings.TrimSpace(inputs["entry_host"])
+		if raw := strings.TrimSpace(inputs["resolve_entry_host"]); raw != "" {
+			v := json.Number(raw)
+			payload.ResolveEntryHost = &v
+		}
 		payload.ExtraNodes = splitClientEntryLines(inputs["extra_nodes"])
 		payload.ExtraNodesPosition = strings.TrimSpace(inputs["extra_nodes_position"])
 		if raw := strings.TrimSpace(inputs["conditions"]); raw != "" {
@@ -1126,6 +1131,11 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "保存失败"})
 		return true
 	}
+	resolveEntryHost, err := jsonNumberToInt64Pointer(payload.ResolveEntryHost)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "保存失败"})
+		return true
+	}
 	members := make([]admin.ClientEntryGroupMemberSaveRequest, 0, len(payload.Members))
 	for _, member := range payload.Members {
 		serverID, err := jsonNumberToInt64Pointer(member.ServerID)
@@ -1144,7 +1154,7 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		members = append(members, admin.ClientEntryGroupMemberSaveRequest{ServerType: member.ServerType, ServerID: *serverID, Sort: sortValue})
 	}
 	saved, err := adminService.SaveClientEntryUserPolicy(r.Context(), admin.ClientEntryUserPolicySaveRequest{
-		ID: id, Name: payload.Name, Action: payload.Action, Conditions: payload.Conditions, EntryHost: payload.EntryHost, ExtraNodes: payload.ExtraNodes, ExtraNodesPosition: payload.ExtraNodesPosition, Members: members, Enabled: enabled, Remarks: payload.Remarks,
+		ID: id, Name: payload.Name, Action: payload.Action, Conditions: payload.Conditions, EntryHost: payload.EntryHost, ResolveEntryHost: resolveEntryHost, ExtraNodes: payload.ExtraNodes, ExtraNodesPosition: payload.ExtraNodesPosition, Members: members, Enabled: enabled, Remarks: payload.Remarks,
 	})
 	if err != nil {
 		return handleAdminError(w, err)

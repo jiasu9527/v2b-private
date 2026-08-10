@@ -23,7 +23,7 @@ func (s *DBService) ListClientEntryUserPolicies(ctx context.Context) ([]ClientEn
 		return nil, err
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.name, p.sort, p.action, p.conditions, p.entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.name, p.sort, p.action, p.conditions, p.entry_host, p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at
 FROM v2_client_entry_user_policy p
 ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 	if err != nil {
@@ -46,6 +46,7 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 			&record.Action,
 			&conditionsRaw,
 			&record.EntryHost,
+			&record.ResolveEntryHost,
 			&extraNodesRaw,
 			&record.ExtraNodesPosition,
 			&record.Enabled,
@@ -265,9 +266,9 @@ func (s *DBService) SaveClientEntryUserPolicy(ctx context.Context, req ClientEnt
 			return false, errors.New("保存失败")
 		}
 		if err := tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_user_policy
-(name, sort, action, conditions, entry_host, extra_nodes, extra_nodes_position, enabled, remarks, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
-RETURNING id`, prepared.Name, nextSort, prepared.Action, conditions, prepared.EntryHost, extraNodes, prepared.ExtraNodesPosition, prepared.Enabled, prepared.Remarks, now).Scan(&policyID); err != nil {
+(name, sort, action, conditions, entry_host, resolve_entry_host, extra_nodes, extra_nodes_position, enabled, remarks, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+RETURNING id`, prepared.Name, nextSort, prepared.Action, conditions, prepared.EntryHost, prepared.ResolveEntryHost, extraNodes, prepared.ExtraNodesPosition, prepared.Enabled, prepared.Remarks, now).Scan(&policyID); err != nil {
 			return false, errors.New("保存失败")
 		}
 	} else {
@@ -276,8 +277,8 @@ RETURNING id`, prepared.Name, nextSort, prepared.Action, conditions, prepared.En
 			return false, errors.New("规则不存在")
 		}
 		result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
-SET name = $2, action = $3, conditions = $4, entry_host = $5, extra_nodes = $6, extra_nodes_position = $7, enabled = $8, remarks = $9, updated_at = $10
-WHERE id = $1`, policyID, prepared.Name, prepared.Action, conditions, prepared.EntryHost, extraNodes, prepared.ExtraNodesPosition, prepared.Enabled, prepared.Remarks, now)
+SET name = $2, action = $3, conditions = $4, entry_host = $5, resolve_entry_host = $6, extra_nodes = $7, extra_nodes_position = $8, enabled = $9, remarks = $10, updated_at = $11
+WHERE id = $1`, policyID, prepared.Name, prepared.Action, conditions, prepared.EntryHost, prepared.ResolveEntryHost, extraNodes, prepared.ExtraNodesPosition, prepared.Enabled, prepared.Remarks, now)
 		if err != nil {
 			return false, errors.New("保存失败")
 		}
@@ -404,6 +405,7 @@ type preparedClientEntryRuleSaveRequest struct {
 	Conditions         []cliententry.Condition
 	Members            []ClientEntryGroupMemberSaveRequest
 	EntryHost          string
+	ResolveEntryHost   int64
 	ExtraNodes         []string
 	ExtraNodesPosition string
 	Enabled            int64
@@ -443,6 +445,12 @@ func normalizeClientEntryUserPolicySaveRequest(req ClientEntryUserPolicySaveRequ
 			return result, err
 		}
 		result.EntryHost = host
+		if req.ResolveEntryHost != nil {
+			if *req.ResolveEntryHost != 0 && *req.ResolveEntryHost != 1 {
+				return result, errors.New("解析域名下发 IP 设置无效")
+			}
+			result.ResolveEntryHost = *req.ResolveEntryHost
+		}
 	}
 	conditions, err := cliententry.NormalizeConditions(req.Conditions)
 	if err != nil {

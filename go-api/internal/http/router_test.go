@@ -4303,7 +4303,7 @@ func TestRouterAdminClientEntryUserPolicySaveEndpointAcceptsStructuredRules(t *t
 		WithAdminService(adminService),
 	)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/save", strings.NewReader(`{"auth_data":"jwt-admin","name":"新用户 Clash","action":"override","entry_host":"vip-entry.example.com","conditions":[{"field":"user_id","operator":"in","values":[1001,1002]},{"field":"ua","operator":"contains_any","values":["Clash","Mihomo"]}],"members":[{"server_type":"vmess","server_id":11},{"server_type":"trojan","server_id":12}],"extra_nodes":["trojan://secret@extra.example.com:443#Extra"],"extra_nodes_position":"before","enabled":1,"remarks":"VIP"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/save", strings.NewReader(`{"auth_data":"jwt-admin","name":"新用户 Clash","action":"override","entry_host":"vip-entry.example.com","resolve_entry_host":1,"conditions":[{"field":"user_id","operator":"in","values":[1001,1002]},{"field":"ua","operator":"contains_any","values":["Clash","Mihomo"]}],"members":[{"server_type":"vmess","server_id":11},{"server_type":"trojan","server_id":12}],"extra_nodes":["trojan://secret@extra.example.com:443#Extra"],"extra_nodes_position":"before","enabled":1,"remarks":"VIP"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -4317,6 +4317,9 @@ func TestRouterAdminClientEntryUserPolicySaveEndpointAcceptsStructuredRules(t *t
 	if adminService.lastClientEntryUserPolicySave.EntryHost != "vip-entry.example.com" {
 		t.Fatalf("unexpected entry host: %#v", adminService.lastClientEntryUserPolicySave.EntryHost)
 	}
+	if adminService.lastClientEntryUserPolicySave.ResolveEntryHost == nil || *adminService.lastClientEntryUserPolicySave.ResolveEntryHost != 1 {
+		t.Fatalf("unexpected resolve entry host setting: %#v", adminService.lastClientEntryUserPolicySave.ResolveEntryHost)
+	}
 	if len(adminService.lastClientEntryUserPolicySave.Members) != 2 || adminService.lastClientEntryUserPolicySave.Members[0].ServerType != "vmess" || adminService.lastClientEntryUserPolicySave.Members[0].ServerID != 11 || adminService.lastClientEntryUserPolicySave.Members[1].ServerType != "trojan" || adminService.lastClientEntryUserPolicySave.Members[1].ServerID != 12 {
 		t.Fatalf("unexpected selected nodes: %#v", adminService.lastClientEntryUserPolicySave.Members)
 	}
@@ -4328,6 +4331,29 @@ func TestRouterAdminClientEntryUserPolicySaveEndpointAcceptsStructuredRules(t *t
 	}
 	if adminService.lastClientEntryUserPolicySave.ExtraNodesPosition != "before" {
 		t.Fatalf("unexpected extra node position: %q", adminService.lastClientEntryUserPolicySave.ExtraNodesPosition)
+	}
+}
+
+func TestRouterAdminClientEntryUserPolicySaveEndpointAcceptsResolveHostFormField(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	body := strings.NewReader("auth_data=jwt-admin&name=DNS+entry&action=override&entry_host=entry.example.com&resolve_entry_host=1&members%5B0%5D%5Bserver_type%5D=vmess&members%5B0%5D%5Bserver_id%5D=11")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/save", body)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if adminService.lastClientEntryUserPolicySave.ResolveEntryHost == nil || *adminService.lastClientEntryUserPolicySave.ResolveEntryHost != 1 {
+		t.Fatalf("unexpected resolve entry host setting: %#v", adminService.lastClientEntryUserPolicySave.ResolveEntryHost)
 	}
 }
 

@@ -23,9 +23,9 @@ func TestDBServiceListClientEntryUserPoliciesReturnsRulesInStoredOrder(t *testin
 
 	service := &DBService{db: db}
 	readyClientEntrySchemaForPolicyTest(service)
-	rows := sqlmock.NewRows([]string{"id", "name", "sort", "action", "conditions", "entry_host", "extra_nodes", "extra_nodes_position", "enabled", "remarks", "created_at", "updated_at"}).
-		AddRow(int64(3), "Clash", int64(10), "override", `[{"field":"ua","operator":"contains_any","values":["Clash"]}]`, "vip-entry.example.com", `["trojan://secret@extra.example.com:443#Extra"]`, "before", int64(1), "VIP", int64(100), int64(200))
-	mock.ExpectQuery(`SELECT p.id, p.name, p.sort, p.action, p.conditions, p.entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at\s+FROM v2_client_entry_user_policy p\s+ORDER BY p.sort ASC NULLS LAST, p.id ASC`).
+	rows := sqlmock.NewRows([]string{"id", "name", "sort", "action", "conditions", "entry_host", "resolve_entry_host", "extra_nodes", "extra_nodes_position", "enabled", "remarks", "created_at", "updated_at"}).
+		AddRow(int64(3), "Clash", int64(10), "override", `[{"field":"ua","operator":"contains_any","values":["Clash"]}]`, "vip-entry.example.com", int64(1), `["trojan://secret@extra.example.com:443#Extra"]`, "before", int64(1), "VIP", int64(100), int64(200))
+	mock.ExpectQuery(`SELECT p.id, p.name, p.sort, p.action, p.conditions, p.entry_host, p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at\s+FROM v2_client_entry_user_policy p\s+ORDER BY p.sort ASC NULLS LAST, p.id ASC`).
 		WillReturnRows(rows)
 	memberRows := sqlmock.NewRows([]string{"policy_id", "server_type", "server_id", "sort"}).
 		AddRow(int64(3), "vmess", int64(11), int64(10)).
@@ -53,6 +53,9 @@ func TestDBServiceListClientEntryUserPoliciesReturnsRulesInStoredOrder(t *testin
 	if policies[0].ExtraNodesPosition != "before" {
 		t.Fatalf("unexpected extra node position: %q", policies[0].ExtraNodesPosition)
 	}
+	if policies[0].ResolveEntryHost != 1 {
+		t.Fatalf("unexpected resolve entry host setting: %d", policies[0].ResolveEntryHost)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
 	}
@@ -67,9 +70,9 @@ func TestDBServiceListClientEntryUserPoliciesCountsActualUsersInIDRange(t *testi
 
 	service := &DBService{db: db}
 	readyClientEntrySchemaForPolicyTest(service)
-	rows := sqlmock.NewRows([]string{"id", "name", "sort", "action", "conditions", "entry_host", "extra_nodes", "extra_nodes_position", "enabled", "remarks", "created_at", "updated_at"}).
-		AddRow(int64(4), "ID range", int64(10), "original", `[{"field":"user_id","operator":"between","min":100,"max":200}]`, "", `[]`, "after", int64(1), "", int64(100), int64(200))
-	mock.ExpectQuery(`SELECT p.id, p.name, p.sort, p.action, p.conditions, p.entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at\s+FROM v2_client_entry_user_policy p\s+ORDER BY p.sort ASC NULLS LAST, p.id ASC`).
+	rows := sqlmock.NewRows([]string{"id", "name", "sort", "action", "conditions", "entry_host", "resolve_entry_host", "extra_nodes", "extra_nodes_position", "enabled", "remarks", "created_at", "updated_at"}).
+		AddRow(int64(4), "ID range", int64(10), "original", `[{"field":"user_id","operator":"between","min":100,"max":200}]`, "", int64(0), `[]`, "after", int64(1), "", int64(100), int64(200))
+	mock.ExpectQuery(`SELECT p.id, p.name, p.sort, p.action, p.conditions, p.entry_host, p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at\s+FROM v2_client_entry_user_policy p\s+ORDER BY p.sort ASC NULLS LAST, p.id ASC`).
 		WillReturnRows(rows)
 	mock.ExpectQuery(`SELECT policy_id, server_type, server_id, sort\s+FROM v2_client_entry_user_policy_member\s+WHERE policy_id IN \(\$1\)`).
 		WithArgs(int64(4)).
@@ -124,7 +127,7 @@ func TestDBServiceSaveClientEntryUserPolicyCreatesStructuredRule(t *testing.T) {
 	mock.ExpectQuery(`SELECT sort FROM v2_client_entry_user_policy\s+ORDER BY sort DESC NULLS LAST, id DESC\s+LIMIT 1\s+FOR UPDATE`).
 		WillReturnRows(sqlmock.NewRows([]string{"sort"}))
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy`).
-		WithArgs("VIP Clash", int64(10), "override", `[{"field":"user_id","operator":"in","values":[1001]}]`, "vip-entry.example.com", `["trojan://secret@extra.example.com:443#Extra"]`, "before", int64(1), "VIP", sqlmock.AnyArg()).
+		WithArgs("VIP Clash", int64(10), "override", `[{"field":"user_id","operator":"in","values":[1001]}]`, "vip-entry.example.com", int64(1), `["trojan://secret@extra.example.com:443#Extra"]`, "before", int64(1), "VIP", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
 	mock.ExpectExec(`DELETE FROM v2_client_entry_user_policy_member WHERE policy_id = \$1`).
 		WithArgs(int64(9)).
@@ -135,7 +138,7 @@ func TestDBServiceSaveClientEntryUserPolicyCreatesStructuredRule(t *testing.T) {
 	mock.ExpectCommit()
 
 	ok, err := service.SaveClientEntryUserPolicy(context.Background(), ClientEntryUserPolicySaveRequest{
-		Name: "VIP Clash", Action: "override", EntryHost: "VIP-ENTRY.example.com", Enabled: ptrInt64ForClientEntryPolicyTest(1), Remarks: "VIP",
+		Name: "VIP Clash", Action: "override", EntryHost: "VIP-ENTRY.example.com", ResolveEntryHost: ptrInt64ForClientEntryPolicyTest(1), Enabled: ptrInt64ForClientEntryPolicyTest(1), Remarks: "VIP",
 		Conditions:         []cliententry.Condition{{Field: "user_id", Operator: "in", Values: []json.RawMessage{json.RawMessage("1001")}}},
 		Members:            []ClientEntryGroupMemberSaveRequest{{ServerType: "vmess", ServerID: 11}},
 		ExtraNodes:         []string{"trojan://secret@extra.example.com:443#Extra"},
@@ -143,6 +146,42 @@ func TestDBServiceSaveClientEntryUserPolicyCreatesStructuredRule(t *testing.T) {
 	})
 	if err != nil || !ok {
 		t.Fatalf("save policy: ok=%v err=%v", ok, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestDBServiceSaveClientEntryUserPolicyUpdatesResolveEntryHost(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	service := &DBService{db: db}
+	readyClientEntrySchemaForPolicyTest(service)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM "v2_server_vmess" WHERE id = \$1\)`).
+		WithArgs(int64(11)).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectExec(`UPDATE v2_client_entry_user_policy\s+SET name = \$2, action = \$3, conditions = \$4, entry_host = \$5, resolve_entry_host = \$6, extra_nodes = \$7, extra_nodes_position = \$8, enabled = \$9, remarks = \$10, updated_at = \$11\s+WHERE id = \$1`).
+		WithArgs(int64(9), "DNS entry", "override", `[]`, "entry.example.com", int64(1), `[]`, "after", int64(1), "", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_client_entry_user_policy_member WHERE policy_id = \$1`).
+		WithArgs(int64(9)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO v2_client_entry_user_policy_member`).
+		WithArgs(int64(9), "vmess", int64(11), int64(10), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	ok, err := service.SaveClientEntryUserPolicy(context.Background(), ClientEntryUserPolicySaveRequest{
+		ID: ptrInt64ForClientEntryPolicyTest(9), Name: "DNS entry", Action: "override", EntryHost: "entry.example.com", ResolveEntryHost: ptrInt64ForClientEntryPolicyTest(1),
+		Members: []ClientEntryGroupMemberSaveRequest{{ServerType: "vmess", ServerID: 11}},
+	})
+	if err != nil || !ok {
+		t.Fatalf("update policy: ok=%v err=%v", ok, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -170,8 +209,31 @@ func TestNormalizeClientEntryUserPolicyAllowsOriginalAddressWithoutEntryHost(t *
 	if err != nil {
 		t.Fatalf("normalize original-address rule: %v", err)
 	}
-	if prepared.Action != cliententry.ActionOriginal || prepared.EntryHost != "" || len(prepared.Members) != 2 {
+	if prepared.Action != cliententry.ActionOriginal || prepared.EntryHost != "" || prepared.ResolveEntryHost != 0 || len(prepared.Members) != 2 {
 		t.Fatalf("unexpected original-address rule: %#v", prepared)
+	}
+}
+
+func TestNormalizeClientEntryUserPolicyForcesResolveEntryHostOffOutsideOverride(t *testing.T) {
+	prepared, err := normalizeClientEntryUserPolicySaveRequest(ClientEntryUserPolicySaveRequest{
+		Name: "指定用户原入口", Action: cliententry.ActionOriginal, ResolveEntryHost: ptrInt64ForClientEntryPolicyTest(1),
+		Members: []ClientEntryGroupMemberSaveRequest{{ServerType: "vmess", ServerID: 11}},
+	})
+	if err != nil {
+		t.Fatalf("normalize original-address rule: %v", err)
+	}
+	if prepared.ResolveEntryHost != 0 {
+		t.Fatalf("resolve_entry_host = %d, want 0", prepared.ResolveEntryHost)
+	}
+}
+
+func TestNormalizeClientEntryUserPolicyRejectsInvalidResolveEntryHost(t *testing.T) {
+	_, err := normalizeClientEntryUserPolicySaveRequest(ClientEntryUserPolicySaveRequest{
+		Name: "解析入口", Action: cliententry.ActionOverride, EntryHost: "entry.example.com", ResolveEntryHost: ptrInt64ForClientEntryPolicyTest(2),
+		Members: []ClientEntryGroupMemberSaveRequest{{ServerType: "vmess", ServerID: 11}},
+	})
+	if err == nil {
+		t.Fatal("expected invalid resolve_entry_host to be rejected")
 	}
 }
 
