@@ -180,10 +180,18 @@ func handleAdminClientEntryUserPolicySplitGroupHost(w http.ResponseWriter, r *ht
 		return true
 	}
 	var payload struct {
-		PolicyID  *json.Number `json:"policy_id"`
-		GroupID   *json.Number `json:"group_id"`
-		Name      string       `json:"name"`
-		EntryHost string       `json:"entry_host"`
+		PolicyID         *json.Number `json:"policy_id"`
+		GroupID          *json.Number `json:"group_id"`
+		Name             string       `json:"name"`
+		EntryHost        string       `json:"entry_host"`
+		ResolveEntryHost *json.Number `json:"resolve_entry_host"`
+		Enabled          *json.Number `json:"enabled"`
+		Remarks          string       `json:"remarks"`
+		Members          []struct {
+			ServerType string       `json:"server_type"`
+			ServerID   *json.Number `json:"server_id"`
+			Sort       *json.Number `json:"sort"`
+		} `json:"members"`
 	}
 	if err := readJSONBody(r, &payload); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
@@ -193,8 +201,27 @@ func handleAdminClientEntryUserPolicySplitGroupHost(w http.ResponseWriter, r *ht
 	if !ok {
 		return true
 	}
+	resolveEntryHost, err := jsonNumberToInt64Pointer(payload.ResolveEntryHost)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "解析域名设置无效"})
+		return true
+	}
+	enabled, err := jsonNumberToInt64Pointer(payload.Enabled)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "规则状态无效"})
+		return true
+	}
+	var members []admin.ClientEntryGroupMemberSaveRequest
+	if payload.Members != nil {
+		members, err = clientEntrySplitMembers(payload.Members)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+			return true
+		}
+	}
 	result, err := adminService.UpdateClientEntryUserPolicySplitGroupHost(r.Context(), admin.ClientEntryUserPolicyGroupHostUpdateRequest{
 		PolicyID: policyID, GroupID: groupID, Name: payload.Name, EntryHost: payload.EntryHost,
+		ResolveEntryHost: resolveEntryHost, Members: members, Enabled: enabled, Remarks: payload.Remarks,
 	})
 	if err != nil {
 		return handleAdminError(w, err)

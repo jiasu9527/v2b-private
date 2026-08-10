@@ -468,12 +468,39 @@ func (s *DBService) UpdateClientEntryUserPolicySplitGroupHost(ctx context.Contex
 	if err != nil {
 		return ClientEntryUserPolicyRecord{}, fmt.Errorf("分组入口地址无效: %w", err)
 	}
+	updateSharedSettings := req.ResolveEntryHost != nil || req.Enabled != nil || req.Members != nil
+	var members []ClientEntryGroupMemberSaveRequest
+	if updateSharedSettings {
+		if req.ResolveEntryHost == nil || (*req.ResolveEntryHost != 0 && *req.ResolveEntryHost != 1) {
+			return ClientEntryUserPolicyRecord{}, errors.New("解析域名下发 IP 设置无效")
+		}
+		if req.Enabled == nil || (*req.Enabled != 0 && *req.Enabled != 1) {
+			return ClientEntryUserPolicyRecord{}, errors.New("规则状态无效")
+		}
+		remarks := strings.TrimSpace(req.Remarks)
+		if len([]rune(remarks)) > 255 {
+			return ClientEntryUserPolicyRecord{}, errors.New("备注不能超过 255 个字符")
+		}
+		req.Remarks = remarks
+		members, err = normalizePolicyMembers(req.Members)
+		if err != nil {
+			return ClientEntryUserPolicyRecord{}, err
+		}
+		if len(members) == 0 {
+			return ClientEntryUserPolicyRecord{}, errors.New("生效节点不能为空")
+		}
+	}
 	now := time.Now().Unix()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ClientEntryUserPolicyRecord{}, errors.New("更新二分规则失败")
 	}
 	defer tx.Rollback()
+	if updateSharedSettings {
+		if err := validateClientEntryRuleMembers(ctx, tx, members); err != nil {
+			return ClientEntryUserPolicyRecord{}, err
+		}
+	}
 	result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy_split_group split_group
 SET name = $3, entry_host = $4, updated_at = $5
 WHERE split_group.id = $1 AND split_group.policy_id = $2
@@ -489,11 +516,32 @@ WHERE split_group.id = $1 AND split_group.policy_id = $2
 	if err := requireClientEntryRuleAffected(result, "二分组"); err != nil {
 		return ClientEntryUserPolicyRecord{}, errors.New("只能编辑当前叶子组")
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy SET updated_at = $2 WHERE id = $1 AND mode = 'split'`, req.PolicyID, now); err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("更新二分规则失败")
+	if updateSharedSettings {
+		result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
+SET resolve_entry_host = $2, enabled = $3, remarks = $4, updated_at = $5
+WHERE id = $1 AND mode = 'split'`, req.PolicyID, *req.ResolveEntryHost, *req.Enabled, req.Remarks, now)
+		if err != nil {
+			return ClientEntryUserPolicyRecord{}, errors.New("更新入口规则失败")
+		}
+		if err := requireClientEntryRuleAffected(result, "规则"); err != nil {
+			return ClientEntryUserPolicyRecord{}, errors.New("规则不存在")
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy_member WHERE policy_id = $1`, req.PolicyID); err != nil {
+			return ClientEntryUserPolicyRecord{}, errors.New("更新生效节点失败")
+		}
+		for index, member := range members {
+			memberSort := int64(index+1) * clientEntryRuleSortStep
+			if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_user_policy_member
+(policy_id, server_type, server_id, sort, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $5)`, req.PolicyID, member.ServerType, member.ServerID, memberSort, now); err != nil {
+				return ClientEntryUserPolicyRecord{}, errors.New("更新生效节点失败")
+			}
+		}
+	} else if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy SET updated_at = $2 WHERE id = $1 AND mode = 'split'`, req.PolicyID, now); err != nil {
+		return ClientEntryUserPolicyRecord{}, errors.New("更新入口规则失败")
 	}
 	if err := tx.Commit(); err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("更新二分规则失败")
+		return ClientEntryUserPolicyRecord{}, errors.New("更新入口规则失败")
 	}
 	s.markClientEntryMonitorTargetsDirty()
 	return ClientEntryUserPolicyRecord{ID: req.PolicyID, Mode: ClientEntryUserPolicyModeSplit}, nil

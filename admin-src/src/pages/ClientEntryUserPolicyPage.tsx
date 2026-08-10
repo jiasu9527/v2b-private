@@ -23,7 +23,6 @@ import {
   BranchesOutlined,
   CopyOutlined,
   DeleteOutlined,
-  EditOutlined,
   LoadingOutlined,
   MenuOutlined,
   PlayCircleOutlined,
@@ -102,6 +101,10 @@ function sortSplitLeaves(groups: SplitGroup[]) {
 
 function isSplitGroupDisplayRow(row: any) {
   return row?.__row_kind === 'split_group' && row?.__split_group;
+}
+
+function splitGroupDisplayName(group: SplitGroup) {
+  return String(group?.name || `规则 #${Number(group?.id || 0)}`);
 }
 
 function displayRowKey(row: any) {
@@ -1096,7 +1099,7 @@ function SplitGroupUsersModal({ row, group, open, onClose }: { row: any; group: 
   ];
 
   return <Modal
-    title={`${group.name || group.path} · 固定用户名单`}
+    title={`${splitGroupDisplayName(group)} · 固定用户名单`}
     open={open}
     onCancel={onClose}
     footer={null}
@@ -1106,7 +1109,7 @@ function SplitGroupUsersModal({ row, group, open, onClose }: { row: any; group: 
     <Alert
       type="info"
       showIcon
-      message={`${group.path} 组当前固定 ${Number(group.user_count || 0)} 个有效用户`}
+      message={`当前固定 ${Number(group.user_count || 0)} 个有效用户`}
       description="名单是创建或继续二分时保存的固定快照，不会因用户后续订阅而自动换组。"
       style={{ marginBottom: 16 }}
     />
@@ -1144,7 +1147,17 @@ function SplitGroupUsersModal({ row, group, open, onClose }: { row: any; group: 
   </Modal>;
 }
 
-function SplitGroupRowActions({ row, group, onDone }: { row: any; group: SplitGroup; onDone: () => void | Promise<void> }) {
+function SplitGroupRowActions({
+  row,
+  group,
+  serverOptions,
+  onDone,
+}: {
+  row: any;
+  group: SplitGroup;
+  serverOptions: ClientEntryServerOption[];
+  onDone: () => void | Promise<void>;
+}) {
   const [splitOpen, setSplitOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [usersOpen, setUsersOpen] = useState(false);
@@ -1158,7 +1171,14 @@ function SplitGroupRowActions({ row, group, onDone }: { row: any; group: SplitGr
   };
   const openEdit = () => {
     editForm.resetFields();
-    editForm.setFieldsValue({ name: group.name || group.path, entry_host: group.entry_host });
+    editForm.setFieldsValue({
+      name: splitGroupDisplayName(group),
+      entry_host: group.entry_host,
+      resolve_entry_host: normalizeResolveEntryHost(row.resolve_entry_host),
+      members: normalizedMembers(row),
+      enabled: Number(row.enabled) !== 0,
+      remarks: row.remarks || '',
+    });
     setEditOpen(true);
   };
   const submitSplit = async () => {
@@ -1171,7 +1191,7 @@ function SplitGroupRowActions({ row, group, onDone }: { row: any; group: SplitGr
         entry_host_a: String(values.entry_host_a || '').trim(),
         entry_host_b: String(values.entry_host_b || '').trim(),
       });
-      message.success(`${group.path} 组已继续二分，新分组已在原位置展开`);
+      message.success(`“${splitGroupDisplayName(group)}”已继续二分，新规则已在原位置展开`);
       setSplitOpen(false);
       await onDone();
     } catch (error: any) {
@@ -1189,12 +1209,16 @@ function SplitGroupRowActions({ row, group, onDone }: { row: any; group: SplitGr
         group_id: group.id,
         name: String(values.name || '').trim(),
         entry_host: String(values.entry_host || '').trim(),
+        resolve_entry_host: values.resolve_entry_host ? 1 : 0,
+        members: (values.members || []).map(splitMemberKey).filter(Boolean),
+        enabled: values.enabled ? 1 : 0,
+        remarks: String(values.remarks || '').trim(),
       });
-      message.success('二分规则已更新');
+      message.success('入口规则已更新');
       setEditOpen(false);
       await onDone();
     } catch (error: any) {
-      if (!error?.errorFields) message.error(error?.message || '更新二分规则失败');
+      if (!error?.errorFields) message.error(error?.message || '更新入口规则失败');
     } finally {
       setSaving(false);
     }
@@ -1202,14 +1226,14 @@ function SplitGroupRowActions({ row, group, onDone }: { row: any; group: SplitGr
 
   return <>
     <Space className="client-entry-actions" size={10}>
-      <a onClick={openEdit}><EditOutlined /> 编辑</a>
+      <a onClick={openEdit}>编辑</a>
       <a onClick={() => setUsersOpen(true)}><TeamOutlined /> 固定名单</a>
       {Number(group.user_count) >= 2
         ? <a onClick={openSplit}><BranchesOutlined /> 继续二分</a>
         : <Typography.Text type="secondary">不足 2 人</Typography.Text>}
     </Space>
     <Modal
-      title={`继续二分 ${group.path} 组`}
+      title={`继续二分“${splitGroupDisplayName(group)}”`}
       open={splitOpen}
       onCancel={() => setSplitOpen(false)}
       onOk={submitSplit}
@@ -1220,41 +1244,72 @@ function SplitGroupRowActions({ row, group, onDone }: { row: any; group: SplitGr
       <Alert
         type="info"
         showIcon
-        message={`${group.path} 组当前 ${Number(group.user_count || 0)} 人`}
+        message={`当前固定 ${Number(group.user_count || 0)} 人`}
         description="当前行会被两个新叶子组原地替换；节点、解析设置和全局优先级都会继承。"
         style={{ marginBottom: 16 }}
       />
       <Form form={splitForm} layout="vertical">
-        <Form.Item name="entry_host_a" label={`${group.path}.1 组入口`} rules={[{ required: true, whitespace: true, message: '请输入第一个子组入口' }]}>
+        <Form.Item name="entry_host_a" label="第一个子规则入口" rules={[{ required: true, whitespace: true, message: '请输入第一个子规则入口' }]}>
           <Input placeholder="域名或 IP" />
         </Form.Item>
-        <Form.Item name="entry_host_b" label={`${group.path}.2 组入口`} rules={[{ required: true, whitespace: true, message: '请输入第二个子组入口' }]}>
+        <Form.Item name="entry_host_b" label="第二个子规则入口" rules={[{ required: true, whitespace: true, message: '请输入第二个子规则入口' }]}>
           <Input placeholder="域名或 IP" />
         </Form.Item>
       </Form>
     </Modal>
     <Modal
-      title={`编辑 ${group.path} 组规则`}
+      title="编辑用户入口规则"
       open={editOpen}
       onCancel={() => setEditOpen(false)}
       onOk={submitEdit}
       confirmLoading={saving}
       okText="保存"
       destroyOnHidden
+      width={920}
     >
       <Alert
         type="info"
         showIcon
-        message="名称和入口地址只影响当前这一行"
-        description="固定用户名单、共同生效节点和解析设置仍由原二分规则继承，不会影响兄弟分组。"
+        message={`当前规则固定 ${Number(group.user_count || 0)} 人`}
+        description="名称和入口地址只修改当前规则；固定用户名单不会变化。解析设置、生效节点、状态和备注由同一套固定规则共同使用。"
         style={{ marginBottom: 16 }}
       />
       <Form form={editForm} layout="vertical">
         <Form.Item name="name" label="规则名称" rules={[{ required: true, whitespace: true, message: '请输入规则名称' }]}>
           <Input placeholder="例如：内鬼入口 B" maxLength={255} showCount />
         </Form.Item>
-        <Form.Item name="entry_host" label="入口地址" rules={[{ required: true, whitespace: true, message: '请输入入口地址' }]}>
-          <Input placeholder="域名或 IP" />
+        <Form.Item
+          name="entry_host"
+          label="独立入口地址"
+          rules={[
+            { required: true, whitespace: true, message: '请输入独立入口地址' },
+            { validator: (_, value) => /[,，()]/.test(String(value || '')) ? Promise.reject(new Error('这里只能填写单个普通域名或 IP')) : Promise.resolve() },
+          ]}
+        >
+          <Input placeholder="例如 vip.example.com 或 1.2.3.4" />
+        </Form.Item>
+        <Form.Item
+          name="resolve_entry_host"
+          valuePropName="checked"
+          extra="勾选后，用户拉取订阅时由后端解析域名并下发 IP；解析失败时仍下发原域名。"
+        >
+          <Checkbox>解析域名下发 IP</Checkbox>
+        </Form.Item>
+        <Form.Item label="匹配条件">
+          <Space wrap>
+            <Tag icon={<TeamOutlined />}>固定名单</Tag>
+            <Tag color="cyan">{Number(group.user_count || 0)} 人</Tag>
+            <Button type="link" size="small" onClick={() => setUsersOpen(true)}>查看用户详情</Button>
+          </Space>
+        </Form.Item>
+        <Form.Item name="members" label="生效节点" rules={[{ required: true, message: '请选择生效节点' }]} tooltip="固定二分出来的规则共同使用同一批生效节点。">
+          <Select mode="multiple" showSearch allowClear placeholder="选择多个生效节点" options={serverOptions} optionFilterProp="label" />
+        </Form.Item>
+        <Form.Item name="enabled" label="状态" valuePropName="checked">
+          <Switch checkedChildren="启用" unCheckedChildren="禁用" />
+        </Form.Item>
+        <Form.Item name="remarks" label="备注">
+          <Input.TextArea rows={3} placeholder="可选" maxLength={255} showCount />
         </Form.Item>
       </Form>
     </Modal>
@@ -1492,11 +1547,8 @@ export default function ClientEntryUserPolicyPage() {
       render: (value: any, row: any) => {
         if (isSplitGroupDisplayRow(row)) {
           const group = row.__split_group as SplitGroup;
-          const text = String(group.name || group.path || `分组 #${group.id}`);
-          return <Space size={6} wrap>
-            <Tag color="purple">{group.path} 组</Tag>
-            <span className="client-entry-rule-name" title={text}>{text}</span>
-          </Space>;
+          const text = splitGroupDisplayName(group);
+          return <span className="client-entry-rule-name" title={text}>{text}</span>;
         }
         const text = String(value || `规则 #${row.id}`);
         return <span className="client-entry-rule-name" title={text}>{text}</span>;
@@ -1507,32 +1559,11 @@ export default function ClientEntryUserPolicyPage() {
       dataIndex: 'conditions',
       width: 620,
       render: (value: any, row: any) => {
-        if (isSplitPolicy(row)) {
-          const group = isSplitGroupDisplayRow(row) ? row.__split_group as SplitGroup : undefined;
-          const range = singleUserIDRange(value);
-          const from = Number(row.snapshot_from || 0);
-          const to = Number(row.snapshot_to || 0);
-          const minutes = from > 0 && to >= from ? Math.max(1, Math.round((to - from) / 60)) : 0;
-          if (range) return <Space direction="vertical" size={4}>
-            <Space wrap>
-              <Tag color="purple" icon={<BranchesOutlined />}>{group?.path || '-'} 组固定名单</Tag>
-              <Tag color="cyan">{Number(group?.user_count || 0)} 人</Tag>
-              <Tag>ID 范围固定快照 #{range.min} ～ #{range.max}</Tag>
-            </Space>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              来源：用户 ID {range.min}～{range.max} 固定快照
-              {to > 0 && <> · 固定于 {formatSnapshotTime(to)}</>}
-            </Typography.Text>
-          </Space>;
-          return <Space direction="vertical" size={4}>
-            <Space wrap>
-              <Tag color="purple" icon={<BranchesOutlined />}>{group?.path || '-'} 组固定名单</Tag>
-              <Tag color="cyan">{Number(group?.user_count || 0)} 人</Tag>
-              {minutes > 0 && <Tag>最近 {minutes} 分钟</Tag>}
-            </Space>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              固定于 {formatSnapshotTime(row.snapshot_to)}，后续用户不会自动加入或换组
-            </Typography.Text>
+        if (isSplitGroupDisplayRow(row)) {
+          const group = row.__split_group as SplitGroup;
+          return <Space wrap>
+            <Tag icon={<TeamOutlined />}>固定名单</Tag>
+            <Tag color="cyan">{Number(group.user_count || 0)} 人</Tag>
           </Space>;
         }
         const conditions = parseConditions(value);
@@ -1605,8 +1636,8 @@ export default function ClientEntryUserPolicyPage() {
       width: 410,
       render: (_: any, row: any) => {
         if (isSplitGroupDisplayRow(row)) return <Space className="client-entry-actions" size={10}>
-          <SplitGroupRowActions row={row} group={row.__split_group} onDone={load} />
-          <Popconfirm title={`确认删除“${row.name || `规则 #${row.id}`}”整条二分规则及全部固定名单？`} onConfirm={() => drop(row)}><a>删除整组</a></Popconfirm>
+          <SplitGroupRowActions row={row} group={row.__split_group} serverOptions={serverOptions} onDone={load} />
+          <Popconfirm title={`确认删除“${splitGroupDisplayName(row.__split_group)}”所属的整套固定规则及全部名单？`} onConfirm={() => drop(row)}><a>删除整组</a></Popconfirm>
         </Space>;
         const copyRow = { ...row, id: undefined, name: `${row.name || `规则 #${row.id}`} - 副本` };
         return <Space className="client-entry-actions" size={10}>
@@ -1646,7 +1677,7 @@ export default function ClientEntryUserPolicyPage() {
           dataSource={rows}
           pagination={false}
           scroll={{ x: 2505 }}
-          rowClassName={(row) => `sortable-row ${draggingKey === displayRowKey(row) ? 'dragging-row' : ''} ${isSplitGroupDisplayRow(row) ? 'split-group-main-row' : ''}`}
+          rowClassName={(row) => `sortable-row ${draggingKey === displayRowKey(row) ? 'dragging-row' : ''}`}
           onRow={(row) => ({
             draggable: true,
             onDragStart: () => setDraggingKey(displayRowKey(row)),

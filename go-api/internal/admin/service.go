@@ -1363,10 +1363,14 @@ type ClientEntryUserPolicyGroupSplitRequest struct {
 }
 
 type ClientEntryUserPolicyGroupHostUpdateRequest struct {
-	PolicyID  int64
-	GroupID   int64
-	Name      string
-	EntryHost string
+	PolicyID         int64
+	GroupID          int64
+	Name             string
+	EntryHost        string
+	ResolveEntryHost *int64
+	Members          []ClientEntryGroupMemberSaveRequest
+	Enabled          *int64
+	Remarks          string
 }
 
 type ClientEntryUserPolicySplitGroupUserListRequest struct {

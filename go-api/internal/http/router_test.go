@@ -4457,7 +4457,7 @@ func TestRouterAdminClientEntryUserPolicySplitEndpoints(t *testing.T) {
 		body string
 	}{
 		{"split-group", `{"policy_id":9,"group_id":20,"entry_host_a":"a1.example.com","entry_host_b":"a2.example.com"}`},
-		{"split-group-host", `{"policy_id":9,"group_id":21,"name":"内鬼入口 B","entry_host":"new.example.com"}`},
+		{"split-group-host", `{"policy_id":9,"group_id":21,"name":"内鬼入口 B","entry_host":"new.example.com","resolve_entry_host":1,"enabled":0,"remarks":"共享备注","members":[{"server_type":"vmess","server_id":11}]}`},
 		{"split-group-sort", `{"policy_id":9,"ids":[22,21]}`},
 		{"split-group-root", `{"policy_id":9,"group_id":22}`},
 		{"enabled", `{"id":9,"enabled":0}`},
@@ -4476,6 +4476,9 @@ func TestRouterAdminClientEntryUserPolicySplitEndpoints(t *testing.T) {
 	}
 	if adminService.lastClientEntryGroupHost.PolicyID != 9 || adminService.lastClientEntryGroupHost.GroupID != 21 || adminService.lastClientEntryGroupHost.Name != "内鬼入口 B" || adminService.lastClientEntryGroupHost.EntryHost != "new.example.com" {
 		t.Fatalf("host request = %#v", adminService.lastClientEntryGroupHost)
+	}
+	if adminService.lastClientEntryGroupHost.ResolveEntryHost == nil || *adminService.lastClientEntryGroupHost.ResolveEntryHost != 1 || adminService.lastClientEntryGroupHost.Enabled == nil || *adminService.lastClientEntryGroupHost.Enabled != 0 || adminService.lastClientEntryGroupHost.Remarks != "共享备注" || len(adminService.lastClientEntryGroupHost.Members) != 1 || adminService.lastClientEntryGroupHost.Members[0].ServerType != "vmess" || adminService.lastClientEntryGroupHost.Members[0].ServerID != 11 {
+		t.Fatalf("host shared settings request = %#v", adminService.lastClientEntryGroupHost)
 	}
 	if got := adminService.lastClientEntryGroupSort; got.PolicyID != 9 || len(got.IDs) != 2 || got.IDs[0] != 22 || got.IDs[1] != 21 {
 		t.Fatalf("sort request = %#v", got)

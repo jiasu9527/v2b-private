@@ -573,6 +573,47 @@ func TestUpdateClientEntryUserPolicySplitGroupDetailsRejectsBlankName(t *testing
 	}
 }
 
+func TestUpdateClientEntryUserPolicySplitGroupDetailsUpdatesSharedRuleSettings(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db}
+	readyClientEntrySchemaForPolicyTest(service)
+	resolve := int64(1)
+	enabled := int64(0)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM "v2_server_vmess" WHERE id = \$1\)`).
+		WithArgs(int64(11)).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectExec(`(?s)UPDATE v2_client_entry_user_policy_split_group split_group.*SET name = \$3, entry_host = \$4, updated_at = \$5.*NOT EXISTS.*policy.mode = 'split'`).
+		WithArgs(int64(101), int64(9), "内鬼入口 B", "new.example.com", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE v2_client_entry_user_policy\s+SET resolve_entry_host = \$2, enabled = \$3, remarks = \$4, updated_at = \$5\s+WHERE id = \$1 AND mode = 'split'`).
+		WithArgs(int64(9), int64(1), int64(0), "共享备注", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_client_entry_user_policy_member WHERE policy_id = \$1`).
+		WithArgs(int64(9)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO v2_client_entry_user_policy_member`).
+		WithArgs(int64(9), "vmess", int64(11), int64(10), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	record, err := service.UpdateClientEntryUserPolicySplitGroupHost(context.Background(), ClientEntryUserPolicyGroupHostUpdateRequest{
+		PolicyID: 9, GroupID: 101, Name: "内鬼入口 B", EntryHost: "new.example.com",
+		ResolveEntryHost: &resolve, Enabled: &enabled, Members: []ClientEntryGroupMemberSaveRequest{{ServerType: "vmess", ServerID: 11}}, Remarks: "共享备注",
+	})
+	if err != nil || record.ID != 9 || record.Mode != ClientEntryUserPolicyModeSplit {
+		t.Fatalf("update shared settings: record=%#v err=%v", record, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func TestListClientEntryUserPolicySplitGroupUsersReturnsPagedDetails(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
