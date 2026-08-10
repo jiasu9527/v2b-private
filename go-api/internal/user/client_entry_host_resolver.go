@@ -15,7 +15,7 @@ import (
 
 const (
 	clientEntryDNSLookupTimeout = 2 * time.Second
-	clientEntryDNSSuccessTTL    = 5 * time.Minute
+	clientEntryDNSSuccessTTL    = time.Minute
 	clientEntryDNSFailureTTL    = 30 * time.Second
 )
 
