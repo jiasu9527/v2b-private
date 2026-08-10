@@ -20,6 +20,7 @@ import {
   message,
 } from 'antd';
 import {
+  ArrowUpOutlined,
   BranchesOutlined,
   CopyOutlined,
   DeleteOutlined,
@@ -994,6 +995,28 @@ function SplitGroupManager({ row, onDone }: { row: any; onDone: () => void }) {
       setSorting(false);
     }
   };
+
+  const moveGroupToRoot = async (requestedGroupID?: number) => {
+    const groupID = requestedGroupID ?? draggingGroupID;
+    if (groupID === undefined || sorting) return;
+    const group = orderedLeaves.find((item) => item.id === groupID);
+    setDraggingGroupID(undefined);
+    setDropTargetGroupID(undefined);
+    if (!group?.parent_id) return;
+    setSorting(true);
+    try {
+      await apiPost('/server/client-entry-user-policy/split-group-root', {
+        policy_id: row.id,
+        group_id: group.id,
+      });
+      message.success(`${group.path} 组已移到根级`);
+      onDone();
+    } catch (error: any) {
+      message.error(error?.message || '移出父分组失败');
+    } finally {
+      setSorting(false);
+    }
+  };
   const openEdit = (group: SplitGroup) => {
     editForm.resetFields();
     editForm.setFieldsValue({ entry_host: group.entry_host });
@@ -1059,6 +1082,14 @@ function SplitGroupManager({ row, onDone }: { row: any; onDone: () => void }) {
       width={920}
       destroyOnHidden
     >
+      {orderedLeaves.some((group) => group.parent_id) && <div
+        className="split-group-root-drop-zone"
+        onDragOver={(event) => { event.preventDefault(); event.currentTarget.classList.add('split-group-root-drop-zone-active'); }}
+        onDragLeave={(event) => event.currentTarget.classList.remove('split-group-root-drop-zone-active')}
+        onDrop={(event) => { event.preventDefault(); event.currentTarget.classList.remove('split-group-root-drop-zone-active'); void moveGroupToRoot(); }}
+      >
+        <ArrowUpOutlined /> 拖到这里移出父分组，放到根级
+      </div>}
       <Table
         className="split-group-manager-table"
         rowKey="id"
@@ -1088,12 +1119,13 @@ function SplitGroupManager({ row, onDone }: { row: any; onDone: () => void }) {
           {
             title: '操作',
             key: 'action',
-            width: 190,
-            render: (_: any, group: SplitGroup) => <Space size={10} className="client-entry-actions">
+            width: 280,
+            render: (_: any, group: SplitGroup) => <Space size={10} wrap className="split-group-actions">
               <a onClick={() => openEdit(group)}><EditOutlined /> 修改入口</a>
               {Number(group.user_count) >= 2
                 ? <a onClick={() => openSplit(group)}><BranchesOutlined /> 继续二分</a>
                 : <Typography.Text type="secondary">不足 2 人</Typography.Text>}
+              {group.parent_id && <a onClick={() => { void moveGroupToRoot(group.id); }}><ArrowUpOutlined /> 移出父组</a>}
             </Space>,
           },
         ]}

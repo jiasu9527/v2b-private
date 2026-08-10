@@ -337,6 +337,7 @@ type Service interface {
 	SplitClientEntryUserPolicyGroup(ctx context.Context, req ClientEntryUserPolicyGroupSplitRequest) (ClientEntryUserPolicyRecord, error)
 	UpdateClientEntryUserPolicySplitGroupHost(ctx context.Context, req ClientEntryUserPolicyGroupHostUpdateRequest) (ClientEntryUserPolicyRecord, error)
 	SortClientEntryUserPolicySplitGroups(ctx context.Context, req ClientEntryUserPolicyGroupSortRequest) (bool, error)
+	MoveClientEntryUserPolicySplitGroupToRoot(ctx context.Context, req ClientEntryUserPolicyGroupMoveRequest) (bool, error)
 	SetClientEntryUserPolicyEnabled(ctx context.Context, id, enabled int64) (bool, error)
 	SortClientEntryUserPolicies(ctx context.Context, ids []int64) (bool, error)
 	DeleteClientEntryUserPolicy(ctx context.Context, id int64) (bool, error)
@@ -1362,4 +1363,9 @@ type ClientEntryUserPolicyGroupHostUpdateRequest struct {
 type ClientEntryUserPolicyGroupSortRequest struct {
 	PolicyID int64
 	IDs      []int64
+}
+
+type ClientEntryUserPolicyGroupMoveRequest struct {
+	PolicyID int64
+	GroupID  int64
 }

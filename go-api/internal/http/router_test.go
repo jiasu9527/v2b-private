@@ -911,6 +911,7 @@ type fakeAdminService struct {
 	lastClientEntryGroupSplit     admin.ClientEntryUserPolicyGroupSplitRequest
 	lastClientEntryGroupHost      admin.ClientEntryUserPolicyGroupHostUpdateRequest
 	lastClientEntryGroupSort      admin.ClientEntryUserPolicyGroupSortRequest
+	lastClientEntryGroupMove      admin.ClientEntryUserPolicyGroupMoveRequest
 	lastClientEntryPolicyEnabled  [2]int64
 	lastClientEntryUserPolicySort []int64
 	lastClientEntryUserPolicyDrop int64
@@ -1169,6 +1170,11 @@ func (f *fakeAdminService) UpdateClientEntryUserPolicySplitGroupHost(_ context.C
 
 func (f *fakeAdminService) SortClientEntryUserPolicySplitGroups(_ context.Context, req admin.ClientEntryUserPolicyGroupSortRequest) (bool, error) {
 	f.lastClientEntryGroupSort = req
+	return true, f.err
+}
+
+func (f *fakeAdminService) MoveClientEntryUserPolicySplitGroupToRoot(_ context.Context, req admin.ClientEntryUserPolicyGroupMoveRequest) (bool, error) {
+	f.lastClientEntryGroupMove = req
 	return true, f.err
 }
 
@@ -4439,6 +4445,7 @@ func TestRouterAdminClientEntryUserPolicySplitEndpoints(t *testing.T) {
 		{"split-group", `{"policy_id":9,"group_id":20,"entry_host_a":"a1.example.com","entry_host_b":"a2.example.com"}`},
 		{"split-group-host", `{"policy_id":9,"group_id":21,"entry_host":"new.example.com"}`},
 		{"split-group-sort", `{"policy_id":9,"ids":[22,21]}`},
+		{"split-group-root", `{"policy_id":9,"group_id":22}`},
 		{"enabled", `{"id":9,"enabled":0}`},
 	}
 	for _, item := range requests {
@@ -4458,6 +4465,9 @@ func TestRouterAdminClientEntryUserPolicySplitEndpoints(t *testing.T) {
 	}
 	if got := adminService.lastClientEntryGroupSort; got.PolicyID != 9 || len(got.IDs) != 2 || got.IDs[0] != 22 || got.IDs[1] != 21 {
 		t.Fatalf("sort request = %#v", got)
+	}
+	if got := adminService.lastClientEntryGroupMove; got.PolicyID != 9 || got.GroupID != 22 {
+		t.Fatalf("move request = %#v", got)
 	}
 	if adminService.lastClientEntryPolicyEnabled != [2]int64{9, 0} {
 		t.Fatalf("enabled request = %#v", adminService.lastClientEntryPolicyEnabled)

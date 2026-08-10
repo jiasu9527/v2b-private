@@ -355,6 +355,48 @@ func TestSortClientEntryUserPolicySplitGroupsRequiresExactLeafSet(t *testing.T) 
 	}
 }
 
+func TestMoveClientEntryUserPolicySplitGroupToRootRenamesAndCleansEmptyParent(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db}
+	readyClientEntrySchemaForPolicyTest(service)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id FROM v2_client_entry_user_policy\s+WHERE id = \$1 AND mode = 'split'\s+FOR UPDATE`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+	mock.ExpectQuery(`SELECT id, parent_id, path, sort\s+FROM v2_client_entry_user_policy_split_group\s+WHERE policy_id = \$1\s+ORDER BY id ASC\s+FOR UPDATE`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "parent_id", "path", "sort"}).
+			AddRow(int64(101), nil, "A", int64(10)).
+			AddRow(int64(102), nil, "B", int64(20)).
+			AddRow(int64(202), int64(101), "A.1", int64(10)))
+	mock.ExpectExec(`UPDATE v2_client_entry_user_policy_split_group\s+SET parent_id = NULL, name = \$3, path = \$3, sort = \$4, updated_at = \$5\s+WHERE id = \$1 AND policy_id = \$2`).
+		WithArgs(int64(202), int64(9), "C", int64(30), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM v2_client_entry_user_policy_split_assignment WHERE policy_id = \$1 AND group_id = \$2`).
+		WithArgs(int64(9), int64(101)).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectExec(`DELETE FROM v2_client_entry_user_policy_split_group WHERE id = \$1 AND policy_id = \$2`).
+		WithArgs(int64(101), int64(9)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE v2_client_entry_user_policy SET updated_at = \$2 WHERE id = \$1 AND mode = 'split'`).
+		WithArgs(int64(9), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	ok, err := service.MoveClientEntryUserPolicySplitGroupToRoot(context.Background(), ClientEntryUserPolicyGroupMoveRequest{PolicyID: 9, GroupID: 202})
+	if err != nil || !ok {
+		t.Fatalf("move split group to root: ok=%v err=%v", ok, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func TestListClientEntryUserPoliciesIncludesSplitTreeAndSnapshotCount(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

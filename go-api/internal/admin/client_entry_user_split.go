@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -563,6 +564,142 @@ WHERE split_group.id = $1 AND split_group.policy_id = $2
 	}
 	s.markClientEntryMonitorTargetsDirty()
 	return true, nil
+}
+
+func (s *DBService) MoveClientEntryUserPolicySplitGroupToRoot(ctx context.Context, req ClientEntryUserPolicyGroupMoveRequest) (bool, error) {
+	if s.db == nil {
+		return false, ErrUnavailable
+	}
+	if err := s.ensureClientEntrySchema(ctx); err != nil {
+		return false, err
+	}
+	if req.PolicyID <= 0 || req.GroupID <= 0 {
+		return false, errors.New("二分组不存在")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, errors.New("移出父分组失败")
+	}
+	defer tx.Rollback()
+
+	var policyID int64
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM v2_client_entry_user_policy
+WHERE id = $1 AND mode = 'split'
+FOR UPDATE`, req.PolicyID).Scan(&policyID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, errors.New("二分规则不存在")
+		}
+		return false, errors.New("移出父分组失败")
+	}
+
+	type groupState struct {
+		id       int64
+		parentID sql.NullInt64
+		path     string
+		sort     int64
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id, parent_id, path, sort
+FROM v2_client_entry_user_policy_split_group
+WHERE policy_id = $1
+ORDER BY id ASC
+FOR UPDATE`, req.PolicyID)
+	if err != nil {
+		return false, errors.New("移出父分组失败")
+	}
+	groups := make(map[int64]groupState)
+	children := make(map[int64]int)
+	paths := make(map[string]struct{})
+	maxRootSort := int64(0)
+	for rows.Next() {
+		var group groupState
+		if err := rows.Scan(&group.id, &group.parentID, &group.path, &group.sort); err != nil {
+			rows.Close()
+			return false, errors.New("移出父分组失败")
+		}
+		group.path = strings.TrimSpace(group.path)
+		groups[group.id] = group
+		paths[group.path] = struct{}{}
+		if group.parentID.Valid {
+			children[group.parentID.Int64]++
+		} else if group.sort > maxRootSort {
+			maxRootSort = group.sort
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return false, errors.New("移出父分组失败")
+	}
+	if err := rows.Close(); err != nil {
+		return false, errors.New("移出父分组失败")
+	}
+	target, ok := groups[req.GroupID]
+	if !ok {
+		return false, errors.New("二分组不存在")
+	}
+	if !target.parentID.Valid {
+		return false, errors.New("该分组已经是根级")
+	}
+	if children[target.id] != 0 {
+		return false, errors.New("只能移出当前叶子分组")
+	}
+
+	newPath := nextClientEntrySplitRootPath(paths)
+	if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy_split_group
+SET parent_id = NULL, name = $3, path = $3, sort = $4, updated_at = $5
+WHERE id = $1 AND policy_id = $2`, req.GroupID, req.PolicyID, newPath, maxRootSort+clientEntryRuleSortStep, time.Now().Unix()); err != nil {
+		return false, errors.New("移出父分组失败")
+	}
+
+	// Remove empty ancestors left behind by moving their last child. They have
+	// no assignments after a split, so retaining them would create unusable
+	// zero-user leaf rows in the next refresh.
+	ancestorID := target.parentID.Int64
+	for ancestorID > 0 {
+		ancestor, exists := groups[ancestorID]
+		if !exists || children[ancestorID] > 1 {
+			break
+		}
+		var hasAssignment bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (
+SELECT 1 FROM v2_client_entry_user_policy_split_assignment WHERE policy_id = $1 AND group_id = $2
+)`, req.PolicyID, ancestorID).Scan(&hasAssignment); err != nil {
+			return false, errors.New("移出父分组失败")
+		}
+		if hasAssignment {
+			break
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy_split_group WHERE id = $1 AND policy_id = $2`, ancestorID, req.PolicyID); err != nil {
+			return false, errors.New("移出父分组失败")
+		}
+		if !ancestor.parentID.Valid {
+			break
+		}
+		ancestorID = ancestor.parentID.Int64
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy SET updated_at = $2 WHERE id = $1 AND mode = 'split'`, req.PolicyID, time.Now().Unix()); err != nil {
+		return false, errors.New("移出父分组失败")
+	}
+	if err := tx.Commit(); err != nil {
+		return false, errors.New("移出父分组失败")
+	}
+	s.markClientEntryMonitorTargetsDirty()
+	return true, nil
+}
+
+func nextClientEntrySplitRootPath(paths map[string]struct{}) string {
+	for index := 0; index < 26; index++ {
+		candidate := string(rune('A' + index))
+		if _, exists := paths[candidate]; !exists {
+			return candidate
+		}
+	}
+	for index := 1; ; index++ {
+		candidate := "R" + strconv.Itoa(index)
+		if _, exists := paths[candidate]; !exists {
+			return candidate
+		}
+	}
 }
 
 func (s *DBService) SetClientEntryUserPolicyEnabled(ctx context.Context, id, enabled int64) (bool, error) {

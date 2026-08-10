@@ -245,6 +245,39 @@ func handleAdminClientEntryUserPolicySplitGroupSort(w http.ResponseWriter, r *ht
 	return true
 }
 
+func handleAdminClientEntryUserPolicySplitGroupRoot(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"message": "请求方式不支持"})
+		return true
+	}
+	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+	var payload struct {
+		PolicyID *json.Number `json:"policy_id"`
+		GroupID  *json.Number `json:"group_id"`
+	}
+	if err := readJSONBody(r, &payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+	policyID, groupID, ok := clientEntrySplitIDs(w, payload.PolicyID, payload.GroupID)
+	if !ok {
+		return true
+	}
+	result, err := adminService.MoveClientEntryUserPolicySplitGroupToRoot(r.Context(), admin.ClientEntryUserPolicyGroupMoveRequest{PolicyID: policyID, GroupID: groupID})
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": result})
+	return true
+}
+
 func handleAdminClientEntryUserPolicyEnabled(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
 	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
 		return true
