@@ -23,7 +23,7 @@ func (s *DBService) ListClientEntryUserPolicies(ctx context.Context) ([]ClientEn
 		return nil, err
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.name, p.sort, p.action, p.conditions, p.entry_host, p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.name, p.sort, p.mode, p.snapshot_from, p.snapshot_to, p.action, p.conditions, p.entry_host, p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at
 FROM v2_client_entry_user_policy p
 ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 	if err != nil {
@@ -33,9 +33,12 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 
 	result := make([]ClientEntryUserPolicyRecord, 0)
 	ids := make([]int64, 0)
+	splitIDs := make([]int64, 0)
 	for rows.Next() {
 		var (
 			record        ClientEntryUserPolicyRecord
+			snapshotFrom  sql.NullInt64
+			snapshotTo    sql.NullInt64
 			conditionsRaw string
 			extraNodesRaw string
 		)
@@ -43,6 +46,9 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 			&record.ID,
 			&record.Name,
 			&record.Sort,
+			&record.Mode,
+			&snapshotFrom,
+			&snapshotTo,
 			&record.Action,
 			&conditionsRaw,
 			&record.EntryHost,
@@ -55,6 +61,19 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 			&record.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan client entry rule: %w", err)
+		}
+		mode, err := normalizeClientEntryUserPolicyMode(record.Mode)
+		if err != nil {
+			return nil, fmt.Errorf("decode client entry rule %d mode: %w", record.ID, err)
+		}
+		record.Mode = mode
+		if snapshotFrom.Valid {
+			value := snapshotFrom.Int64
+			record.SnapshotFrom = &value
+		}
+		if snapshotTo.Valid {
+			value := snapshotTo.Int64
+			record.SnapshotTo = &value
 		}
 		conditions, err := cliententry.DecodeConditions(conditionsRaw)
 		if err != nil {
@@ -80,6 +99,10 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 		record.Remarks = strings.TrimSpace(record.Remarks)
 		record.Conditions = conditions
 		record.Members = []ClientEntryGroupMemberRecord{}
+		if record.Mode == ClientEntryUserPolicyModeSplit {
+			record.SplitGroups = []ClientEntryUserPolicySplitGroupRecord{}
+			splitIDs = append(splitIDs, record.ID)
+		}
 		result = append(result, record)
 		ids = append(ids, record.ID)
 	}
@@ -95,6 +118,17 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 	}
 	for index := range result {
 		result[index].Members = members[result[index].ID]
+	}
+	groups, counts, err := s.loadClientEntryUserPolicySplitGroups(ctx, splitIDs)
+	if err != nil {
+		return nil, err
+	}
+	for index := range result {
+		if result[index].Mode != ClientEntryUserPolicyModeSplit {
+			continue
+		}
+		result[index].SplitGroups = groups[result[index].ID]
+		result[index].SnapshotUserCount = counts[result[index].ID]
 	}
 	if err := s.attachClientEntryUserPolicyIDRangeCounts(ctx, result); err != nil {
 		return nil, err
@@ -278,7 +312,7 @@ RETURNING id`, prepared.Name, nextSort, prepared.Action, conditions, prepared.En
 		}
 		result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
 SET name = $2, action = $3, conditions = $4, entry_host = $5, resolve_entry_host = $6, extra_nodes = $7, extra_nodes_position = $8, enabled = $9, remarks = $10, updated_at = $11
-WHERE id = $1`, policyID, prepared.Name, prepared.Action, conditions, prepared.EntryHost, prepared.ResolveEntryHost, extraNodes, prepared.ExtraNodesPosition, prepared.Enabled, prepared.Remarks, now)
+WHERE id = $1 AND mode = 'standard'`, policyID, prepared.Name, prepared.Action, conditions, prepared.EntryHost, prepared.ResolveEntryHost, extraNodes, prepared.ExtraNodesPosition, prepared.Enabled, prepared.Remarks, now)
 		if err != nil {
 			return false, errors.New("保存失败")
 		}

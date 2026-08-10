@@ -66,7 +66,7 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 	if !knowledgeUserAvailable(userRow.Banned, userRow.TransferEnable, userRow.ExpiredAt, now) {
 		return []map[string]any{}, nil
 	}
-	userPolicies, err := s.loadClientEntryUserPolicies(ctx)
+	userPolicies, err := s.loadClientEntryUserPolicies(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -137,6 +137,7 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 		filtered = append(filtered, item)
 	}
 
+	s.recordClientEntrySubscribeActivity(ctx, userID, now)
 	return filtered, nil
 }
 

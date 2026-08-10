@@ -331,6 +331,11 @@ type Service interface {
 	DeleteClientEntryGroup(ctx context.Context, id int64) (bool, error)
 	ListClientEntryUserPolicies(ctx context.Context) ([]ClientEntryUserPolicyRecord, error)
 	SaveClientEntryUserPolicy(ctx context.Context, req ClientEntryUserPolicySaveRequest) (bool, error)
+	PreviewClientEntryUserPolicySplit(ctx context.Context, req ClientEntryUserPolicySplitPreviewRequest) (ClientEntryUserPolicySplitPreviewResult, error)
+	CreateClientEntryUserPolicySplit(ctx context.Context, req ClientEntryUserPolicySplitCreateRequest) (ClientEntryUserPolicyRecord, error)
+	SplitClientEntryUserPolicyGroup(ctx context.Context, req ClientEntryUserPolicyGroupSplitRequest) (ClientEntryUserPolicyRecord, error)
+	UpdateClientEntryUserPolicySplitGroupHost(ctx context.Context, req ClientEntryUserPolicyGroupHostUpdateRequest) (ClientEntryUserPolicyRecord, error)
+	SetClientEntryUserPolicyEnabled(ctx context.Context, id, enabled int64) (bool, error)
 	SortClientEntryUserPolicies(ctx context.Context, ids []int64) (bool, error)
 	DeleteClientEntryUserPolicy(ctx context.Context, id int64) (bool, error)
 	ListServerRoutes(ctx context.Context) ([]ServerRouteRecord, error)
@@ -1256,21 +1261,26 @@ func randomAlphaNumeric(length int) (string, error) {
 }
 
 type ClientEntryUserPolicyRecord struct {
-	ID                 int64                          `json:"id"`
-	Name               string                         `json:"name"`
-	Sort               int64                          `json:"sort"`
-	Action             string                         `json:"action"`
-	Conditions         []cliententry.Condition        `json:"conditions"`
-	IDRangeUserCount   *int64                         `json:"id_range_user_count,omitempty"`
-	Members            []ClientEntryGroupMemberRecord `json:"members,omitempty"`
-	EntryHost          string                         `json:"entry_host"`
-	ResolveEntryHost   int64                          `json:"resolve_entry_host"`
-	ExtraNodes         []string                       `json:"extra_nodes"`
-	ExtraNodesPosition string                         `json:"extra_nodes_position"`
-	Enabled            int64                          `json:"enabled"`
-	Remarks            string                         `json:"remarks"`
-	CreatedAt          int64                          `json:"created_at,omitempty"`
-	UpdatedAt          int64                          `json:"updated_at,omitempty"`
+	ID                 int64                                   `json:"id"`
+	Name               string                                  `json:"name"`
+	Sort               int64                                   `json:"sort"`
+	Mode               string                                  `json:"mode"`
+	SnapshotFrom       *int64                                  `json:"snapshot_from,omitempty"`
+	SnapshotTo         *int64                                  `json:"snapshot_to,omitempty"`
+	SnapshotUserCount  int64                                   `json:"snapshot_user_count"`
+	SplitGroups        []ClientEntryUserPolicySplitGroupRecord `json:"split_groups,omitempty"`
+	Action             string                                  `json:"action"`
+	Conditions         []cliententry.Condition                 `json:"conditions"`
+	IDRangeUserCount   *int64                                  `json:"id_range_user_count,omitempty"`
+	Members            []ClientEntryGroupMemberRecord          `json:"members,omitempty"`
+	EntryHost          string                                  `json:"entry_host"`
+	ResolveEntryHost   int64                                   `json:"resolve_entry_host"`
+	ExtraNodes         []string                                `json:"extra_nodes"`
+	ExtraNodesPosition string                                  `json:"extra_nodes_position"`
+	Enabled            int64                                   `json:"enabled"`
+	Remarks            string                                  `json:"remarks"`
+	CreatedAt          int64                                   `json:"created_at,omitempty"`
+	UpdatedAt          int64                                   `json:"updated_at,omitempty"`
 }
 
 type ClientEntryUserPolicySaveRequest struct {
@@ -1285,4 +1295,58 @@ type ClientEntryUserPolicySaveRequest struct {
 	ExtraNodesPosition string
 	Enabled            *int64
 	Remarks            string
+}
+
+const (
+	ClientEntryUserPolicyModeStandard = "standard"
+	ClientEntryUserPolicyModeSplit    = "split"
+)
+
+type ClientEntryUserPolicySplitGroupRecord struct {
+	ID        int64  `json:"id"`
+	PolicyID  int64  `json:"policy_id"`
+	ParentID  *int64 `json:"parent_id,omitempty"`
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	EntryHost string `json:"entry_host"`
+	Sort      int64  `json:"sort"`
+	UserCount int64  `json:"user_count"`
+	IsLeaf    bool   `json:"is_leaf"`
+	CreatedAt int64  `json:"created_at,omitempty"`
+	UpdatedAt int64  `json:"updated_at,omitempty"`
+}
+
+type ClientEntryUserPolicySplitPreviewRequest struct {
+	Minutes int64
+}
+
+type ClientEntryUserPolicySplitPreviewResult struct {
+	Minutes   int64 `json:"minutes"`
+	From      int64 `json:"from"`
+	To        int64 `json:"to"`
+	UserCount int64 `json:"user_count"`
+}
+
+type ClientEntryUserPolicySplitCreateRequest struct {
+	Name             string
+	Minutes          int64
+	Members          []ClientEntryGroupMemberSaveRequest
+	EntryHostA       string
+	EntryHostB       string
+	ResolveEntryHost *int64
+	Enabled          *int64
+	Remarks          string
+}
+
+type ClientEntryUserPolicyGroupSplitRequest struct {
+	PolicyID   int64
+	GroupID    int64
+	EntryHostA string
+	EntryHostB string
+}
+
+type ClientEntryUserPolicyGroupHostUpdateRequest struct {
+	PolicyID  int64
+	GroupID   int64
+	EntryHost string
 }

@@ -903,6 +903,13 @@ type fakeAdminService struct {
 	lastClientEntrySave           admin.ClientEntryGroupSaveRequest
 	lastClientEntryDrop           int64
 	lastClientEntryUserPolicySave admin.ClientEntryUserPolicySaveRequest
+	clientEntrySplitPreview       admin.ClientEntryUserPolicySplitPreviewResult
+	clientEntrySplitPolicy        admin.ClientEntryUserPolicyRecord
+	lastClientEntrySplitPreview   admin.ClientEntryUserPolicySplitPreviewRequest
+	lastClientEntrySplitCreate    admin.ClientEntryUserPolicySplitCreateRequest
+	lastClientEntryGroupSplit     admin.ClientEntryUserPolicyGroupSplitRequest
+	lastClientEntryGroupHost      admin.ClientEntryUserPolicyGroupHostUpdateRequest
+	lastClientEntryPolicyEnabled  [2]int64
 	lastClientEntryUserPolicySort []int64
 	lastClientEntryUserPolicyDrop int64
 	lastRouteSave                 admin.ServerRouteSaveRequest
@@ -1130,6 +1137,31 @@ func (f *fakeAdminService) ListClientEntryUserPolicies(_ context.Context) ([]adm
 
 func (f *fakeAdminService) SaveClientEntryUserPolicy(_ context.Context, req admin.ClientEntryUserPolicySaveRequest) (bool, error) {
 	f.lastClientEntryUserPolicySave = req
+	return true, f.err
+}
+
+func (f *fakeAdminService) PreviewClientEntryUserPolicySplit(_ context.Context, req admin.ClientEntryUserPolicySplitPreviewRequest) (admin.ClientEntryUserPolicySplitPreviewResult, error) {
+	f.lastClientEntrySplitPreview = req
+	return f.clientEntrySplitPreview, f.err
+}
+
+func (f *fakeAdminService) CreateClientEntryUserPolicySplit(_ context.Context, req admin.ClientEntryUserPolicySplitCreateRequest) (admin.ClientEntryUserPolicyRecord, error) {
+	f.lastClientEntrySplitCreate = req
+	return f.clientEntrySplitPolicy, f.err
+}
+
+func (f *fakeAdminService) SplitClientEntryUserPolicyGroup(_ context.Context, req admin.ClientEntryUserPolicyGroupSplitRequest) (admin.ClientEntryUserPolicyRecord, error) {
+	f.lastClientEntryGroupSplit = req
+	return f.clientEntrySplitPolicy, f.err
+}
+
+func (f *fakeAdminService) UpdateClientEntryUserPolicySplitGroupHost(_ context.Context, req admin.ClientEntryUserPolicyGroupHostUpdateRequest) (admin.ClientEntryUserPolicyRecord, error) {
+	f.lastClientEntryGroupHost = req
+	return f.clientEntrySplitPolicy, f.err
+}
+
+func (f *fakeAdminService) SetClientEntryUserPolicyEnabled(_ context.Context, id, enabled int64) (bool, error) {
+	f.lastClientEntryPolicyEnabled = [2]int64{id, enabled}
 	return true, f.err
 }
 
@@ -4354,6 +4386,65 @@ func TestRouterAdminClientEntryUserPolicySaveEndpointAcceptsResolveHostFormField
 	}
 	if adminService.lastClientEntryUserPolicySave.ResolveEntryHost == nil || *adminService.lastClientEntryUserPolicySave.ResolveEntryHost != 1 {
 		t.Fatalf("unexpected resolve entry host setting: %#v", adminService.lastClientEntryUserPolicySave.ResolveEntryHost)
+	}
+}
+
+func TestRouterAdminClientEntryUserPolicySplitEndpoints(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{
+		clientEntrySplitPreview: admin.ClientEntryUserPolicySplitPreviewResult{Minutes: 60, From: 100, To: 200, UserCount: 5},
+		clientEntrySplitPolicy:  admin.ClientEntryUserPolicyRecord{ID: 9, Mode: admin.ClientEntryUserPolicyModeSplit},
+	}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	previewReq := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/server/client-entry-user-policy/split-preview?auth_data=jwt-admin&minutes=60", nil)
+	previewRec := httptest.NewRecorder()
+	router.ServeHTTP(previewRec, previewReq)
+	if previewRec.Code != http.StatusOK || !strings.Contains(previewRec.Body.String(), `"user_count":5`) || adminService.lastClientEntrySplitPreview.Minutes != 60 {
+		t.Fatalf("preview: status=%d request=%#v body=%s", previewRec.Code, adminService.lastClientEntrySplitPreview, previewRec.Body.String())
+	}
+
+	createBody := `{"name":"活跃用户排查","minutes":60,"members":[{"server_type":"vmess","server_id":11}],"entry_host_a":"a.example.com","entry_host_b":"b.example.com","resolve_entry_host":1,"enabled":1,"remarks":"binary"}`
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/split-create?auth_data=jwt-admin", strings.NewReader(createBody))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusOK || !strings.Contains(createRec.Body.String(), `"mode":"split"`) {
+		t.Fatalf("create: status=%d body=%s", createRec.Code, createRec.Body.String())
+	}
+	if adminService.lastClientEntrySplitCreate.Minutes != 60 || adminService.lastClientEntrySplitCreate.EntryHostA != "a.example.com" || adminService.lastClientEntrySplitCreate.EntryHostB != "b.example.com" || len(adminService.lastClientEntrySplitCreate.Members) != 1 || adminService.lastClientEntrySplitCreate.ResolveEntryHost == nil || *adminService.lastClientEntrySplitCreate.ResolveEntryHost != 1 {
+		t.Fatalf("create request = %#v", adminService.lastClientEntrySplitCreate)
+	}
+
+	requests := []struct {
+		path string
+		body string
+	}{
+		{"split-group", `{"policy_id":9,"group_id":20,"entry_host_a":"a1.example.com","entry_host_b":"a2.example.com"}`},
+		{"split-group-host", `{"policy_id":9,"group_id":21,"entry_host":"new.example.com"}`},
+		{"enabled", `{"id":9,"enabled":0}`},
+	}
+	for _, item := range requests {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/localadmin/server/client-entry-user-policy/"+item.path+"?auth_data=jwt-admin", strings.NewReader(item.body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status=%d body=%s", item.path, rec.Code, rec.Body.String())
+		}
+	}
+	if adminService.lastClientEntryGroupSplit.PolicyID != 9 || adminService.lastClientEntryGroupSplit.GroupID != 20 || adminService.lastClientEntryGroupSplit.EntryHostA != "a1.example.com" {
+		t.Fatalf("split request = %#v", adminService.lastClientEntryGroupSplit)
+	}
+	if adminService.lastClientEntryGroupHost.PolicyID != 9 || adminService.lastClientEntryGroupHost.GroupID != 21 || adminService.lastClientEntryGroupHost.EntryHost != "new.example.com" {
+		t.Fatalf("host request = %#v", adminService.lastClientEntryGroupHost)
+	}
+	if adminService.lastClientEntryPolicyEnabled != [2]int64{9, 0} {
+		t.Fatalf("enabled request = %#v", adminService.lastClientEntryPolicyEnabled)
 	}
 }
 

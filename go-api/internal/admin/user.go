@@ -1203,6 +1203,16 @@ func deleteUsersByIDList(ctx context.Context, tx *sql.Tx, ids []int64, message s
 			return errors.New(message)
 		}
 	}
+	if query, args := buildInt64InQuery(`DELETE FROM v2_client_entry_user_policy_split_assignment WHERE user_id IN (%s)`, ids); len(args) > 0 {
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return errors.New(message)
+		}
+	}
+	if query, args := buildInt64InQuery(`DELETE FROM v2_user_subscribe_activity WHERE user_id IN (%s)`, ids); len(args) > 0 {
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return errors.New(message)
+		}
+	}
 	if query, args := buildInt64InQuery(`DELETE FROM v2_user WHERE id IN (%s)`, ids); len(args) > 0 {
 		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 			return errors.New(message)

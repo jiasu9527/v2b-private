@@ -188,10 +188,32 @@ func (s *DBService) resolveClientEntryMonitorPolicies(ctx context.Context) ([]Cl
 		}
 		switch policy.Action {
 		case cliententry.ActionOverride:
+			if policy.Mode == ClientEntryUserPolicyModeSplit {
+				for _, group := range policy.SplitGroups {
+					host := strings.TrimSpace(group.EntryHost)
+					if !group.IsLeaf || host == "" {
+						continue
+					}
+					path := strings.TrimSpace(group.Path)
+					if path == "" {
+						path = strings.TrimSpace(group.Name)
+					}
+					if path == "" {
+						path = strconv.FormatInt(group.ID, 10)
+					}
+					item.Targets = append(item.Targets, ClientEntryMonitorCandidateTarget{
+						SourceKey:     fmt.Sprintf("policy:%d:split-group:%d", policy.ID, group.ID),
+						Name:          truncateClientEntryMonitorReportText(policy.Name+" · "+path+" 组入口", 255),
+						Host:          host,
+						SuggestedPort: 443,
+					})
+				}
+				break
+			}
 			if host := strings.TrimSpace(policy.EntryHost); host != "" {
 				item.Targets = append(item.Targets, ClientEntryMonitorCandidateTarget{
 					SourceKey:     fmt.Sprintf("policy:%d", policy.ID),
-					Name:          policy.Name + " · 独立入口",
+					Name:          truncateClientEntryMonitorReportText(policy.Name+" · 独立入口", 255),
 					Host:          host,
 					SuggestedPort: 443,
 				})

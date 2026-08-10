@@ -722,6 +722,26 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminClientEntryUserPolicySave(w, r, state.session, state.admin) {
 				return
 			}
+		case r.URL.Path == adminPrefix+"/server/client-entry-user-policy/split-preview":
+			if handleAdminClientEntryUserPolicySplitPreview(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/server/client-entry-user-policy/split-create":
+			if handleAdminClientEntryUserPolicySplitCreate(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/server/client-entry-user-policy/split-group":
+			if handleAdminClientEntryUserPolicySplitGroup(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/server/client-entry-user-policy/split-group-host":
+			if handleAdminClientEntryUserPolicySplitGroupHost(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/server/client-entry-user-policy/enabled":
+			if handleAdminClientEntryUserPolicyEnabled(w, r, state.session, state.admin) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/server/client-entry-user-policy/sort":
 			if handleAdminClientEntryUserPolicySort(w, r, state.session, state.admin) {
 				return

@@ -681,9 +681,9 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
         if (policy.action === 'hide') return <span className="dns-failover-sub">隐藏规则不可检测</span>;
         const targets = policyTargets(policy);
         if (!targets.length) return <span className="text-danger">没有可检测地址</span>;
-        if (policy.action === 'override') return <span className="dns-entry-host">{targets[0].host}</span>;
+        if (policy.action === 'override' && targets.length === 1) return <span className="dns-entry-host">{targets[0].host}</span>;
         return <details className="dns-entry-policy-details">
-          <summary>{targets.length} 个节点原地址</summary>
+          <summary>{policy.action === 'override' ? `${targets.length} 个分组入口` : `${targets.length} 个节点原地址`}</summary>
           <div className="dns-entry-policy-hosts">
             {targets.map((target) => <span className="dns-entry-host" key={target.source_key}>
               {target.name ? `${target.name} · ` : ''}{target.host}

@@ -12,8 +12,10 @@ import (
 
 type clientEntryUserPolicy struct {
 	ID                 int64
+	Mode               string
 	Action             string
 	EntryHost          string
+	AssignedEntryHost  string
 	ResolveEntryHost   bool
 	ExtraNodes         []string
 	ExtraNodesPosition string
@@ -21,16 +23,23 @@ type clientEntryUserPolicy struct {
 	Members            []ClientEntryGroupMember
 }
 
-func (s *DBService) loadClientEntryUserPolicies(ctx context.Context) ([]clientEntryUserPolicy, error) {
+func (s *DBService) loadClientEntryUserPolicies(ctx context.Context, userID int64) ([]clientEntryUserPolicy, error) {
 	if err := s.ensureClientEntrySchema(ctx); err != nil {
 		return nil, err
 	}
 
-	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.action, p.conditions, p.entry_host, p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position, m.server_type, m.server_id, m.sort AS member_sort
+	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.mode, p.action, p.conditions, p.entry_host,
+p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position,
+COALESCE(split_group.entry_host, '') AS assigned_entry_host,
+m.server_type, m.server_id, m.sort AS member_sort
 FROM v2_client_entry_user_policy p
 JOIN v2_client_entry_user_policy_member m ON m.policy_id = p.id
+LEFT JOIN v2_client_entry_user_policy_split_assignment split_assignment
+  ON split_assignment.policy_id = p.id AND split_assignment.user_id = $1
+LEFT JOIN v2_client_entry_user_policy_split_group split_group
+  ON split_group.id = split_assignment.group_id AND split_group.policy_id = p.id
 WHERE p.enabled = 1
-ORDER BY p.sort ASC NULLS LAST, p.id ASC, m.sort ASC NULLS LAST, m.id ASC`)
+ORDER BY p.sort ASC NULLS LAST, p.id ASC, m.sort ASC NULLS LAST, m.id ASC`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("query client entry rules: %w", err)
 	}
@@ -44,6 +53,13 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC, m.sort ASC NULLS LAST, m.id ASC`)
 		}
 		policy := byID[id]
 		if policy == nil {
+			mode := strings.ToLower(strings.TrimSpace(fmt.Sprint(row["mode"])))
+			if mode == "" {
+				mode = "standard"
+			}
+			if mode != "standard" && mode != "split" {
+				return nil, fmt.Errorf("decode client entry rule %d mode: unsupported mode %q", id, mode)
+			}
 			action, err := cliententry.NormalizeAction(fmt.Sprint(row["action"]))
 			if err != nil {
 				return nil, fmt.Errorf("decode client entry rule %d action: %w", id, err)
@@ -62,8 +78,10 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC, m.sort ASC NULLS LAST, m.id ASC`)
 			}
 			policy = &clientEntryUserPolicy{
 				ID:                 id,
+				Mode:               mode,
 				Action:             action,
 				EntryHost:          strings.TrimSpace(fmt.Sprint(row["entry_host"])),
+				AssignedEntryHost:  strings.TrimSpace(fmt.Sprint(row["assigned_entry_host"])),
 				ResolveEntryHost:   mapInt64(row["resolve_entry_host"]) != 0,
 				ExtraNodes:         extraNodes,
 				ExtraNodesPosition: extraNodesPosition,
@@ -119,7 +137,11 @@ func applyClientEntryUserPoliciesWithResolver(ctx context.Context, servers []map
 			if !clientEntryPolicyHasMember(policy.Members, ClientEntryGroupMember{ServerType: serverType, ServerID: serverID}) {
 				continue
 			}
-			if !cliententry.MatchAll(policy.Conditions, subject) {
+			matched := cliententry.MatchAll(policy.Conditions, subject)
+			if policy.Mode == "split" {
+				matched = policy.AssignedEntryHost != ""
+			}
+			if !matched {
 				continue
 			}
 			if policy.Action == cliententry.ActionHide {
@@ -130,6 +152,9 @@ func applyClientEntryUserPoliciesWithResolver(ctx context.Context, servers []map
 			granted = true
 			if policy.Action == cliententry.ActionOverride {
 				entryHost := policy.EntryHost
+				if policy.Mode == "split" {
+					entryHost = policy.AssignedEntryHost
+				}
 				if policy.ResolveEntryHost && resolver != nil {
 					selectionKey := fmt.Sprintf("%d:%d", subject.UserID, policy.ID)
 					entryHost = resolver.Resolve(ctx, entryHost, selectionKey)

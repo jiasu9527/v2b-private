@@ -311,6 +311,26 @@ func TestApplyClientEntryUserPolicyKeepsOriginalServersWhenNoPolicy(t *testing.T
 	}
 }
 
+func TestApplyClientEntryUserPolicyUsesFixedSplitAssignment(t *testing.T) {
+	servers := []map[string]any{{"id": int64(11), "type": "vmess", "host": "original.example.com", "client_entry_only": int64(1)}}
+	assigned := []clientEntryUserPolicy{{
+		ID: 31, Mode: "split", Action: cliententry.ActionOverride, AssignedEntryHost: "group-a.example.com",
+		Members: []ClientEntryGroupMember{{ServerType: "vmess", ServerID: 11}},
+	}}
+	result := applyClientEntryUserPolicies(cloneServerMapsForTest(servers), cliententry.Subject{UserID: 100}, assigned)
+	if len(result) != 1 || result[0]["host"] != "group-a.example.com" {
+		t.Fatalf("assigned split user did not receive its group entry: %#v", result)
+	}
+
+	unassigned := []clientEntryUserPolicy{{
+		ID: 31, Mode: "split", Action: cliententry.ActionOverride,
+		Members: []ClientEntryGroupMember{{ServerType: "vmess", ServerID: 11}},
+	}}
+	if result := applyClientEntryUserPolicies(cloneServerMapsForTest(servers), cliententry.Subject{UserID: 101}, unassigned); len(result) != 0 {
+		t.Fatalf("unassigned user received split-only node: %#v", result)
+	}
+}
+
 func TestApplyClientEntryUserPolicyRequiresMatchingOverrideForEntryOnlyNode(t *testing.T) {
 	servers := []map[string]any{
 		{"id": int64(11), "type": "vmess", "host": "private.example.com", "client_entry_only": int64(1)},
@@ -370,6 +390,7 @@ func TestServersDoesNotExposeShowZeroNodeEvenWhenOverrideMatches(t *testing.T) {
 	// Node #11 is show=0 in the scenario, so PostgreSQL must remove it at the
 	// WHERE show=1 boundary before its otherwise matching override is evaluated.
 	expectServerFetchTableQueriesForVisibilityTest(mock, "", 0, "")
+	expectSubscribeActivityForVisibilityTest(mock, 100)
 
 	servers, err := service.Servers(context.Background(), 100, "ClashMeta/1.0")
 	if err != nil {
@@ -395,6 +416,7 @@ func TestServersDoesNotGrantGroupMismatchEvenWhenOverrideMatches(t *testing.T) {
 	expectEnsureClientEntrySchema(mock)
 	expectMatchingOverridePolicyForVisibilityTest(mock, "vmess", 11, 100)
 	expectServerFetchTableQueriesForVisibilityTest(mock, "vmess", 11, `[2]`)
+	expectSubscribeActivityForVisibilityTest(mock, 100)
 
 	servers, err := service.Servers(context.Background(), 100, "ClashMeta/1.0")
 	if err != nil {
@@ -417,9 +439,16 @@ func expectServerFetchUserForVisibilityTest(mock sqlmock.Sqlmock, userID, groupI
 
 func expectMatchingOverridePolicyForVisibilityTest(mock sqlmock.Sqlmock, serverType string, serverID, userID int64) {
 	conditions := `[{"field":"user_id","operator":"in","values":[` + fmt.Sprint(userID) + `]}]`
-	mock.ExpectQuery(`SELECT p.id, p.action, p.conditions, p.entry_host, p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position, m.server_type, m.server_id, m.sort AS member_sort\s+FROM v2_client_entry_user_policy p\s+JOIN v2_client_entry_user_policy_member m ON m.policy_id = p.id\s+WHERE p.enabled = 1`).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "action", "conditions", "entry_host", "resolve_entry_host", "extra_nodes", "extra_nodes_position", "server_type", "server_id", "member_sort"}).
-			AddRow(int64(7), cliententry.ActionOverride, conditions, "assigned.example.com", int64(0), `[]`, "after", serverType, serverID, int64(1)))
+	mock.ExpectQuery(`SELECT p.id, p.mode, p.action, p.conditions, p.entry_host,\s+p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position,\s+COALESCE\(split_group.entry_host, ''\) AS assigned_entry_host,\s+m.server_type, m.server_id, m.sort AS member_sort\s+FROM v2_client_entry_user_policy p\s+JOIN v2_client_entry_user_policy_member m ON m.policy_id = p.id\s+LEFT JOIN v2_client_entry_user_policy_split_assignment split_assignment\s+ON split_assignment.policy_id = p.id AND split_assignment.user_id = \$1\s+LEFT JOIN v2_client_entry_user_policy_split_group split_group\s+ON split_group.id = split_assignment.group_id AND split_group.policy_id = p.id\s+WHERE p.enabled = 1`).
+		WithArgs(userID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "mode", "action", "conditions", "entry_host", "resolve_entry_host", "extra_nodes", "extra_nodes_position", "assigned_entry_host", "server_type", "server_id", "member_sort"}).
+			AddRow(int64(7), "standard", cliententry.ActionOverride, conditions, "assigned.example.com", int64(0), `[]`, "after", "", serverType, serverID, int64(1)))
+}
+
+func expectSubscribeActivityForVisibilityTest(mock sqlmock.Sqlmock, userID int64) {
+	mock.ExpectExec(`INSERT INTO v2_user_subscribe_activity`).
+		WithArgs(userID, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
 }
 
 func expectServerFetchTableQueriesForVisibilityTest(mock sqlmock.Sqlmock, visibleType string, visibleID int64, visibleGroupIDs string) {

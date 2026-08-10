@@ -20,8 +20,10 @@ import {
   message,
 } from 'antd';
 import {
+  BranchesOutlined,
   CopyOutlined,
   DeleteOutlined,
+  EditOutlined,
   LoadingOutlined,
   MenuOutlined,
   PlayCircleOutlined,
@@ -46,6 +48,27 @@ type UserOption = { value: number; label: string };
 type EmailOption = { value: string; label: string };
 type PolicyAction = 'override' | 'original' | 'hide';
 type ExtraNodePosition = 'before' | 'after';
+
+type SplitGroup = {
+  id: number;
+  policy_id: number;
+  parent_id?: number;
+  name: string;
+  path: string;
+  entry_host: string;
+  user_count: number;
+  is_leaf: boolean;
+};
+
+function isSplitPolicy(row: any) {
+  return String(row?.mode || '').toLowerCase() === 'split';
+}
+
+function formatSnapshotTime(value: any) {
+  const timestamp = Number(value);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return '-';
+  return new Date(timestamp * 1000).toLocaleString();
+}
 
 const fieldOptions = [
   { label: '用户 ID', value: 'user_id' },
@@ -643,10 +666,12 @@ function conditionMatches(condition: EntryCondition, input: any) {
 }
 
 function policyMatches(row: any, input: any) {
+  if (isSplitPolicy(row)) return false;
   return parseConditions(row.conditions).every((condition) => conditionMatches(condition, input));
 }
 
 function policyResultDescription(row: any) {
+  if (isSplitPolicy(row)) return `结果：按固定二分组下发不同入口，共 ${Number(row?.snapshot_user_count || 0)} 人`;
   const action = normalizePolicyAction(row?.action);
   const extraNodeCount = parseExtraNodes(row?.extra_nodes).length;
   const position = normalizeExtraNodePosition(row?.extra_nodes_position) === 'before' ? '置顶' : '置底';
@@ -675,6 +700,269 @@ function ExtraNodesSummary({ value, position }: { value: any; position: any }) {
       </Typography.Text>)}
     </div>
   </details>;
+}
+
+function SplitPolicyCreator({
+  children,
+  serverOptions,
+  onDone,
+}: {
+  children: React.ReactElement;
+  serverOptions: ClientEntryServerOption[];
+  onDone: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [preview, setPreview] = useState<any>();
+  const previewSequence = useRef(0);
+  const [form] = Form.useForm();
+  const minutes = Form.useWatch('minutes', form) || 60;
+
+  const refreshPreview = async (value: number) => {
+    const sequence = ++previewSequence.current;
+    setPreviewLoading(true);
+    try {
+      const response = await apiGet('/server/client-entry-user-policy/split-preview', { minutes: value });
+      if (sequence === previewSequence.current) setPreview(response.data || {});
+    } catch (error: any) {
+      if (sequence === previewSequence.current) {
+        setPreview(undefined);
+        message.error(error?.message || '读取近期订阅用户失败');
+      }
+    } finally {
+      if (sequence === previewSequence.current) setPreviewLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const value = Math.max(1, Math.floor(Number(minutes) || 60));
+    const timer = window.setTimeout(() => refreshPreview(value), 300);
+    return () => window.clearTimeout(timer);
+  }, [open, minutes]);
+
+  const show = () => {
+    form.resetFields();
+    form.setFieldsValue({ minutes: 60, enabled: true, resolve_entry_host: false, members: [] });
+    setPreview(undefined);
+    setOpen(true);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const values = await form.validateFields();
+      await apiPost('/server/client-entry-user-policy/split-create', {
+        name: String(values.name || '').trim(),
+        minutes: Number(values.minutes),
+        members: (values.members || []).map(splitMemberKey).filter(Boolean),
+        entry_host_a: String(values.entry_host_a || '').trim(),
+        entry_host_b: String(values.entry_host_b || '').trim(),
+        resolve_entry_host: values.resolve_entry_host ? 1 : 0,
+        enabled: values.enabled ? 1 : 0,
+        remarks: String(values.remarks || '').trim(),
+      });
+      message.success('已创建固定二分规则');
+      setOpen(false);
+      onDone();
+    } catch (error: any) {
+      if (!error?.errorFields) message.error(error?.message || '创建二分规则失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const userCount = finiteNumber(preview?.user_count) || 0;
+  return <>
+    {React.cloneElement(children, { onClick: show })}
+    <Modal
+      title="从近期订阅用户创建固定二分"
+      open={open}
+      onCancel={() => setOpen(false)}
+      onOk={save}
+      okText="创建并固定分组"
+      confirmLoading={saving}
+      width={820}
+      destroyOnHidden
+    >
+      <Alert
+        type="info"
+        showIcon
+        message="创建时固定用户名单，后续不会自动换组"
+        description="系统会把时间窗口内成功拉取过节点列表的用户按 ID 顺序平均分成 A、B 两组。两组使用完全相同的生效节点，只需要分别填写入口；之后可继续二分任意叶子组。"
+        style={{ marginBottom: 18 }}
+      />
+      <Form form={form} layout="vertical">
+        <Form.Item name="name" label="规则名称" rules={[{ required: true, whitespace: true, message: '请输入规则名称' }]}>
+          <Input placeholder="例如：近期活跃用户排查" maxLength={100} showCount />
+        </Form.Item>
+        <Space align="start" wrap style={{ width: '100%' }}>
+          <Form.Item name="minutes" label="统计最近多少分钟" rules={[{ required: true }]}>
+            <InputNumber min={1} max={43200} precision={0} addonAfter="分钟" style={{ width: 220 }} />
+          </Form.Item>
+          <div style={{ paddingTop: 30 }}>
+            {previewLoading ? <Spin size="small" /> : <Tag color={userCount >= 2 ? 'cyan' : 'orange'}>当前可固定 {userCount} 人</Tag>}
+          </div>
+        </Space>
+        <Alert
+          type={userCount >= 2 ? 'success' : 'warning'}
+          showIcon
+          message={userCount >= 2 ? `预计 A 组 ${Math.ceil(userCount / 2)} 人，B 组 ${Math.floor(userCount / 2)} 人` : '至少需要 2 个近期订阅用户'}
+          description="活跃记录从安装此功能并更新服务后开始累计；创建瞬间会重新统计，人数可能与预览略有变化。"
+          style={{ marginBottom: 18 }}
+        />
+        <Form.Item name="members" label="两组共同生效节点" rules={[{ required: true, message: '请选择生效节点' }]}>
+          <Select mode="multiple" showSearch allowClear options={serverOptions} optionFilterProp="label" placeholder="选择节点；以后继续二分会自动继承，无需重复选择" />
+        </Form.Item>
+        <Space align="start" wrap style={{ width: '100%' }}>
+          <Form.Item name="entry_host_a" label="A 组入口" rules={[{ required: true, whitespace: true, message: '请输入 A 组入口' }]} style={{ minWidth: 320, flex: 1 }}>
+            <Input placeholder="a.example.com 或 IP" />
+          </Form.Item>
+          <Form.Item name="entry_host_b" label="B 组入口" rules={[{ required: true, whitespace: true, message: '请输入 B 组入口' }]} style={{ minWidth: 320, flex: 1 }}>
+            <Input placeholder="b.example.com 或 IP" />
+          </Form.Item>
+        </Space>
+        <Form.Item name="resolve_entry_host" valuePropName="checked" extra="两组及后续子组共同使用此设置；DNS 成功结果缓存 1 分钟，解析失败回退原域名。">
+          <Checkbox>解析域名后下发 IP</Checkbox>
+        </Form.Item>
+        <Form.Item name="enabled" label="状态" valuePropName="checked">
+          <Switch checkedChildren="启用" unCheckedChildren="禁用" />
+        </Form.Item>
+        <Form.Item name="remarks" label="备注">
+          <Input.TextArea rows={2} maxLength={255} showCount />
+        </Form.Item>
+      </Form>
+    </Modal>
+  </>;
+}
+
+function SplitGroupManager({ row, onDone }: { row: any; onDone: () => void }) {
+  const [splitGroup, setSplitGroup] = useState<SplitGroup>();
+  const [editGroup, setEditGroup] = useState<SplitGroup>();
+  const [saving, setSaving] = useState(false);
+  const [splitForm] = Form.useForm();
+  const [editForm] = Form.useForm();
+  const groups = (Array.isArray(row?.split_groups) ? row.split_groups : []) as SplitGroup[];
+  const leaves = groups.filter((group) => group.is_leaf).sort((left, right) => String(left.path).localeCompare(String(right.path), undefined, { numeric: true }));
+
+  const openSplit = (group: SplitGroup) => {
+    splitForm.resetFields();
+    setSplitGroup(group);
+  };
+  const openEdit = (group: SplitGroup) => {
+    editForm.resetFields();
+    editForm.setFieldsValue({ entry_host: group.entry_host });
+    setEditGroup(group);
+  };
+
+  const submitSplit = async () => {
+    if (!splitGroup) return;
+    setSaving(true);
+    try {
+      const values = await splitForm.validateFields();
+      await apiPost('/server/client-entry-user-policy/split-group', {
+        policy_id: row.id,
+        group_id: splitGroup.id,
+        entry_host_a: String(values.entry_host_a || '').trim(),
+        entry_host_b: String(values.entry_host_b || '').trim(),
+      });
+      message.success(`${splitGroup.path} 组已继续二分`);
+      setSplitGroup(undefined);
+      onDone();
+    } catch (error: any) {
+      if (!error?.errorFields) message.error(error?.message || '继续二分失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const submitEdit = async () => {
+    if (!editGroup) return;
+    setSaving(true);
+    try {
+      const values = await editForm.validateFields();
+      await apiPost('/server/client-entry-user-policy/split-group-host', {
+        policy_id: row.id,
+        group_id: editGroup.id,
+        entry_host: String(values.entry_host || '').trim(),
+      });
+      message.success('分组入口已更新');
+      setEditGroup(undefined);
+      onDone();
+    } catch (error: any) {
+      if (!error?.errorFields) message.error(error?.message || '更新入口失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <>
+    <details className="client-entry-members">
+      <summary>{leaves.length} 个当前分组 · {Number(row?.snapshot_user_count || 0)} 人</summary>
+      <div style={{ marginTop: 8, width: 360, maxHeight: 260, overflow: 'auto' }}>
+        {leaves.map((group) => <Card key={group.id} size="small" style={{ marginBottom: 8 }} styles={{ body: { padding: 10 } }}>
+          <Space direction="vertical" size={5} style={{ width: '100%' }}>
+            <Space wrap>
+              <Tag color="purple">{group.path} 组</Tag>
+              <Tag>{Number(group.user_count || 0)} 人</Tag>
+            </Space>
+            <Typography.Text code copyable={{ text: String(group.entry_host || '') }} ellipsis={{ tooltip: group.entry_host }} style={{ maxWidth: 325 }}>
+              {group.entry_host || '-'}
+            </Typography.Text>
+            <Space size={12}>
+              <a onClick={(event) => { event.stopPropagation(); openEdit(group); }}><EditOutlined /> 修改入口</a>
+              {Number(group.user_count) >= 2
+                ? <a onClick={(event) => { event.stopPropagation(); openSplit(group); }}><BranchesOutlined /> 继续二分</a>
+                : <Typography.Text type="secondary">不足 2 人</Typography.Text>}
+            </Space>
+          </Space>
+        </Card>)}
+      </div>
+    </details>
+
+    <Modal
+      title={`继续二分 ${splitGroup?.path || ''} 组`}
+      open={Boolean(splitGroup)}
+      onCancel={() => setSplitGroup(undefined)}
+      onOk={submitSplit}
+      confirmLoading={saving}
+      okText="确认二分"
+      destroyOnHidden
+    >
+      <Alert
+        type="info"
+        showIcon
+        message={`${splitGroup?.path || '-'} 组当前 ${Number(splitGroup?.user_count || 0)} 人`}
+        description="节点、解析设置和规则顺序全部继承，只需要填写两个子组的新入口。原组用户会固定平均分配到两个子组。"
+        style={{ marginBottom: 16 }}
+      />
+      <Form form={splitForm} layout="vertical">
+        <Form.Item name="entry_host_a" label={`${splitGroup?.path || ''}.1 组入口`} rules={[{ required: true, whitespace: true, message: '请输入第一个子组入口' }]}>
+          <Input placeholder="域名或 IP" />
+        </Form.Item>
+        <Form.Item name="entry_host_b" label={`${splitGroup?.path || ''}.2 组入口`} rules={[{ required: true, whitespace: true, message: '请输入第二个子组入口' }]}>
+          <Input placeholder="域名或 IP" />
+        </Form.Item>
+      </Form>
+    </Modal>
+
+    <Modal
+      title={`修改 ${editGroup?.path || ''} 组入口`}
+      open={Boolean(editGroup)}
+      onCancel={() => setEditGroup(undefined)}
+      onOk={submitEdit}
+      confirmLoading={saving}
+      okText="保存入口"
+      destroyOnHidden
+    >
+      <Form form={editForm} layout="vertical">
+        <Form.Item name="entry_host" label="入口地址" rules={[{ required: true, whitespace: true, message: '请输入入口地址' }]}>
+          <Input placeholder="域名或 IP" />
+        </Form.Item>
+      </Form>
+    </Modal>
+  </>;
 }
 
 function SimulationModal({
@@ -727,6 +1015,12 @@ function SimulationModal({
         plan_id: finiteNumber(user.plan_id) ?? 0,
       };
       const selectedMember = values.member;
+      const hasRelevantSplitRule = rows.some((row) => Number(row.enabled) !== 0 && isSplitPolicy(row) && (!selectedMember || normalizedMembers(row).includes(selectedMember)));
+      if (hasRelevantSplitRule) {
+        setResult(undefined);
+        setSimulationError('当前节点存在固定二分规则，用户所属分组只保存在服务端，请以实际订阅结果为准');
+        return;
+      }
       const matched = rows.find((row) => {
         if (Number(row.enabled) === 0) return false;
         if (selectedMember && !normalizedMembers(row).includes(selectedMember)) return false;
@@ -746,6 +1040,7 @@ function SimulationModal({
       type="info"
       showIcon
       message="按当前列表从上到下匹配，第一条满足全部条件的启用规则生效。模拟不会保存或修改任何数据。"
+      description="固定二分规则按服务端保存的用户快照分组，不在这里按普通条件模拟。"
       style={{ marginBottom: 16 }}
     />
     <Form form={form} layout="vertical">
@@ -797,7 +1092,16 @@ export default function ClientEntryUserPolicyPage() {
       const policies = Array.isArray(policyRes.data) ? policyRes.data : [];
       setRows(policies.map((row: any) => ({
         ...row,
+        mode: isSplitPolicy(row) ? 'split' : 'standard',
         resolve_entry_host: normalizeResolveEntryHost(row.resolve_entry_host),
+        split_groups: Array.isArray(row.split_groups) ? row.split_groups.map((group: any) => ({
+          ...group,
+          id: Number(group.id),
+          policy_id: Number(group.policy_id),
+          parent_id: group.parent_id === undefined || group.parent_id === null ? undefined : Number(group.parent_id),
+          user_count: Number(group.user_count || 0),
+          is_leaf: group.is_leaf === true || Number(group.is_leaf) !== 0,
+        })) : [],
         conditions: parseConditions(row.conditions),
         extra_nodes: parseExtraNodes(row.extra_nodes),
         extra_nodes_position: normalizeExtraNodePosition(row.extra_nodes_position),
@@ -826,7 +1130,11 @@ export default function ClientEntryUserPolicyPage() {
 
   const toggle = async (row: any, enabled: boolean) => {
     try {
-      await apiPost('/server/client-entry-user-policy/save', policyPayload(row, { enabled }));
+      if (isSplitPolicy(row)) {
+        await apiPost('/server/client-entry-user-policy/enabled', { id: row.id, enabled: enabled ? 1 : 0 });
+      } else {
+        await apiPost('/server/client-entry-user-policy/save', policyPayload(row, { enabled }));
+      }
       message.success(enabled ? '规则已启用' : '规则已禁用');
       load();
     } catch (error: any) {
@@ -885,6 +1193,21 @@ export default function ClientEntryUserPolicyPage() {
       dataIndex: 'conditions',
       width: 620,
       render: (value: any, row: any) => {
+        if (isSplitPolicy(row)) {
+          const from = Number(row.snapshot_from || 0);
+          const to = Number(row.snapshot_to || 0);
+          const minutes = from > 0 && to >= from ? Math.max(1, Math.round((to - from) / 60)) : 0;
+          return <Space direction="vertical" size={4}>
+            <Space wrap>
+              <Tag color="purple" icon={<BranchesOutlined />}>固定二分快照</Tag>
+              <Tag color="cyan">{Number(row.snapshot_user_count || 0)} 人</Tag>
+              {minutes > 0 && <Tag>最近 {minutes} 分钟</Tag>}
+            </Space>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              固定于 {formatSnapshotTime(row.snapshot_to)}，后续用户不会自动加入或换组
+            </Typography.Text>
+          </Space>;
+        }
         const conditions = parseConditions(value);
         if (!conditions.length) return <Tag>全部用户</Tag>;
         const hasEmailList = conditions.some((condition) => condition.field === 'email' && condition.operator === 'in' && (condition.values || []).length > 1);
@@ -906,8 +1229,12 @@ export default function ClientEntryUserPolicyPage() {
     {
       title: '命中结果',
       key: 'result',
-      width: 250,
+      width: 410,
       render: (_: any, row: any) => {
+        if (isSplitPolicy(row)) return <Space direction="vertical" size={5}>
+          <SplitGroupManager row={row} onDone={load} />
+          {normalizeResolveEntryHost(row.resolve_entry_host) && <Tag color="cyan" style={{ width: 'fit-content', marginInlineEnd: 0 }}>域名解析为 IP</Tag>}
+        </Space>;
         const action = normalizePolicyAction(row.action);
         if (action === 'hide') return <Tag color="red">不下发节点</Tag>;
         if (action === 'original') return <Tag color="blue">下发原入口地址</Tag>;
@@ -934,7 +1261,7 @@ export default function ClientEntryUserPolicyPage() {
       title: '额外节点',
       dataIndex: 'extra_nodes',
       width: 190,
-      render: (value: any, row: any) => <ExtraNodesSummary value={value} position={row.extra_nodes_position} />,
+      render: (value: any, row: any) => isSplitPolicy(row) ? <Typography.Text type="secondary">二分组不使用</Typography.Text> : <ExtraNodesSummary value={value} position={row.extra_nodes_position} />,
     },
     {
       title: '状态',
@@ -950,6 +1277,10 @@ export default function ClientEntryUserPolicyPage() {
       align: 'right',
       width: 205,
       render: (_: any, row: any) => {
+        if (isSplitPolicy(row)) return <Space className="client-entry-actions" size={10}>
+          <Tag color="purple">固定分组</Tag>
+          <Popconfirm title="确认删除整条二分规则及其固定用户名单？" onConfirm={() => drop(row)}><a>删除</a></Popconfirm>
+        </Space>;
         const copyRow = { ...row, id: undefined, name: `${row.name || `规则 #${row.id}`} - 副本` };
         return <Space className="client-entry-actions" size={10}>
           <PolicyEditor row={row} onDone={load} serverOptions={serverOptions}><a>编辑</a></PolicyEditor>
@@ -968,12 +1299,13 @@ export default function ClientEntryUserPolicyPage() {
         type="info"
         showIcon
         message="仅入口分配节点的下发规则"
-        description="节点编辑中标记为“仅入口分配”的节点，请先保持节点“显示”为“显示”。命中“覆盖入口地址”或“下发原入口地址”规则后才会下发；后者可一次选择多个节点并分别保留各自地址。未命中或命中“不下发所选节点”规则的用户看不到这些节点，节点权限组仍然生效。"
+        description="节点编辑中标记为“仅入口分配”的节点，请先保持节点“显示”为“显示”。普通规则按条件匹配；固定二分会把创建时的近期订阅用户平均锁定到不同入口，继续二分时自动继承同一批节点。未命中规则的用户看不到仅入口分配节点，节点权限组仍然生效。"
       />
       <Card className="block-card" styles={{ body: { padding: 0 } }}>
         <div className="forest-table-action">
           <Space wrap>
             <PolicyEditor onDone={load} serverOptions={serverOptions}><Button type="primary" icon={<PlusOutlined />}>新增入口规则</Button></PolicyEditor>
+            <SplitPolicyCreator onDone={load} serverOptions={serverOptions}><Button icon={<BranchesOutlined />}>近期用户固定二分</Button></SplitPolicyCreator>
             <Button icon={<PlayCircleOutlined />} onClick={() => setSimulatorOpen(true)}>模拟匹配</Button>
             <Typography.Text type="secondary">规则从上到下匹配，拖动行即可调整顺序；第一条命中的规则生效。</Typography.Text>
           </Space>
@@ -985,7 +1317,7 @@ export default function ClientEntryUserPolicyPage() {
           columns={columns}
           dataSource={rows}
           pagination={false}
-          scroll={{ x: 2100 }}
+          scroll={{ x: 2300 }}
           rowClassName={(row) => `sortable-row ${draggingKey === String(row.id) ? 'dragging-row' : ''}`}
           onRow={(row) => ({
             draggable: true,

@@ -23,9 +23,9 @@ func TestDBServiceListClientEntryUserPoliciesReturnsRulesInStoredOrder(t *testin
 
 	service := &DBService{db: db}
 	readyClientEntrySchemaForPolicyTest(service)
-	rows := sqlmock.NewRows([]string{"id", "name", "sort", "action", "conditions", "entry_host", "resolve_entry_host", "extra_nodes", "extra_nodes_position", "enabled", "remarks", "created_at", "updated_at"}).
-		AddRow(int64(3), "Clash", int64(10), "override", `[{"field":"ua","operator":"contains_any","values":["Clash"]}]`, "vip-entry.example.com", int64(1), `["trojan://secret@extra.example.com:443#Extra"]`, "before", int64(1), "VIP", int64(100), int64(200))
-	mock.ExpectQuery(`SELECT p.id, p.name, p.sort, p.action, p.conditions, p.entry_host, p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at\s+FROM v2_client_entry_user_policy p\s+ORDER BY p.sort ASC NULLS LAST, p.id ASC`).
+	rows := sqlmock.NewRows([]string{"id", "name", "sort", "mode", "snapshot_from", "snapshot_to", "action", "conditions", "entry_host", "resolve_entry_host", "extra_nodes", "extra_nodes_position", "enabled", "remarks", "created_at", "updated_at"}).
+		AddRow(int64(3), "Clash", int64(10), "standard", nil, nil, "override", `[{"field":"ua","operator":"contains_any","values":["Clash"]}]`, "vip-entry.example.com", int64(1), `["trojan://secret@extra.example.com:443#Extra"]`, "before", int64(1), "VIP", int64(100), int64(200))
+	mock.ExpectQuery(`SELECT p.id, p.name, p.sort, p.mode, p.snapshot_from, p.snapshot_to, p.action, p.conditions, p.entry_host, p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at\s+FROM v2_client_entry_user_policy p\s+ORDER BY p.sort ASC NULLS LAST, p.id ASC`).
 		WillReturnRows(rows)
 	memberRows := sqlmock.NewRows([]string{"policy_id", "server_type", "server_id", "sort"}).
 		AddRow(int64(3), "vmess", int64(11), int64(10)).
@@ -70,9 +70,9 @@ func TestDBServiceListClientEntryUserPoliciesCountsActualUsersInIDRange(t *testi
 
 	service := &DBService{db: db}
 	readyClientEntrySchemaForPolicyTest(service)
-	rows := sqlmock.NewRows([]string{"id", "name", "sort", "action", "conditions", "entry_host", "resolve_entry_host", "extra_nodes", "extra_nodes_position", "enabled", "remarks", "created_at", "updated_at"}).
-		AddRow(int64(4), "ID range", int64(10), "original", `[{"field":"user_id","operator":"between","min":100,"max":200}]`, "", int64(0), `[]`, "after", int64(1), "", int64(100), int64(200))
-	mock.ExpectQuery(`SELECT p.id, p.name, p.sort, p.action, p.conditions, p.entry_host, p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at\s+FROM v2_client_entry_user_policy p\s+ORDER BY p.sort ASC NULLS LAST, p.id ASC`).
+	rows := sqlmock.NewRows([]string{"id", "name", "sort", "mode", "snapshot_from", "snapshot_to", "action", "conditions", "entry_host", "resolve_entry_host", "extra_nodes", "extra_nodes_position", "enabled", "remarks", "created_at", "updated_at"}).
+		AddRow(int64(4), "ID range", int64(10), "standard", nil, nil, "original", `[{"field":"user_id","operator":"between","min":100,"max":200}]`, "", int64(0), `[]`, "after", int64(1), "", int64(100), int64(200))
+	mock.ExpectQuery(`SELECT p.id, p.name, p.sort, p.mode, p.snapshot_from, p.snapshot_to, p.action, p.conditions, p.entry_host, p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at\s+FROM v2_client_entry_user_policy p\s+ORDER BY p.sort ASC NULLS LAST, p.id ASC`).
 		WillReturnRows(rows)
 	mock.ExpectQuery(`SELECT policy_id, server_type, server_id, sort\s+FROM v2_client_entry_user_policy_member\s+WHERE policy_id IN \(\$1\)`).
 		WithArgs(int64(4)).
@@ -165,7 +165,7 @@ func TestDBServiceSaveClientEntryUserPolicyUpdatesResolveEntryHost(t *testing.T)
 	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM "v2_server_vmess" WHERE id = \$1\)`).
 		WithArgs(int64(11)).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
-	mock.ExpectExec(`UPDATE v2_client_entry_user_policy\s+SET name = \$2, action = \$3, conditions = \$4, entry_host = \$5, resolve_entry_host = \$6, extra_nodes = \$7, extra_nodes_position = \$8, enabled = \$9, remarks = \$10, updated_at = \$11\s+WHERE id = \$1`).
+	mock.ExpectExec(`UPDATE v2_client_entry_user_policy\s+SET name = \$2, action = \$3, conditions = \$4, entry_host = \$5, resolve_entry_host = \$6, extra_nodes = \$7, extra_nodes_position = \$8, enabled = \$9, remarks = \$10, updated_at = \$11\s+WHERE id = \$1 AND mode = 'standard'`).
 		WithArgs(int64(9), "DNS entry", "override", `[]`, "entry.example.com", int64(1), `[]`, "after", int64(1), "", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`DELETE FROM v2_client_entry_user_policy_member WHERE policy_id = \$1`).

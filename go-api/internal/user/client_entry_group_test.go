@@ -18,6 +18,12 @@ func expectEnsureClientEntrySchema(mock sqlmock.Sqlmock) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy_member`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_user_subscribe_activity`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy_split_group`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_client_entry_user_policy_split_assignment`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	for _, item := range []struct {
 		table  string
@@ -34,11 +40,14 @@ func expectEnsureClientEntrySchema(mock sqlmock.Sqlmock) {
 		{"v2_client_entry_user_policy", "name"},
 		{"v2_client_entry_user_policy", "sort"},
 		{"v2_client_entry_user_policy", "action"},
+		{"v2_client_entry_user_policy", "mode"},
 		{"v2_client_entry_user_policy", "conditions"},
 		{"v2_client_entry_user_policy", "entry_host"},
 		{"v2_client_entry_user_policy", "resolve_entry_host"},
 		{"v2_client_entry_user_policy", "extra_nodes"},
 		{"v2_client_entry_user_policy", "extra_nodes_position"},
+		{"v2_client_entry_user_policy", "snapshot_from"},
+		{"v2_client_entry_user_policy", "snapshot_to"},
 		{"v2_server_shadowsocks", "client_entry_only"},
 		{"v2_server_vmess", "client_entry_only"},
 		{"v2_server_vless", "client_entry_only"},
@@ -60,6 +69,11 @@ func expectEnsureClientEntrySchema(mock sqlmock.Sqlmock) {
 		WithArgs("v2_client_entry_user_policy", "server_type").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 
+	for range 6 {
+		mock.ExpectExec(`DO \$client_entry_split\$`).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_group_member_group ON v2_client_entry_group_member\(entry_group_id\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_group_ip_group ON v2_client_entry_group_ip\(entry_group_id\)`).
@@ -69,6 +83,16 @@ func expectEnsureClientEntrySchema(mock sqlmock.Sqlmock) {
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_member_policy ON v2_client_entry_user_policy_member\(policy_id\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_member_server ON v2_client_entry_user_policy_member\(server_type, server_id\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_user_subscribe_activity_last_subscribe_at ON v2_user_subscribe_activity\(last_subscribe_at\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_group_policy ON v2_client_entry_user_policy_split_group\(policy_id, sort, id\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_group_parent ON v2_client_entry_user_policy_split_group\(parent_id\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_assignment_group ON v2_client_entry_user_policy_split_assignment\(group_id\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_assignment_user ON v2_client_entry_user_policy_split_assignment\(user_id, policy_id\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 }
 

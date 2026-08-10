@@ -41,6 +41,12 @@ func TestDeleteUsersByIDListClearsInviteUserReferencesInOrders(t *testing.T) {
 	mock.ExpectExec(`UPDATE v2_user SET invite_user_id = NULL, updated_at = \$1 WHERE invite_user_id IN \(\$2\)`).
 		WithArgs(sqlmock.AnyArg(), int64(9)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_client_entry_user_policy_split_assignment WHERE user_id IN \(\$1\)`).
+		WithArgs(int64(9)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_user_subscribe_activity WHERE user_id IN \(\$1\)`).
+		WithArgs(int64(9)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`DELETE FROM v2_user WHERE id IN \(\$1\)`).
 		WithArgs(int64(9)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
