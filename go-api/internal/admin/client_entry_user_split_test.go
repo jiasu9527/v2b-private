@@ -60,7 +60,7 @@ func TestCreateClientEntryUserPolicySplitSnapshotsAndBalancesUsers(t *testing.T)
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
 		WithArgs(int64(9), nil, "B", "B", "b.example.com", int64(20), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(102)))
-	mock.ExpectQuery(`(?s)WITH eligible AS \(.*ROW_NUMBER\(\) OVER \(ORDER BY activity.user_id ASC\).*INSERT INTO v2_client_entry_user_policy_split_assignment.*RETURNING group_id`).
+	mock.ExpectQuery(`(?s)WITH eligible AS \(.*ROW_NUMBER\(\) OVER \(ORDER BY activity.user_id ASC\).*INSERT INTO v2_client_entry_user_policy_split_assignment.*CASE WHEN position <= \(total \+ 1\) / 2 THEN \$4::BIGINT ELSE \$5::BIGINT END.*RETURNING group_id`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), int64(9), int64(101), int64(102)).
 		WillReturnRows(sqlmock.NewRows([]string{"group_id"}).AddRow(int64(101)).AddRow(int64(101)).AddRow(int64(101)).AddRow(int64(102)).AddRow(int64(102)))
 	mock.ExpectCommit()
@@ -171,7 +171,7 @@ func TestConvertClientEntryUserPolicyToSplitKeepsOnePolicyAndBalancesCurrentUser
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
 		WithArgs(int64(9), nil, "B", "B", "b.example.com", int64(20), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(102)))
-	mock.ExpectQuery(`(?s)WITH eligible AS \(.*FROM v2_user users.*WHERE users.id BETWEEN \$1 AND \$2.*INSERT INTO v2_client_entry_user_policy_split_assignment.*RETURNING group_id`).
+	mock.ExpectQuery(`(?s)WITH eligible AS \(.*FROM v2_user users.*WHERE users.id BETWEEN \$1 AND \$2.*INSERT INTO v2_client_entry_user_policy_split_assignment.*CASE WHEN position <= \(total \+ 1\) / 2 THEN \$4::BIGINT ELSE \$5::BIGINT END.*RETURNING group_id`).
 		WithArgs(int64(100), int64(200), int64(9), int64(101), int64(102), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"group_id"}).
 			AddRow(int64(101)).AddRow(int64(101)).AddRow(int64(101)).AddRow(int64(102)).AddRow(int64(102)))
@@ -294,7 +294,7 @@ func TestSplitClientEntryUserPolicyGroupKeepsParentAndMovesAssignments(t *testin
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
 		WithArgs(int64(9), int64(101), "A.2", "A.2", "a2.example.com", int64(20), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(202)))
-	mock.ExpectExec(`(?s)WITH ranked AS .*UPDATE v2_client_entry_user_policy_split_assignment assignment.*SET group_id = CASE`).
+	mock.ExpectExec(`(?s)WITH ranked AS .*UPDATE v2_client_entry_user_policy_split_assignment assignment.*SET group_id = CASE WHEN ranked.position <= \$3 THEN \$4::BIGINT ELSE \$5::BIGINT END`).
 		WithArgs(int64(9), int64(101), int64(3), int64(201), int64(202), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectExec(`UPDATE v2_client_entry_user_policy_split_group\s+SET entry_host = '', updated_at = \$2`).

@@ -114,7 +114,7 @@ VALUES ($1, $2, $3, $4, $5, $5)`, policyID, member.ServerType, member.ServerID, 
 )
 INSERT INTO v2_client_entry_user_policy_split_assignment
 (policy_id, user_id, group_id, created_at, updated_at)
-SELECT $3, user_id, CASE WHEN position <= (total + 1) / 2 THEN $4 ELSE $5 END, $2, $2
+SELECT $3, user_id, CASE WHEN position <= (total + 1) / 2 THEN $4::BIGINT ELSE $5::BIGINT END, $2, $2
 FROM eligible
 ORDER BY user_id ASC
 RETURNING group_id`, from, now, policyID, groupA, groupB)
@@ -257,7 +257,7 @@ FOR UPDATE`, req.PolicyID).Scan(&action, &conditionsRaw, &extraNodesRaw); err !=
 )
 INSERT INTO v2_client_entry_user_policy_split_assignment
 (policy_id, user_id, group_id, created_at, updated_at)
-SELECT $3, user_id, CASE WHEN position <= (total + 1) / 2 THEN $4 ELSE $5 END, $6, $6
+SELECT $3, user_id, CASE WHEN position <= (total + 1) / 2 THEN $4::BIGINT ELSE $5::BIGINT END, $6, $6
 FROM eligible
 ORDER BY user_id ASC
 RETURNING group_id`, minimum, maximum, req.PolicyID, groupA, groupB, now)
@@ -400,7 +400,7 @@ FOR UPDATE`, req.PolicyID, req.GroupID)
 	WHERE policy_id = $1 AND group_id = $2
 )
 UPDATE v2_client_entry_user_policy_split_assignment assignment
-SET group_id = CASE WHEN ranked.position <= $3 THEN $4 ELSE $5 END,
+SET group_id = CASE WHEN ranked.position <= $3 THEN $4::BIGINT ELSE $5::BIGINT END,
     updated_at = $6
 FROM ranked
 WHERE assignment.policy_id = $1 AND assignment.user_id = ranked.user_id`, req.PolicyID, req.GroupID, half, groupA, groupB, now)
