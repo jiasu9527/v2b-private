@@ -28,8 +28,9 @@ import {
   MenuOutlined,
   PlayCircleOutlined,
   PlusOutlined,
+  TeamOutlined,
 } from '@ant-design/icons';
-import { apiGet, apiPost } from '../lib/api';
+import { apiGet, apiPost, bytes } from '../lib/api';
 import { moveItem } from '../lib/drag';
 import { buildVisibleServerOptions, memberKey, splitMemberKey, type ClientEntryServerOption } from './clientEntryHelpers';
 
@@ -60,6 +61,22 @@ type SplitGroup = {
   global_sort?: number;
   user_count: number;
   is_leaf: boolean;
+};
+
+type SplitGroupUser = {
+  user_id: number;
+  email: string;
+  plan_id?: number;
+  plan_name?: string;
+  banned: number;
+  transfer_enable: number;
+  u: number;
+  d: number;
+  created_at: number;
+  expired_at?: number;
+  last_subscribe_at?: number;
+  assigned_at: number;
+  remarks?: string;
 };
 
 function isSplitPolicy(row: any) {
@@ -964,9 +981,173 @@ function RangePolicySplitConverter({ row, onDone }: { row: any; onDone: () => vo
   </>;
 }
 
+function SplitGroupUsersModal({ row, group, open, onClose }: { row: any; group: SplitGroup; open: boolean; onClose: () => void }) {
+  const [users, setUsers] = useState<SplitGroupUser[]>([]);
+  const [total, setTotal] = useState(0);
+  const [current, setCurrent] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [searchInput, setSearchInput] = useState('');
+  const [appliedSearch, setAppliedSearch] = useState('');
+  const [loading, setLoading] = useState(false);
+  const requestSequence = useRef(0);
+
+  const loadUsers = async (nextCurrent: number, nextPageSize: number, nextSearch: string) => {
+    const sequence = ++requestSequence.current;
+    setLoading(true);
+    try {
+      const response = await apiGet('/server/client-entry-user-policy/split-group-users', {
+        policy_id: row.id,
+        group_id: group.id,
+        current: nextCurrent,
+        page_size: nextPageSize,
+        search: nextSearch.trim(),
+      });
+      if (sequence !== requestSequence.current) return;
+      const nextUsers = Array.isArray(response?.data) ? response.data : [];
+      setUsers(nextUsers.map((user: any) => ({
+        ...user,
+        user_id: Number(user.user_id || 0),
+        banned: Number(user.banned || 0),
+        transfer_enable: Number(user.transfer_enable || 0),
+        u: Number(user.u || 0),
+        d: Number(user.d || 0),
+        created_at: Number(user.created_at || 0),
+        assigned_at: Number(user.assigned_at || 0),
+      })));
+      setTotal(Number(response?.total || 0));
+      setCurrent(Number(response?.current || nextCurrent));
+      setPageSize(Number(response?.page_size || nextPageSize));
+    } catch (error: any) {
+      if (sequence !== requestSequence.current) return;
+      setUsers([]);
+      setTotal(0);
+      message.error(error?.message || '读取固定名单失败');
+    } finally {
+      if (sequence === requestSequence.current) setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    setUsers([]);
+    setTotal(0);
+    setCurrent(1);
+    setPageSize(20);
+    setSearchInput('');
+    setAppliedSearch('');
+    void loadUsers(1, 20, '');
+    return () => { requestSequence.current += 1; };
+  }, [open, row.id, group.id]);
+
+  const now = Math.floor(Date.now() / 1000);
+  const columns: any[] = [
+    {
+      title: '用户',
+      key: 'user',
+      width: 280,
+      render: (_: any, user: SplitGroupUser) => <Space direction="vertical" size={2}>
+        <Typography.Text strong>#{user.user_id}</Typography.Text>
+        <Typography.Text copyable={{ text: user.email }} ellipsis={{ tooltip: user.email }} style={{ maxWidth: 235 }}>{user.email || '-'}</Typography.Text>
+      </Space>,
+    },
+    {
+      title: '套餐',
+      key: 'plan',
+      width: 160,
+      render: (_: any, user: SplitGroupUser) => user.plan_id
+        ? <Space direction="vertical" size={2}><span>{user.plan_name || `套餐 #${user.plan_id}`}</span><Typography.Text type="secondary">ID: {user.plan_id}</Typography.Text></Space>
+        : <Tag>无套餐</Tag>,
+    },
+    {
+      title: '状态',
+      key: 'status',
+      width: 100,
+      render: (_: any, user: SplitGroupUser) => Number(user.banned) !== 0
+        ? <Tag color="red">已封禁</Tag>
+        : Number(user.expired_at || 0) > 0 && Number(user.expired_at) <= now
+          ? <Tag color="orange">已过期</Tag>
+          : <Tag color="green">正常</Tag>,
+    },
+    {
+      title: '已用 / 总流量',
+      key: 'traffic',
+      width: 190,
+      render: (_: any, user: SplitGroupUser) => <Typography.Text>{bytes(Number(user.u || 0) + Number(user.d || 0))} / {bytes(user.transfer_enable)}</Typography.Text>,
+    },
+    {
+      title: '注册 / 到期',
+      key: 'lifetime',
+      width: 205,
+      render: (_: any, user: SplitGroupUser) => <Space direction="vertical" size={2}>
+        <span>注册：{formatSnapshotTime(user.created_at)}</span>
+        <span>到期：{formatSnapshotTime(user.expired_at)}</span>
+      </Space>,
+    },
+    { title: '最后订阅', dataIndex: 'last_subscribe_at', width: 170, render: formatSnapshotTime },
+    { title: '固定时间', dataIndex: 'assigned_at', width: 170, render: formatSnapshotTime },
+    {
+      title: '备注',
+      dataIndex: 'remarks',
+      width: 180,
+      render: (value: any) => value
+        ? <Typography.Text ellipsis={{ tooltip: value }} style={{ maxWidth: 150 }}>{value}</Typography.Text>
+        : '-',
+    },
+  ];
+
+  return <Modal
+    title={`${group.name || group.path} · 固定用户名单`}
+    open={open}
+    onCancel={onClose}
+    footer={null}
+    width={1280}
+    destroyOnHidden
+  >
+    <Alert
+      type="info"
+      showIcon
+      message={`${group.path} 组当前固定 ${Number(group.user_count || 0)} 个有效用户`}
+      description="名单是创建或继续二分时保存的固定快照，不会因用户后续订阅而自动换组。"
+      style={{ marginBottom: 16 }}
+    />
+    <Input.Search
+      allowClear
+      enterButton="搜索"
+      value={searchInput}
+      onChange={(event) => setSearchInput(event.target.value)}
+      onSearch={(value) => {
+        setSearchInput(value);
+        setAppliedSearch(value.trim());
+        void loadUsers(1, pageSize, value);
+      }}
+      placeholder="输入用户 ID 或邮箱"
+      style={{ width: 'min(380px, 100%)', marginBottom: 16 }}
+    />
+    <Table
+      rowKey="user_id"
+      size="small"
+      tableLayout="fixed"
+      loading={loading}
+      columns={columns}
+      dataSource={users}
+      scroll={{ x: 1455, y: 520 }}
+      pagination={{
+        current,
+        pageSize,
+        total,
+        showSizeChanger: true,
+        pageSizeOptions: [10, 20, 50, 100],
+        showTotal: (value) => `共 ${value} 人`,
+        onChange: (page, size) => { void loadUsers(page, size, appliedSearch); },
+      }}
+    />
+  </Modal>;
+}
+
 function SplitGroupRowActions({ row, group, onDone }: { row: any; group: SplitGroup; onDone: () => void | Promise<void> }) {
   const [splitOpen, setSplitOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [usersOpen, setUsersOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [splitForm] = Form.useForm();
   const [editForm] = Form.useForm();
@@ -1022,6 +1203,7 @@ function SplitGroupRowActions({ row, group, onDone }: { row: any; group: SplitGr
   return <>
     <Space className="client-entry-actions" size={10}>
       <a onClick={openEdit}><EditOutlined /> 编辑</a>
+      <a onClick={() => setUsersOpen(true)}><TeamOutlined /> 固定名单</a>
       {Number(group.user_count) >= 2
         ? <a onClick={openSplit}><BranchesOutlined /> 继续二分</a>
         : <Typography.Text type="secondary">不足 2 人</Typography.Text>}
@@ -1076,6 +1258,7 @@ function SplitGroupRowActions({ row, group, onDone }: { row: any; group: SplitGr
         </Form.Item>
       </Form>
     </Modal>
+    <SplitGroupUsersModal row={row} group={group} open={usersOpen} onClose={() => setUsersOpen(false)} />
   </>;
 }
 
@@ -1419,7 +1602,7 @@ export default function ClientEntryUserPolicyPage() {
       key: 'action',
       fixed: 'right',
       align: 'right',
-      width: 310,
+      width: 410,
       render: (_: any, row: any) => {
         if (isSplitGroupDisplayRow(row)) return <Space className="client-entry-actions" size={10}>
           <SplitGroupRowActions row={row} group={row.__split_group} onDone={load} />
@@ -1462,7 +1645,7 @@ export default function ClientEntryUserPolicyPage() {
           columns={columns}
           dataSource={rows}
           pagination={false}
-          scroll={{ x: 2405 }}
+          scroll={{ x: 2505 }}
           rowClassName={(row) => `sortable-row ${draggingKey === displayRowKey(row) ? 'dragging-row' : ''} ${isSplitGroupDisplayRow(row) ? 'split-group-main-row' : ''}`}
           onRow={(row) => ({
             draggable: true,

@@ -336,6 +336,7 @@ type Service interface {
 	ConvertClientEntryUserPolicyToSplit(ctx context.Context, req ClientEntryUserPolicySplitConvertRequest) (ClientEntryUserPolicyRecord, error)
 	SplitClientEntryUserPolicyGroup(ctx context.Context, req ClientEntryUserPolicyGroupSplitRequest) (ClientEntryUserPolicyRecord, error)
 	UpdateClientEntryUserPolicySplitGroupHost(ctx context.Context, req ClientEntryUserPolicyGroupHostUpdateRequest) (ClientEntryUserPolicyRecord, error)
+	ListClientEntryUserPolicySplitGroupUsers(ctx context.Context, req ClientEntryUserPolicySplitGroupUserListRequest) (ClientEntryUserPolicySplitGroupUserListResult, error)
 	SortClientEntryUserPolicySplitGroups(ctx context.Context, req ClientEntryUserPolicyGroupSortRequest) (bool, error)
 	MoveClientEntryUserPolicySplitGroupToRoot(ctx context.Context, req ClientEntryUserPolicyGroupMoveRequest) (bool, error)
 	SetClientEntryUserPolicyEnabled(ctx context.Context, id, enabled int64) (bool, error)
@@ -1366,6 +1367,37 @@ type ClientEntryUserPolicyGroupHostUpdateRequest struct {
 	GroupID   int64
 	Name      string
 	EntryHost string
+}
+
+type ClientEntryUserPolicySplitGroupUserListRequest struct {
+	PolicyID int64
+	GroupID  int64
+	Current  int64
+	PageSize int64
+	Search   string
+}
+
+type ClientEntryUserPolicySplitGroupUserRecord struct {
+	UserID          int64  `json:"user_id"`
+	Email           string `json:"email"`
+	PlanID          *int64 `json:"plan_id"`
+	PlanName        string `json:"plan_name"`
+	Banned          int64  `json:"banned"`
+	TransferEnable  int64  `json:"transfer_enable"`
+	Upload          int64  `json:"u"`
+	Download        int64  `json:"d"`
+	CreatedAt       int64  `json:"created_at"`
+	ExpiredAt       *int64 `json:"expired_at"`
+	LastSubscribeAt *int64 `json:"last_subscribe_at"`
+	AssignedAt      int64  `json:"assigned_at"`
+	Remarks         string `json:"remarks"`
+}
+
+type ClientEntryUserPolicySplitGroupUserListResult struct {
+	Data     []ClientEntryUserPolicySplitGroupUserRecord `json:"data"`
+	Total    int64                                       `json:"total"`
+	Current  int64                                       `json:"current"`
+	PageSize int64                                       `json:"page_size"`
 }
 
 type ClientEntryUserPolicyGroupSortRequest struct {

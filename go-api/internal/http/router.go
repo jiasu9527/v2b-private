@@ -742,6 +742,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminClientEntryUserPolicySplitGroupHost(w, r, state.session, state.admin) {
 				return
 			}
+		case r.URL.Path == adminPrefix+"/server/client-entry-user-policy/split-group-users":
+			if handleAdminClientEntryUserPolicySplitGroupUsers(w, r, state.session, state.admin) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/server/client-entry-user-policy/split-group-sort":
 			if handleAdminClientEntryUserPolicySplitGroupSort(w, r, state.session, state.admin) {
 				return

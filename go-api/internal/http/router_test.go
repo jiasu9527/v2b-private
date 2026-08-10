@@ -910,6 +910,8 @@ type fakeAdminService struct {
 	lastClientEntrySplitConvert   admin.ClientEntryUserPolicySplitConvertRequest
 	lastClientEntryGroupSplit     admin.ClientEntryUserPolicyGroupSplitRequest
 	lastClientEntryGroupHost      admin.ClientEntryUserPolicyGroupHostUpdateRequest
+	clientEntryGroupUsers         admin.ClientEntryUserPolicySplitGroupUserListResult
+	lastClientEntryGroupUsers     admin.ClientEntryUserPolicySplitGroupUserListRequest
 	lastClientEntryGroupSort      admin.ClientEntryUserPolicyGroupSortRequest
 	lastClientEntryGroupMove      admin.ClientEntryUserPolicyGroupMoveRequest
 	lastClientEntryPolicyEnabled  [2]int64
@@ -1166,6 +1168,11 @@ func (f *fakeAdminService) SplitClientEntryUserPolicyGroup(_ context.Context, re
 func (f *fakeAdminService) UpdateClientEntryUserPolicySplitGroupHost(_ context.Context, req admin.ClientEntryUserPolicyGroupHostUpdateRequest) (admin.ClientEntryUserPolicyRecord, error) {
 	f.lastClientEntryGroupHost = req
 	return f.clientEntrySplitPolicy, f.err
+}
+
+func (f *fakeAdminService) ListClientEntryUserPolicySplitGroupUsers(_ context.Context, req admin.ClientEntryUserPolicySplitGroupUserListRequest) (admin.ClientEntryUserPolicySplitGroupUserListResult, error) {
+	f.lastClientEntryGroupUsers = req
+	return f.clientEntryGroupUsers, f.err
 }
 
 func (f *fakeAdminService) SortClientEntryUserPolicySplitGroups(_ context.Context, req admin.ClientEntryUserPolicyGroupSortRequest) (bool, error) {
@@ -4416,6 +4423,9 @@ func TestRouterAdminClientEntryUserPolicySplitEndpoints(t *testing.T) {
 	adminService := &fakeAdminService{
 		clientEntrySplitPreview: admin.ClientEntryUserPolicySplitPreviewResult{Minutes: 60, From: 100, To: 200, UserCount: 5},
 		clientEntrySplitPolicy:  admin.ClientEntryUserPolicyRecord{ID: 9, Mode: admin.ClientEntryUserPolicyModeSplit},
+		clientEntryGroupUsers: admin.ClientEntryUserPolicySplitGroupUserListResult{
+			Data: []admin.ClientEntryUserPolicySplitGroupUserRecord{{UserID: 1001, Email: "demo@example.com"}}, Total: 21, Current: 2, PageSize: 20,
+		},
 	}
 	router := NewRouter(
 		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
@@ -4475,6 +4485,19 @@ func TestRouterAdminClientEntryUserPolicySplitEndpoints(t *testing.T) {
 	}
 	if adminService.lastClientEntryPolicyEnabled != [2]int64{9, 0} {
 		t.Fatalf("enabled request = %#v", adminService.lastClientEntryPolicyEnabled)
+	}
+
+	usersReq := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/server/client-entry-user-policy/split-group-users?auth_data=jwt-admin&policy_id=9&group_id=21&current=2&page_size=20&search=demo", nil)
+	usersRec := httptest.NewRecorder()
+	router.ServeHTTP(usersRec, usersReq)
+	if usersRec.Code != http.StatusOK || !strings.Contains(usersRec.Body.String(), `"email":"demo@example.com"`) || !strings.Contains(usersRec.Body.String(), `"total":21`) {
+		t.Fatalf("group users: status=%d body=%s", usersRec.Code, usersRec.Body.String())
+	}
+	if cacheControl := usersRec.Header().Get("Cache-Control"); !strings.Contains(cacheControl, "no-store") {
+		t.Fatalf("group users Cache-Control = %q", cacheControl)
+	}
+	if got := adminService.lastClientEntryGroupUsers; got.PolicyID != 9 || got.GroupID != 21 || got.Current != 2 || got.PageSize != 20 || got.Search != "demo" {
+		t.Fatalf("group users request = %#v", got)
 	}
 }
 

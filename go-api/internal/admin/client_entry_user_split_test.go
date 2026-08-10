@@ -573,6 +573,72 @@ func TestUpdateClientEntryUserPolicySplitGroupDetailsRejectsBlankName(t *testing
 	}
 }
 
+func TestListClientEntryUserPolicySplitGroupUsersReturnsPagedDetails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db}
+	readyClientEntrySchemaForPolicyTest(service)
+
+	mock.ExpectQuery(`(?s)SELECT EXISTS \(.*v2_client_entry_user_policy_split_group split_group.*split_group.id = \$1 AND split_group.policy_id = \$2.*policy.mode = 'split'.*NOT EXISTS`).
+		WithArgs(int64(201), int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`(?s)SELECT COUNT\(\*\)::BIGINT.*v2_client_entry_user_policy_split_assignment assignment.*assignment.policy_id = \$1 AND assignment.group_id = \$2.*users.id = \$3.*users.email ILIKE \$4`).
+		WithArgs(int64(9), int64(201), int64(0), "%demo%").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(21)))
+	rows := sqlmock.NewRows([]string{
+		"id", "email", "plan_id", "plan_name", "banned", "transfer_enable", "u", "d", "created_at", "expired_at", "last_subscribe_at", "assigned_at", "remarks",
+	}).AddRow(
+		int64(1001), "demo@example.com", int64(2), "高级套餐", int64(0), int64(1000), int64(100), int64(200), int64(1700000000), int64(1800000000), int64(1750000000), int64(1740000000), "排查",
+	)
+	mock.ExpectQuery(`(?s)SELECT users.id, users.email, users.plan_id.*LEFT JOIN v2_user_subscribe_activity activity.*assignment.policy_id = \$1 AND assignment.group_id = \$2.*users.id = \$3.*users.email ILIKE \$4.*ORDER BY CASE WHEN \$5::TEXT.*users.id ASC.*LIMIT \$6 OFFSET \$7`).
+		WithArgs(int64(9), int64(201), int64(0), "%demo%", "demo", int64(20), int64(20)).
+		WillReturnRows(rows)
+
+	result, err := service.ListClientEntryUserPolicySplitGroupUsers(context.Background(), ClientEntryUserPolicySplitGroupUserListRequest{
+		PolicyID: 9, GroupID: 201, Current: 2, PageSize: 20, Search: " demo ",
+	})
+	if err != nil {
+		t.Fatalf("list fixed users: %v", err)
+	}
+	if result.Total != 21 || result.Current != 2 || result.PageSize != 20 || len(result.Data) != 1 {
+		t.Fatalf("unexpected fixed user result: %#v", result)
+	}
+	user := result.Data[0]
+	if user.UserID != 1001 || user.Email != "demo@example.com" || user.PlanID == nil || *user.PlanID != 2 || user.PlanName != "高级套餐" || user.LastSubscribeAt == nil || *user.LastSubscribeAt != 1750000000 || user.AssignedAt != 1740000000 {
+		t.Fatalf("unexpected fixed user detail: %#v", user)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestNormalizeSplitGroupUserSearch(t *testing.T) {
+	tests := []struct {
+		name        string
+		search      string
+		wantID      int64
+		wantPattern string
+		wantExact   string
+	}{
+		{name: "empty", search: "", wantID: 0},
+		{name: "numeric ID", search: "123", wantID: 123},
+		{name: "invalid numeric ID", search: "0", wantID: -1},
+		{name: "exact and fuzzy email", search: "demo@example.com", wantPattern: "%demo@example.com%", wantExact: "demo@example.com"},
+		{name: "literal LIKE metacharacters", search: `100%_test\mail@example.com`, wantPattern: `%100\%\_test\\mail@example.com%`, wantExact: `100%_test\mail@example.com`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gotID, gotPattern, gotExact := normalizeSplitGroupUserSearch(test.search)
+			if gotID != test.wantID || gotPattern != test.wantPattern || gotExact != test.wantExact {
+				t.Fatalf("normalize search = (%d, %q, %q), want (%d, %q, %q)", gotID, gotPattern, gotExact, test.wantID, test.wantPattern, test.wantExact)
+			}
+		})
+	}
+}
+
 func TestSetClientEntryUserPolicyEnabledValidatesAndPersistsValue(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

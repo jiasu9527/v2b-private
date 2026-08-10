@@ -499,6 +499,158 @@ WHERE split_group.id = $1 AND split_group.policy_id = $2
 	return ClientEntryUserPolicyRecord{ID: req.PolicyID, Mode: ClientEntryUserPolicyModeSplit}, nil
 }
 
+func (s *DBService) ListClientEntryUserPolicySplitGroupUsers(ctx context.Context, req ClientEntryUserPolicySplitGroupUserListRequest) (ClientEntryUserPolicySplitGroupUserListResult, error) {
+	if s.db == nil {
+		return ClientEntryUserPolicySplitGroupUserListResult{}, ErrUnavailable
+	}
+	if err := s.ensureClientEntrySchema(ctx); err != nil {
+		return ClientEntryUserPolicySplitGroupUserListResult{}, err
+	}
+	if req.PolicyID <= 0 || req.GroupID <= 0 {
+		return ClientEntryUserPolicySplitGroupUserListResult{}, errors.New("二分组不存在")
+	}
+	current := req.Current
+	if current <= 0 {
+		current = 1
+	}
+	pageSize := req.PageSize
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize < 10 {
+		pageSize = 10
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	search := strings.TrimSpace(req.Search)
+	if len([]rune(search)) > 255 {
+		return ClientEntryUserPolicySplitGroupUserListResult{}, errors.New("搜索内容不能超过 255 个字符")
+	}
+	searchID, searchPattern, exactEmail := normalizeSplitGroupUserSearch(search)
+
+	var groupExists bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (
+	SELECT 1
+	FROM v2_client_entry_user_policy_split_group split_group
+	JOIN v2_client_entry_user_policy policy ON policy.id = split_group.policy_id
+	WHERE split_group.id = $1 AND split_group.policy_id = $2 AND policy.mode = 'split'
+	  AND NOT EXISTS (
+		SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = split_group.id
+	  )
+)`, req.GroupID, req.PolicyID).Scan(&groupExists); err != nil {
+		return ClientEntryUserPolicySplitGroupUserListResult{}, fmt.Errorf("校验固定名单分组失败: %w", err)
+	}
+	if !groupExists {
+		return ClientEntryUserPolicySplitGroupUserListResult{}, errors.New("只能查看当前叶子组的固定名单")
+	}
+
+	result := ClientEntryUserPolicySplitGroupUserListResult{
+		Data:     []ClientEntryUserPolicySplitGroupUserRecord{},
+		Current:  current,
+		PageSize: pageSize,
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*)::BIGINT
+FROM v2_client_entry_user_policy_split_assignment assignment
+JOIN v2_user users ON users.id = assignment.user_id
+WHERE assignment.policy_id = $1 AND assignment.group_id = $2
+  AND ($3::BIGINT = 0 OR users.id = $3)
+  AND ($4::TEXT = '' OR users.email ILIKE $4 ESCAPE E'\\')`, req.PolicyID, req.GroupID, searchID, searchPattern).Scan(&result.Total); err != nil {
+		return ClientEntryUserPolicySplitGroupUserListResult{}, fmt.Errorf("统计固定名单失败: %w", err)
+	}
+	if result.Total == 0 {
+		result.Current = 1
+		return result, nil
+	}
+	lastPage := (result.Total + pageSize - 1) / pageSize
+	if current > lastPage {
+		current = lastPage
+		result.Current = current
+	}
+
+	offset := (current - 1) * pageSize
+	rows, err := s.db.QueryContext(ctx, `SELECT users.id, users.email, users.plan_id, COALESCE(plan.name, ''),
+       users.banned, users.transfer_enable, users.u, users.d, users.created_at, users.expired_at,
+       activity.last_subscribe_at, assignment.updated_at, COALESCE(users.remarks, '')
+FROM v2_client_entry_user_policy_split_assignment assignment
+JOIN v2_user users ON users.id = assignment.user_id
+LEFT JOIN v2_plan plan ON plan.id = users.plan_id
+LEFT JOIN v2_user_subscribe_activity activity ON activity.user_id = users.id
+WHERE assignment.policy_id = $1 AND assignment.group_id = $2
+  AND ($3::BIGINT = 0 OR users.id = $3)
+  AND ($4::TEXT = '' OR users.email ILIKE $4 ESCAPE E'\\')
+ORDER BY CASE WHEN $5::TEXT <> '' AND LOWER(users.email) = LOWER($5) THEN 0 ELSE 1 END, users.id ASC
+LIMIT $6 OFFSET $7`, req.PolicyID, req.GroupID, searchID, searchPattern, exactEmail, pageSize, offset)
+	if err != nil {
+		return ClientEntryUserPolicySplitGroupUserListResult{}, fmt.Errorf("查询固定名单失败: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			record          ClientEntryUserPolicySplitGroupUserRecord
+			planID          sql.NullInt64
+			expiredAt       sql.NullInt64
+			lastSubscribeAt sql.NullInt64
+		)
+		if err := rows.Scan(
+			&record.UserID,
+			&record.Email,
+			&planID,
+			&record.PlanName,
+			&record.Banned,
+			&record.TransferEnable,
+			&record.Upload,
+			&record.Download,
+			&record.CreatedAt,
+			&expiredAt,
+			&lastSubscribeAt,
+			&record.AssignedAt,
+			&record.Remarks,
+		); err != nil {
+			return ClientEntryUserPolicySplitGroupUserListResult{}, fmt.Errorf("读取固定名单失败: %w", err)
+		}
+		if planID.Valid {
+			value := planID.Int64
+			record.PlanID = &value
+		}
+		if expiredAt.Valid {
+			value := expiredAt.Int64
+			record.ExpiredAt = &value
+		}
+		if lastSubscribeAt.Valid {
+			value := lastSubscribeAt.Int64
+			record.LastSubscribeAt = &value
+		}
+		result.Data = append(result.Data, record)
+	}
+	if err := rows.Err(); err != nil {
+		return ClientEntryUserPolicySplitGroupUserListResult{}, fmt.Errorf("遍历固定名单失败: %w", err)
+	}
+	return result, nil
+}
+
+func normalizeSplitGroupUserSearch(search string) (int64, string, string) {
+	if search == "" {
+		return 0, "", ""
+	}
+	onlyDigits := true
+	for _, character := range search {
+		if character < '0' || character > '9' {
+			onlyDigits = false
+			break
+		}
+	}
+	if onlyDigits {
+		userID, err := strconv.ParseInt(search, 10, 64)
+		if err != nil || userID <= 0 {
+			return -1, "", ""
+		}
+		return userID, "", ""
+	}
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(search)
+	return 0, "%" + escaped + "%", search
+}
+
 func (s *DBService) SortClientEntryUserPolicySplitGroups(ctx context.Context, req ClientEntryUserPolicyGroupSortRequest) (bool, error) {
 	if s.db == nil {
 		return false, ErrUnavailable

@@ -203,6 +203,61 @@ func handleAdminClientEntryUserPolicySplitGroupHost(w http.ResponseWriter, r *ht
 	return true
 }
 
+func handleAdminClientEntryUserPolicySplitGroupUsers(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	disableResponseCache(w)
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"message": "请求方式不支持"})
+		return true
+	}
+	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+	inputs, err := readInputs(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+	policyID, policyErr := strconv.ParseInt(strings.TrimSpace(inputs["policy_id"]), 10, 64)
+	groupID, groupErr := strconv.ParseInt(strings.TrimSpace(inputs["group_id"]), 10, 64)
+	if policyErr != nil || groupErr != nil || policyID <= 0 || groupID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "二分组不存在"})
+		return true
+	}
+	current := int64(1)
+	if raw := strings.TrimSpace(inputs["current"]); raw != "" {
+		current, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || current <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": "页码无效"})
+			return true
+		}
+	}
+	pageSize := int64(20)
+	if raw := strings.TrimSpace(inputs["page_size"]); raw != "" {
+		pageSize, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || pageSize <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": "每页数量无效"})
+			return true
+		}
+	}
+	result, err := adminService.ListClientEntryUserPolicySplitGroupUsers(r.Context(), admin.ClientEntryUserPolicySplitGroupUserListRequest{
+		PolicyID: policyID,
+		GroupID:  groupID,
+		Current:  current,
+		PageSize: pageSize,
+		Search:   strings.TrimSpace(inputs["search"]),
+	})
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	writeJSON(w, http.StatusOK, result)
+	return true
+}
+
 func handleAdminClientEntryUserPolicySplitGroupSort(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
