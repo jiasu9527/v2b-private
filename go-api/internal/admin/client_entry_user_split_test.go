@@ -316,6 +316,45 @@ func TestSplitClientEntryUserPolicyGroupKeepsParentAndMovesAssignments(t *testin
 	}
 }
 
+func TestSortClientEntryUserPolicySplitGroupsRequiresExactLeafSet(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db}
+	readyClientEntrySchemaForPolicyTest(service)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id FROM v2_client_entry_user_policy\s+WHERE id = \$1 AND mode = 'split'\s+FOR UPDATE`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+	mock.ExpectQuery(`(?s)SELECT split_group.id.*FROM v2_client_entry_user_policy_split_group split_group.*split_group.policy_id = \$1.*NOT EXISTS.*ORDER BY split_group.id ASC.*FOR UPDATE OF split_group`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(201)).AddRow(int64(202)))
+	mock.ExpectExec(`(?s)UPDATE v2_client_entry_user_policy_split_group split_group.*SET sort = \$3, updated_at = \$4.*split_group.id = \$1 AND split_group.policy_id = \$2.*NOT EXISTS`).
+		WithArgs(int64(202), int64(9), int64(10), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`(?s)UPDATE v2_client_entry_user_policy_split_group split_group.*SET sort = \$3, updated_at = \$4.*split_group.id = \$1 AND split_group.policy_id = \$2.*NOT EXISTS`).
+		WithArgs(int64(201), int64(9), int64(20), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE v2_client_entry_user_policy SET updated_at = \$2 WHERE id = \$1 AND mode = 'split'`).
+		WithArgs(int64(9), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	ok, err := service.SortClientEntryUserPolicySplitGroups(context.Background(), ClientEntryUserPolicyGroupSortRequest{
+		PolicyID: 9,
+		IDs:      []int64{202, 201},
+	})
+	if err != nil || !ok {
+		t.Fatalf("sort split groups: ok=%v err=%v", ok, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func TestListClientEntryUserPoliciesIncludesSplitTreeAndSnapshotCount(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

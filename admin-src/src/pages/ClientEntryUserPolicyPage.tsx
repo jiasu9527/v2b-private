@@ -56,6 +56,7 @@ type SplitGroup = {
   name: string;
   path: string;
   entry_host: string;
+  sort: number;
   user_count: number;
   is_leaf: boolean;
 };
@@ -68,6 +69,17 @@ function formatSnapshotTime(value: any) {
   const timestamp = Number(value);
   if (!Number.isFinite(timestamp) || timestamp <= 0) return '-';
   return new Date(timestamp * 1000).toLocaleString();
+}
+
+function sortSplitLeaves(groups: SplitGroup[]) {
+  return groups
+    .filter((group) => group.is_leaf)
+    .slice()
+    .sort((left, right) => {
+      const sortDifference = Number(left.sort || 0) - Number(right.sort || 0);
+      if (sortDifference !== 0) return sortDifference;
+      return String(left.path).localeCompare(String(right.path), undefined, { numeric: true });
+    });
 }
 
 const fieldOptions = [
@@ -922,15 +934,65 @@ function RangePolicySplitConverter({ row, onDone }: { row: any; onDone: () => vo
 function SplitGroupManager({ row, onDone }: { row: any; onDone: () => void }) {
   const [splitGroup, setSplitGroup] = useState<SplitGroup>();
   const [editGroup, setEditGroup] = useState<SplitGroup>();
+  const [managerOpen, setManagerOpen] = useState(false);
+  const [orderedLeaves, setOrderedLeaves] = useState<SplitGroup[]>([]);
+  const [draggingGroupID, setDraggingGroupID] = useState<number>();
+  const [dropTargetGroupID, setDropTargetGroupID] = useState<number>();
   const [saving, setSaving] = useState(false);
+  const [sorting, setSorting] = useState(false);
   const [splitForm] = Form.useForm();
   const [editForm] = Form.useForm();
   const groups = (Array.isArray(row?.split_groups) ? row.split_groups : []) as SplitGroup[];
-  const leaves = groups.filter((group) => group.is_leaf).sort((left, right) => String(left.path).localeCompare(String(right.path), undefined, { numeric: true }));
+  const leaves = sortSplitLeaves(groups);
+
+  useEffect(() => {
+    setOrderedLeaves(sortSplitLeaves(groups));
+  }, [row?.split_groups]);
 
   const openSplit = (group: SplitGroup) => {
     splitForm.resetFields();
     setSplitGroup(group);
+  };
+
+  const openManager = () => {
+    setOrderedLeaves(sortSplitLeaves(groups));
+    setManagerOpen(true);
+  };
+
+  const handleGroupDrop = async (targetGroup: SplitGroup) => {
+    if (draggingGroupID === undefined || draggingGroupID === targetGroup.id || sorting) {
+      setDraggingGroupID(undefined);
+      setDropTargetGroupID(undefined);
+      return;
+    }
+    const fromIndex = orderedLeaves.findIndex((group) => group.id === draggingGroupID);
+    const toIndex = orderedLeaves.findIndex((group) => group.id === targetGroup.id);
+    if (fromIndex < 0 || toIndex < 0) {
+      setDraggingGroupID(undefined);
+      setDropTargetGroupID(undefined);
+      return;
+    }
+    const previous = orderedLeaves;
+    const next = moveItem(orderedLeaves, fromIndex, toIndex).map((group, index) => ({
+      ...group,
+      sort: (index + 1) * 10,
+    }));
+    setOrderedLeaves(next);
+    setDraggingGroupID(undefined);
+    setDropTargetGroupID(undefined);
+    setSorting(true);
+    try {
+      await apiPost('/server/client-entry-user-policy/split-group-sort', {
+        policy_id: row.id,
+        ids: next.map((group) => group.id),
+      });
+      message.success('二分组顺序已保存');
+    } catch (error: any) {
+      setOrderedLeaves(previous);
+      message.error(error?.message || '二分组排序保存失败');
+    } finally {
+      setSorting(false);
+    }
   };
   const openEdit = (group: SplitGroup) => {
     editForm.resetFields();
@@ -980,28 +1042,72 @@ function SplitGroupManager({ row, onDone }: { row: any; onDone: () => void }) {
   };
 
   return <>
-    <details className="client-entry-members">
-      <summary>{leaves.length} 个当前分组 · {Number(row?.snapshot_user_count || 0)} 人</summary>
-      <div style={{ marginTop: 8, width: 360, maxHeight: 260, overflow: 'auto' }}>
-        {leaves.map((group) => <Card key={group.id} size="small" style={{ marginBottom: 8 }} styles={{ body: { padding: 10 } }}>
-          <Space direction="vertical" size={5} style={{ width: '100%' }}>
-            <Space wrap>
-              <Tag color="purple">{group.path} 组</Tag>
-              <Tag>{Number(group.user_count || 0)} 人</Tag>
-            </Space>
-            <Typography.Text code copyable={{ text: String(group.entry_host || '') }} ellipsis={{ tooltip: group.entry_host }} style={{ maxWidth: 325 }}>
-              {group.entry_host || '-'}
-            </Typography.Text>
-            <Space size={12}>
-              <a onClick={(event) => { event.stopPropagation(); openEdit(group); }}><EditOutlined /> 修改入口</a>
+    <Space direction="vertical" size={4}>
+      <Button type="link" size="small" icon={<BranchesOutlined />} onClick={(event) => { event.stopPropagation(); openManager(); }}>
+        管理 {leaves.length} 个二分组
+      </Button>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        {Number(row?.snapshot_user_count || 0)} 人 · 独立排序
+      </Typography.Text>
+    </Space>
+
+    <Modal
+      title={`管理“${String(row?.name || `规则 #${row?.id}`)}”二分组`}
+      open={managerOpen}
+      onCancel={() => setManagerOpen(false)}
+      footer={null}
+      width={920}
+      destroyOnHidden
+    >
+      <Table
+        className="split-group-manager-table"
+        rowKey="id"
+        size="small"
+        tableLayout="fixed"
+        pagination={false}
+        loading={sorting}
+        dataSource={orderedLeaves}
+        columns={[
+          {
+            title: '顺序',
+            key: 'sort',
+            width: 82,
+            render: (_: any, group: SplitGroup, index: number) => <Space size={6}><MenuOutlined className="drag-handle" title="拖动调整分组顺序" /><span>{index + 1}</span></Space>,
+          },
+          {
+            title: '分组',
+            key: 'group',
+            width: 160,
+            render: (_: any, group: SplitGroup) => <Space wrap><Tag color="purple">{group.path} 组</Tag><Tag>{Number(group.user_count || 0)} 人</Tag></Space>,
+          },
+          {
+            title: '入口地址',
+            dataIndex: 'entry_host',
+            render: (value: any) => <Typography.Text code copyable={{ text: String(value || '') }} ellipsis={{ tooltip: value }} style={{ maxWidth: 360 }}>{value || '-'}</Typography.Text>,
+          },
+          {
+            title: '操作',
+            key: 'action',
+            width: 190,
+            render: (_: any, group: SplitGroup) => <Space size={10} className="client-entry-actions">
+              <a onClick={() => openEdit(group)}><EditOutlined /> 修改入口</a>
               {Number(group.user_count) >= 2
-                ? <a onClick={(event) => { event.stopPropagation(); openSplit(group); }}><BranchesOutlined /> 继续二分</a>
+                ? <a onClick={() => openSplit(group)}><BranchesOutlined /> 继续二分</a>
                 : <Typography.Text type="secondary">不足 2 人</Typography.Text>}
-            </Space>
-          </Space>
-        </Card>)}
-      </div>
-    </details>
+            </Space>,
+          },
+        ]}
+        rowClassName={(group: SplitGroup) => `split-group-sort-row ${draggingGroupID === group.id ? 'dragging-row' : ''} ${dropTargetGroupID === group.id ? 'split-group-drop-target' : ''}`}
+        onRow={(group: SplitGroup) => ({
+          draggable: !sorting,
+          onDragStart: () => setDraggingGroupID(group.id),
+          onDragEnter: () => setDropTargetGroupID(group.id),
+          onDragOver: (event) => event.preventDefault(),
+          onDrop: () => handleGroupDrop(group),
+          onDragEnd: () => { setDraggingGroupID(undefined); setDropTargetGroupID(undefined); },
+        })}
+      />
+    </Modal>
 
     <Modal
       title={`继续二分 ${splitGroup?.path || ''} 组`}
@@ -1182,6 +1288,7 @@ export default function ClientEntryUserPolicyPage() {
           policy_id: Number(group.policy_id),
           parent_id: group.parent_id === undefined || group.parent_id === null ? undefined : Number(group.parent_id),
           user_count: Number(group.user_count || 0),
+          sort: Number(group.sort || 0),
           is_leaf: group.is_leaf === true || Number(group.is_leaf) !== 0,
         })) : [],
         conditions: parseConditions(row.conditions),

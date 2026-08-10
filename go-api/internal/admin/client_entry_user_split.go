@@ -471,6 +471,100 @@ WHERE split_group.id = $1 AND split_group.policy_id = $2
 	return ClientEntryUserPolicyRecord{ID: req.PolicyID, Mode: ClientEntryUserPolicyModeSplit}, nil
 }
 
+func (s *DBService) SortClientEntryUserPolicySplitGroups(ctx context.Context, req ClientEntryUserPolicyGroupSortRequest) (bool, error) {
+	if s.db == nil {
+		return false, ErrUnavailable
+	}
+	if err := s.ensureClientEntrySchema(ctx); err != nil {
+		return false, err
+	}
+	if req.PolicyID <= 0 || len(req.IDs) == 0 {
+		return false, errors.New("二分组顺序无效")
+	}
+	seen := make(map[int64]struct{}, len(req.IDs))
+	for _, id := range req.IDs {
+		if id <= 0 {
+			return false, errors.New("二分组顺序无效")
+		}
+		if _, exists := seen[id]; exists {
+			return false, errors.New("二分组顺序包含重复项")
+		}
+		seen[id] = struct{}{}
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, errors.New("保存二分组排序失败")
+	}
+	defer tx.Rollback()
+
+	var policyID int64
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM v2_client_entry_user_policy
+WHERE id = $1 AND mode = 'split'
+FOR UPDATE`, req.PolicyID).Scan(&policyID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, errors.New("二分规则不存在")
+		}
+		return false, errors.New("保存二分组排序失败")
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT split_group.id
+FROM v2_client_entry_user_policy_split_group split_group
+WHERE split_group.policy_id = $1
+  AND NOT EXISTS (
+	SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = split_group.id
+  )
+ORDER BY split_group.id ASC
+FOR UPDATE OF split_group`, req.PolicyID)
+	if err != nil {
+		return false, errors.New("保存二分组排序失败")
+	}
+	actual := make(map[int64]struct{}, len(req.IDs))
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return false, errors.New("保存二分组排序失败")
+		}
+		actual[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return false, errors.New("保存二分组排序失败")
+	}
+	if err := rows.Close(); err != nil {
+		return false, errors.New("保存二分组排序失败")
+	}
+	if len(actual) != len(seen) {
+		return false, errors.New("二分组列表已变化，请刷新后重试")
+	}
+	for id := range seen {
+		if _, exists := actual[id]; !exists {
+			return false, errors.New("二分组列表已变化，请刷新后重试")
+		}
+	}
+
+	now := time.Now().Unix()
+	for index, id := range req.IDs {
+		result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy_split_group split_group
+SET sort = $3, updated_at = $4
+WHERE split_group.id = $1 AND split_group.policy_id = $2
+  AND NOT EXISTS (
+	SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = split_group.id
+  )`, id, req.PolicyID, int64(index+1)*clientEntryRuleSortStep, now)
+		if err != nil || requireClientEntryRuleAffected(result, "二分组") != nil {
+			return false, errors.New("保存二分组排序失败")
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy SET updated_at = $2 WHERE id = $1 AND mode = 'split'`, req.PolicyID, now); err != nil {
+		return false, errors.New("保存二分组排序失败")
+	}
+	if err := tx.Commit(); err != nil {
+		return false, errors.New("保存二分组排序失败")
+	}
+	s.markClientEntryMonitorTargetsDirty()
+	return true, nil
+}
+
 func (s *DBService) SetClientEntryUserPolicyEnabled(ctx context.Context, id, enabled int64) (bool, error) {
 	if s.db == nil {
 		return false, ErrUnavailable
@@ -520,7 +614,7 @@ LEFT JOIN v2_client_entry_user_policy_split_assignment assignment
 LEFT JOIN v2_user users ON users.id = assignment.user_id
 WHERE split_group.policy_id IN (`+strings.Join(placeholders, ",")+`)
 GROUP BY split_group.id
-ORDER BY split_group.policy_id ASC, split_group.path ASC, split_group.sort ASC, split_group.id ASC`, args...)
+ORDER BY split_group.policy_id ASC, is_leaf DESC, split_group.sort ASC, split_group.path ASC, split_group.id ASC`, args...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("query client entry split groups: %w", err)
 	}

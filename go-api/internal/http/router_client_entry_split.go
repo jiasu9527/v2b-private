@@ -202,6 +202,49 @@ func handleAdminClientEntryUserPolicySplitGroupHost(w http.ResponseWriter, r *ht
 	return true
 }
 
+func handleAdminClientEntryUserPolicySplitGroupSort(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"message": "请求方式不支持"})
+		return true
+	}
+	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+	var payload struct {
+		PolicyID *json.Number  `json:"policy_id"`
+		IDs      []json.Number `json:"ids"`
+	}
+	if err := readJSONBody(r, &payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+	policyID, err := jsonNumberToInt64Pointer(payload.PolicyID)
+	if err != nil || policyID == nil || *policyID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "二分规则不存在"})
+		return true
+	}
+	ids := make([]int64, 0, len(payload.IDs))
+	for _, raw := range payload.IDs {
+		id, err := strconv.ParseInt(strings.TrimSpace(raw.String()), 10, 64)
+		if err != nil || id <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": "二分组顺序无效"})
+			return true
+		}
+		ids = append(ids, id)
+	}
+	result, err := adminService.SortClientEntryUserPolicySplitGroups(r.Context(), admin.ClientEntryUserPolicyGroupSortRequest{PolicyID: *policyID, IDs: ids})
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": result})
+	return true
+}
+
 func handleAdminClientEntryUserPolicyEnabled(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
 	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
 		return true

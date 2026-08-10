@@ -910,6 +910,7 @@ type fakeAdminService struct {
 	lastClientEntrySplitConvert   admin.ClientEntryUserPolicySplitConvertRequest
 	lastClientEntryGroupSplit     admin.ClientEntryUserPolicyGroupSplitRequest
 	lastClientEntryGroupHost      admin.ClientEntryUserPolicyGroupHostUpdateRequest
+	lastClientEntryGroupSort      admin.ClientEntryUserPolicyGroupSortRequest
 	lastClientEntryPolicyEnabled  [2]int64
 	lastClientEntryUserPolicySort []int64
 	lastClientEntryUserPolicyDrop int64
@@ -1164,6 +1165,11 @@ func (f *fakeAdminService) SplitClientEntryUserPolicyGroup(_ context.Context, re
 func (f *fakeAdminService) UpdateClientEntryUserPolicySplitGroupHost(_ context.Context, req admin.ClientEntryUserPolicyGroupHostUpdateRequest) (admin.ClientEntryUserPolicyRecord, error) {
 	f.lastClientEntryGroupHost = req
 	return f.clientEntrySplitPolicy, f.err
+}
+
+func (f *fakeAdminService) SortClientEntryUserPolicySplitGroups(_ context.Context, req admin.ClientEntryUserPolicyGroupSortRequest) (bool, error) {
+	f.lastClientEntryGroupSort = req
+	return true, f.err
 }
 
 func (f *fakeAdminService) SetClientEntryUserPolicyEnabled(_ context.Context, id, enabled int64) (bool, error) {
@@ -4432,6 +4438,7 @@ func TestRouterAdminClientEntryUserPolicySplitEndpoints(t *testing.T) {
 	}{
 		{"split-group", `{"policy_id":9,"group_id":20,"entry_host_a":"a1.example.com","entry_host_b":"a2.example.com"}`},
 		{"split-group-host", `{"policy_id":9,"group_id":21,"entry_host":"new.example.com"}`},
+		{"split-group-sort", `{"policy_id":9,"ids":[22,21]}`},
 		{"enabled", `{"id":9,"enabled":0}`},
 	}
 	for _, item := range requests {
@@ -4448,6 +4455,9 @@ func TestRouterAdminClientEntryUserPolicySplitEndpoints(t *testing.T) {
 	}
 	if adminService.lastClientEntryGroupHost.PolicyID != 9 || adminService.lastClientEntryGroupHost.GroupID != 21 || adminService.lastClientEntryGroupHost.EntryHost != "new.example.com" {
 		t.Fatalf("host request = %#v", adminService.lastClientEntryGroupHost)
+	}
+	if got := adminService.lastClientEntryGroupSort; got.PolicyID != 9 || len(got.IDs) != 2 || got.IDs[0] != 22 || got.IDs[1] != 21 {
+		t.Fatalf("sort request = %#v", got)
 	}
 	if adminService.lastClientEntryPolicyEnabled != [2]int64{9, 0} {
 		t.Fatalf("enabled request = %#v", adminService.lastClientEntryPolicyEnabled)
