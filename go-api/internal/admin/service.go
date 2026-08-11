@@ -337,6 +337,7 @@ type Service interface {
 	SplitClientEntryUserPolicyGroup(ctx context.Context, req ClientEntryUserPolicyGroupSplitRequest) (ClientEntryUserPolicyRecord, error)
 	UpdateClientEntryUserPolicySplitGroupHost(ctx context.Context, req ClientEntryUserPolicyGroupHostUpdateRequest) (ClientEntryUserPolicyRecord, error)
 	ListClientEntryUserPolicySplitGroupUsers(ctx context.Context, req ClientEntryUserPolicySplitGroupUserListRequest) (ClientEntryUserPolicySplitGroupUserListResult, error)
+	SimulateClientEntryUserPolicy(ctx context.Context, req ClientEntryUserPolicySimulationRequest) (ClientEntryUserPolicySimulationResult, error)
 	SortClientEntryUserPolicySplitGroups(ctx context.Context, req ClientEntryUserPolicyGroupSortRequest) (bool, error)
 	MoveClientEntryUserPolicySplitGroupToRoot(ctx context.Context, req ClientEntryUserPolicyGroupMoveRequest) (bool, error)
 	SetClientEntryUserPolicyEnabled(ctx context.Context, id, enabled int64) (bool, error)
@@ -1402,6 +1403,26 @@ type ClientEntryUserPolicySplitGroupUserListResult struct {
 	Total    int64                                       `json:"total"`
 	Current  int64                                       `json:"current"`
 	PageSize int64                                       `json:"page_size"`
+}
+
+type ClientEntryUserPolicySimulationRequest struct {
+	Email      string
+	UA         string
+	MemberType string
+	MemberID   int64
+}
+
+type ClientEntryUserPolicySimulationUser struct {
+	ID               int64  `json:"id"`
+	Email            string `json:"email"`
+	PlanID           int64  `json:"plan_id"`
+	RegistrationDays int64  `json:"registration_days"`
+}
+
+type ClientEntryUserPolicySimulationResult struct {
+	Found   bool                                 `json:"found"`
+	User    *ClientEntryUserPolicySimulationUser `json:"user,omitempty"`
+	Matched *ClientEntryUserPolicyRecord         `json:"matched,omitempty"`
 }
 
 type ClientEntryUserPolicyGroupSortRequest struct {

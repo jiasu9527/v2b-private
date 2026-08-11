@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,6 +34,61 @@ func handleAdminClientEntryUserPolicySplitPreview(w http.ResponseWriter, r *http
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": result})
 	return true
+}
+
+func handleAdminClientEntryUserPolicySimulation(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	disableResponseCache(w)
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"message": "请求方式不支持"})
+		return true
+	}
+	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+	inputs, err := readInputs(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+	email := strings.TrimSpace(inputs["email"])
+	if email == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "请输入用户邮箱"})
+		return true
+	}
+	memberType, memberID, err := parseClientEntrySimulationMember(inputs["member"])
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+	result, err := adminService.SimulateClientEntryUserPolicy(r.Context(), admin.ClientEntryUserPolicySimulationRequest{
+		Email: email, UA: inputs["ua"], MemberType: memberType, MemberID: memberID,
+	})
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": result})
+	return true
+}
+
+func parseClientEntrySimulationMember(value string) (string, int64, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", 0, nil
+	}
+	parts := strings.SplitN(value, ":", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+		return "", 0, errors.New("生效节点无效")
+	}
+	memberID, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
+	if err != nil || memberID <= 0 {
+		return "", 0, errors.New("生效节点无效")
+	}
+	return strings.ToLower(strings.TrimSpace(parts[0])), memberID, nil
 }
 
 func handleAdminClientEntryUserPolicySplitCreate(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {

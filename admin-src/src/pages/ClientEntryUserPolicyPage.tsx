@@ -720,41 +720,11 @@ function EmailConditionSummary({ condition }: { condition: EntryCondition }) {
   </details>;
 }
 
-function numericConditionMatches(condition: EntryCondition, actual: any) {
-  const number = finiteNumber(actual);
-  if (number === undefined) return false;
-  if (condition.operator === 'in') return (condition.values || []).some((item) => Number(item) === number);
-  if (condition.operator === 'between') return number >= Number(condition.min) && number <= Number(condition.max);
-  if (condition.operator === 'eq') return number === Number(condition.value);
-  if (condition.operator === 'gt') return number > Number(condition.value);
-  if (condition.operator === 'gte') return number >= Number(condition.value);
-  if (condition.operator === 'lt') return number < Number(condition.value);
-  if (condition.operator === 'lte') return number <= Number(condition.value);
-  return false;
-}
-
-function conditionMatches(condition: EntryCondition, input: any) {
-  if (condition.field === 'user_id') return numericConditionMatches(condition, input.user_id);
-  if (condition.field === 'email') return (condition.values || []).some((item) => String(item).trim().toLowerCase() === String(input.email || '').trim().toLowerCase());
-  if (condition.field === 'registration_days') return numericConditionMatches(condition, input.registration_days);
-  if (condition.field === 'plan_id') return numericConditionMatches(condition, input.plan_id);
-  const ua = String(input.ua || '').trim();
-  const needles = (condition.values || []).map((item) => String(item).trim().toLowerCase()).filter(Boolean);
-  const normalizedUA = ua.toLowerCase();
-  if (condition.operator === 'contains_any') return needles.some((needle) => normalizedUA.includes(needle));
-  if (condition.operator === 'excludes_any') return needles.every((needle) => !normalizedUA.includes(needle));
-  if (['empty', 'is_empty'].includes(condition.operator)) return !ua;
-  if (['not_empty', 'is_not_empty'].includes(condition.operator)) return !!ua;
-  return false;
-}
-
-function policyMatches(row: any, input: any) {
-  if (isSplitPolicy(row)) return false;
-  return parseConditions(row.conditions).every((condition) => conditionMatches(condition, input));
-}
-
 function policyResultDescription(row: any) {
-  if (isSplitPolicy(row)) return `结果：按固定二分组下发不同入口，共 ${Number(row?.snapshot_user_count || 0)} 人`;
+  if (isSplitPolicy(row)) {
+    const resolveDescription = normalizeResolveEntryHost(row?.resolve_entry_host) ? '（后端解析域名后下发 IP）' : '';
+    return `结果：该用户命中固定名单分组，下发独立入口 ${row?.entry_host || '-'}${resolveDescription}`;
+  }
   const action = normalizePolicyAction(row?.action);
   const extraNodeCount = parseExtraNodes(row?.extra_nodes).length;
   const position = normalizeExtraNodePosition(row?.extra_nodes_position) === 'before' ? '置顶' : '置底';
@@ -1320,12 +1290,10 @@ function SplitGroupRowActions({
 function SimulationModal({
   open,
   onClose,
-  rows,
   serverOptions,
 }: {
   open: boolean;
   onClose: () => void;
-  rows: any[];
   serverOptions: ClientEntryServerOption[];
 }) {
   const [form] = Form.useForm();
@@ -1346,42 +1314,21 @@ function SimulationModal({
     setSimulationError('');
     try {
       const email = String(values.email || '').trim().toLowerCase();
-      const response = await apiGet('/user/fetch', {
-        current: 1,
-        pageSize: 10,
-        filter: [{ key: 'email', condition: '=', value: email }],
+      const response = await apiGet('/server/client-entry-user-policy/simulate', {
+        email,
+        ua: String(values.ua || ''),
+        member: String(values.member || ''),
       });
-      const user = (Array.isArray(response.data) ? response.data : []).find((item: any) => String(item.email || '').trim().toLowerCase() === email);
-      if (!user) {
+      const simulation = response?.data;
+      if (!simulation?.found) {
         setResult(undefined);
         setSimulationError('没有找到该邮箱对应的用户');
         return;
       }
-      const createdAt = finiteNumber(user.created_at);
-      const now = Math.floor(Date.now() / 1000);
-      const subject = {
-        ...values,
-        user_id: finiteNumber(user.id),
-        email: String(user.email || email).trim().toLowerCase(),
-        registration_days: createdAt !== undefined && createdAt > 0 && now >= createdAt ? Math.floor((now - createdAt) / 86400) : -1,
-        plan_id: finiteNumber(user.plan_id) ?? 0,
-      };
-      const selectedMember = values.member;
-      const hasRelevantSplitRule = rows.some((row) => Number(row.enabled) !== 0 && isSplitPolicy(row) && (!selectedMember || normalizedMembers(row).includes(selectedMember)));
-      if (hasRelevantSplitRule) {
-        setResult(undefined);
-        setSimulationError('当前节点存在固定二分规则，用户所属分组只保存在服务端，请以实际订阅结果为准');
-        return;
-      }
-      const matched = rows.find((row) => {
-        if (Number(row.enabled) === 0) return false;
-        if (selectedMember && !normalizedMembers(row).includes(selectedMember)) return false;
-        return policyMatches(row, subject);
-      });
-      setResult(matched || null);
+      setResult(simulation.matched || null);
     } catch (error: any) {
       setResult(undefined);
-      setSimulationError(error?.message || '查询用户失败');
+      setSimulationError(error?.message || '模拟匹配失败');
     } finally {
       setRunning(false);
     }
@@ -1392,7 +1339,7 @@ function SimulationModal({
       type="info"
       showIcon
       message="按当前列表从上到下匹配，第一条满足全部条件的启用规则生效。模拟不会保存或修改任何数据。"
-      description="固定二分规则按服务端保存的用户快照分组，不在这里按普通条件模拟。"
+      description="普通规则按用户条件匹配；固定二分规则会读取服务端保存的真实用户分组，因此结果与实际订阅使用同一份名单。"
       style={{ marginBottom: 16 }}
     />
     <Form form={form} layout="vertical">
@@ -1428,7 +1375,6 @@ function SimulationModal({
 }
 
 export default function ClientEntryUserPolicyPage() {
-  const [policyRows, setPolicyRows] = useState<any[]>([]);
   const [rows, setRows] = useState<any[]>([]);
   const [serverOptions, setServerOptions] = useState<ClientEntryServerOption[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1461,7 +1407,6 @@ export default function ClientEntryUserPolicyPage() {
         extra_nodes: parseExtraNodes(row.extra_nodes),
         extra_nodes_position: normalizeExtraNodePosition(row.extra_nodes_position),
       }));
-      setPolicyRows(normalizedPolicies);
       setRows(buildPolicyDisplayRows(normalizedPolicies));
       setServerOptions(buildVisibleServerOptions(Array.isArray(nodeRes.data) ? nodeRes.data : []));
     } catch (error: any) {
@@ -1688,6 +1633,6 @@ export default function ClientEntryUserPolicyPage() {
         />
       </Card>
     </Spin>
-    <SimulationModal open={simulatorOpen} onClose={() => setSimulatorOpen(false)} rows={policyRows} serverOptions={serverOptions} />
+    <SimulationModal open={simulatorOpen} onClose={() => setSimulatorOpen(false)} serverOptions={serverOptions} />
   </div>;
 }

@@ -912,6 +912,8 @@ type fakeAdminService struct {
 	lastClientEntryGroupHost      admin.ClientEntryUserPolicyGroupHostUpdateRequest
 	clientEntryGroupUsers         admin.ClientEntryUserPolicySplitGroupUserListResult
 	lastClientEntryGroupUsers     admin.ClientEntryUserPolicySplitGroupUserListRequest
+	clientEntrySimulation         admin.ClientEntryUserPolicySimulationResult
+	lastClientEntrySimulation     admin.ClientEntryUserPolicySimulationRequest
 	lastClientEntryGroupSort      admin.ClientEntryUserPolicyGroupSortRequest
 	lastClientEntryGroupMove      admin.ClientEntryUserPolicyGroupMoveRequest
 	lastClientEntryPolicyEnabled  [2]int64
@@ -1173,6 +1175,11 @@ func (f *fakeAdminService) UpdateClientEntryUserPolicySplitGroupHost(_ context.C
 func (f *fakeAdminService) ListClientEntryUserPolicySplitGroupUsers(_ context.Context, req admin.ClientEntryUserPolicySplitGroupUserListRequest) (admin.ClientEntryUserPolicySplitGroupUserListResult, error) {
 	f.lastClientEntryGroupUsers = req
 	return f.clientEntryGroupUsers, f.err
+}
+
+func (f *fakeAdminService) SimulateClientEntryUserPolicy(_ context.Context, req admin.ClientEntryUserPolicySimulationRequest) (admin.ClientEntryUserPolicySimulationResult, error) {
+	f.lastClientEntrySimulation = req
+	return f.clientEntrySimulation, f.err
 }
 
 func (f *fakeAdminService) SortClientEntryUserPolicySplitGroups(_ context.Context, req admin.ClientEntryUserPolicyGroupSortRequest) (bool, error) {
@@ -4426,6 +4433,10 @@ func TestRouterAdminClientEntryUserPolicySplitEndpoints(t *testing.T) {
 		clientEntryGroupUsers: admin.ClientEntryUserPolicySplitGroupUserListResult{
 			Data: []admin.ClientEntryUserPolicySplitGroupUserRecord{{UserID: 1001, Email: "demo@example.com"}}, Total: 21, Current: 2, PageSize: 20,
 		},
+		clientEntrySimulation: admin.ClientEntryUserPolicySimulationResult{
+			Found: true,
+			User:  &admin.ClientEntryUserPolicySimulationUser{ID: 1001, Email: "demo@example.com", RegistrationDays: 3},
+		},
 	}
 	router := NewRouter(
 		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
@@ -4501,6 +4512,16 @@ func TestRouterAdminClientEntryUserPolicySplitEndpoints(t *testing.T) {
 	}
 	if got := adminService.lastClientEntryGroupUsers; got.PolicyID != 9 || got.GroupID != 21 || got.Current != 2 || got.PageSize != 20 || got.Search != "demo" {
 		t.Fatalf("group users request = %#v", got)
+	}
+
+	simulationReq := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/server/client-entry-user-policy/simulate?auth_data=jwt-admin&email=demo%40example.com&ua=ClashMeta%2F1.0&member=vmess%3A11", nil)
+	simulationRec := httptest.NewRecorder()
+	router.ServeHTTP(simulationRec, simulationReq)
+	if simulationRec.Code != http.StatusOK || !strings.Contains(simulationRec.Body.String(), `"found":true`) || !strings.Contains(simulationRec.Body.String(), `"email":"demo@example.com"`) {
+		t.Fatalf("simulation: status=%d body=%s", simulationRec.Code, simulationRec.Body.String())
+	}
+	if got := adminService.lastClientEntrySimulation; got.Email != "demo@example.com" || got.UA != "ClashMeta/1.0" || got.MemberType != "vmess" || got.MemberID != 11 {
+		t.Fatalf("simulation request = %#v", got)
 	}
 }
 
