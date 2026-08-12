@@ -748,11 +748,30 @@ function conditionSummary(condition: EntryCondition) {
 function EmailConditionSummary({ condition }: { condition: EntryCondition }) {
   const emails = (condition.values || []).map((item) => String(item).trim()).filter(Boolean);
   const summary = `指定邮箱：${emails.length} 个`;
-  if (emails.length <= 1) return <Tag className="client-entry-condition-tag" title={emails[0] || summary}>{emails[0] ? `指定邮箱：${emails[0]}` : summary}</Tag>;
+  const copyEmail = async (email: string) => {
+    try {
+      await copyText(email);
+      message.success(`已复制邮箱：${email}`);
+    } catch {
+      message.error('复制失败，请手动复制');
+    }
+  };
+  if (emails.length <= 1) return <Tag
+    className="client-entry-condition-tag"
+    title={emails[0] ? `单击复制 ${emails[0]}` : summary}
+    style={emails[0] ? { cursor: 'pointer' } : undefined}
+    onClick={emails[0] ? () => { void copyEmail(emails[0]); } : undefined}
+  >{emails[0] ? `指定邮箱：${emails[0]}` : summary}</Tag>;
   return <details className="client-entry-email-condition">
     <summary><Tag className="client-entry-condition-tag">{summary}（点击展开）</Tag></summary>
     <div className="client-entry-condition-list">
-      {emails.map((email) => <Tag className="client-entry-condition-tag" title={email} key={email}>{email}</Tag>)}
+      {emails.map((email) => <Tag
+        className="client-entry-condition-tag"
+        title={`单击复制 ${email}`}
+        style={{ cursor: 'pointer' }}
+        onClick={() => { void copyEmail(email); }}
+        key={email}
+      >{email}</Tag>)}
     </div>
   </details>;
 }
