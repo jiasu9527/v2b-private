@@ -135,6 +135,43 @@ function buildPolicyDisplayRows(policies: any[]) {
   });
 }
 
+function collectEntryHosts(rows: any[]) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  rows.forEach((row) => {
+    const host = String((isSplitGroupDisplayRow(row) ? row.__split_group.entry_host : row.entry_host) || '').trim();
+    if (!host || (!isSplitGroupDisplayRow(row) && normalizePolicyAction(row.action) !== 'override') || seen.has(host)) return;
+    seen.add(host);
+    result.push(host);
+  });
+  return result;
+}
+
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Fall through for non-HTTPS panels or browsers that deny Clipboard API access.
+    }
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  let copied = false;
+  try {
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    copied = document.execCommand('copy');
+  } finally {
+    textarea.remove();
+  }
+  if (!copied) throw new Error('copy failed');
+}
+
 const fieldOptions = [
   { label: '用户 ID', value: 'user_id' },
   { label: '用户邮箱', value: 'email' },
@@ -1419,6 +1456,20 @@ export default function ClientEntryUserPolicyPage() {
   useEffect(() => { load(); }, []);
 
   const serverOptionMap = useMemo(() => Object.fromEntries(serverOptions.map((item) => [item.value, item.label])), [serverOptions]);
+  const entryHosts = useMemo(() => collectEntryHosts(rows), [rows]);
+
+  const copyAllEntryHosts = async () => {
+    if (!entryHosts.length) {
+      message.warning('当前没有可复制的入口地址');
+      return;
+    }
+    try {
+      await copyText(entryHosts.join('\n'));
+      message.success(`已复制 ${entryHosts.length} 个入口地址，一行一个`);
+    } catch {
+      message.error('复制失败，请检查浏览器剪贴板权限');
+    }
+  };
 
   const drop = async (row: any) => {
     try {
@@ -1611,6 +1662,7 @@ export default function ClientEntryUserPolicyPage() {
             <PolicyEditor onDone={load} serverOptions={serverOptions}><Button type="primary" icon={<PlusOutlined />}>新增入口规则</Button></PolicyEditor>
             <SplitPolicyCreator onDone={load} serverOptions={serverOptions}><Button icon={<BranchesOutlined />}>近期用户固定二分</Button></SplitPolicyCreator>
             <Button icon={<PlayCircleOutlined />} onClick={() => setSimulatorOpen(true)}>模拟匹配</Button>
+            <Button icon={<CopyOutlined />} disabled={!entryHosts.length} onClick={copyAllEntryHosts}>复制所有入口</Button>
             <Typography.Text type="secondary">普通规则和二分叶子组统一从上到下匹配；拖动任意行即可调整全局优先级。</Typography.Text>
           </Space>
         </div>
