@@ -862,6 +862,14 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminSubscribeGuardStats(w, r, cfg, state.session, state.node, state.user, state.admin) {
 				return
 			}
+		case r.URL.Path == adminPrefix+"/subscribe-guard/user-search":
+			if handleAdminSubscribeGuardUserSearch(w, r, state.session, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/subscribe-guard/user-detail":
+			if handleAdminSubscribeGuardUserDetail(w, r, cfg, state.session, state.admin) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/subscribe-guard/set-user-banned":
 			if handleAdminSubscribeGuardSetUserBanned(w, r, state.session, state.admin) {
 				return

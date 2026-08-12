@@ -521,6 +521,7 @@ type fakeUserService struct {
 	transferOK                 bool
 	newPeriodOK                bool
 	resolvedClientUserID       int64
+	peekedClientUserID         int64
 	resolvedClientErr          error
 	err                        error
 }
@@ -542,6 +543,14 @@ func (f *fakeUserService) Subscribe(_ context.Context, userID int64) (user.Subsc
 
 func (f *fakeUserService) ResolveClientUserID(_ context.Context, token string) (int64, error) {
 	f.lastClientToken = token
+	return f.resolvedClientUserID, f.resolvedClientErr
+}
+
+func (f *fakeUserService) PeekClientUserID(_ context.Context, token string) (int64, error) {
+	f.lastClientToken = token
+	if f.peekedClientUserID > 0 {
+		return f.peekedClientUserID, f.resolvedClientErr
+	}
 	return f.resolvedClientUserID, f.resolvedClientErr
 }
 

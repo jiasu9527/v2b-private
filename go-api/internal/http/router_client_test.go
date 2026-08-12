@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"forest/go-api/internal/admin"
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/nodeapi"
 	"forest/go-api/internal/session"
@@ -617,10 +618,39 @@ func TestRouterClientSubscribeGuardBlocksTokenBlacklistBeforeUserLookup(t *testi
 		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
 	}
 	if userService.lastClientToken != "" {
-		t.Fatalf("expected blocked request to skip user lookup, got token %q", userService.lastClientToken)
+		t.Fatalf("expected token blacklist to skip both peek and auth lookup, got token %q", userService.lastClientToken)
 	}
 	if reason := rec.Header().Get("X-Subscribe-Guard"); reason != "token" {
 		t.Fatalf("expected token block reason header, got %q", reason)
+	}
+}
+
+func TestRouterClientSubscribeGuardRecordsResolvedUserID(t *testing.T) {
+	resetSubscribeGuardStateForTest()
+	publicDir := filepath.Join(t.TempDir(), "public")
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userService := &fakeUserService{resolvedClientUserID: 10, peekedClientUserID: 10}
+	router := NewRouter(config.Config{
+		PublicDir:                        publicDir,
+		SubscribeGuardEnable:             true,
+		SubscribeGuardUABlacklist:        []string{"curl"},
+		SubscribeGuardLogKeepDays:        7,
+		SubscribeGuardRateLimitPerMinute: 0,
+	}, WithUserService(userService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=dynamic-token", nil)
+	req.Header.Set("User-Agent", "curl/8.0")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+	events := subscribeGuardEventsSnapshot(config.Config{PublicDir: publicDir, SubscribeGuardLogKeepDays: 7})
+	if len(events) != 1 || events[0].UserID != 10 || events[0].Token != "dynamic-token" {
+		t.Fatalf("expected resolved user id in guard event, got %#v", events)
 	}
 }
 
@@ -778,6 +808,154 @@ func TestRouterAdminSubscribeGuardStatsEndpoint(t *testing.T) {
 	}
 }
 
+func TestRouterAdminSubscribeGuardUserDetailEndpoint(t *testing.T) {
+	resetSubscribeGuardStateForTest()
+	publicDir := filepath.Join(t.TempDir(), "public")
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{PublicDir: publicDir, AdminPath: "localadmin", SubscribeGuardLogKeepDays: 7}
+	for _, request := range []struct {
+		ip      string
+		ua      string
+		status  int
+		reason  string
+		blocked bool
+	}{
+		{ip: "203.0.113.10", ua: "ClashMeta/1.0", status: http.StatusOK, reason: "pass"},
+		{ip: "203.0.113.11", ua: "curl/8.0", status: http.StatusForbidden, reason: "ua", blocked: true},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=user-token", nil)
+		req.RemoteAddr = request.ip + ":12345"
+		req.Header.Set("User-Agent", request.ua)
+		recordSubscribeGuardEvent(cfg, req, request.status, request.reason, request.blocked)
+	}
+	otherReq := httptest.NewRequest(http.MethodGet, "/api/v1/client/subscribe?token=other-token", nil)
+	otherReq.RemoteAddr = "198.51.100.20:12345"
+	recordSubscribeGuardEvent(cfg, otherReq, http.StatusOK, "pass", false)
+
+	adminService := &fakeAdminService{userInfoDetail: map[string]any{
+		"id": int64(10), "email": "guard-user@example.com", "token": "user-token", "password": "must-not-leak",
+		"banned": int64(0), "plan_id": int64(2), "transfer_enable": int64(1000), "remarks": "重点观察",
+		"invite_user": map[string]any{"id": int64(3), "email": "invite@example.com", "token": "invite-token"},
+	}}
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1, Email: "admin@example.com"}}
+	router := NewRouter(cfg, WithAdminService(adminService), WithSessionService(sessionService))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/subscribe-guard/user-detail?auth_data=jwt-admin&id=10", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if adminService.lastUserInfoID != 10 {
+		t.Fatalf("expected user id 10, got %d", adminService.lastUserInfoID)
+	}
+	if strings.Contains(rec.Body.String(), "must-not-leak") || strings.Contains(rec.Body.String(), "user-token") || strings.Contains(rec.Body.String(), "invite-token") {
+		t.Fatalf("sensitive user field leaked: %s", rec.Body.String())
+	}
+	var payload struct {
+		Data struct {
+			User  map[string]any `json:"user"`
+			Stats map[string]any `json:"stats"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Data.User["email"] != "guard-user@example.com" || payload.Data.User["remarks"] != "重点观察" {
+		t.Fatalf("unexpected user detail: %#v", payload.Data.User)
+	}
+	if payload.Data.Stats["total"] != float64(2) || payload.Data.Stats["blocked"] != float64(1) || payload.Data.Stats["allowed"] != float64(1) {
+		t.Fatalf("unexpected user guard stats: %#v", payload.Data.Stats)
+	}
+	recent, ok := payload.Data.Stats["recent"].([]any)
+	if !ok || len(recent) != 2 {
+		t.Fatalf("unexpected user recent stats: %#v", payload.Data.Stats["recent"])
+	}
+	if cacheControl := rec.Header().Get("Cache-Control"); !strings.Contains(cacheControl, "no-store") {
+		t.Fatalf("expected no-store response, got %q", cacheControl)
+	}
+}
+
+func TestRouterAdminSubscribeGuardUserSearchEndpointOnlyReturnsPublicFields(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1, Email: "admin@example.com"}}
+	adminService := &fakeAdminService{userList: admin.UserListResult{
+		Data: []map[string]any{{
+			"id": int64(10), "email": "guard-user@example.com", "banned": int64(0),
+			"plan_id": int64(2), "plan_name": "Pro", "u": int64(100), "d": int64(200),
+			"transfer_enable": int64(1000), "expired_at": int64(1893456000),
+			"password": "must-not-leak", "token": "secret-token", "uuid": "secret-uuid",
+			"subscribe_url": "https://example.com/secret-subscribe-url",
+		}},
+		Total: 1,
+	}}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/subscribe-guard/user-search?auth_data=jwt-admin&keyword=guard%40example.com", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := adminService.lastUserFetch; got.Current != 1 || got.PageSize != 20 || got.Sort != "id" || got.SortType != "DESC" {
+		t.Fatalf("unexpected search request: %#v", got)
+	}
+	if filters := adminService.lastUserFetch.Filters; len(filters) != 1 || filters[0].Key != "email" || filters[0].Condition != "模糊" || filters[0].Value != "guard@example.com" {
+		t.Fatalf("unexpected search filters: %#v", filters)
+	}
+	for _, secret := range []string{"must-not-leak", "secret-token", "secret-uuid", "secret-subscribe-url"} {
+		if strings.Contains(rec.Body.String(), secret) {
+			t.Fatalf("sensitive user field leaked (%s): %s", secret, rec.Body.String())
+		}
+	}
+	var payload struct {
+		Data  []map[string]any `json:"data"`
+		Total int64            `json:"total"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Total != 1 || len(payload.Data) != 1 || payload.Data[0]["email"] != "guard-user@example.com" || payload.Data[0]["plan_name"] != "Pro" {
+		t.Fatalf("unexpected public user search payload: %#v", payload)
+	}
+	for _, forbiddenKey := range []string{"password", "token", "uuid", "subscribe_url"} {
+		if _, ok := payload.Data[0][forbiddenKey]; ok {
+			t.Fatalf("forbidden field %q returned: %#v", forbiddenKey, payload.Data[0])
+		}
+	}
+	if cacheControl := rec.Header().Get("Cache-Control"); !strings.Contains(cacheControl, "no-store") {
+		t.Fatalf("expected no-store response, got %q", cacheControl)
+	}
+}
+
+func TestRouterAdminSubscribeGuardUserSearchUsesExactNumericID(t *testing.T) {
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}
+	adminService := &fakeAdminService{userList: admin.UserListResult{Data: []map[string]any{}, Total: 0}}
+	router := NewRouter(
+		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		WithSessionService(sessionService),
+		WithAdminService(adminService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/subscribe-guard/user-search?auth_data=jwt-admin&keyword=0010", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	filters := adminService.lastUserFetch.Filters
+	if len(filters) != 1 || filters[0].Key != "id" || filters[0].Condition != "=" || filters[0].Value != "10" {
+		t.Fatalf("unexpected numeric search filters: %#v", filters)
+	}
+}
+
 func TestSubscribeGuardStatsSurvivesMemoryResetFromLogFile(t *testing.T) {
 	resetSubscribeGuardStateForTest()
 	publicDir := filepath.Join(t.TempDir(), "public")
@@ -799,6 +977,31 @@ func TestSubscribeGuardStatsSurvivesMemoryResetFromLogFile(t *testing.T) {
 	recent := stats["recent"].([]subscribeGuardEvent)
 	if len(recent) != 1 || recent[0].Token != "token-persist" || recent[0].Reason != "ua" {
 		t.Fatalf("unexpected persisted recent events: %#v", recent)
+	}
+}
+
+func TestSubscribeGuardUserStatsMatchesUserIDAndLegacyCanonicalToken(t *testing.T) {
+	resetSubscribeGuardStateForTest()
+	publicDir := filepath.Join(t.TempDir(), "public")
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{PublicDir: publicDir, SubscribeGuardLogKeepDays: 7}
+	now := time.Now().Unix()
+	events := []subscribeGuardEvent{
+		{Time: now - 3, UserID: 10, Token: "dynamic-a", IP: "203.0.113.1", UA: "Clash/1", Status: 200, Reason: "pass"},
+		{Time: now - 2, UserID: 10, Token: "dynamic-b", IP: "203.0.113.2", UA: "Clash/2", Status: 403, Reason: "ua", Blocked: true},
+		{Time: now - 1, Token: "canonical-token", IP: "203.0.113.3", UA: "legacy", Status: 200, Reason: "pass"},
+		{Time: now, Token: "old-dynamic-token", CanonicalToken: "canonical-token", IP: "203.0.113.4", UA: "legacy-dynamic", Status: 200, Reason: "pass"},
+		{Time: now + 1, UserID: 11, Token: "other", IP: "198.51.100.1", UA: "other", Status: 200, Reason: "pass"},
+	}
+	if err := writeSubscribeGuardEvents(cfg, events); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := subscribeGuardUserStatsSnapshot(cfg, 10, "canonical-token")
+	if stats["total"] != int64(4) || stats["blocked"] != int64(1) || stats["ip_count"] != int64(4) {
+		t.Fatalf("unexpected user-id and legacy-token stats: %#v", stats)
 	}
 }
 

@@ -76,10 +76,14 @@ func handleClientAppGetConfig(w http.ResponseWriter, r *http.Request, cfg config
 func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Config, service usersvc.Service) bool {
 	r = withClientSubscribePathToken(cfg, r)
 	r = withRecoveredClientSubscribeQuery(r)
-	if handleSubscribeGuard(w, r, cfg) {
+	blocked, guardReason := handleSubscribeGuard(w, r, cfg, service)
+	if blocked {
 		return true
 	}
 	userID, ok := authenticateClientUser(w, r, service)
+	if ok && guardReason != "" {
+		recordSubscribeGuardEvent(cfg, r, http.StatusOK, guardReason, false, userID)
+	}
 	if !ok {
 		return true
 	}

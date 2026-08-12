@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"forest/go-api/internal/config"
+	usersvc "forest/go-api/internal/user"
 )
 
 var defaultSubscribeCrawlerUA = []string{
@@ -36,9 +38,20 @@ type subscribeGuardBucket struct {
 }
 
 type subscribeGuardEvent struct {
+	Time           int64  `json:"time"`
+	IP             string `json:"ip"`
+	Token          string `json:"token"`
+	UserID         int64  `json:"user_id,omitempty"`
+	CanonicalToken string `json:"canonical_token,omitempty"`
+	UA             string `json:"ua"`
+	Status         int    `json:"status"`
+	Reason         string `json:"reason"`
+	Blocked        bool   `json:"blocked"`
+}
+
+type subscribeGuardUserEvent struct {
 	Time    int64  `json:"time"`
 	IP      string `json:"ip"`
-	Token   string `json:"token"`
 	UA      string `json:"ua"`
 	Status  int    `json:"status"`
 	Reason  string `json:"reason"`
@@ -60,9 +73,9 @@ var subscribeGuardCleanupState = struct {
 	lastRun time.Time
 }{}
 
-func handleSubscribeGuard(w http.ResponseWriter, r *http.Request, cfg config.Config) bool {
+func handleSubscribeGuard(w http.ResponseWriter, r *http.Request, cfg config.Config, userService usersvc.Service) (bool, string) {
 	if !cfg.SubscribeGuardEnable {
-		return false
+		return false, ""
 	}
 
 	clientIP := requestClientIP(r)
@@ -70,59 +83,98 @@ func handleSubscribeGuard(w http.ResponseWriter, r *http.Request, cfg config.Con
 	ua := strings.TrimSpace(r.UserAgent())
 
 	if listMatchesIP(cfg.SubscribeGuardIPWhitelist, clientIP) {
-		recordSubscribeGuardEvent(cfg, r, http.StatusOK, "whitelist", false)
-		return false
+		return false, "whitelist"
 	}
 
 	if listMatchesIP(cfg.SubscribeGuardIPBlacklist, clientIP) {
-		writeSubscribeGuardBlock(w, r, cfg, http.StatusForbidden, "ip")
-		return true
+		writeSubscribeGuardBlock(w, r, cfg, http.StatusForbidden, "ip", 0)
+		return true, ""
 	}
 
 	if stringInList(cfg.SubscribeGuardTokenBlacklist, token) {
-		writeSubscribeGuardBlock(w, r, cfg, http.StatusForbidden, "token")
-		return true
+		writeSubscribeGuardBlock(w, r, cfg, http.StatusForbidden, "token", 0)
+		return true, ""
 	}
+
+	userID := peekSubscribeGuardUserID(r, userService)
 
 	if !listContainsFold(cfg.SubscribeGuardUAWhitelist, ua) {
 		if cfg.SubscribeGuardBlockEmptyUA && ua == "" {
-			writeSubscribeGuardBlock(w, r, cfg, http.StatusForbidden, "ua")
-			return true
+			writeSubscribeGuardBlock(w, r, cfg, http.StatusForbidden, "ua", userID)
+			return true, ""
 		}
 		if listContainsFold(cfg.SubscribeGuardUABlacklist, ua) {
-			writeSubscribeGuardBlock(w, r, cfg, http.StatusForbidden, "ua")
-			return true
+			writeSubscribeGuardBlock(w, r, cfg, http.StatusForbidden, "ua", userID)
+			return true, ""
 		}
 		if cfg.SubscribeGuardBlockCrawlerUA && listContainsFold(defaultSubscribeCrawlerUA, ua) {
-			writeSubscribeGuardBlock(w, r, cfg, http.StatusForbidden, "ua")
-			return true
+			writeSubscribeGuardBlock(w, r, cfg, http.StatusForbidden, "ua", userID)
+			return true, ""
 		}
 	}
 
 	if cfg.SubscribeGuardRateLimitPerMinute > 0 && !allowSubscribeGuardRate(clientIP, cfg.SubscribeGuardRateLimitPerMinute) {
-		writeSubscribeGuardBlock(w, r, cfg, http.StatusTooManyRequests, "rate_limit")
-		return true
+		writeSubscribeGuardBlock(w, r, cfg, http.StatusTooManyRequests, "rate_limit", userID)
+		return true, ""
 	}
 
-	recordSubscribeGuardEvent(cfg, r, http.StatusOK, "pass", false)
-	return false
+	return false, "pass"
 }
 
-func writeSubscribeGuardBlock(w http.ResponseWriter, r *http.Request, cfg config.Config, status int, reason string) {
-	recordSubscribeGuardEvent(cfg, r, status, reason, true)
+type subscribeGuardUserResolver interface {
+	PeekClientUserID(context.Context, string) (int64, error)
+}
+
+func peekSubscribeGuardUserID(r *http.Request, userService usersvc.Service) int64 {
+	if userService == nil {
+		return 0
+	}
+	resolver, ok := userService.(subscribeGuardUserResolver)
+	if !ok {
+		return 0
+	}
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if token == "" {
+		return 0
+	}
+	userID, err := resolver.PeekClientUserID(r.Context(), token)
+	if err != nil || userID <= 0 {
+		return 0
+	}
+	return userID
+}
+
+func writeSubscribeGuardBlock(w http.ResponseWriter, r *http.Request, cfg config.Config, status int, reason string, userID int64) {
+	recordSubscribeGuardEvent(cfg, r, status, reason, true, userID)
 	w.Header().Set("X-Subscribe-Guard", reason)
 	writePlainText(w, status, "Forbidden")
 }
 
-func recordSubscribeGuardEvent(cfg config.Config, r *http.Request, status int, reason string, blocked bool) {
+func recordSubscribeGuardEvent(cfg config.Config, r *http.Request, status int, reason string, blocked bool, values ...any) {
+	var userID int64
+	if len(values) > 0 {
+		switch value := values[0].(type) {
+		case int64:
+			userID = value
+		case int:
+			userID = int64(value)
+		}
+	}
+	canonicalToken := ""
+	if len(values) > 1 {
+		canonicalToken, _ = values[1].(string)
+		canonicalToken = strings.TrimSpace(canonicalToken)
+	}
 	event := subscribeGuardEvent{
-		Time:    time.Now().Unix(),
-		IP:      requestClientIP(r),
-		Token:   strings.TrimSpace(r.URL.Query().Get("token")),
-		UA:      strings.TrimSpace(r.UserAgent()),
-		Status:  status,
-		Reason:  reason,
-		Blocked: blocked,
+		Time:           time.Now().Unix(),
+		IP:             requestClientIP(r),
+		Token:          strings.TrimSpace(r.URL.Query().Get("token")),
+		UserID:         userID,
+		CanonicalToken: canonicalToken,
+		UA:             strings.TrimSpace(r.UserAgent()),
+		Status:         status,
+		Reason:         reason,
+		Blocked:        blocked,
 	}
 	subscribeGuardEventState.Lock()
 	defer subscribeGuardEventState.Unlock()
@@ -135,13 +187,7 @@ func recordSubscribeGuardEvent(cfg config.Config, r *http.Request, status int, r
 }
 
 func subscribeGuardStatsSnapshot(cfg config.Config) map[string]any {
-	maybeCleanupSubscribeGuardLog(cfg, time.Now())
-	subscribeGuardEventState.Lock()
-	events := append([]subscribeGuardEvent(nil), subscribeGuardEventState.events...)
-	subscribeGuardEventState.Unlock()
-	if persisted := readSubscribeGuardLogEvents(cfg); len(persisted) > 0 {
-		events = persisted
-	}
+	events := subscribeGuardEventsSnapshot(cfg)
 
 	total := int64(len(events))
 	blocked := int64(0)
@@ -149,8 +195,13 @@ func subscribeGuardStatsSnapshot(cfg config.Config) map[string]any {
 	ipCounts := map[string]int64{}
 	tokenCounts := map[string]int64{}
 	uaCounts := map[string]int64{}
-	tokenUAs := map[string]map[string]struct{}{}
-	tokenIPs := map[string]map[string]struct{}{}
+	userCounts := map[int64]int64{}
+	userUAs := map[int64]map[string]struct{}{}
+	userIPs := map[int64]map[string]struct{}{}
+	legacyTokenCounts := map[string]int64{}
+	legacyTokenUAs := map[string]map[string]struct{}{}
+	legacyTokenIPs := map[string]map[string]struct{}{}
+	legacyTokenCanonical := map[string]string{}
 	for _, event := range events {
 		if event.Blocked {
 			blocked++
@@ -163,17 +214,37 @@ func subscribeGuardStatsSnapshot(cfg config.Config) map[string]any {
 		}
 		if event.Token != "" {
 			tokenCounts[event.Token]++
-			if _, ok := tokenUAs[event.Token]; !ok {
-				tokenUAs[event.Token] = map[string]struct{}{}
+		}
+		if event.UserID > 0 {
+			userCounts[event.UserID]++
+			if _, ok := userUAs[event.UserID]; !ok {
+				userUAs[event.UserID] = map[string]struct{}{}
 			}
-			if _, ok := tokenIPs[event.Token]; !ok {
-				tokenIPs[event.Token] = map[string]struct{}{}
+			if _, ok := userIPs[event.UserID]; !ok {
+				userIPs[event.UserID] = map[string]struct{}{}
 			}
 			if event.UA != "" {
-				tokenUAs[event.Token][event.UA] = struct{}{}
+				userUAs[event.UserID][event.UA] = struct{}{}
 			}
 			if event.IP != "" {
-				tokenIPs[event.Token][event.IP] = struct{}{}
+				userIPs[event.UserID][event.IP] = struct{}{}
+			}
+		} else if event.Token != "" {
+			legacyTokenCounts[event.Token]++
+			if event.CanonicalToken != "" {
+				legacyTokenCanonical[event.Token] = event.CanonicalToken
+			}
+			if _, ok := legacyTokenUAs[event.Token]; !ok {
+				legacyTokenUAs[event.Token] = map[string]struct{}{}
+			}
+			if _, ok := legacyTokenIPs[event.Token]; !ok {
+				legacyTokenIPs[event.Token] = map[string]struct{}{}
+			}
+			if event.UA != "" {
+				legacyTokenUAs[event.Token][event.UA] = struct{}{}
+			}
+			if event.IP != "" {
+				legacyTokenIPs[event.Token][event.IP] = struct{}{}
 			}
 		}
 		if event.UA != "" {
@@ -187,38 +258,132 @@ func subscribeGuardStatsSnapshot(cfg config.Config) map[string]any {
 	}
 
 	return map[string]any{
-		"total":                total,
-		"allowed":              total - blocked,
-		"blocked":              blocked,
-		"reason_counts":        reasonCounts,
-		"top_ips":              topSubscribeGuardItems(ipCounts, "ip", 20),
-		"top_tokens":           topSubscribeGuardItems(tokenCounts, "token", 20),
-		"top_subscribe_tokens": topSubscribeGuardTokenItems(tokenCounts, tokenUAs, tokenIPs, 20),
-		"top_uas":              topSubscribeGuardItems(uaCounts, "ua", 20),
-		"recent":               recent,
+		"total":                  total,
+		"allowed":                total - blocked,
+		"blocked":                blocked,
+		"reason_counts":          reasonCounts,
+		"top_ips":                topSubscribeGuardItems(ipCounts, "ip", 20),
+		"top_tokens":             topSubscribeGuardItems(tokenCounts, "token", 20),
+		"top_subscribe_user_ids": topSubscribeGuardUserIDItems(userCounts, userUAs, userIPs, 20),
+		"top_subscribe_tokens":   topSubscribeGuardTokenItems(legacyTokenCounts, legacyTokenUAs, legacyTokenIPs, legacyTokenCanonical, 20),
+		"top_uas":                topSubscribeGuardItems(uaCounts, "ua", 20),
+		"recent":                 recent,
 	}
 }
 
-func topSubscribeGuardTokenItems(counts map[string]int64, uas map[string]map[string]struct{}, ips map[string]map[string]struct{}, limit int) []map[string]any {
+func subscribeGuardEventsSnapshot(cfg config.Config) []subscribeGuardEvent {
+	maybeCleanupSubscribeGuardLog(cfg, time.Now())
+	subscribeGuardEventState.Lock()
+	events := append([]subscribeGuardEvent(nil), subscribeGuardEventState.events...)
+	subscribeGuardEventState.Unlock()
+	if persisted := readSubscribeGuardLogEvents(cfg); len(persisted) > 0 {
+		events = persisted
+	}
+	return events
+}
+
+func subscribeGuardUserStatsSnapshot(cfg config.Config, userID int64, token string) map[string]any {
+	token = strings.TrimSpace(token)
+	events := subscribeGuardEventsSnapshot(cfg)
+	matched := make([]subscribeGuardEvent, 0)
+	ipCounts := map[string]int64{}
+	uaCounts := map[string]int64{}
+	reasonCounts := map[string]int64{}
+	blocked := int64(0)
+	for _, event := range events {
+		matchesUserID := userID > 0 && event.UserID == userID
+		matchesLegacyToken := event.UserID == 0 && token != "" && (event.Token == token || event.CanonicalToken == token)
+		if !matchesUserID && !matchesLegacyToken {
+			continue
+		}
+		matched = append(matched, event)
+		if event.Blocked {
+			blocked++
+		}
+		if event.Reason != "" {
+			reasonCounts[event.Reason]++
+		}
+		if event.IP != "" {
+			ipCounts[event.IP]++
+		}
+		if event.UA != "" {
+			uaCounts[event.UA]++
+		}
+	}
+	recent := make([]subscribeGuardUserEvent, 0, minInt(len(matched), 100))
+	for index := len(matched) - 1; index >= 0 && len(recent) < 100; index-- {
+		event := matched[index]
+		recent = append(recent, subscribeGuardUserEvent{
+			Time: event.Time, IP: event.IP, UA: event.UA, Status: event.Status, Reason: event.Reason, Blocked: event.Blocked,
+		})
+	}
+	return map[string]any{
+		"total":         int64(len(matched)),
+		"allowed":       int64(len(matched)) - blocked,
+		"blocked":       blocked,
+		"reason_counts": reasonCounts,
+		"ip_count":      int64(len(ipCounts)),
+		"ua_count":      int64(len(uaCounts)),
+		"ips":           topSubscribeGuardItems(ipCounts, "ip", minInt(len(ipCounts), 100)),
+		"uas":           topSubscribeGuardItems(uaCounts, "ua", minInt(len(uaCounts), 100)),
+		"recent":        recent,
+	}
+}
+
+func topSubscribeGuardUserIDItems(counts map[int64]int64, uas map[int64]map[string]struct{}, ips map[int64]map[string]struct{}, limit int) []map[string]any {
+	type item struct {
+		userID int64
+		count  int64
+	}
+	items := make([]item, 0, len(counts))
+	for userID, count := range counts {
+		items = append(items, item{userID: userID, count: count})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].count == items[j].count {
+			return items[i].userID < items[j].userID
+		}
+		return items[i].count > items[j].count
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	result := make([]map[string]any, 0, len(items))
+	for _, current := range items {
+		uaValues := sortedSubscribeGuardSet(uas[current.userID])
+		ipValues := sortedSubscribeGuardSet(ips[current.userID])
+		result = append(result, map[string]any{
+			"user_id": current.userID, "count": current.count,
+			"ua_count": int64(len(uaValues)), "uas": uaValues,
+			"ip_count": int64(len(ipValues)), "ips": ipValues,
+		})
+	}
+	return result
+}
+
+func sortedSubscribeGuardSet(values map[string]struct{}) []string {
+	result := make([]string, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func topSubscribeGuardTokenItems(counts map[string]int64, uas map[string]map[string]struct{}, ips map[string]map[string]struct{}, canonicalTokens map[string]string, limit int) []map[string]any {
 	items := topSubscribeGuardItems(counts, "token", limit)
 	for _, item := range items {
 		token, _ := item["token"].(string)
-		uaValues := make([]string, 0, len(uas[token]))
-		for ua := range uas[token] {
-			uaValues = append(uaValues, ua)
-		}
-		sort.Strings(uaValues)
-
-		ipValues := make([]string, 0, len(ips[token]))
-		for ip := range ips[token] {
-			ipValues = append(ipValues, ip)
-		}
-		sort.Strings(ipValues)
+		uaValues := sortedSubscribeGuardSet(uas[token])
+		ipValues := sortedSubscribeGuardSet(ips[token])
 
 		item["ua_count"] = int64(len(uaValues))
 		item["uas"] = uaValues
 		item["ip_count"] = int64(len(ipValues))
 		item["ips"] = ipValues
+		if canonicalToken := strings.TrimSpace(canonicalTokens[token]); canonicalToken != "" {
+			item["canonical_token"] = canonicalToken
+		}
 	}
 	return items
 }

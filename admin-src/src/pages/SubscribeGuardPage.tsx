@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Col, Form, Input, InputNumber, Modal, Popconfirm, Row, Space, Spin, Statistic, Switch, Table, Tag, Typography, message } from 'antd';
-import { apiGet, apiPost, unwrapData } from '../lib/api';
+import { SearchOutlined } from '@ant-design/icons';
+import { apiGet, apiPost, bytes, money, unwrapData } from '../lib/api';
 
 const textListFields = [
   'subscribe_guard_ip_whitelist',
@@ -167,12 +168,51 @@ function safeList(value: any) {
   return Array.isArray(value) ? value.map((item) => String(item || '').trim()).filter(Boolean) : [];
 }
 
+function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return <div className="legacy-detail-row">
+    <div className="legacy-detail-label">{label}</div>
+    <div className="legacy-detail-value">{children === null || children === undefined || children === '' ? '-' : children}</div>
+  </div>;
+}
+
+function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return <section className="legacy-detail-section">
+    <div className="legacy-detail-section-title">{title}</div>
+    <div className="legacy-detail-grid">{children}</div>
+  </section>;
+}
+
+function userStatus(row: any) {
+  if (Number(row?.banned)) return <Tag color="red">已封禁</Tag>;
+  const expiredAt = Number(row?.expired_at || 0);
+  if (expiredAt > 0 && expiredAt < Date.now() / 1000) return <Tag color="orange">已过期</Tag>;
+  return <Tag color="green">正常</Tag>;
+}
+
+function userRole(row: any) {
+  if (Number(row?.is_admin)) return '管理员';
+  if (Number(row?.is_staff)) return '员工';
+  return '普通用户';
+}
+
+function userExpiryText(value: any) {
+  const timestamp = Number(value || 0);
+  return timestamp > 0 ? dateText(timestamp) : '长期有效';
+}
+
 export default function SubscribeGuardPage() {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [stats, setStats] = useState<any>({});
   const [detailModal, setDetailModal] = useState<any>(null);
+  const [userSearch, setUserSearch] = useState('');
+  const [userSearching, setUserSearching] = useState(false);
+  const [userSearchRows, setUserSearchRows] = useState<any[]>([]);
+  const [userDetail, setUserDetail] = useState<any>(null);
+  const [userDetailLoading, setUserDetailLoading] = useState(false);
+  const userSearchSequence = useRef(0);
+  const userDetailSequence = useRef(0);
 
   const loadStats = async () => {
     try {
@@ -219,17 +259,83 @@ export default function SubscribeGuardPage() {
   };
 
   const setUserBanned = async (row: any, banned: number) => {
-    if (!row?.user_id) return message.warning('用户ID不存在');
+    const userID = Number(row?.user_id || row?.id || row?.user?.id || 0);
+    if (!userID) return message.warning('用户ID不存在');
     setSaving(true);
     try {
-      await apiPost('/subscribe-guard/set-user-banned', { id: row.user_id, banned }, { form: true });
+      await apiPost('/subscribe-guard/set-user-banned', { id: userID, banned }, { form: true });
       message.success(banned ? '已封禁用户' : '已恢复正常');
       await loadStats();
+      setUserSearchRows((current) => current.map((item) => Number(item.id) === userID ? { ...item, banned } : item));
+      setUserDetail((current: any) => current && Number(current.user?.id) === userID
+        ? { ...current, user: { ...current.user, banned } }
+        : current);
     } catch (e: any) {
       message.error(e.message || '操作失败');
     } finally {
       setSaving(false);
     }
+  };
+
+  const searchUsers = async (keyword = userSearch) => {
+    const value = String(keyword || '').trim();
+    const sequence = ++userSearchSequence.current;
+    setUserSearch(value);
+    if (!value) {
+      setUserSearchRows([]);
+      setUserSearching(false);
+      return;
+    }
+    setUserSearching(true);
+    try {
+      const response = await apiGet('/subscribe-guard/user-search', { keyword: value });
+      if (sequence === userSearchSequence.current) {
+        const rows = Array.isArray(response.data) ? response.data.slice() : [];
+        const normalized = value.toLowerCase();
+        rows.sort((left: any, right: any) => {
+          const leftEmail = String(left?.email || '').trim().toLowerCase();
+          const rightEmail = String(right?.email || '').trim().toLowerCase();
+          const rank = (email: string) => email === normalized ? 0 : email.startsWith(normalized) ? 1 : 2;
+          return rank(leftEmail) - rank(rightEmail) || Number(left?.id || 0) - Number(right?.id || 0);
+        });
+        setUserSearchRows(rows);
+      }
+    } catch (e: any) {
+      if (sequence === userSearchSequence.current) message.error(e.message || '用户搜索失败');
+    } finally {
+      if (sequence === userSearchSequence.current) setUserSearching(false);
+    }
+  };
+
+  const showUserDetail = async (row: any) => {
+    const userID = Number(row?.user_id || row?.id || 0);
+    if (!userID) return message.warning('用户ID不存在');
+    const sequence = ++userDetailSequence.current;
+    setUserDetail({ user: { ...row, id: userID }, stats: {} });
+    setUserDetailLoading(true);
+    try {
+      const response = await apiGet('/subscribe-guard/user-detail', { id: userID });
+      const data = unwrapData(response) || {};
+      if (sequence === userDetailSequence.current) {
+        setUserDetail({
+          ...data,
+          user: { ...row, ...(data.user || {}), id: userID },
+        });
+      }
+    } catch (e: any) {
+      if (sequence === userDetailSequence.current) {
+        setUserDetail(null);
+        message.error(e.message || '用户详情加载失败');
+      }
+    } finally {
+      if (sequence === userDetailSequence.current) setUserDetailLoading(false);
+    }
+  };
+
+  const closeUserDetail = () => {
+    userDetailSequence.current += 1;
+    setUserDetail(null);
+    setUserDetailLoading(false);
   };
 
   const renderControl = (field: any) => {
@@ -293,7 +399,7 @@ export default function SubscribeGuardPage() {
   });
 
   const sensitiveUserColumns: any[] = [
-    { title: '账号', dataIndex: 'email', ellipsis: true, render: (value: any, row: any) => <Typography.Text copyable={{ text: String(value || row.user_id || '') }} ellipsis>{value || `用户 #${row.user_id}`}</Typography.Text> },
+    { title: '账号', dataIndex: 'email', ellipsis: true, render: (value: any, row: any) => <a onClick={() => showUserDetail(row)}>{value || `用户 #${row.user_id}`}</a> },
     { title: '命中数', dataIndex: 'count', width: 90 },
     { title: '域名数', dataIndex: 'domain_count', width: 90 },
     { title: 'IP数', dataIndex: 'ip_count', width: 80, render: (value: any) => value || 0 },
@@ -314,7 +420,7 @@ export default function SubscribeGuardPage() {
   ];
 
   const subscribeUserColumns: any[] = [
-    { title: '用户邮箱', dataIndex: 'email', ellipsis: true, render: (value: any, row: any) => <Typography.Text copyable={{ text: String(value || row.token || '') }} ellipsis>{value || '-'}</Typography.Text> },
+    { title: '用户邮箱', dataIndex: 'email', ellipsis: true, render: (value: any, row: any) => <a onClick={() => showUserDetail(row)}>{value || `用户 #${row.user_id}`}</a> },
     { title: '状态', dataIndex: 'banned', width: 90, render: (value: any) => Number(value) ? <Tag color="red">封禁</Tag> : <Tag color="green">正常</Tag> },
     { title: '请求数', dataIndex: 'count', width: 90 },
     { title: 'IP数', dataIndex: 'ip_count', width: 80, render: (value: any) => value || 0 },
@@ -333,7 +439,20 @@ export default function SubscribeGuardPage() {
         ],
       })}>查看明细</Button> : '-';
     } },
-    { title: '操作', width: 110, render: (_: any, row: any) => Number(row.banned) ? <Popconfirm title={`恢复 ${row.email || row.user_id} 为正常？`} onConfirm={() => setUserBanned(row, 0)}><a>恢复正常</a></Popconfirm> : <Popconfirm title={`封禁 ${row.email || row.user_id}？`} onConfirm={() => setUserBanned(row, 1)}><a className="text-danger">封禁</a></Popconfirm> },
+    { title: '操作', width: 180, render: (_: any, row: any) => <Space size="small">
+      <a onClick={() => showUserDetail(row)}>查看详细</a>
+      {Number(row.banned) ? <Popconfirm title={`恢复 ${row.email || row.user_id} 为正常？`} onConfirm={() => setUserBanned(row, 0)}><a>恢复正常</a></Popconfirm> : <Popconfirm title={`封禁 ${row.email || row.user_id}？`} onConfirm={() => setUserBanned(row, 1)}><a className="text-danger">封禁</a></Popconfirm>}
+    </Space> },
+  ];
+
+  const userSearchColumns: any[] = [
+    { title: 'ID', dataIndex: 'id', width: 85 },
+    { title: '邮箱', dataIndex: 'email', width: 250, ellipsis: true, render: (value: any, row: any) => <a onClick={() => showUserDetail(row)}>{value || `用户 #${row.id}`}</a> },
+    { title: '状态', dataIndex: 'banned', width: 95, render: (_: any, row: any) => userStatus(row) },
+    { title: '套餐', dataIndex: 'plan_name', width: 150, ellipsis: true, render: (value: any) => value || '-' },
+    { title: '已用 / 总流量', width: 190, render: (_: any, row: any) => `${bytes(Number(row.u || 0) + Number(row.d || 0))} / ${bytes(row.transfer_enable)}` },
+    { title: '到期时间', dataIndex: 'expired_at', width: 175, render: userExpiryText },
+    { title: '操作', width: 100, fixed: 'right', render: (_: any, row: any) => <Button size="small" onClick={() => showUserDetail(row)}>查看详细</Button> },
   ];
 
   const sensitiveDomainColumns: any[] = [
@@ -343,7 +462,7 @@ export default function SubscribeGuardPage() {
 
   const sensitiveRecentColumns: any[] = [
     { title: '时间', dataIndex: 'last_at', width: 170, render: (_: any, row: any) => sensitiveTimeText(row) },
-    { title: '账号', dataIndex: 'email', width: 210, ellipsis: true, render: (value: any, row: any) => <Typography.Text copyable={{ text: String(value || row.user_id || '') }} ellipsis>{value || `用户 #${row.user_id}`}</Typography.Text> },
+    { title: '账号', dataIndex: 'email', width: 210, ellipsis: true, render: (value: any, row: any) => <a onClick={() => showUserDetail(row)}>{value || `用户 #${row.user_id}`}</a> },
     { title: '域名', dataIndex: 'domain', ellipsis: true, render: (value: any) => <Typography.Text copyable={{ text: String(value || '') }} ellipsis>{value || '-'}</Typography.Text> },
     { title: '规则', dataIndex: 'rule', width: 190, ellipsis: true },
     { title: '客户端 IP', dataIndex: 'client_ip', width: 150, render: (value: any) => value || '-' },
@@ -351,8 +470,73 @@ export default function SubscribeGuardPage() {
   ];
 
   const sensitiveStats = stats.sensitive || {};
+  const detailUser = userDetail?.user || {};
+  const detailStats = userDetail?.stats || {};
+  const detailRecent = Array.isArray(detailStats.recent) ? detailStats.recent : [];
+  const detailIPs = Array.isArray(detailStats.ips) ? detailStats.ips : [];
+  const detailUAs = Array.isArray(detailStats.uas) ? detailStats.uas : [];
+  const detailIPCount = Number(detailStats.ip_count ?? detailIPs.length);
+  const detailUACount = Number(detailStats.ua_count ?? detailUAs.length);
+  const detailUsed = Number(detailUser.u || 0) + Number(detailUser.d || 0);
+  const detailRecentColumns: any[] = [
+    { title: '时间', dataIndex: 'time', width: 170, render: dateText },
+    { title: '状态', dataIndex: 'blocked', width: 95, render: (blocked: any, row: any) => <Tag color={blocked ? 'red' : 'green'}>{reasonText(row.reason)}</Tag> },
+    { title: 'IP', dataIndex: 'ip', width: 150, render: (value: any) => <Typography.Text copyable={{ text: String(value || '') }}>{value || '-'}</Typography.Text> },
+    { title: 'UA', dataIndex: 'ua', ellipsis: true, render: (value: any) => <Typography.Text ellipsis={{ tooltip: value }}>{value || '-'}</Typography.Text> },
+  ];
 
   return <div className="legacy-page config-page subscribe-guard-page">
+    <Modal
+      open={!!userDetail}
+      title="订阅防护用户详情"
+      width={980}
+      footer={<Space>
+        {Number(detailUser.banned) ? <Popconfirm title="确认恢复该用户为正常状态？" onConfirm={() => setUserBanned(detailUser, 0)}><Button>恢复正常</Button></Popconfirm> : <Popconfirm title="确认封禁该用户？" onConfirm={() => setUserBanned(detailUser, 1)}><Button danger>封禁用户</Button></Popconfirm>}
+        <Button onClick={closeUserDetail}>关闭</Button>
+      </Space>}
+      onCancel={closeUserDetail}
+      destroyOnHidden
+    >
+      <Spin spinning={userDetailLoading}>
+        <div className="legacy-detail-modal">
+          <DetailSection title="账号信息">
+            <DetailRow label="用户 ID">#{detailUser.id || '-'}</DetailRow>
+            <DetailRow label="邮箱"><Typography.Text copyable={{ text: String(detailUser.email || '') }}>{detailUser.email || '-'}</Typography.Text></DetailRow>
+            <DetailRow label="账号状态">{userStatus(detailUser)}</DetailRow>
+            <DetailRow label="账号身份">{userRole(detailUser)}</DetailRow>
+            <DetailRow label="套餐">{detailUser.plan_name || (detailUser.plan_id ? `套餐 #${detailUser.plan_id}` : '无套餐')}</DetailRow>
+            <DetailRow label="权限组">{detailUser.group_name || (detailUser.group_id ? `权限组 #${detailUser.group_id}` : '-')}</DetailRow>
+            <DetailRow label="到期时间">{userExpiryText(detailUser.expired_at)}</DetailRow>
+            <DetailRow label="设备限制">{detailUser.device_limit ?? '不限制'}</DetailRow>
+            <DetailRow label="已用流量">{bytes(detailUsed)}</DetailRow>
+            <DetailRow label="总流量">{bytes(detailUser.transfer_enable)}</DetailRow>
+            <DetailRow label="余额">{money(detailUser.balance)}</DetailRow>
+            <DetailRow label="推广佣金">{money(detailUser.commission_balance)}</DetailRow>
+            <DetailRow label="限速">{detailUser.speed_limit ? `${detailUser.speed_limit} Mbps` : '不限制'}</DetailRow>
+            <DetailRow label="邀请人">{detailUser.invite_user?.email || (detailUser.invite_user_id ? `用户 #${detailUser.invite_user_id}` : '-')}</DetailRow>
+            <DetailRow label="邀请码">{detailUser.invite_code || '-'}</DetailRow>
+            <DetailRow label="注册时间">{dateText(detailUser.created_at)}</DetailRow>
+            <DetailRow label="最后在线">{dateText(detailUser.t || detailUser.last_login_at)}</DetailRow>
+            <DetailRow label="备注">{detailUser.remarks || '-'}</DetailRow>
+          </DetailSection>
+          <DetailSection title="订阅防护统计">
+            <DetailRow label="总请求">{Number(detailStats.total || 0)}</DetailRow>
+            <DetailRow label="已放行">{Number(detailStats.allowed || 0)}</DetailRow>
+            <DetailRow label="已拦截">{Number(detailStats.blocked || 0)}</DetailRow>
+            <DetailRow label="请求 IP">{detailIPCount} 个</DetailRow>
+            <DetailRow label="User-Agent">{detailUACount} 个</DetailRow>
+            <DetailRow label="结果统计">{Object.entries(detailStats.reason_counts || {}).map(([reason, count]) => `${reasonText(reason)} ${count}`).join(' / ') || '-'}</DetailRow>
+          </DetailSection>
+          <Row gutter={[16, 16]}>
+            <Col xs={24} lg={12}><Card size="small" title={`请求 IP (${detailIPCount})`}><Table size="small" rowKey="ip" pagination={{ pageSize: 8, size: 'small' }} columns={compactColumns('ip', 'IP')} dataSource={detailIPs} /></Card></Col>
+            <Col xs={24} lg={12}><Card size="small" title={`User-Agent (${detailUACount})`}><Table size="small" rowKey="ua" pagination={{ pageSize: 8, size: 'small' }} columns={compactColumns('ua', 'User-Agent')} dataSource={detailUAs} /></Card></Col>
+          </Row>
+          <Card size="small" title={`最近请求 (${detailRecent.length})`}>
+            <Table size="small" rowKey={(_, index) => String(index)} pagination={{ pageSize: 10, size: 'small' }} columns={detailRecentColumns} dataSource={detailRecent} scroll={{ x: 760 }} locale={{ emptyText: '保留期内暂无该用户的订阅防护记录' }} />
+          </Card>
+        </div>
+      </Spin>
+    </Modal>
     <Modal
       open={!!detailModal}
       title={detailModal?.title || '明细'}
@@ -405,6 +589,38 @@ export default function SubscribeGuardPage() {
             <Col xs={24} lg={8}><Card size="small" title="Top Token"><Table size="small" rowKey="token" pagination={false} columns={compactColumns('token', 'Token')} dataSource={stats.top_tokens || []} /></Card></Col>
             <Col xs={24} lg={8}><Card size="small" title="Top UA"><Table size="small" rowKey="ua" pagination={false} columns={compactColumns('ua', 'UA')} dataSource={stats.top_uas || []} /></Card></Col>
           </Row>
+          <Card className="mt-4" size="small" title="搜索用户">
+            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+              <Input.Search
+                allowClear
+                enterButton={<><SearchOutlined /> 搜索</>}
+                value={userSearch}
+                loading={userSearching}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setUserSearch(value);
+                  if (!value) {
+                    userSearchSequence.current += 1;
+                    setUserSearchRows([]);
+                    setUserSearching(false);
+                  }
+                }}
+                onSearch={searchUsers}
+                placeholder="输入用户 ID 或邮箱，支持邮箱模糊搜索"
+                style={{ maxWidth: 620 }}
+              />
+              <Table
+                size="small"
+                rowKey="id"
+                loading={userSearching}
+                pagination={false}
+                columns={userSearchColumns}
+                dataSource={userSearchRows}
+                scroll={{ x: 1100 }}
+                locale={{ emptyText: userSearch ? '未找到匹配用户' : '输入用户 ID 或邮箱后搜索' }}
+              />
+            </Space>
+          </Card>
           <Card className="mt-4" size="small" title="订阅防控用户排行">
             <Table size="small" rowKey={(row) => String(row.user_id || row.token)} pagination={{ pageSize: 10, size: 'small', showSizeChanger: true }} columns={subscribeUserColumns} dataSource={stats.top_subscribe_users || []} scroll={{ x: 900 }} />
           </Card>
