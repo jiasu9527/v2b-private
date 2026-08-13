@@ -78,6 +78,45 @@ type SplitGroupUser = {
   remarks?: string;
 };
 
+function ClientEntryDetailRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return <div className="legacy-detail-row">
+    <div className="legacy-detail-label">{label}</div>
+    <div className="legacy-detail-value">{children === null || children === undefined || children === '' ? '-' : children}</div>
+  </div>;
+}
+
+function ClientEntryDetailSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return <section className="legacy-detail-section">
+    <div className="legacy-detail-section-title">{title}</div>
+    <div className="legacy-detail-grid">{children}</div>
+  </section>;
+}
+
+function subscribeGuardReasonText(reason: any) {
+  const labels: Record<string, string> = {
+    pass: '放行',
+    whitelist: '白名单',
+    ip: 'IP 拦截',
+    token: 'Token 拦截',
+    ua: 'UA 拦截',
+    rate_limit: '频率限制',
+  };
+  return labels[String(reason)] || String(reason || '-');
+}
+
+function splitGroupUserHasPlan(user: any) {
+  const planID = Number(user?.plan_id);
+  return Number.isFinite(planID) && planID > 0;
+}
+
+function splitGroupUserStatus(user: any) {
+  if (Number(user?.banned) !== 0) return <Tag color="red">已封禁</Tag>;
+  if (!splitGroupUserHasPlan(user)) return <Tag>未购买套餐</Tag>;
+  const expiredAt = Number(user?.expired_at || 0);
+  if (expiredAt > 0 && expiredAt <= Date.now() / 1000) return <Tag color="orange">已过期</Tag>;
+  return <Tag color="green">正常</Tag>;
+}
+
 function isSplitPolicy(row: any) {
   return String(row?.mode || '').toLowerCase() === 'split';
 }
@@ -1018,7 +1057,10 @@ function SplitGroupUsersModal({ row, group, open, onClose }: { row: any; group: 
   const [searchInput, setSearchInput] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
   const [loading, setLoading] = useState(false);
+  const [detail, setDetail] = useState<any>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const requestSequence = useRef(0);
+  const detailRequestSequence = useRef(0);
 
   const loadUsers = async (nextCurrent: number, nextPageSize: number, nextSearch: string) => {
     const sequence = ++requestSequence.current;
@@ -1057,18 +1099,59 @@ function SplitGroupUsersModal({ row, group, open, onClose }: { row: any; group: 
   };
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      // Invalidate pending requests and close the nested detail dialog together
+      // with the fixed-user list dialog.
+      requestSequence.current += 1;
+      detailRequestSequence.current += 1;
+      setDetail(null);
+      setDetailLoading(false);
+      return;
+    }
     setUsers([]);
     setTotal(0);
     setCurrent(1);
     setPageSize(20);
     setSearchInput('');
     setAppliedSearch('');
+    setDetail(null);
+    setDetailLoading(false);
     void loadUsers(1, 20, '');
-    return () => { requestSequence.current += 1; };
+    return () => {
+      requestSequence.current += 1;
+      detailRequestSequence.current += 1;
+    };
   }, [open, row.id, group.id]);
 
-  const now = Math.floor(Date.now() / 1000);
+  const showUserDetail = async (user: SplitGroupUser) => {
+    const userID = Number(user.user_id || 0);
+    if (!userID) return message.warning('用户 ID 不存在');
+    const sequence = ++detailRequestSequence.current;
+    setDetail({ user: { ...user, id: userID }, stats: {} });
+    setDetailLoading(true);
+    try {
+      const response = await apiGet('/subscribe-guard/user-detail', { id: userID });
+      if (sequence !== detailRequestSequence.current) return;
+      const payload = response?.data ?? response ?? {};
+      setDetail({
+        ...payload,
+        user: { ...user, ...(payload?.user || {}), id: userID },
+      });
+    } catch (error: any) {
+      if (sequence !== detailRequestSequence.current) return;
+      setDetail(null);
+      message.error(error?.message || '读取用户详情失败');
+    } finally {
+      if (sequence === detailRequestSequence.current) setDetailLoading(false);
+    }
+  };
+
+  const closeUserDetail = () => {
+    detailRequestSequence.current += 1;
+    setDetail(null);
+    setDetailLoading(false);
+  };
+
   const columns: any[] = [
     {
       title: '用户',
@@ -1083,19 +1166,15 @@ function SplitGroupUsersModal({ row, group, open, onClose }: { row: any; group: 
       title: '套餐',
       key: 'plan',
       width: 160,
-      render: (_: any, user: SplitGroupUser) => user.plan_id
+      render: (_: any, user: SplitGroupUser) => splitGroupUserHasPlan(user)
         ? <Space direction="vertical" size={2}><span>{user.plan_name || `套餐 #${user.plan_id}`}</span><Typography.Text type="secondary">ID: {user.plan_id}</Typography.Text></Space>
-        : <Tag>无套餐</Tag>,
+        : <Tag>未购买套餐</Tag>,
     },
     {
       title: '状态',
       key: 'status',
       width: 100,
-      render: (_: any, user: SplitGroupUser) => Number(user.banned) !== 0
-        ? <Tag color="red">已封禁</Tag>
-        : Number(user.expired_at || 0) > 0 && Number(user.expired_at) <= now
-          ? <Tag color="orange">已过期</Tag>
-          : <Tag color="green">正常</Tag>,
+      render: (_: any, user: SplitGroupUser) => splitGroupUserStatus(user),
     },
     {
       title: '已用 / 总流量',
@@ -1122,16 +1201,37 @@ function SplitGroupUsersModal({ row, group, open, onClose }: { row: any; group: 
         ? <Typography.Text ellipsis={{ tooltip: value }} style={{ maxWidth: 150 }}>{value}</Typography.Text>
         : '-',
     },
+    { title: '操作', key: 'action', fixed: 'right', width: 100, render: (_: any, user: SplitGroupUser) => <Button type="link" size="small" onClick={() => showUserDetail(user)}>查看详细</Button> },
   ];
 
-  return <Modal
-    title={`${splitGroupDisplayName(group)} · 固定用户名单`}
-    open={open}
-    onCancel={onClose}
-    footer={null}
-    width={1280}
-    destroyOnHidden
-  >
+  const detailUser = detail?.user || {};
+  const detailStats = detail?.stats || {};
+  const detailRecent = Array.isArray(detailStats.recent) ? detailStats.recent : [];
+  const detailIPs = Array.isArray(detailStats.ips) ? detailStats.ips : [];
+  const detailUAs = Array.isArray(detailStats.uas) ? detailStats.uas : [];
+  const detailIPCount = Number(detailStats.ip_count ?? detailIPs.length);
+  const detailUACount = Number(detailStats.ua_count ?? detailUAs.length);
+  const detailUsed = Number(detailUser.u || 0) + Number(detailUser.d || 0);
+  const detailRecentColumns: any[] = [
+    { title: '时间', dataIndex: 'time', width: 170, render: formatSnapshotTime },
+    { title: '结果', dataIndex: 'blocked', width: 105, render: (blocked: any, item: any) => <Tag color={blocked ? 'red' : 'green'}>{subscribeGuardReasonText(item.reason)}</Tag> },
+    { title: '请求 IP', dataIndex: 'ip', width: 155, render: (value: any) => <Typography.Text copyable={{ text: String(value || '') }}>{value || '-'}</Typography.Text> },
+    { title: 'User-Agent', dataIndex: 'ua', ellipsis: true, render: (value: any) => <Typography.Text ellipsis={{ tooltip: value }}>{value || '-'}</Typography.Text> },
+  ];
+  const compactDetailColumns = (field: string, title: string) => [
+    { title, dataIndex: field, ellipsis: true, render: (value: any) => <Typography.Text copyable={{ text: String(value || '') }} ellipsis>{value || '-'}</Typography.Text> },
+    { title: '次数', dataIndex: 'count', width: 80 },
+  ];
+
+  return <>
+    <Modal
+      title={`${splitGroupDisplayName(group)} · 固定用户名单`}
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      width={1280}
+      destroyOnHidden
+    >
     <Alert
       type="info"
       showIcon
@@ -1159,7 +1259,7 @@ function SplitGroupUsersModal({ row, group, open, onClose }: { row: any; group: 
       loading={loading}
       columns={columns}
       dataSource={users}
-      scroll={{ x: 1455, y: 520 }}
+      scroll={{ x: 1555, y: 520 }}
       pagination={{
         current,
         pageSize,
@@ -1170,7 +1270,57 @@ function SplitGroupUsersModal({ row, group, open, onClose }: { row: any; group: 
         onChange: (page, size) => { void loadUsers(page, size, appliedSearch); },
       }}
     />
-  </Modal>;
+    </Modal>
+    <Modal
+      title="固定名单用户详情"
+      open={!!detail}
+      onCancel={closeUserDetail}
+      footer={<Button onClick={closeUserDetail}>关闭</Button>}
+      width={980}
+      destroyOnHidden
+    >
+      <Spin spinning={detailLoading}>
+        <div className="legacy-detail-modal">
+          <ClientEntryDetailSection title="账号信息">
+            <ClientEntryDetailRow label="用户 ID">#{detailUser.id || '-'}</ClientEntryDetailRow>
+            <ClientEntryDetailRow label="邮箱"><Typography.Text copyable={{ text: String(detailUser.email || '') }}>{detailUser.email || '-'}</Typography.Text></ClientEntryDetailRow>
+            <ClientEntryDetailRow label="账号状态">{splitGroupUserStatus(detailUser)}</ClientEntryDetailRow>
+            <ClientEntryDetailRow label="套餐">{splitGroupUserHasPlan(detailUser) ? (detailUser.plan_name || `套餐 #${detailUser.plan_id}`) : '未购买套餐'}</ClientEntryDetailRow>
+            <ClientEntryDetailRow label="到期时间">{splitGroupUserHasPlan(detailUser) ? (Number(detailUser.expired_at || 0) > 0 ? formatSnapshotTime(detailUser.expired_at) : '长期有效') : '-'}</ClientEntryDetailRow>
+            <ClientEntryDetailRow label="已用 / 总流量">{bytes(detailUsed)} / {bytes(detailUser.transfer_enable)}</ClientEntryDetailRow>
+            <ClientEntryDetailRow label="最后订阅">{formatSnapshotTime(detailUser.last_subscribe_at)}</ClientEntryDetailRow>
+            <ClientEntryDetailRow label="固定时间">{formatSnapshotTime(detailUser.assigned_at)}</ClientEntryDetailRow>
+            <ClientEntryDetailRow label="注册时间">{formatSnapshotTime(detailUser.created_at)}</ClientEntryDetailRow>
+            <ClientEntryDetailRow label="最后在线">{formatSnapshotTime(detailUser.t || detailUser.last_login_at)}</ClientEntryDetailRow>
+            <ClientEntryDetailRow label="备注">{detailUser.remarks || '-'}</ClientEntryDetailRow>
+          </ClientEntryDetailSection>
+          <ClientEntryDetailSection title="订阅防控数据">
+            <ClientEntryDetailRow label="总请求">{Number(detailStats.total || 0)}</ClientEntryDetailRow>
+            <ClientEntryDetailRow label="已放行">{Number(detailStats.allowed || 0)}</ClientEntryDetailRow>
+            <ClientEntryDetailRow label="已拦截">{Number(detailStats.blocked || 0)}</ClientEntryDetailRow>
+            <ClientEntryDetailRow label="请求 IP">{detailIPCount} 个</ClientEntryDetailRow>
+            <ClientEntryDetailRow label="User-Agent">{detailUACount} 个</ClientEntryDetailRow>
+            <ClientEntryDetailRow label="结果统计">{Object.entries(detailStats.reason_counts || {}).map(([reason, count]) => `${subscribeGuardReasonText(reason)} ${count}`).join(' / ') || '-'}</ClientEntryDetailRow>
+          </ClientEntryDetailSection>
+          <Card size="small" title={`近期订阅防控记录 (${detailRecent.length})`}>
+            <Table
+              size="small"
+              rowKey={(_, index) => String(index)}
+              pagination={{ pageSize: 10, size: 'small' }}
+              columns={detailRecentColumns}
+              dataSource={detailRecent}
+              scroll={{ x: 760 }}
+              locale={{ emptyText: '保留期内暂无订阅防控记录' }}
+            />
+          </Card>
+          <Space align="start" size="middle" style={{ width: '100%' }} wrap>
+            <Card size="small" title={`请求 IP (${detailIPCount})`} style={{ flex: '1 1 390px' }}><Table size="small" rowKey="ip" pagination={{ pageSize: 8, size: 'small' }} columns={compactDetailColumns('ip', 'IP')} dataSource={detailIPs} /></Card>
+            <Card size="small" title={`User-Agent (${detailUACount})`} style={{ flex: '1 1 390px' }}><Table size="small" rowKey="ua" pagination={{ pageSize: 8, size: 'small' }} columns={compactDetailColumns('ua', 'User-Agent')} dataSource={detailUAs} /></Card>
+          </Space>
+        </div>
+      </Spin>
+    </Modal>
+  </>;
 }
 
 function SplitGroupRowActions({
