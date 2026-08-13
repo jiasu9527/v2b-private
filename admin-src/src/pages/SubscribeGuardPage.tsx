@@ -184,6 +184,7 @@ function DetailSection({ title, children }: { title: string; children: React.Rea
 
 function userStatus(row: any) {
   if (Number(row?.banned)) return <Tag color="red">已封禁</Tag>;
+  if (!(Number(row?.plan_id) > 0)) return <Tag>未购买套餐</Tag>;
   const expiredAt = Number(row?.expired_at || 0);
   if (expiredAt > 0 && expiredAt < Date.now() / 1000) return <Tag color="orange">已过期</Tag>;
   return <Tag color="green">正常</Tag>;
