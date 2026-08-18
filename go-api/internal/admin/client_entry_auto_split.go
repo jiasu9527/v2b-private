@@ -457,7 +457,7 @@ WHERE id = $3 AND status = 'pending'`, now, saturatingUnixAdd(now, clientEntryAu
 }
 
 func loadClientEntryAutoSplitSourceStates(ctx context.Context, tx *sql.Tx, operation clientEntryAutoSplitOperation, now int64) (int64, int64, []clientEntryAutoSplitSourceState, error) {
-	// Result reporting locks a probe before it takes a shared target lock.  Lock
+	// Result reporting locks a probe before it takes a shared target lock. Lock
 	// all online probes first as well, otherwise a worker and a probe report can
 	// deadlock in opposite probe/target order.
 	rows, err := tx.QueryContext(ctx, `SELECT probe.id
@@ -485,6 +485,23 @@ FOR SHARE OF probe`, saturatingUnixAdd(now, -time.Duration(defaultProbeOfflineSe
 	}
 	if err := rows.Close(); err != nil {
 		return 0, 0, nil, fmt.Errorf("close online probes for automatic split: %w", err)
+	}
+
+	// Target refresh/settings transactions lock monitor -> target. Keep that
+	// order here too: the successful split later inserts child targets whose FK
+	// check needs a key-share lock on this monitor. Taking the monitor key-share
+	// before the target update lock prevents a refresh holding monitor FOR UPDATE
+	// from waiting on our target while we wait on its monitor row. This remains
+	// after the probe locks so probe result ingestion keeps probe -> target order.
+	var lockedMonitorID int64
+	if err := tx.QueryRowContext(ctx, `SELECT id
+FROM v2_client_entry_monitor
+WHERE id = $1
+FOR KEY SHARE`, operation.MonitorID).Scan(&lockedMonitorID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, 0, nil, err
+		}
+		return 0, 0, nil, fmt.Errorf("lock client entry monitor for automatic split: %w", err)
 	}
 
 	var checkIntervalSec, tcpTimeoutMS int64

@@ -253,6 +253,9 @@ func expectClientEntryAutoSplitSource(mock sqlmock.Sqlmock, now int64, states []
 	}
 	mock.ExpectQuery(`(?s)SELECT probe.id.*FROM v2_dns_probe probe.*FOR SHARE OF probe`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(probeRows)
+	mock.ExpectQuery(`(?s)SELECT id.*FROM v2_client_entry_monitor.*WHERE id = \$1.*FOR KEY SHARE`).
+		WithArgs(int64(3)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(3)))
 	mock.ExpectQuery(`(?s)SELECT target.source_key, target.host, target.generation,.*FOR UPDATE OF target`).
 		WithArgs(int64(5), int64(3)).
 		WillReturnRows(sqlmock.NewRows([]string{
