@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -85,6 +86,120 @@ func handleAdminSubscribeGuardUserSearch(w http.ResponseWriter, r *http.Request,
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": rows, "total": result.Total})
 	return true
+}
+
+const (
+	subscribeGuardUASearchDefaultPageSize int64 = 20
+	subscribeGuardUASearchMaxPageSize     int64 = 100
+	subscribeGuardUASearchMaxPage         int64 = 100000
+)
+
+func handleAdminSubscribeGuardUASearch(w http.ResponseWriter, r *http.Request, cfg config.Config, sessionService session.Service, userService usersvc.Service, adminService admin.Service) bool {
+	disableResponseCache(w)
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"message": "请求方式不支持"})
+		return true
+	}
+	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
+		return true
+	}
+	if adminService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
+		return true
+	}
+	inputs, err := readInputs(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+	keyword := strings.TrimSpace(inputs["keyword"])
+	if keyword == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "请输入 UA 关键词"})
+		return true
+	}
+	if len(keyword) > 255 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "UA 关键词过长"})
+		return true
+	}
+	current, pageSize, err := subscribeGuardUASearchPagination(inputs)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+
+	groups, matchedEvents, unresolvedEvents := subscribeGuardUASearchSnapshot(r.Context(), cfg, keyword, userService)
+	total := int64(len(groups))
+	rows := make([]map[string]any, 0, pageSize)
+	start := (current - 1) * pageSize
+	if start < total {
+		end := start + pageSize
+		if end > total {
+			end = total
+		}
+		for _, group := range groups[start:end] {
+			info, infoErr := adminService.GetUserInfoByID(r.Context(), group.UserID)
+			if infoErr != nil {
+				return handleAdminError(w, infoErr)
+			}
+			rows = append(rows, subscribeGuardUASearchPublicRow(group, info))
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data":              rows,
+		"total":             total,
+		"current":           current,
+		"page_size":         pageSize,
+		"matched_events":    matchedEvents,
+		"unresolved_events": unresolvedEvents,
+	})
+	return true
+}
+
+func subscribeGuardUASearchPagination(inputs map[string]string) (int64, int64, error) {
+	current := int64(1)
+	if raw := strings.TrimSpace(inputs["current"]); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed <= 0 || parsed > subscribeGuardUASearchMaxPage {
+			return 0, 0, fmt.Errorf("页码无效")
+		}
+		current = parsed
+	}
+	pageSize := subscribeGuardUASearchDefaultPageSize
+	if raw := strings.TrimSpace(inputs["page_size"]); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed <= 0 || parsed > subscribeGuardUASearchMaxPageSize {
+			return 0, 0, fmt.Errorf("每页数量无效（1-%d）", subscribeGuardUASearchMaxPageSize)
+		}
+		pageSize = parsed
+	}
+	return current, pageSize, nil
+}
+
+func subscribeGuardUASearchPublicRow(group subscribeGuardUASearchGroup, info map[string]any) map[string]any {
+	row := map[string]any{
+		"user_id":  group.UserID,
+		"count":    group.Count,
+		"allowed":  group.Allowed,
+		"blocked":  group.Blocked,
+		"ip_count": group.IPCount,
+		"ua_count": group.UACount,
+		"first_at": group.FirstAt,
+		"last_at":  group.LastAt,
+		"recent":   group.Recent,
+	}
+	for _, key := range []string{
+		"id", "email", "banned", "plan_id", "plan_name", "u", "d", "transfer_enable", "expired_at",
+	} {
+		if value, ok := info[key]; ok {
+			row[key] = value
+		}
+	}
+	row["id"] = group.UserID
+	if _, ok := row["email"]; !ok || strings.TrimSpace(fmt.Sprint(row["email"])) == "" {
+		row["email"] = fmt.Sprintf("用户 #%d", group.UserID)
+	}
+	return row
 }
 
 func isDecimalDigits(value string) bool {

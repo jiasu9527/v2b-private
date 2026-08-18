@@ -32,6 +32,8 @@ var defaultSubscribeCrawlerUA = []string{
 	"postman",
 }
 
+const subscribeGuardUASearchRecentLimit = 20
+
 type subscribeGuardBucket struct {
 	windowStart time.Time
 	count       int64
@@ -328,6 +330,118 @@ func subscribeGuardUserStatsSnapshot(cfg config.Config, userID int64, token stri
 		"uas":           topSubscribeGuardItems(uaCounts, "ua", minInt(len(uaCounts), 100)),
 		"recent":        recent,
 	}
+}
+
+// subscribeGuardUASearchGroup contains only data that is safe to expose to an
+// authenticated administrator. Tokens stay in the persisted event internally.
+type subscribeGuardUASearchGroup struct {
+	UserID  int64
+	Count   int64
+	Allowed int64
+	Blocked int64
+	FirstAt int64
+	LastAt  int64
+	IPCount int64
+	UACount int64
+	Recent  []subscribeGuardUserEvent
+	ips     map[string]struct{}
+	uas     map[string]struct{}
+}
+
+// subscribeGuardUASearchSnapshot scans the retained log instead of the
+// dashboard's recent-record subset, then groups matching requests by user.
+// Legacy records are resolved through their canonical/raw token when possible;
+// only records that still cannot be attributed are counted as unresolved.
+func subscribeGuardUASearchSnapshot(ctx context.Context, cfg config.Config, keyword string, userService usersvc.Service) (groups []subscribeGuardUASearchGroup, matchedEvents, unresolvedEvents int64) {
+	needle := strings.ToLower(strings.TrimSpace(keyword))
+	if needle == "" {
+		return []subscribeGuardUASearchGroup{}, 0, 0
+	}
+
+	byUserID := make(map[int64]*subscribeGuardUASearchGroup)
+	legacyUserIDs := make(map[string]int64)
+	for _, event := range subscribeGuardEventsSnapshot(cfg) {
+		if !strings.Contains(strings.ToLower(strings.TrimSpace(event.UA)), needle) {
+			continue
+		}
+		matchedEvents++
+		userID := event.UserID
+		if userID <= 0 {
+			legacyToken := strings.TrimSpace(event.CanonicalToken)
+			if legacyToken == "" {
+				legacyToken = strings.TrimSpace(event.Token)
+			}
+			if legacyToken != "" && userService != nil {
+				var cached bool
+				userID, cached = legacyUserIDs[legacyToken]
+				if !cached {
+					resolvedUserID, err := peekSubscribeGuardLegacyUserID(ctx, userService, legacyToken)
+					if err == nil && resolvedUserID > 0 {
+						userID = resolvedUserID
+					}
+					legacyUserIDs[legacyToken] = userID
+				}
+			}
+		}
+		if userID <= 0 {
+			unresolvedEvents++
+			continue
+		}
+
+		group := byUserID[userID]
+		if group == nil {
+			group = &subscribeGuardUASearchGroup{
+				UserID: userID,
+				ips:    make(map[string]struct{}),
+				uas:    make(map[string]struct{}),
+			}
+			byUserID[userID] = group
+		}
+		group.Count++
+		if event.Blocked {
+			group.Blocked++
+		} else {
+			group.Allowed++
+		}
+		if group.Count == 1 || event.Time < group.FirstAt {
+			group.FirstAt = event.Time
+		}
+		if group.Count == 1 || event.Time > group.LastAt {
+			group.LastAt = event.Time
+		}
+		if event.IP != "" {
+			group.ips[event.IP] = struct{}{}
+		}
+		if event.UA != "" {
+			group.uas[event.UA] = struct{}{}
+		}
+		group.Recent = append(group.Recent, subscribeGuardUserEvent{
+			Time: event.Time, IP: event.IP, UA: event.UA, Status: event.Status, Reason: event.Reason, Blocked: event.Blocked,
+		})
+		sort.SliceStable(group.Recent, func(i, j int) bool {
+			return group.Recent[i].Time > group.Recent[j].Time
+		})
+		if len(group.Recent) > subscribeGuardUASearchRecentLimit {
+			group.Recent = group.Recent[:subscribeGuardUASearchRecentLimit]
+		}
+	}
+
+	groups = make([]subscribeGuardUASearchGroup, 0, len(byUserID))
+	for _, group := range byUserID {
+		group.IPCount = int64(len(group.ips))
+		group.UACount = int64(len(group.uas))
+		groups = append(groups, *group)
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].LastAt != groups[j].LastAt {
+			return groups[i].LastAt > groups[j].LastAt
+		}
+		if groups[i].Count != groups[j].Count {
+			return groups[i].Count > groups[j].Count
+		}
+		return groups[i].UserID < groups[j].UserID
+	})
+	return groups, matchedEvents, unresolvedEvents
 }
 
 func topSubscribeGuardUserIDItems(counts map[int64]int64, uas map[int64]map[string]struct{}, ips map[int64]map[string]struct{}, limit int) []map[string]any {

@@ -969,6 +969,7 @@ type fakeAdminService struct {
 	lastMailTestEmail             string
 	userList                      admin.UserListResult
 	userInfoDetail                map[string]any
+	userInfoDetails               map[int64]map[string]any
 	userGenerateCSV               string
 	userGenerateBatch             bool
 	userDumpCSV                   string
@@ -1256,6 +1257,9 @@ func (f *fakeAdminService) ListUsers(_ context.Context, req admin.UserFetchReque
 
 func (f *fakeAdminService) GetUserInfoByID(_ context.Context, id int64) (map[string]any, error) {
 	f.lastUserInfoID = id
+	if f.userInfoDetails != nil {
+		return f.userInfoDetails[id], f.err
+	}
 	return f.userInfoDetail, f.err
 }
 

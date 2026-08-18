@@ -956,6 +956,125 @@ func TestRouterAdminSubscribeGuardUserSearchUsesExactNumericID(t *testing.T) {
 	}
 }
 
+func TestRouterAdminSubscribeGuardUASearchEndpoint(t *testing.T) {
+	resetSubscribeGuardStateForTest()
+	publicDir := filepath.Join(t.TempDir(), "public")
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{PublicDir: publicDir, AdminPath: "localadmin", SubscribeGuardLogKeepDays: 7}
+	now := time.Now().Unix()
+	events := []subscribeGuardEvent{
+		{Time: now - 5, UserID: 10, Token: "secret-token-10-a", IP: "203.0.113.10", UA: "curl/8.0", Status: http.StatusOK, Reason: "pass"},
+		{Time: now - 3, UserID: 10, Token: "secret-token-10-b", IP: "203.0.113.11", UA: "CURL/8.1", Status: http.StatusForbidden, Reason: "ua", Blocked: true},
+		{Time: now - 1, UserID: 20, Token: "secret-token-20", IP: "198.51.100.20", UA: "curl/7.0", Status: http.StatusOK, Reason: "pass"},
+		{Time: now - 2, UserID: 20, Token: "clash-token", IP: "198.51.100.21", UA: "Clash/1.0", Status: http.StatusOK, Reason: "pass"},
+		{Time: now - 4, Token: "legacy-secret-token", CanonicalToken: "canonical-secret-token", IP: "192.0.2.30", UA: "curl/6.0", Status: http.StatusForbidden, Reason: "ua", Blocked: true},
+		{Time: now - 6, IP: "192.0.2.31", UA: "curl/5.0", Status: http.StatusForbidden, Reason: "ua", Blocked: true},
+	}
+	if err := writeSubscribeGuardEvents(cfg, events); err != nil {
+		t.Fatal(err)
+	}
+	resetSubscribeGuardStateForTest()
+
+	adminService := &fakeAdminService{userInfoDetails: map[int64]map[string]any{
+		10: {"id": int64(10), "email": "ten@example.com", "banned": int64(0), "plan_id": int64(2), "plan_name": "Pro", "password": "secret-password-10", "token": "secret-user-token-10", "uuid": "secret-uuid-10"},
+		20: {"id": int64(20), "email": "twenty@example.com", "banned": int64(1), "plan_id": int64(0), "password": "secret-password-20", "token": "secret-user-token-20", "uuid": "secret-uuid-20"},
+		30: {"id": int64(30), "email": "legacy@example.com", "banned": int64(0), "plan_id": int64(3), "password": "secret-password-30", "token": "secret-user-token-30", "uuid": "secret-uuid-30"},
+	}}
+	userService := &fakeUserService{resolvedClientUserID: 30}
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1, Email: "admin@example.com"}}
+	router := NewRouter(cfg, WithAdminService(adminService), WithSessionService(sessionService), WithUserService(userService))
+
+	request := func(page string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/subscribe-guard/ua-search?auth_data=jwt-admin&keyword=CuRl&current="+page+"&page_size=1", nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	first := request("1")
+	if first.Code != http.StatusOK {
+		t.Fatalf("expected first page 200, got %d: %s", first.Code, first.Body.String())
+	}
+	for _, secret := range []string{"secret-token-10-a", "secret-token-10-b", "legacy-secret-token", "canonical-secret-token", "secret-password-10", "secret-user-token-10", "secret-uuid-10"} {
+		if strings.Contains(first.Body.String(), secret) {
+			t.Fatalf("UA search leaked sensitive value %q: %s", secret, first.Body.String())
+		}
+	}
+	var firstPayload struct {
+		Data             []map[string]any `json:"data"`
+		Total            int64            `json:"total"`
+		Current          int64            `json:"current"`
+		PageSize         int64            `json:"page_size"`
+		MatchedEvents    int64            `json:"matched_events"`
+		UnresolvedEvents int64            `json:"unresolved_events"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &firstPayload); err != nil {
+		t.Fatal(err)
+	}
+	if firstPayload.Total != 3 || firstPayload.Current != 1 || firstPayload.PageSize != 1 || firstPayload.MatchedEvents != 5 || firstPayload.UnresolvedEvents != 1 {
+		t.Fatalf("unexpected UA search pagination counters: %#v", firstPayload)
+	}
+	if len(firstPayload.Data) != 1 || firstPayload.Data[0]["user_id"] != float64(20) || firstPayload.Data[0]["email"] != "twenty@example.com" {
+		t.Fatalf("unexpected first UA search row: %#v", firstPayload.Data)
+	}
+
+	second := request("2")
+	if second.Code != http.StatusOK {
+		t.Fatalf("expected second page 200, got %d: %s", second.Code, second.Body.String())
+	}
+	for _, secret := range []string{"secret-token-10-a", "secret-token-10-b", "secret-password-10", "secret-user-token-10", "secret-uuid-10"} {
+		if strings.Contains(second.Body.String(), secret) {
+			t.Fatalf("UA search leaked sensitive value %q: %s", secret, second.Body.String())
+		}
+	}
+	var secondPayload struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(second.Body.Bytes(), &secondPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(secondPayload.Data) != 1 {
+		t.Fatalf("expected one second-page row, got %#v", secondPayload.Data)
+	}
+	row := secondPayload.Data[0]
+	if row["user_id"] != float64(10) || row["email"] != "ten@example.com" || row["count"] != float64(2) || row["allowed"] != float64(1) || row["blocked"] != float64(1) || row["ip_count"] != float64(2) || row["ua_count"] != float64(2) {
+		t.Fatalf("unexpected second UA search row: %#v", row)
+	}
+	recent, ok := row["recent"].([]any)
+	if !ok || len(recent) != 2 {
+		t.Fatalf("expected two safe recent requests, got %#v", row["recent"])
+	}
+	if cacheControl := second.Header().Get("Cache-Control"); !strings.Contains(cacheControl, "no-store") {
+		t.Fatalf("expected no-store response, got %q", cacheControl)
+	}
+
+	third := request("3")
+	if third.Code != http.StatusOK {
+		t.Fatalf("expected third page 200, got %d: %s", third.Code, third.Body.String())
+	}
+	var thirdPayload struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(third.Body.Bytes(), &thirdPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(thirdPayload.Data) != 1 || thirdPayload.Data[0]["user_id"] != float64(30) || thirdPayload.Data[0]["email"] != "legacy@example.com" || thirdPayload.Data[0]["count"] != float64(1) {
+		t.Fatalf("expected legacy token request to resolve to user 30, got %#v", thirdPayload.Data)
+	}
+	if userService.lastClientToken != "canonical-secret-token" {
+		t.Fatalf("expected canonical token to be used for legacy lookup, got %q", userService.lastClientToken)
+	}
+
+	tooMany := httptest.NewRecorder()
+	tooManyReq := httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/subscribe-guard/ua-search?auth_data=jwt-admin&keyword=curl&page_size=101", nil)
+	router.ServeHTTP(tooMany, tooManyReq)
+	if tooMany.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid page size 400, got %d: %s", tooMany.Code, tooMany.Body.String())
+	}
+}
+
 func TestSubscribeGuardStatsSurvivesMemoryResetFromLogFile(t *testing.T) {
 	resetSubscribeGuardStateForTest()
 	publicDir := filepath.Join(t.TempDir(), "public")
