@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -17,14 +18,25 @@ import (
 
 func handleAdminSubscribeGuardStats(w http.ResponseWriter, r *http.Request, cfg config.Config, sessionService session.Service, nodeService nodeapi.Service, userService usersvc.Service, adminService admin.Service) bool {
 	disableResponseCache(w)
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"message": "请求方式不支持"})
+		return true
+	}
 	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
 		return true
 	}
-	stats := subscribeGuardStatsSnapshot(cfg)
-	enrichSubscribeGuardUserRank(r.Context(), stats, userService, adminService)
+	userRankSort, err := parseSubscribeGuardUserRankSort(r.URL.Query().Get("user_rank_sort"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return true
+	}
+	events := subscribeGuardEventsSnapshot(cfg)
+	stats := subscribeGuardStatsSnapshotFromEvents(events)
+	enrichSubscribeGuardUserRank(r.Context(), events, stats, userService, adminService, userRankSort)
 	if nodeService != nil {
-		sensitive, err := nodeService.SensitiveAccessStats(r.Context(), 20)
-		if err == nil {
+		sensitive, sensitiveErr := nodeService.SensitiveAccessStats(r.Context(), 20)
+		if sensitiveErr == nil {
 			stats["sensitive"] = sensitive
 		}
 	}
@@ -335,45 +347,202 @@ func subscribeGuardCanonicalToken(info map[string]any) string {
 	return strings.TrimSpace(token)
 }
 
-func enrichSubscribeGuardUserRank(ctx context.Context, stats map[string]any, userService usersvc.Service, adminService admin.Service) {
-	if userService == nil {
-		return
+const (
+	subscribeGuardUserRankSortCount   = "count"
+	subscribeGuardUserRankSortIPCount = "ip_count"
+	subscribeGuardUserRankLimit       = 20
+	subscribeGuardUserRankDetailLimit = 100
+	// Legacy token-only events require a database lookup before they can be
+	// attributed to a user. Cap candidates so attacker-controlled tokens cannot
+	// turn one dashboard refresh into an unbounded number of database queries.
+	subscribeGuardLegacyUserRankResolveLimit = 40
+)
+
+type subscribeGuardUserRankAggregate struct {
+	UserID int64
+	Token  string
+	Count  int64
+	UAs    map[string]struct{}
+	IPs    map[string]struct{}
+}
+
+func parseSubscribeGuardUserRankSort(raw string) (string, error) {
+	sortBy := strings.ToLower(strings.TrimSpace(raw))
+	if sortBy == "" {
+		return subscribeGuardUserRankSortCount, nil
 	}
-	userIDItems, _ := stats["top_subscribe_user_ids"].([]map[string]any)
-	result := make([]map[string]any, 0, len(userIDItems))
-	for _, item := range userIDItems {
-		userID := anyInt64(item["user_id"])
-		if userID <= 0 {
+	if sortBy != subscribeGuardUserRankSortCount && sortBy != subscribeGuardUserRankSortIPCount {
+		return "", fmt.Errorf("用户排行榜排序方式无效")
+	}
+	return sortBy, nil
+}
+
+// subscribeGuardUserRankItems scans every retained event and only applies the
+// user limit after aggregation and sorting. Legacy token-only candidates are
+// separately pre-ranked and lookup-capped to keep dashboard refresh bounded.
+func subscribeGuardUserRankItems(ctx context.Context, cfg config.Config, userService usersvc.Service, sortBy string, limit int) []map[string]any {
+	return subscribeGuardUserRankItemsFromEvents(ctx, subscribeGuardEventsSnapshot(cfg), userService, sortBy, limit)
+}
+
+func subscribeGuardUserRankItemsFromEvents(ctx context.Context, events []subscribeGuardEvent, userService usersvc.Service, sortBy string, limit int) []map[string]any {
+	if sortBy != subscribeGuardUserRankSortIPCount {
+		sortBy = subscribeGuardUserRankSortCount
+	}
+	aggregates := make(map[int64]*subscribeGuardUserRankAggregate)
+	legacyAggregates := make(map[string]*subscribeGuardUserRankAggregate)
+	for _, event := range events {
+		if event.UserID > 0 {
+			aggregate := ensureSubscribeGuardUserRankAggregate(aggregates, event.UserID)
+			addSubscribeGuardUserRankEvent(aggregate, event)
 			continue
 		}
-		if next, ok := subscribeGuardUserRankRow(ctx, userID, item, userService, adminService); ok {
-			result = append(result, next)
-		}
-	}
 
-	legacyItems, _ := stats["top_subscribe_tokens"].([]map[string]any)
-	seenUserIDs := make(map[int64]struct{}, len(result))
-	for _, item := range result {
-		seenUserIDs[anyInt64(item["user_id"])] = struct{}{}
-	}
-	for _, item := range legacyItems {
-		token, _ := item["token"].(string)
-		if canonicalToken, ok := item["canonical_token"].(string); ok && strings.TrimSpace(canonicalToken) != "" {
-			token = strings.TrimSpace(canonicalToken)
+		token := strings.TrimSpace(event.CanonicalToken)
+		if token == "" {
+			token = strings.TrimSpace(event.Token)
 		}
 		if token == "" {
 			continue
 		}
-		userID, err := peekSubscribeGuardLegacyUserID(ctx, userService, token)
-		if err != nil || userID <= 0 {
-			continue
+		aggregate := legacyAggregates[token]
+		if aggregate == nil {
+			aggregate = &subscribeGuardUserRankAggregate{
+				Token: token,
+				UAs:   make(map[string]struct{}),
+				IPs:   make(map[string]struct{}),
+			}
+			legacyAggregates[token] = aggregate
 		}
-		if _, exists := seenUserIDs[userID]; exists {
-			continue
+		addSubscribeGuardUserRankEvent(aggregate, event)
+	}
+
+	legacyCandidates := make([]*subscribeGuardUserRankAggregate, 0, len(legacyAggregates))
+	for _, aggregate := range legacyAggregates {
+		legacyCandidates = append(legacyCandidates, aggregate)
+	}
+	sort.Slice(legacyCandidates, func(i, j int) bool {
+		if subscribeGuardUserRankAggregateLess(legacyCandidates[i], legacyCandidates[j], sortBy) {
+			return true
 		}
-		if next, ok := subscribeGuardUserRankRow(ctx, userID, item, userService, adminService); ok {
-			result = append(result, next)
-			seenUserIDs[userID] = struct{}{}
+		if subscribeGuardUserRankAggregateLess(legacyCandidates[j], legacyCandidates[i], sortBy) {
+			return false
+		}
+		return legacyCandidates[i].Token < legacyCandidates[j].Token
+	})
+	if len(legacyCandidates) > subscribeGuardLegacyUserRankResolveLimit {
+		legacyCandidates = legacyCandidates[:subscribeGuardLegacyUserRankResolveLimit]
+	}
+	if userService != nil {
+		for _, legacy := range legacyCandidates {
+			userID, err := peekSubscribeGuardLegacyUserID(ctx, userService, legacy.Token)
+			if err != nil || userID <= 0 {
+				continue
+			}
+			mergeSubscribeGuardUserRankAggregate(ensureSubscribeGuardUserRankAggregate(aggregates, userID), legacy)
+		}
+	}
+
+	items := make([]*subscribeGuardUserRankAggregate, 0, len(aggregates))
+	for _, aggregate := range aggregates {
+		items = append(items, aggregate)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if subscribeGuardUserRankAggregateLess(items[i], items[j], sortBy) {
+			return true
+		}
+		if subscribeGuardUserRankAggregateLess(items[j], items[i], sortBy) {
+			return false
+		}
+		return items[i].UserID < items[j].UserID
+	})
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		uaValues := limitedSortedSubscribeGuardSet(item.UAs, subscribeGuardUserRankDetailLimit)
+		ipValues := limitedSortedSubscribeGuardSet(item.IPs, subscribeGuardUserRankDetailLimit)
+		result = append(result, map[string]any{
+			"user_id":  item.UserID,
+			"count":    item.Count,
+			"ua_count": int64(len(item.UAs)),
+			"uas":      uaValues,
+			"ip_count": int64(len(item.IPs)),
+			"ips":      ipValues,
+		})
+	}
+	return result
+}
+
+func limitedSortedSubscribeGuardSet(values map[string]struct{}, limit int) []string {
+	result := sortedSubscribeGuardSet(values)
+	if limit > 0 && len(result) > limit {
+		return result[:limit]
+	}
+	return result
+}
+
+func ensureSubscribeGuardUserRankAggregate(aggregates map[int64]*subscribeGuardUserRankAggregate, userID int64) *subscribeGuardUserRankAggregate {
+	aggregate := aggregates[userID]
+	if aggregate == nil {
+		aggregate = &subscribeGuardUserRankAggregate{
+			UserID: userID,
+			UAs:    make(map[string]struct{}),
+			IPs:    make(map[string]struct{}),
+		}
+		aggregates[userID] = aggregate
+	}
+	return aggregate
+}
+
+func addSubscribeGuardUserRankEvent(aggregate *subscribeGuardUserRankAggregate, event subscribeGuardEvent) {
+	aggregate.Count++
+	if event.UA != "" {
+		aggregate.UAs[event.UA] = struct{}{}
+	}
+	if event.IP != "" {
+		aggregate.IPs[event.IP] = struct{}{}
+	}
+}
+
+func mergeSubscribeGuardUserRankAggregate(target, source *subscribeGuardUserRankAggregate) {
+	target.Count += source.Count
+	for ua := range source.UAs {
+		target.UAs[ua] = struct{}{}
+	}
+	for ip := range source.IPs {
+		target.IPs[ip] = struct{}{}
+	}
+}
+
+func subscribeGuardUserRankAggregateLess(left, right *subscribeGuardUserRankAggregate, sortBy string) bool {
+	leftIPCount, rightIPCount := len(left.IPs), len(right.IPs)
+	if sortBy == subscribeGuardUserRankSortIPCount {
+		if leftIPCount != rightIPCount {
+			return leftIPCount > rightIPCount
+		}
+		return left.Count > right.Count
+	}
+	if left.Count != right.Count {
+		return left.Count > right.Count
+	}
+	return leftIPCount > rightIPCount
+}
+
+func enrichSubscribeGuardUserRank(ctx context.Context, events []subscribeGuardEvent, stats map[string]any, userService usersvc.Service, adminService admin.Service, sortBy string) {
+	stats["user_rank_sort"] = sortBy
+	result := make([]map[string]any, 0, subscribeGuardUserRankLimit)
+	if userService != nil {
+		items := subscribeGuardUserRankItemsFromEvents(ctx, events, userService, sortBy, subscribeGuardUserRankLimit)
+		for _, item := range items {
+			userID := anyInt64(item["user_id"])
+			if userID <= 0 {
+				continue
+			}
+			if next, ok := subscribeGuardUserRankRow(ctx, userID, item, userService, adminService); ok {
+				result = append(result, next)
+			}
 		}
 	}
 	stats["top_subscribe_users"] = result

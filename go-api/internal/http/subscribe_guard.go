@@ -189,8 +189,10 @@ func recordSubscribeGuardEvent(cfg config.Config, r *http.Request, status int, r
 }
 
 func subscribeGuardStatsSnapshot(cfg config.Config) map[string]any {
-	events := subscribeGuardEventsSnapshot(cfg)
+	return subscribeGuardStatsSnapshotFromEvents(subscribeGuardEventsSnapshot(cfg))
+}
 
+func subscribeGuardStatsSnapshotFromEvents(events []subscribeGuardEvent) map[string]any {
 	total := int64(len(events))
 	blocked := int64(0)
 	reasonCounts := map[string]int64{}

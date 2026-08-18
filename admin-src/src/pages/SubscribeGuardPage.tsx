@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Col, Form, Input, InputNumber, Modal, Popconfirm, Row, Space, Spin, Statistic, Switch, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, Form, Input, InputNumber, Modal, Popconfirm, Row, Segmented, Space, Spin, Statistic, Switch, Table, Tag, Typography, message } from 'antd';
 import { SearchOutlined } from '@ant-design/icons';
 import { apiGet, apiPost, bytes, money, unwrapData } from '../lib/api';
 
@@ -19,6 +19,8 @@ const switchFields = [
   'subscribe_guard_sensitive_enable',
   'subscribe_guard_sensitive_log_ip',
 ];
+
+type SubscribeUserRankSort = 'count' | 'ip_count';
 
 const fields = [
   {
@@ -232,6 +234,8 @@ export default function SubscribeGuardPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [stats, setStats] = useState<any>({});
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [userRankSort, setUserRankSort] = useState<SubscribeUserRankSort>('count');
   const [detailModal, setDetailModal] = useState<any>(null);
   const [userSearch, setUserSearch] = useState('');
   const [userSearching, setUserSearching] = useState(false);
@@ -248,14 +252,41 @@ export default function SubscribeGuardPage() {
   const userSearchSequence = useRef(0);
   const uaSearchSequence = useRef(0);
   const userDetailSequence = useRef(0);
+  const statsSequence = useRef(0);
+  const userRankSortRef = useRef<SubscribeUserRankSort>('count');
+  const loadedUserRankSortRef = useRef<SubscribeUserRankSort>('count');
 
-  const loadStats = async () => {
+  const loadStats = async (rankSort?: SubscribeUserRankSort) => {
+    const requestedRankSort = rankSort || userRankSortRef.current;
+    const sequence = ++statsSequence.current;
+    setStatsLoading(true);
     try {
-      const res = await apiGet('/subscribe-guard/stats');
-      setStats(unwrapData(res) || {});
-    } catch {
-      setStats({});
+      const res = await apiGet('/subscribe-guard/stats', { user_rank_sort: requestedRankSort });
+      if (sequence !== statsSequence.current) return;
+      const nextStats = unwrapData(res) || {};
+      const loadedRankSort: SubscribeUserRankSort = nextStats.user_rank_sort === 'ip_count' ? 'ip_count' : requestedRankSort;
+      loadedUserRankSortRef.current = loadedRankSort;
+      userRankSortRef.current = loadedRankSort;
+      setUserRankSort(loadedRankSort);
+      setStats(nextStats);
+    } catch (e: any) {
+      if (sequence === statsSequence.current) {
+        const loadedRankSort = loadedUserRankSortRef.current;
+        userRankSortRef.current = loadedRankSort;
+        setUserRankSort(loadedRankSort);
+        message.error(e.message || '统计加载失败');
+      }
+    } finally {
+      if (sequence === statsSequence.current) setStatsLoading(false);
     }
+  };
+
+  const changeUserRankSort = (value: string | number) => {
+    const next: SubscribeUserRankSort = value === 'ip_count' ? 'ip_count' : 'count';
+    if (next === userRankSortRef.current && Array.isArray(stats.top_subscribe_users)) return;
+    userRankSortRef.current = next;
+    setUserRankSort(next);
+    void loadStats(next);
   };
 
   const load = async () => {
@@ -503,20 +534,22 @@ export default function SubscribeGuardPage() {
   const subscribeUserColumns: any[] = [
     { title: '用户邮箱', dataIndex: 'email', ellipsis: true, render: (value: any, row: any) => <a onClick={() => showUserDetail(row)}>{value || `用户 #${row.user_id}`}</a> },
     { title: '状态', dataIndex: 'banned', width: 90, render: (value: any) => Number(value) ? <Tag color="red">封禁</Tag> : <Tag color="green">正常</Tag> },
-    { title: '请求数', dataIndex: 'count', width: 90 },
-    { title: 'IP数', dataIndex: 'ip_count', width: 80, render: (value: any) => value || 0 },
+    { title: '请求数', dataIndex: 'count', width: 100, sorter: true, sortDirections: ['descend'], sortOrder: userRankSort === 'count' ? 'descend' : null },
+    { title: 'IP数', dataIndex: 'ip_count', width: 90, sorter: true, sortDirections: ['descend'], sortOrder: userRankSort === 'ip_count' ? 'descend' : null, render: (value: any) => value || 0 },
     { title: 'UA数量', dataIndex: 'ua_count', width: 90 },
     { title: '明细', dataIndex: 'uas', width: 110, render: (value: any, row: any) => {
       const uas = safeList(value);
       const ips = safeList(row.ips);
+      const uaCount = Number(row.ua_count || uas.length);
+      const ipCount = Number(row.ip_count || ips.length);
       return (uas.length || ips.length) ? <Button size="small" onClick={() => showListDetail({
         title: '订阅防控用户明细',
         owner: row.email || row.token || '-',
-        summary: `请求 ${row.count || 0} 次，${ips.length} 个请求 IP，${uas.length} 个 UA`,
+        summary: `请求 ${row.count || 0} 次，${ipCount} 个请求 IP，${uaCount} 个 UA`,
         copyText: [`请求 IP：`, ips.join('\n'), '', 'User-Agent：', uas.join('\n')].join('\n'),
         sections: [
-          buildDetailSection('请求 IP', ips, 'IP'),
-          buildDetailSection('User-Agent', uas, 'User-Agent'),
+          buildDetailSection(ipCount > ips.length ? `请求 IP（展示 ${ips.length} / ${ipCount}）` : '请求 IP', ips, 'IP'),
+          buildDetailSection(uaCount > uas.length ? `User-Agent（展示 ${uas.length} / ${uaCount}）` : 'User-Agent', uas, 'User-Agent'),
         ],
       })}>查看明细</Button> : '-';
     } },
@@ -784,17 +817,43 @@ export default function SubscribeGuardPage() {
               />
             </Space>
           </Card>
-          <Card className="mt-4" size="small" title="订阅防控用户排行">
-            <Table size="small" rowKey={(row) => String(row.user_id || row.token)} pagination={{ pageSize: 10, size: 'small', showSizeChanger: true }} columns={subscribeUserColumns} dataSource={stats.top_subscribe_users || []} scroll={{ x: 900 }} />
+          <Card
+            className="mt-4"
+            size="small"
+            title="订阅防控用户排行"
+            extra={<Segmented
+              size="small"
+              value={userRankSort}
+              options={[
+                { label: '请求数最多', value: 'count' },
+                { label: 'IP 数最多', value: 'ip_count' },
+              ]}
+              onChange={changeUserRankSort}
+            />}
+          >
+            <Table
+              key={userRankSort}
+              size="small"
+              rowKey={(row) => String(row.user_id || row.token)}
+              loading={statsLoading}
+              pagination={{ pageSize: 10, size: 'small', showSizeChanger: true }}
+              columns={subscribeUserColumns}
+              dataSource={stats.top_subscribe_users || []}
+              onChange={(_pagination, _filters, sorter: any) => {
+                if (!sorter?.order) return;
+                changeUserRankSort(sorter.field === 'ip_count' ? 'ip_count' : 'count');
+              }}
+              scroll={{ x: 920 }}
+            />
           </Card>
-          <Card className="mt-4" size="small" title="最近订阅防护记录" extra={<Button size="small" onClick={loadStats}>刷新统计</Button>}>
+          <Card className="mt-4" size="small" title="最近订阅防护记录" extra={<Button size="small" loading={statsLoading} onClick={() => void loadStats()}>刷新统计</Button>}>
             <Table size="small" rowKey={(_, index) => String(index)} pagination={{ pageSize: 10, size: 'small' }} columns={recentColumns} dataSource={stats.recent || []} scroll={{ x: 1100 }} />
           </Card>
           <Row gutter={[16, 16]} className="mt-4">
             <Col xs={24} lg={12}><Card size="small" title="敏感访问账号排行"><Table size="small" rowKey={(row) => String(row.user_id || row.email)} pagination={false} columns={sensitiveUserColumns} dataSource={sensitiveStats.top_users || []} /></Card></Col>
             <Col xs={24} lg={12}><Card size="small" title="敏感访问域名排行"><Table size="small" rowKey="domain" pagination={false} columns={sensitiveDomainColumns} dataSource={sensitiveStats.top_domains || []} /></Card></Col>
           </Row>
-          <Card className="mt-4" size="small" title="最近敏感访问记录" extra={<Button size="small" onClick={loadStats}>刷新统计</Button>}>
+          <Card className="mt-4" size="small" title="最近敏感访问记录" extra={<Button size="small" loading={statsLoading} onClick={() => void loadStats()}>刷新统计</Button>}>
             <Table size="small" rowKey={(row, index) => String(row.id || index)} pagination={{ pageSize: 10, size: 'small' }} columns={sensitiveRecentColumns} dataSource={sensitiveStats.recent || []} scroll={{ x: 1150 }} />
           </Card>
         </div>
