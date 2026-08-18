@@ -23,6 +23,8 @@ type fakeEntryMonitorController struct {
 	start            func(context.Context, int64, int64, string) (int64, error)
 	startWithMessage func(context.Context, []int64, int64, int64, int64, string) (int64, error)
 	options          []admin.ClientEntryMonitorRunOption
+	manualOptions    []admin.ClientEntryManualAutoSplitOption
+	requestManual    func(context.Context, int64, int64) (int64, error)
 	recent           func(context.Context) (string, error)
 	recentImage      func(context.Context) ([]byte, string, error)
 }
@@ -39,6 +41,20 @@ func (f *fakeEntryMonitorController) StartClientEntryMonitorRunForPoliciesWithMe
 		return 0, nil
 	}
 	return f.startWithMessage(ctx, policyIDs, userID, chatID, messageID, requestKey)
+}
+
+func (f *fakeEntryMonitorController) ListClientEntryManualAutoSplitOptions(context.Context) ([]admin.ClientEntryManualAutoSplitOption, error) {
+	if f == nil {
+		return nil, nil
+	}
+	return f.manualOptions, nil
+}
+
+func (f *fakeEntryMonitorController) RequestClientEntryManualAutoSplit(ctx context.Context, targetID, requestedByUserID int64) (int64, error) {
+	if f == nil || f.requestManual == nil {
+		return 0, nil
+	}
+	return f.requestManual(ctx, targetID, requestedByUserID)
 }
 
 const telegramOperatorQueryPattern = `(?s)SELECT id.*FROM v2_user.*WHERE telegram_id = \$1 AND banned = 0 AND \(is_admin = 1 OR is_staff = 1\).*ORDER BY id ASC.*LIMIT 1`
@@ -473,6 +489,160 @@ func TestMonitorRunReplyKeyboardTextCreatesOnePickerPerWebhookMessage(t *testing
 	}
 	if len(messages) != 1 || !strings.Contains(messages[0], "选择要主动检测") {
 		t.Fatalf("messages = %#v", messages)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestManualAutoSplitReplyKeyboardTextOpensFailedEntryPicker(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	controller := &fakeEntryMonitorController{manualOptions: []admin.ClientEntryManualAutoSplitOption{{
+		TargetID: 21, PolicyID: 3, GroupID: 8, PolicyName: "内鬼分流", GroupName: "故障叶子",
+		Host: "2001:db8::1", Port: 443, UserCount: 12, OnlineProbeCount: 2, FailedProbeCount: 2,
+	}}}
+	svc := NewService(config.Config{}, db).WithEntryMonitorController(controller)
+	var sentText string
+	var sentMarkup inlineKeyboardMarkup
+	svc.sendMessageMarkup = func(_ context.Context, chatID int64, text string, markup any) error {
+		if chatID != 123 {
+			t.Fatalf("chatID = %d", chatID)
+		}
+		sentText = text
+		var ok bool
+		sentMarkup, ok = markup.(inlineKeyboardMarkup)
+		if !ok {
+			t.Fatalf("markup type = %T", markup)
+		}
+		return nil
+	}
+	mock.ExpectQuery(telegramOperatorQueryPattern).
+		WithArgs(int64(123)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+
+	if err := svc.HandleWebhook(context.Background(), monitorTextPayload(clientEntryManualAutoSplitText, 123, 91)); err != nil {
+		t.Fatalf("HandleWebhook: %v", err)
+	}
+	if !strings.Contains(sentText, "选择要手动二分") || len(sentMarkup.InlineKeyboard) != 1 {
+		t.Fatalf("picker = text %q markup %#v", sentText, sentMarkup)
+	}
+	button := sentMarkup.InlineKeyboard[0][0]
+	if button.CallbackData != "cea:s:21:1" || !strings.Contains(button.Text, "[2001:db8::1]:443") || !strings.Contains(button.Text, "12 人") {
+		t.Fatalf("button = %#v", button)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestManualAutoSplitCallbackRequiresConfirmationAndQueuesOnlyOnce(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	for range 3 {
+		mock.ExpectQuery(telegramOperatorQueryPattern).
+			WithArgs(int64(123)).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+	}
+
+	requests := 0
+	controller := &fakeEntryMonitorController{
+		manualOptions: []admin.ClientEntryManualAutoSplitOption{{
+			TargetID: 21, PolicyID: 3, GroupID: 8, PolicyName: "内鬼分流", GroupName: "故障叶子",
+			Host: "198.51.100.7", Port: 8443, UserCount: 7,
+			OnlineProbeCount: 3, FailedProbeCount: 3, AutoSplitEnabled: false,
+		}},
+		requestManual: func(_ context.Context, targetID, userID int64) (int64, error) {
+			if targetID != 21 || userID != 9 {
+				t.Fatalf("request args target=%d user=%d", targetID, userID)
+			}
+			requests++
+			return 73, nil
+		},
+	}
+	svc := NewService(config.Config{}, db).WithEntryMonitorController(controller)
+	svc.answerCallback = func(context.Context, string, string, bool) error { return nil }
+	type edit struct {
+		text   string
+		markup inlineKeyboardMarkup
+	}
+	var edits []edit
+	svc.editMessageText = func(_ context.Context, chatID, messageID int64, text string, markup any) error {
+		if chatID != 123 || messageID != 1 {
+			t.Fatalf("edit target = %d/%d", chatID, messageID)
+		}
+		keyboard, ok := markup.(inlineKeyboardMarkup)
+		if !ok {
+			t.Fatalf("markup type = %T", markup)
+		}
+		edits = append(edits, edit{text: text, markup: keyboard})
+		return nil
+	}
+
+	if err := svc.HandleWebhook(context.Background(), monitorCallbackPayload("select", "cea:s:21:1", 123)); err != nil {
+		t.Fatalf("select callback: %v", err)
+	}
+	if requests != 0 || len(edits) != 1 || !strings.Contains(edits[0].text, "确认手动二分") ||
+		!strings.Contains(edits[0].text, "未开启（本次仍可手动执行）") ||
+		edits[0].markup.InlineKeyboard[0][0].CallbackData != "cea:c:21:1" {
+		t.Fatalf("after select requests=%d edits=%#v", requests, edits)
+	}
+	confirm := monitorCallbackPayload("confirm", "cea:c:21:1", 123)
+	for range 2 {
+		if err := svc.HandleWebhook(context.Background(), confirm); err != nil {
+			t.Fatalf("confirm callback: %v", err)
+		}
+	}
+	if requests != 1 || len(edits) != 2 || !strings.Contains(edits[1].text, "已提交") ||
+		strings.Contains(edits[1].text, "任务编号") || strings.Contains(edits[1].text, "#73") || len(edits[1].markup.InlineKeyboard) != 0 {
+		t.Fatalf("after confirm requests=%d edits=%#v", requests, edits)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestManualAutoSplitConfirmRetryAcceptsExistingPendingOperation(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	mock.ExpectQuery(telegramOperatorQueryPattern).
+		WithArgs(int64(123)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+
+	requests := 0
+	controller := &fakeEntryMonitorController{requestManual: func(_ context.Context, targetID, userID int64) (int64, error) {
+		if targetID != 21 || userID != 9 {
+			t.Fatalf("request args target=%d user=%d", targetID, userID)
+		}
+		requests++
+		return 73, nil
+	}}
+	svc := NewService(config.Config{}, db).WithEntryMonitorController(controller)
+	svc.answerCallback = func(context.Context, string, string, bool) error { return nil }
+	var edited string
+	svc.editMessageText = func(_ context.Context, chatID, messageID int64, text string, _ any) error {
+		if chatID != 123 || messageID != 1 {
+			t.Fatalf("edit target = %d/%d", chatID, messageID)
+		}
+		edited = text
+		return nil
+	}
+
+	if err := svc.HandleWebhook(context.Background(), monitorCallbackPayload("retry", "cea:c:21:1", 123)); err != nil {
+		t.Fatalf("confirm retry: %v", err)
+	}
+	if requests != 1 || !strings.Contains(edited, "已提交或正在处理") {
+		t.Fatalf("requests=%d edited=%q", requests, edited)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
@@ -989,6 +1159,61 @@ func TestEntryMonitorRuleCallbacksRejectInvalidValuesAndRequireMessageID(t *test
 	delete(payload["callback_query"].(map[string]any)["message"].(map[string]any), "message_id")
 	if _, ok := parseWebhookCallbackQuery(payload["callback_query"].(map[string]any)); ok {
 		t.Fatal("callback without message_id was accepted")
+	}
+}
+
+func TestManualAutoSplitPickerPaginatesAndRejectsMalformedCallbacks(t *testing.T) {
+	options := make([]admin.ClientEntryManualAutoSplitOption, 0, 9)
+	for id := int64(1); id <= 9; id++ {
+		options = append(options, admin.ClientEntryManualAutoSplitOption{
+			TargetID: id, PolicyID: 1, GroupID: id, GroupName: "故障入口",
+			Host: "192.0.2.1", Port: 443, UserCount: id + 1,
+		})
+	}
+	controller := &fakeEntryMonitorController{manualOptions: options}
+	text, keyboard, err := entryManualAutoSplitPage(context.Background(), controller, 2)
+	if err != nil || !strings.Contains(text, "第 2/2 页") || !strings.Contains(text, "共 9 个") {
+		t.Fatalf("page = %q err=%v", text, err)
+	}
+	if len(keyboard.InlineKeyboard) != 2 || keyboard.InlineKeyboard[0][0].CallbackData != "cea:s:9:2" || keyboard.InlineKeyboard[1][0].CallbackData != "cea:p:1" {
+		t.Fatalf("keyboard = %#v", keyboard)
+	}
+	for _, row := range keyboard.InlineKeyboard {
+		for _, button := range row {
+			if len(button.CallbackData) > 64 {
+				t.Fatalf("callback too long: %q", button.CallbackData)
+			}
+		}
+	}
+
+	for _, value := range []string{
+		"cea:p:0", "cea:p:1000", "cea:p:bad", "cea:p:1:2",
+		"cea:s:0", "cea:s:-1", "cea:s:bad", "cea:s:1:0", "cea:s:1:1000",
+		"cea:c:0", "cea:c:bad", "cea:c:1:bad", "cea:x:1", "cea:s:1:1:extra",
+	} {
+		if _, ok := parseClientEntryManualSplitCallback(value); ok {
+			t.Fatalf("invalid callback accepted: %q", value)
+		}
+	}
+	if got, ok := parseClientEntryManualSplitCallback("cea:c:42:3"); !ok || got.TargetID != 42 || got.Page != 3 || !got.Confirm {
+		t.Fatalf("valid callback = %#v ok=%v", got, ok)
+	}
+	maxCallback := "cea:c:9223372036854775807:999"
+	if got, ok := parseClientEntryManualSplitCallback(maxCallback); !ok || got.TargetID != int64(9223372036854775807) || got.Page != 999 || !got.Confirm {
+		t.Fatalf("max callback = %#v ok=%v", got, ok)
+	}
+	if len(maxCallback) > 64 {
+		t.Fatalf("max callback is %d bytes, Telegram limit is 64", len(maxCallback))
+	}
+}
+
+func TestManualAutoSplitPickerEmptyStateKeepsMainActions(t *testing.T) {
+	text, keyboard, err := entryManualAutoSplitPage(context.Background(), &fakeEntryMonitorController{}, 1)
+	if err != nil || !strings.Contains(text, "当前没有") {
+		t.Fatalf("empty page = %q err=%v", text, err)
+	}
+	if mustJSON(t, keyboard) != mustJSON(t, entryMonitorInlineKeyboard()) {
+		t.Fatalf("keyboard = %s", mustJSON(t, keyboard))
 	}
 }
 

@@ -154,6 +154,24 @@ type ClientEntryMonitorRunOption struct {
 	TargetCount int64  `json:"target_count"`
 }
 
+// ClientEntryManualAutoSplitOption is a confirmed-down fixed-list leaf that an
+// operator may explicitly split with two addresses from the backup pool. The
+// list is intentionally derived from current probe state rather than monitor
+// events, because events are historical and may outlive a recovery.
+type ClientEntryManualAutoSplitOption struct {
+	TargetID         int64  `json:"target_id"`
+	PolicyID         int64  `json:"policy_id"`
+	GroupID          int64  `json:"group_id"`
+	PolicyName       string `json:"policy_name"`
+	GroupName        string `json:"group_name"`
+	Host             string `json:"host"`
+	Port             int64  `json:"port"`
+	UserCount        int64  `json:"user_count"`
+	OnlineProbeCount int64  `json:"online_probe_count"`
+	FailedProbeCount int64  `json:"failed_probe_count"`
+	AutoSplitEnabled bool   `json:"auto_split_enabled"`
+}
+
 type ClientEntryMonitorAdminService interface {
 	ListClientEntryMonitors(context.Context) (ClientEntryMonitorOverview, error)
 	SaveClientEntryMonitors(context.Context, ClientEntryMonitorSaveRequest) (ClientEntryMonitorOverview, error)

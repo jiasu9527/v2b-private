@@ -221,7 +221,7 @@ last_reported_at = EXCLUDED.last_reported_at, updated_at = EXCLUDED.updated_at`,
 		if err != nil {
 			return summary, fmt.Errorf("save client entry monitor state: %w", err)
 		}
-		if success && snapshot.AutoSplitEnabled {
+		if success {
 			if err := cancelClientEntryAutoSplitOnSuccess(ctx, tx, snapshot, now); err != nil {
 				return summary, err
 			}

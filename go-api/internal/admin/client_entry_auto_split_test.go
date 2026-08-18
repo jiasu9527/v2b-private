@@ -103,7 +103,7 @@ func TestClientEntryAutoSplitKeepsPendingWhenBackupPoolIsInsufficient(t *testing
 	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_event.*VALUES \(\$1, \$2, NULL, \$3, \$4, \$5, NULL, 0, \$6, '', \$6\)`).
 		WithArgs(int64(3), int64(5), clientEntryAutoSplitBackupIPShortageEventType,
 			"用户入口自动二分等待备用 IP\n规则：高级入口\n故障入口：198.51.100.9\n原因：可用备用 IP 不足 2 个\n系统将在备用 IP 可用后自动重试",
-			`{"operation_id":1,"policy_id":42,"source_group_id":9,"source_host":"198.51.100.9"}`, sqlmock.AnyArg()).
+			`{"manual":false,"operation_id":1,"policy_id":42,"source_group_id":9,"source_host":"198.51.100.9"}`, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`(?s)UPDATE v2_client_entry_auto_split_operation.*SET last_error = \$2, next_attempt_at = \$3`).
 		WithArgs(int64(1), clientEntryAutoSplitBackupIPInsufficientReason, sqlmock.AnyArg(), sqlmock.AnyArg()).
@@ -157,6 +157,16 @@ func TestClientEntryAutoSplitDoesNotRepeatBackupPoolShortageEvent(t *testing.T) 
 }
 
 func TestClientEntryAutoSplitAtomicallyAssignsTwoHealthyIPs(t *testing.T) {
+	t.Run("automatic source keeps recursive split enabled", func(t *testing.T) {
+		testClientEntryAutoSplitAtomicallyAssignsTwoHealthyIPs(t, int64(101), 1, 1)
+	})
+	t.Run("manual source with automatic split disabled keeps children disabled", func(t *testing.T) {
+		testClientEntryAutoSplitAtomicallyAssignsTwoHealthyIPs(t, nil, 0, 0)
+	})
+}
+
+func testClientEntryAutoSplitAtomicallyAssignsTwoHealthyIPs(t *testing.T, triggerProbeID any, sourceAutoSplitEnabled, childAutoSplitEnabled int64) {
+	t.Helper()
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -164,11 +174,11 @@ func TestClientEntryAutoSplitAtomicallyAssignsTwoHealthyIPs(t *testing.T) {
 	defer db.Close()
 	service := &DBService{db: db, dnsFailoverSchemaOK: true}
 	now := time.Now().Unix()
-	expectClientEntryAutoSplitClaim(mock, now)
-	expectClientEntryAutoSplitSource(mock, now, []any{
+	expectClientEntryAutoSplitClaimFor(mock, now, "", triggerProbeID)
+	expectClientEntryAutoSplitSourceFor(mock, now, []any{
 		[]any{int64(101), int64(0), int64(2), now},
 		[]any{int64(102), int64(0), int64(2), now},
-	})
+	}, "", triggerProbeID, sourceAutoSplitEnabled)
 	expectClientEntryAutoSplitLeafAndAssignments(mock, 4)
 	mock.ExpectQuery(`(?s)SELECT backup.id, backup.name, backup.ip, backup.port,.*FOR UPDATE OF backup SKIP LOCKED`).
 		WillReturnRows(clientEntryAutoSplitBackupRows().
@@ -201,7 +211,7 @@ func TestClientEntryAutoSplitAtomicallyAssignsTwoHealthyIPs(t *testing.T) {
 		{"policy:42:split-group:92", "旧入口 B", "203.0.113.52", 9443, 20},
 	} {
 		mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_target.*auto_split_enabled.*ON CONFLICT`).
-			WithArgs(int64(3), target.key, target.name, target.host, target.port, target.sort, int64(1), sqlmock.AnyArg()).
+			WithArgs(int64(3), target.key, target.name, target.host, target.port, target.sort, childAutoSplitEnabled, sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	mock.ExpectExec(`(?s)UPDATE v2_client_entry_backup_ip.*SET quarantine_until = GREATEST`).
@@ -233,12 +243,16 @@ func expectClientEntryAutoSplitClaim(mock sqlmock.Sqlmock, now int64, lastErrors
 	if len(lastErrors) > 0 {
 		lastError = lastErrors[0]
 	}
+	expectClientEntryAutoSplitClaimFor(mock, now, lastError, int64(101))
+}
+
+func expectClientEntryAutoSplitClaimFor(mock sqlmock.Sqlmock, now int64, lastError string, triggerProbeID any) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(`(?s)SELECT id, monitor_id, target_id, target_generation,.*ORDER BY id ASC\s*LIMIT 1`).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "monitor_id", "target_id", "target_generation", "policy_id", "source_group_id", "source_host", "attempts", "created_at", "last_error",
-		}).AddRow(int64(1), int64(3), int64(5), int64(2), int64(42), int64(9), "198.51.100.9", int64(0), now, lastError))
+			"id", "monitor_id", "target_id", "target_generation", "policy_id", "source_group_id", "source_host", "attempts", "created_at", "last_error", "trigger_probe_id",
+		}).AddRow(int64(1), int64(3), int64(5), int64(2), int64(42), int64(9), "198.51.100.9", int64(0), now, lastError, triggerProbeID))
 }
 
 func expectClientEntryAutoSplitSource(mock sqlmock.Sqlmock, now int64, states []any, lastErrors ...string) {
@@ -246,6 +260,10 @@ func expectClientEntryAutoSplitSource(mock sqlmock.Sqlmock, now int64, states []
 	if len(lastErrors) > 0 {
 		lastError = lastErrors[0]
 	}
+	expectClientEntryAutoSplitSourceFor(mock, now, states, lastError, int64(101), int64(1))
+}
+
+func expectClientEntryAutoSplitSourceFor(mock sqlmock.Sqlmock, now int64, states []any, lastError string, triggerProbeID any, sourceAutoSplitEnabled int64) {
 	probeRows := sqlmock.NewRows([]string{"id"})
 	for _, raw := range states {
 		values := raw.([]any)
@@ -260,7 +278,7 @@ func expectClientEntryAutoSplitSource(mock sqlmock.Sqlmock, now int64, states []
 		WithArgs(int64(5), int64(3)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"source_key", "host", "generation", "auto_split_enabled", "enabled", "check_interval_sec", "tcp_timeout_ms",
-		}).AddRow("policy:42:split-group:9", "198.51.100.9", int64(2), int64(1), int64(1), int64(30), int64(3000)))
+		}).AddRow("policy:42:split-group:9", "198.51.100.9", int64(2), sourceAutoSplitEnabled, int64(1), int64(30), int64(3000)))
 	stateRows := sqlmock.NewRows([]string{"probe_id", "last_success", "consecutive_failure", "last_reported_at"})
 	for _, raw := range states {
 		values := raw.([]any)
@@ -271,8 +289,8 @@ func expectClientEntryAutoSplitSource(mock sqlmock.Sqlmock, now int64, states []
 	mock.ExpectQuery(`(?s)SELECT id, monitor_id, target_id, target_generation,.*WHERE id = \$1 AND status = 'pending'.*FOR UPDATE SKIP LOCKED`).
 		WithArgs(int64(1), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "monitor_id", "target_id", "target_generation", "policy_id", "source_group_id", "source_host", "attempts", "created_at", "last_error",
-		}).AddRow(int64(1), int64(3), int64(5), int64(2), int64(42), int64(9), "198.51.100.9", int64(0), now, lastError))
+			"id", "monitor_id", "target_id", "target_generation", "policy_id", "source_group_id", "source_host", "attempts", "created_at", "last_error", "trigger_probe_id",
+		}).AddRow(int64(1), int64(3), int64(5), int64(2), int64(42), int64(9), "198.51.100.9", int64(0), now, lastError, triggerProbeID))
 	mock.ExpectExec(`(?s)UPDATE v2_client_entry_auto_split_operation.*SET attempts = attempts \+ 1`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), int64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
 }

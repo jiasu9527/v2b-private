@@ -43,6 +43,15 @@ type EntryMonitorRunOptionsController interface {
 	StartClientEntryMonitorRunForPoliciesWithMessage(ctx context.Context, policyIDs []int64, userID, chatID, messageID int64, requestKey string) (runID int64, err error)
 }
 
+// EntryMonitorManualAutoSplitController backs Telegram's failed-entry picker.
+// The implementation is responsible for revalidating the failure snapshot in
+// the same transaction that enqueues the durable split operation; the picker
+// is only a convenient preview and never an authorization boundary.
+type EntryMonitorManualAutoSplitController interface {
+	ListClientEntryManualAutoSplitOptions(ctx context.Context) ([]admin.ClientEntryManualAutoSplitOption, error)
+	RequestClientEntryManualAutoSplit(ctx context.Context, targetID, requestedByUserID int64) (operationID int64, err error)
+}
+
 var ErrDirectNotifierUnavailable = errors.New("telegram direct notifier unavailable")
 
 const telegramMessageLimit = 4096

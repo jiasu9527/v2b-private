@@ -30,6 +30,16 @@ type clientEntryAutoSplitOperation struct {
 	Attempts         int64
 	CreatedAt        int64
 	LastError        string
+	TriggerProbeID   sql.NullInt64
+}
+
+// manuallyRequested reports whether the operation was explicitly requested
+// by an operator. Automatic incidents always persist the probe that confirmed
+// the down transition; a NULL trigger probe is therefore a durable marker that
+// does not require another schema column. Manual requests still pass the same
+// health revalidation and atomic split transaction as automatic incidents.
+func (operation clientEntryAutoSplitOperation) manuallyRequested() bool {
+	return !operation.TriggerProbeID.Valid
 }
 
 type clientEntryAutoSplitSourceState struct {
@@ -115,15 +125,20 @@ WHERE current_operation.monitor_id IS DISTINCT FROM EXCLUDED.monitor_id
 }
 
 // cancelClientEntryAutoSplitOnSuccess closes an incident as soon as any probe
-// produces a successful raw sample.  Automatic splitting requires every
-// currently-online probe to be confirmed down; an operation from an older
-// partial outage must never fire later against an unrelated outage.
+// produces a successful raw sample. This applies to both automatically and
+// manually queued operations: an operation from an older outage must never
+// fire later against an unrelated outage. Non-split targets are skipped so
+// their routine successful samples do not issue a redundant UPDATE.
 func cancelClientEntryAutoSplitOnSuccess(ctx context.Context, tx *sql.Tx, snapshot clientEntryProbeTargetSnapshot, now int64) error {
-	if tx == nil || !snapshot.AutoSplitEnabled {
+	if tx == nil {
+		return nil
+	}
+	policyID, _, validSource := parseClientEntryMonitorSplitGroupSourceKey(snapshot.SourceKey)
+	if !validSource || policyID != snapshot.PolicyID {
 		return nil
 	}
 	_, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_auto_split_operation
-SET status = 'cancelled', last_error = '入口已有探针恢复，取消自动二分',
+SET status = 'cancelled', last_error = '入口已有探针恢复，取消待处理二分',
     completed_at = $3, updated_at = $3
 WHERE target_id = $1 AND target_generation = $2 AND status = 'pending'`,
 		snapshot.TargetID, snapshot.TargetVersion, now)
@@ -176,7 +191,7 @@ func (s *DBService) processNextClientEntryAutoSplit(ctx context.Context) (proces
 		return false, false, err
 	}
 
-	checkIntervalSec, tcpTimeoutMS, states, sourceErr := loadClientEntryAutoSplitSourceStates(ctx, tx, operation, now)
+	checkIntervalSec, tcpTimeoutMS, sourceAutoSplitEnabled, states, sourceErr := loadClientEntryAutoSplitSourceStates(ctx, tx, operation, now)
 	if sourceErr != nil && !errors.Is(sourceErr, sql.ErrNoRows) {
 		return true, false, sourceErr
 	}
@@ -207,6 +222,14 @@ func (s *DBService) processNextClientEntryAutoSplit(ctx context.Context) (proces
 			state.ConsecutiveFailure >= clientEntryMonitorFailureThreshold &&
 			clientEntryMonitorStateFresh(state.LastReportedAt, now, checkIntervalSec, tcpTimeoutMS) {
 			continue
+		}
+		if operation.manuallyRequested() && state.LastSuccess.Valid && state.LastSuccess.Int64 == 1 &&
+			clientEntryMonitorStateFresh(state.LastReportedAt, now, checkIntervalSec, tcpTimeoutMS) {
+			if err := finishClientEntryAutoSplitOperation(ctx, tx, operation.ID, "cancelled",
+				"入口已有探针恢复，取消手动二分", now, 0, 0, 0, 0); err != nil {
+				return true, false, err
+			}
+			return commitClientEntryAutoSplit(ctx, tx, true, false)
 		}
 		if err := retryClientEntryAutoSplitOperation(ctx, tx, operation.ID,
 			"尚未满足所有在线探针连续两次失败", now); err != nil {
@@ -341,10 +364,10 @@ SET updated_at = $2 WHERE id = $1 AND mode = 'split'`, operation.PolicyID, now);
 		return true, false, fmt.Errorf("touch automatic split policy: %w", err)
 	}
 
-	// Seed the two new monitor targets before the normal refresh.  Refresh keeps
-	// the configured port and flag on conflict, so recursively-created leaves
-	// with at least two users remain protected and use each pool address' own
-	// TCP port. A one-user leaf cannot be divided further and is disabled.
+	// Seed the two new monitor targets before the normal refresh. Refresh keeps
+	// the configured port and flag on conflict, so each child inherits the
+	// source's automatic-split choice and uses its pool address' own TCP port.
+	// A one-user leaf cannot be divided further and is always disabled.
 	childTargets := []struct {
 		groupID          int64
 		name             string
@@ -353,8 +376,8 @@ SET updated_at = $2 WHERE id = $1 AND mode = 'split'`, operation.PolicyID, now);
 		sort             int64
 		autoSplitEnabled bool
 	}{
-		{groupA, nameA, backupIPs[0].IP, backupIPs[0].Port, clientEntryRuleSortStep, half >= 2},
-		{groupB, nameB, backupIPs[1].IP, backupIPs[1].Port, 2 * clientEntryRuleSortStep, userCount-half >= 2},
+		{groupA, nameA, backupIPs[0].IP, backupIPs[0].Port, clientEntryRuleSortStep, sourceAutoSplitEnabled && half >= 2},
+		{groupB, nameB, backupIPs[1].IP, backupIPs[1].Port, 2 * clientEntryRuleSortStep, sourceAutoSplitEnabled && userCount-half >= 2},
 	}
 	for _, child := range childTargets {
 		sourceKey := fmt.Sprintf("policy:%d:split-group:%d", operation.PolicyID, child.groupID)
@@ -381,12 +404,17 @@ sort = EXCLUDED.sort, auto_split_enabled = EXCLUDED.auto_split_enabled, updated_
 	details, _ := json.Marshal(map[string]any{
 		"operation_id": operation.ID, "policy_id": operation.PolicyID,
 		"source_group_id": operation.SourceGroupID, "source_host": operation.SourceHost,
+		"manual":           operation.manuallyRequested(),
 		"child_group_a_id": groupA, "child_group_b_id": groupB,
 		"backup_ip_a_id": backupIPs[0].ID, "backup_ip_b_id": backupIPs[1].ID,
 		"backup_ip_a": backupIPs[0].IP, "backup_ip_b": backupIPs[1].IP,
 		"user_count": userCount,
 	})
-	message := fmt.Sprintf("用户入口已自动二分\n规则：%s\n故障入口：%s\n新入口：%s / %s\n用户：%d 人（%d / %d）",
+	splitLabel := "自动"
+	if operation.manuallyRequested() {
+		splitLabel = "手动"
+	}
+	message := fmt.Sprintf("用户入口已%s二分\n规则：%s\n故障入口：%s\n新入口：%s / %s\n用户：%d 人（%d / %d）", splitLabel,
 		strings.TrimSpace(policyName), operation.SourceHost, backupIPs[0].IP, backupIPs[1].IP,
 		userCount, half, userCount-half)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_monitor_event
@@ -411,13 +439,13 @@ WHERE id = $1 AND monitor_id = $2`, operation.TargetID, operation.MonitorID); er
 func peekNextClientEntryAutoSplitOperation(ctx context.Context, tx *sql.Tx, now int64) (clientEntryAutoSplitOperation, error) {
 	var operation clientEntryAutoSplitOperation
 	err := tx.QueryRowContext(ctx, `SELECT id, monitor_id, target_id, target_generation,
-policy_id, source_group_id, source_host, attempts, created_at, last_error
+policy_id, source_group_id, source_host, attempts, created_at, last_error, trigger_probe_id
 FROM v2_client_entry_auto_split_operation
 WHERE status = 'pending' AND next_attempt_at <= $1
 ORDER BY id ASC
 LIMIT 1`, now).Scan(&operation.ID, &operation.MonitorID, &operation.TargetID,
 		&operation.TargetGeneration, &operation.PolicyID, &operation.SourceGroupID, &operation.SourceHost,
-		&operation.Attempts, &operation.CreatedAt, &operation.LastError)
+		&operation.Attempts, &operation.CreatedAt, &operation.LastError, &operation.TriggerProbeID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return operation, err
@@ -430,12 +458,12 @@ LIMIT 1`, now).Scan(&operation.ID, &operation.MonitorID, &operation.TargetID,
 func claimClientEntryAutoSplitOperation(ctx context.Context, tx *sql.Tx, expected clientEntryAutoSplitOperation, now int64) (clientEntryAutoSplitOperation, error) {
 	var operation clientEntryAutoSplitOperation
 	err := tx.QueryRowContext(ctx, `SELECT id, monitor_id, target_id, target_generation,
-policy_id, source_group_id, source_host, attempts, created_at, last_error
+policy_id, source_group_id, source_host, attempts, created_at, last_error, trigger_probe_id
 FROM v2_client_entry_auto_split_operation
 WHERE id = $1 AND status = 'pending' AND next_attempt_at <= $2
 FOR UPDATE SKIP LOCKED`, expected.ID, now).Scan(&operation.ID, &operation.MonitorID, &operation.TargetID,
 		&operation.TargetGeneration, &operation.PolicyID, &operation.SourceGroupID, &operation.SourceHost,
-		&operation.Attempts, &operation.CreatedAt, &operation.LastError)
+		&operation.Attempts, &operation.CreatedAt, &operation.LastError, &operation.TriggerProbeID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return operation, err
@@ -445,7 +473,8 @@ FOR UPDATE SKIP LOCKED`, expected.ID, now).Scan(&operation.ID, &operation.Monito
 	if operation.MonitorID != expected.MonitorID || operation.TargetID != expected.TargetID ||
 		operation.TargetGeneration != expected.TargetGeneration || operation.PolicyID != expected.PolicyID ||
 		operation.SourceGroupID != expected.SourceGroupID || operation.SourceHost != expected.SourceHost ||
-		operation.CreatedAt != expected.CreatedAt {
+		operation.CreatedAt != expected.CreatedAt || operation.TriggerProbeID.Valid != expected.TriggerProbeID.Valid ||
+		(operation.TriggerProbeID.Valid && operation.TriggerProbeID.Int64 != expected.TriggerProbeID.Int64) {
 		return operation, errors.New("client entry automatic split operation changed while claiming")
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_auto_split_operation
@@ -456,35 +485,13 @@ WHERE id = $3 AND status = 'pending'`, now, saturatingUnixAdd(now, clientEntryAu
 	return operation, nil
 }
 
-func loadClientEntryAutoSplitSourceStates(ctx context.Context, tx *sql.Tx, operation clientEntryAutoSplitOperation, now int64) (int64, int64, []clientEntryAutoSplitSourceState, error) {
+func loadClientEntryAutoSplitSourceStates(ctx context.Context, tx *sql.Tx, operation clientEntryAutoSplitOperation, now int64) (int64, int64, bool, []clientEntryAutoSplitSourceState, error) {
 	// Result reporting locks a probe before it takes a shared target lock. Lock
 	// all online probes first as well, otherwise a worker and a probe report can
 	// deadlock in opposite probe/target order.
-	rows, err := tx.QueryContext(ctx, `SELECT probe.id
-FROM v2_dns_probe probe
-WHERE probe.enabled = 1
-  AND probe.last_heartbeat_at IS NOT NULL
-  AND probe.last_heartbeat_at BETWEEN $1 AND $2
-ORDER BY probe.id
-FOR SHARE OF probe`, saturatingUnixAdd(now, -time.Duration(defaultProbeOfflineSec)*time.Second), now)
+	probeIDs, err := lockOnlineClientEntryAutoSplitProbes(ctx, tx, now)
 	if err != nil {
-		return 0, 0, nil, fmt.Errorf("load online probes for automatic split: %w", err)
-	}
-	probeIDs := make([]int64, 0)
-	for rows.Next() {
-		var probeID int64
-		if err := rows.Scan(&probeID); err != nil {
-			_ = rows.Close()
-			return 0, 0, nil, fmt.Errorf("scan online probe for automatic split: %w", err)
-		}
-		probeIDs = append(probeIDs, probeID)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return 0, 0, nil, fmt.Errorf("iterate online probes for automatic split: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return 0, 0, nil, fmt.Errorf("close online probes for automatic split: %w", err)
+		return 0, 0, false, nil, err
 	}
 
 	// Target refresh/settings transactions lock monitor -> target. Keep that
@@ -499,9 +506,9 @@ FROM v2_client_entry_monitor
 WHERE id = $1
 FOR KEY SHARE`, operation.MonitorID).Scan(&lockedMonitorID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return 0, 0, nil, err
+			return 0, 0, false, nil, err
 		}
-		return 0, 0, nil, fmt.Errorf("lock client entry monitor for automatic split: %w", err)
+		return 0, 0, false, nil, fmt.Errorf("lock client entry monitor for automatic split: %w", err)
 	}
 
 	var checkIntervalSec, tcpTimeoutMS int64
@@ -516,53 +523,24 @@ FOR UPDATE OF target`, operation.TargetID, operation.MonitorID).Scan(
 		&sourceKey, &host, &generation, &autoSplitEnabled, &enabled, &checkIntervalSec, &tcpTimeoutMS,
 	)
 	if err != nil {
-		return 0, 0, nil, err
+		return 0, 0, false, nil, err
 	}
 	policyID, groupID, validSource := parseClientEntryMonitorSplitGroupSourceKey(sourceKey)
-	if generation != operation.TargetGeneration || enabled != 1 || autoSplitEnabled != 1 ||
+	if generation != operation.TargetGeneration || enabled != 1 ||
+		(!operation.manuallyRequested() && autoSplitEnabled != 1) ||
 		!validSource || policyID != operation.PolicyID || groupID != operation.SourceGroupID ||
 		strings.TrimSpace(host) != strings.TrimSpace(operation.SourceHost) {
-		return 0, 0, nil, sql.ErrNoRows
+		return 0, 0, false, nil, sql.ErrNoRows
 	}
+	sourceAutoSplitEnabled := autoSplitEnabled == 1
 	if len(probeIDs) == 0 {
-		return checkIntervalSec, tcpTimeoutMS, []clientEntryAutoSplitSourceState{}, nil
+		return checkIntervalSec, tcpTimeoutMS, sourceAutoSplitEnabled, []clientEntryAutoSplitSourceState{}, nil
 	}
-	placeholders := make([]string, len(probeIDs))
-	args := make([]any, 0, len(probeIDs)+1)
-	args = append(args, operation.TargetID)
-	for index, probeID := range probeIDs {
-		placeholders[index] = fmt.Sprintf("$%d", index+2)
-		args = append(args, probeID)
-	}
-	stateRows, err := tx.QueryContext(ctx, `SELECT probe_id, last_success,
-consecutive_failure, last_reported_at
-FROM v2_client_entry_monitor_state
-WHERE target_id = $1 AND probe_id IN (`+strings.Join(placeholders, ",")+`)
-ORDER BY probe_id`, args...)
+	states, err := loadClientEntryAutoSplitStatesForProbes(ctx, tx, operation.TargetID, probeIDs)
 	if err != nil {
-		return 0, 0, nil, fmt.Errorf("load automatic split source states: %w", err)
+		return 0, 0, false, nil, err
 	}
-	defer stateRows.Close()
-	stateByProbe := make(map[int64]clientEntryAutoSplitSourceState, len(probeIDs))
-	for stateRows.Next() {
-		var state clientEntryAutoSplitSourceState
-		if err := stateRows.Scan(&state.ProbeID, &state.LastSuccess, &state.ConsecutiveFailure, &state.LastReportedAt); err != nil {
-			return 0, 0, nil, fmt.Errorf("scan automatic split source state: %w", err)
-		}
-		stateByProbe[state.ProbeID] = state
-	}
-	if err := stateRows.Err(); err != nil {
-		return 0, 0, nil, fmt.Errorf("iterate automatic split source states: %w", err)
-	}
-	states := make([]clientEntryAutoSplitSourceState, 0, len(probeIDs))
-	for _, probeID := range probeIDs {
-		state, exists := stateByProbe[probeID]
-		if !exists {
-			state = clientEntryAutoSplitSourceState{ProbeID: probeID}
-		}
-		states = append(states, state)
-	}
-	return checkIntervalSec, tcpTimeoutMS, states, nil
+	return checkIntervalSec, tcpTimeoutMS, sourceAutoSplitEnabled, states, nil
 }
 
 func lockClientEntryAutoSplitAssignments(ctx context.Context, tx *sql.Tx, policyID, groupID int64) (int64, error) {
@@ -610,6 +588,7 @@ func createClientEntryAutoSplitBackupIPShortageEvent(ctx context.Context, tx *sq
 		"policy_id":       operation.PolicyID,
 		"source_group_id": operation.SourceGroupID,
 		"source_host":     operation.SourceHost,
+		"manual":          operation.manuallyRequested(),
 	})
 	if err != nil {
 		return fmt.Errorf("encode automatic split backup IP shortage event: %w", err)
@@ -618,7 +597,11 @@ func createClientEntryAutoSplitBackupIPShortageEvent(ctx context.Context, tx *sq
 	if policyLabel == "" {
 		policyLabel = fmt.Sprintf("#%d", operation.PolicyID)
 	}
-	message := fmt.Sprintf("用户入口自动二分等待备用 IP\n规则：%s\n故障入口：%s\n原因：%s\n系统将在备用 IP 可用后自动重试",
+	splitLabel := "自动"
+	if operation.manuallyRequested() {
+		splitLabel = "手动"
+	}
+	message := fmt.Sprintf("用户入口%s二分等待备用 IP\n规则：%s\n故障入口：%s\n原因：%s\n系统将在备用 IP 可用后自动重试", splitLabel,
 		policyLabel, operation.SourceHost, clientEntryAutoSplitBackupIPInsufficientReason)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_monitor_event
 (monitor_id, target_id, probe_id, event_type, message, details, notified_at,

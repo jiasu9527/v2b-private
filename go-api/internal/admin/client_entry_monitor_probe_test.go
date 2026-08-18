@@ -153,7 +153,7 @@ func TestClientEntryProbeRecoveryCreatesAlertEvent(t *testing.T) {
 	mock.ExpectQuery(`(?s)SELECT target.id, target.generation, monitor.id, monitor.policy_id,.*FROM v2_client_entry_monitor_target target.*WHERE target.id = \$2`).
 		WithArgs(probeID, targetID).
 		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "policy_name", "target_name", "source_key", "host", "port", "probe_name", "auto_split_enabled", "check_interval_sec", "tcp_timeout_ms"}).
-			AddRow(targetID, int64(2), int64(3), int64(42), "高级入口", "独立入口", "policy:42", "entry.example.com", int64(443), "东京探针", int64(0), int64(30), int64(3000)))
+			AddRow(targetID, int64(2), int64(3), int64(42), "高级入口", "独立入口", "policy:42:split-group:9", "entry.example.com", int64(443), "东京探针", int64(0), int64(30), int64(3000)))
 	mock.ExpectQuery(`(?s)INSERT INTO v2_client_entry_monitor_result_inbox.*ON CONFLICT \(probe_id, result_id\) DO NOTHING.*RETURNING id`).
 		WithArgs(probeID, targetID, nil, "entry-recovered-1", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(2)))
@@ -163,6 +163,9 @@ func TestClientEntryProbeRecoveryCreatesAlertEvent(t *testing.T) {
 	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_state.*ON CONFLICT \(target_id, probe_id\) DO UPDATE SET`).
 		WithArgs(targetID, probeID, int64(1), latency, "", "203.0.113.9", int64(1), int64(0), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`(?s)UPDATE v2_client_entry_auto_split_operation.*last_error = '入口已有探针恢复，取消待处理二分'.*target_generation = \$2`).
+		WithArgs(targetID, int64(2), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_event.*VALUES`).
 		WithArgs(int64(3), targetID, probeID, "recovered", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))

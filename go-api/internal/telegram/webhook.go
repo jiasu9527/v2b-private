@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -21,9 +22,12 @@ var ticketReplyPattern = regexp.MustCompile(`#\s*([0-9]+)`)
 const (
 	clientEntryMonitorRunCallback      = "cem:p:1"
 	clientEntryMonitorRecentCallback   = "client_entry_monitor:recent"
+	clientEntryManualAutoSplitCallback = "cea:p:1"
 	clientEntryMonitorRunButtonText    = "一键检测用户入口组"
 	clientEntryMonitorRecentButtonText = "查看近期检测结果"
+	clientEntryManualAutoSplitText     = "故障入口手动二分"
 	clientEntryMonitorRulesPerPage     = 8
+	clientEntryManualSplitPerPage      = 8
 )
 
 type inlineKeyboardButton struct {
@@ -68,6 +72,12 @@ type clientEntryMonitorCallback struct {
 	Page     int
 	PolicyID int64
 	RunAll   bool
+}
+
+type clientEntryManualSplitCallback struct {
+	Page     int
+	TargetID int64
+	Confirm  bool
 }
 
 func (s *Service) HandleWebhook(ctx context.Context, payload map[string]any) error {
@@ -163,6 +173,12 @@ func (s *Service) handleCallbackQuery(ctx context.Context, callback webhookCallb
 	if callback.Data == clientEntryMonitorRecentCallback {
 		return s.handleMonitorAction(ctx, callback.FromID, callback.ChatID, callback.Data, callback.ID)
 	}
+	if manualAction, ok := parseClientEntryManualSplitCallback(callback.Data); ok {
+		if callback.MessageID <= 0 {
+			return nil
+		}
+		return s.handleManualAutoSplitCallback(ctx, callback, manualAction)
+	}
 	monitorCallback, ok := parseClientEntryMonitorCallback(callback.Data)
 	if !ok || callback.MessageID <= 0 {
 		return nil
@@ -175,8 +191,8 @@ func (s *Service) handleMonitorTextAction(ctx context.Context, message webhookMe
 		return nil
 	}
 	// Telegram private messages always carry message_id. Refuse a malformed
-	// run request instead of starting it without a stable idempotency key.
-	if action == clientEntryMonitorRunCallback && message.ID <= 0 {
+	// picker request instead of handling it without a stable idempotency key.
+	if (action == clientEntryMonitorRunCallback || action == clientEntryManualAutoSplitCallback) && message.ID <= 0 {
 		return nil
 	}
 	requestKey := ""
@@ -186,7 +202,127 @@ func (s *Service) handleMonitorTextAction(ctx context.Context, message webhookMe
 	if action == clientEntryMonitorRunCallback {
 		return s.handleMonitorRuleTextAction(ctx, message, requestKey)
 	}
+	if action == clientEntryManualAutoSplitCallback {
+		return s.handleManualAutoSplitTextAction(ctx, message)
+	}
 	return s.handleMonitorAction(ctx, message.ChatID, message.ChatID, action, requestKey)
+}
+
+func (s *Service) handleManualAutoSplitTextAction(ctx context.Context, message webhookMessage) error {
+	_, authorized, err := s.lookupTelegramOperator(ctx, message.ChatID)
+	if err != nil {
+		return err
+	}
+	if !authorized {
+		return s.sendMessage(ctx, message.ChatID, "⛔ 无权限\n仅已绑定 Telegram 的管理员和员工可执行入口二分。")
+	}
+	controller, ok := s.entryMonitor.(EntryMonitorManualAutoSplitController)
+	if !ok {
+		return s.sendMessage(ctx, message.ChatID, "⚠️ 故障入口手动二分功能暂不可用，请稍后重试。")
+	}
+	menuKey, menuState := s.lockEntryMonitorMenu(message.ChatID, message.ID)
+	retainMenu := false
+	defer func() { s.unlockEntryMonitorMenu(menuKey, menuState, retainMenu) }()
+	if menuState.started {
+		return nil
+	}
+	text, keyboard, err := entryManualAutoSplitPage(ctx, controller, 1)
+	if err != nil {
+		return s.sendMessage(ctx, message.ChatID, "❌ 获取故障入口失败\n原因："+err.Error())
+	}
+	if err := s.sendMessageMarkup(ctx, message.ChatID, text, keyboard); err != nil {
+		return err
+	}
+	retainMenu = true
+	return nil
+}
+
+func (s *Service) handleManualAutoSplitCallback(ctx context.Context, callback webhookCallbackQuery, action clientEntryManualSplitCallback) error {
+	userID, authorized, err := s.lookupTelegramOperator(ctx, callback.FromID)
+	if err != nil {
+		return err
+	}
+	if !authorized {
+		if !callback.IsText {
+			return s.sendMessage(ctx, callback.ChatID, "⛔ 无权限\n仅已绑定 Telegram 的管理员和员工可执行入口二分。")
+		}
+		return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID,
+			"⛔ 无权限\n仅已绑定 Telegram 的管理员和员工可执行入口二分。", entryMonitorInlineKeyboard())
+	}
+	controller, ok := s.entryMonitor.(EntryMonitorManualAutoSplitController)
+	if !ok {
+		if !callback.IsText {
+			return s.sendMessage(ctx, callback.ChatID, "⚠️ 故障入口手动二分功能暂不可用，请稍后重试。")
+		}
+		return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID,
+			"⚠️ 故障入口手动二分功能暂不可用，请稍后重试。", entryMonitorInlineKeyboard())
+	}
+
+	menuKey, menuState := s.lockEntryMonitorMenu(callback.ChatID, callback.MessageID)
+	retainMenu := false
+	defer func() { s.unlockEntryMonitorMenu(menuKey, menuState, retainMenu) }()
+	if menuState.started {
+		return nil
+	}
+	if !callback.IsText {
+		page := action.Page
+		if page <= 0 {
+			page = 1
+		}
+		text, keyboard, pageErr := entryManualAutoSplitPage(ctx, controller, page)
+		if pageErr != nil {
+			return s.sendMessage(ctx, callback.ChatID, "❌ 获取故障入口失败\n原因："+pageErr.Error())
+		}
+		if err := s.sendMessageMarkup(ctx, callback.ChatID, text, keyboard); err != nil {
+			return err
+		}
+		retainMenu = true
+		return nil
+	}
+	if action.Page > 0 && action.TargetID == 0 {
+		text, keyboard, pageErr := entryManualAutoSplitPage(ctx, controller, action.Page)
+		if pageErr != nil {
+			return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID,
+				"❌ 获取故障入口失败\n原因："+pageErr.Error(), entryMonitorInlineKeyboard())
+		}
+		return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID, text, keyboard)
+	}
+
+	options, err := controller.ListClientEntryManualAutoSplitOptions(ctx)
+	if err != nil {
+		return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID,
+			"❌ 获取故障入口失败\n原因："+err.Error(), entryMonitorInlineKeyboard())
+	}
+	option, exists := findClientEntryManualAutoSplitOption(options, action.TargetID)
+	if !exists && !action.Confirm {
+		return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID,
+			"⚠️ 所选入口已恢复或不再满足二分条件，请重新选择。", entryMonitorInlineKeyboard())
+	}
+	page := action.Page
+	if page <= 0 {
+		page = 1
+	}
+	if !action.Confirm {
+		return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID,
+			manualAutoSplitConfirmationText(option), manualAutoSplitConfirmationKeyboard(option.TargetID, page))
+	}
+
+	_, err = controller.RequestClientEntryManualAutoSplit(ctx, action.TargetID, userID)
+	if err != nil {
+		return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID,
+			"❌ 提交手动二分失败\n原因："+err.Error(), entryMonitorInlineKeyboard())
+	}
+	message := "✅ 该故障入口的二分任务已提交或正在处理。\n\n系统会继续使用备用 IP 池执行，完成后由 Bot 通知。"
+	if exists {
+		message = fmt.Sprintf("✅ 故障入口二分任务已提交\n规则：%s\n分组：%s\n故障入口：%s\n固定名单：%d 人\n\n系统将从可用备用 IP 池原子领取 2 个地址并稳定平分名单；备用 IP 暂时不足时会自动重试，完成后由 Bot 通知。",
+			clientEntryManualOptionPolicyName(option), clientEntryManualOptionGroupName(option),
+			formatClientEntryManualEndpoint(option.Host, option.Port), option.UserCount)
+	}
+	if err := s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID, message, entryMonitorEmptyInlineKeyboard()); err != nil {
+		return err
+	}
+	retainMenu = true
+	return nil
 }
 
 func (s *Service) handleMonitorRuleTextAction(ctx context.Context, message webhookMessage, _ string) error {
@@ -364,6 +500,7 @@ func entryMonitorInlineKeyboard() inlineKeyboardMarkup {
 	return inlineKeyboardMarkup{InlineKeyboard: [][]inlineKeyboardButton{
 		{{Text: clientEntryMonitorRunButtonText, CallbackData: clientEntryMonitorRunCallback}},
 		{{Text: clientEntryMonitorRecentButtonText, CallbackData: clientEntryMonitorRecentCallback}},
+		{{Text: clientEntryManualAutoSplitText, CallbackData: clientEntryManualAutoSplitCallback}},
 	}}
 }
 
@@ -394,6 +531,40 @@ func parseClientEntryMonitorCallback(value string) (clientEntryMonitorCallback, 
 		return clientEntryMonitorCallback{PolicyID: policyID}, true
 	default:
 		return clientEntryMonitorCallback{}, false
+	}
+}
+
+func parseClientEntryManualSplitCallback(value string) (clientEntryManualSplitCallback, bool) {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) < 3 || len(parts) > 4 || parts[0] != "cea" {
+		return clientEntryManualSplitCallback{}, false
+	}
+	page := 1
+	if len(parts) == 4 {
+		parsedPage, err := strconv.Atoi(parts[3])
+		if err != nil || parsedPage <= 0 || parsedPage > 999 {
+			return clientEntryManualSplitCallback{}, false
+		}
+		page = parsedPage
+	}
+	switch parts[1] {
+	case "p":
+		if len(parts) != 3 {
+			return clientEntryManualSplitCallback{}, false
+		}
+		parsedPage, err := strconv.Atoi(parts[2])
+		if err != nil || parsedPage <= 0 || parsedPage > 999 {
+			return clientEntryManualSplitCallback{}, false
+		}
+		return clientEntryManualSplitCallback{Page: parsedPage}, true
+	case "s", "c":
+		targetID, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil || targetID <= 0 {
+			return clientEntryManualSplitCallback{}, false
+		}
+		return clientEntryManualSplitCallback{Page: page, TargetID: targetID, Confirm: parts[1] == "c"}, true
+	default:
+		return clientEntryManualSplitCallback{}, false
 	}
 }
 
@@ -444,6 +615,110 @@ func entryMonitorRulesPage(ctx context.Context, controller EntryMonitorRunOption
 	return fmt.Sprintf("🧭 选择要主动检测的用户入口规则组\n第 %d/%d 页 · 每次检测会让全部启用探针参与。", requestedPage, totalPages), keyboard, nil
 }
 
+func entryManualAutoSplitPage(ctx context.Context, controller EntryMonitorManualAutoSplitController, requestedPage int) (string, inlineKeyboardMarkup, error) {
+	options, err := controller.ListClientEntryManualAutoSplitOptions(ctx)
+	if err != nil {
+		return "", inlineKeyboardMarkup{}, err
+	}
+	if requestedPage <= 0 {
+		requestedPage = 1
+	}
+	totalPages := (len(options) + clientEntryManualSplitPerPage - 1) / clientEntryManualSplitPerPage
+	if totalPages == 0 {
+		return "✅ 当前没有可手动二分的故障入口。\n\n这里只显示固定名单不少于 2 人，且全部在线探针均已连续 2 次检测失败的入口。",
+			entryMonitorInlineKeyboard(), nil
+	}
+	if requestedPage > totalPages {
+		requestedPage = totalPages
+	}
+	start := (requestedPage - 1) * clientEntryManualSplitPerPage
+	end := start + clientEntryManualSplitPerPage
+	if end > len(options) {
+		end = len(options)
+	}
+	keyboard := inlineKeyboardMarkup{InlineKeyboard: make([][]inlineKeyboardButton, 0, end-start+1)}
+	for _, option := range options[start:end] {
+		label := fmt.Sprintf("⚠️ %s · %s/%s · %d 人",
+			formatClientEntryManualEndpoint(option.Host, option.Port),
+			clientEntryManualOptionPolicyName(option), clientEntryManualOptionGroupName(option), option.UserCount)
+		keyboard.InlineKeyboard = append(keyboard.InlineKeyboard, []inlineKeyboardButton{{
+			Text:         truncateEntryMonitorButtonText(label, 54),
+			CallbackData: fmt.Sprintf("cea:s:%d:%d", option.TargetID, requestedPage),
+		}})
+	}
+	if totalPages > 1 {
+		navigation := make([]inlineKeyboardButton, 0, 2)
+		if requestedPage > 1 {
+			navigation = append(navigation, inlineKeyboardButton{Text: "上一页", CallbackData: fmt.Sprintf("cea:p:%d", requestedPage-1)})
+		}
+		if requestedPage < totalPages {
+			navigation = append(navigation, inlineKeyboardButton{Text: "下一页", CallbackData: fmt.Sprintf("cea:p:%d", requestedPage+1)})
+		}
+		keyboard.InlineKeyboard = append(keyboard.InlineKeyboard, navigation)
+	}
+	text := fmt.Sprintf("🧯 选择要手动二分的故障入口\n第 %d/%d 页 · 共 %d 个\n\n仅列出全部在线探针状态新鲜且连续 2 次失败的固定二分叶子。确认后系统会自动从备用 IP 池领取 2 个可用地址。",
+		requestedPage, totalPages, len(options))
+	return text, keyboard, nil
+}
+
+func findClientEntryManualAutoSplitOption(options []admin.ClientEntryManualAutoSplitOption, targetID int64) (admin.ClientEntryManualAutoSplitOption, bool) {
+	for _, option := range options {
+		if option.TargetID == targetID && targetID > 0 {
+			return option, true
+		}
+	}
+	return admin.ClientEntryManualAutoSplitOption{}, false
+}
+
+func manualAutoSplitConfirmationText(option admin.ClientEntryManualAutoSplitOption) string {
+	automaticStatus := "未开启（本次仍可手动执行）"
+	if option.AutoSplitEnabled {
+		automaticStatus = "已开启"
+	}
+	return fmt.Sprintf("⚠️ 确认手动二分？\n\n规则：%s\n分组：%s\n故障入口：%s\n固定名单：%d 人\n故障探针：%d/%d\n原自动二分：%s\n\n确认后系统会自动从备用 IP 池原子领取 2 个可用地址，将固定名单稳定平分，并停用这个故障父入口。此操作不能直接撤销。",
+		clientEntryManualOptionPolicyName(option), clientEntryManualOptionGroupName(option),
+		formatClientEntryManualEndpoint(option.Host, option.Port), option.UserCount,
+		option.FailedProbeCount, option.OnlineProbeCount, automaticStatus)
+}
+
+func manualAutoSplitConfirmationKeyboard(targetID int64, page int) inlineKeyboardMarkup {
+	if page <= 0 {
+		page = 1
+	}
+	return inlineKeyboardMarkup{InlineKeyboard: [][]inlineKeyboardButton{
+		{{Text: "✅ 确认使用备用 IP 二分", CallbackData: fmt.Sprintf("cea:c:%d:%d", targetID, page)}},
+		{{Text: "⬅️ 返回故障入口列表", CallbackData: fmt.Sprintf("cea:p:%d", page)}},
+	}}
+}
+
+func clientEntryManualOptionPolicyName(option admin.ClientEntryManualAutoSplitOption) string {
+	name := compactTelegramButtonLabel(option.PolicyName)
+	if name == "" {
+		return fmt.Sprintf("规则 #%d", option.PolicyID)
+	}
+	return name
+}
+
+func clientEntryManualOptionGroupName(option admin.ClientEntryManualAutoSplitOption) string {
+	name := compactTelegramButtonLabel(option.GroupName)
+	if name == "" {
+		return fmt.Sprintf("入口 #%d", option.GroupID)
+	}
+	return name
+}
+
+func compactTelegramButtonLabel(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func formatClientEntryManualEndpoint(host string, port int64) string {
+	host = strings.TrimSpace(host)
+	if host == "" || port <= 0 {
+		return host
+	}
+	return net.JoinHostPort(strings.Trim(host, "[]"), strconv.FormatInt(port, 10))
+}
+
 func selectedEntryMonitorRuleOptions(options []admin.ClientEntryMonitorRunOption, action clientEntryMonitorCallback) ([]int64, string) {
 	policyIDs := make([]int64, 0, len(options))
 	names := make([]string, 0, len(options))
@@ -480,6 +755,7 @@ func entryMonitorReplyKeyboard() replyKeyboardMarkup {
 		Keyboard: [][]replyKeyboardButton{
 			{{Text: clientEntryMonitorRunButtonText}},
 			{{Text: clientEntryMonitorRecentButtonText}},
+			{{Text: clientEntryManualAutoSplitText}},
 		},
 		ResizeKeyboard:        true,
 		IsPersistent:          true,
@@ -493,6 +769,8 @@ func clientEntryMonitorActionForText(text string) (string, bool) {
 		return clientEntryMonitorRunCallback, true
 	case clientEntryMonitorRecentButtonText:
 		return clientEntryMonitorRecentCallback, true
+	case clientEntryManualAutoSplitText:
+		return clientEntryManualAutoSplitCallback, true
 	default:
 		return "", false
 	}
