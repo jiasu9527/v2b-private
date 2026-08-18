@@ -977,11 +977,17 @@ func TestRouterAdminSubscribeGuardUASearchEndpoint(t *testing.T) {
 	}
 	resetSubscribeGuardStateForTest()
 
-	adminService := &fakeAdminService{userInfoDetails: map[int64]map[string]any{
-		10: {"id": int64(10), "email": "ten@example.com", "banned": int64(0), "plan_id": int64(2), "plan_name": "Pro", "password": "secret-password-10", "token": "secret-user-token-10", "uuid": "secret-uuid-10"},
-		20: {"id": int64(20), "email": "twenty@example.com", "banned": int64(1), "plan_id": int64(0), "password": "secret-password-20", "token": "secret-user-token-20", "uuid": "secret-uuid-20"},
-		30: {"id": int64(30), "email": "legacy@example.com", "banned": int64(0), "plan_id": int64(3), "password": "secret-password-30", "token": "secret-user-token-30", "uuid": "secret-uuid-30"},
-	}}
+	adminService := &fakeAdminService{
+		userInfoDetails: map[int64]map[string]any{
+			10: {"id": int64(10), "email": "ten@example.com", "banned": int64(0), "plan_id": int64(2), "plan_name": "Pro", "password": "secret-password-10", "token": "secret-user-token-10", "uuid": "secret-uuid-10"},
+			20: {"id": int64(20), "email": "twenty@example.com", "banned": int64(1), "plan_id": int64(0), "password": "secret-password-20", "token": "secret-user-token-20", "uuid": "secret-uuid-20"},
+			30: {"id": int64(30), "email": "legacy@example.com", "banned": int64(0), "plan_id": int64(3), "password": "secret-password-30", "token": "secret-user-token-30", "uuid": "secret-uuid-30"},
+		},
+		clientEntryPolicyMatches: map[int64]*admin.ClientEntryUserPolicyRecord{
+			10: {ID: 9, Name: "内鬼固定组", Mode: admin.ClientEntryUserPolicyModeSplit, Action: "override", EntryHost: "fixed-entry.example.com", ResolveEntryHost: 1, ExtraNodes: []string{"trojan://must-not-leak@example.com:443"}},
+			20: {ID: 7, Name: "Curl 普通入口", Mode: admin.ClientEntryUserPolicyModeStandard, Action: "override", EntryHost: "curl-entry.example.com"},
+		},
+	}
 	userService := &fakeUserService{resolvedClientUserID: 30}
 	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1, Email: "admin@example.com"}}
 	router := NewRouter(cfg, WithAdminService(adminService), WithSessionService(sessionService), WithUserService(userService))
@@ -997,7 +1003,7 @@ func TestRouterAdminSubscribeGuardUASearchEndpoint(t *testing.T) {
 	if first.Code != http.StatusOK {
 		t.Fatalf("expected first page 200, got %d: %s", first.Code, first.Body.String())
 	}
-	for _, secret := range []string{"secret-token-10-a", "secret-token-10-b", "legacy-secret-token", "canonical-secret-token", "secret-password-10", "secret-user-token-10", "secret-uuid-10"} {
+	for _, secret := range []string{"secret-token-10-a", "secret-token-10-b", "legacy-secret-token", "canonical-secret-token", "secret-password-10", "secret-user-token-10", "secret-uuid-10", "must-not-leak"} {
 		if strings.Contains(first.Body.String(), secret) {
 			t.Fatalf("UA search leaked sensitive value %q: %s", secret, first.Body.String())
 		}
@@ -1019,12 +1025,19 @@ func TestRouterAdminSubscribeGuardUASearchEndpoint(t *testing.T) {
 	if len(firstPayload.Data) != 1 || firstPayload.Data[0]["user_id"] != float64(20) || firstPayload.Data[0]["email"] != "twenty@example.com" {
 		t.Fatalf("unexpected first UA search row: %#v", firstPayload.Data)
 	}
+	firstPolicy, ok := firstPayload.Data[0]["entry_policy"].(map[string]any)
+	if !ok || firstPolicy["id"] != float64(7) || firstPolicy["name"] != "Curl 普通入口" || firstPolicy["entry_host"] != "curl-entry.example.com" || firstPolicy["evaluated_ua"] != "curl/7.0" {
+		t.Fatalf("unexpected first UA search entry policy: %#v", firstPayload.Data[0]["entry_policy"])
+	}
+	if got := adminService.lastClientEntryPolicyMatches; len(got) != 1 || got[0].UserID != 20 || got[0].UA != "curl/7.0" {
+		t.Fatalf("unexpected first UA search match request: %#v", got)
+	}
 
 	second := request("2")
 	if second.Code != http.StatusOK {
 		t.Fatalf("expected second page 200, got %d: %s", second.Code, second.Body.String())
 	}
-	for _, secret := range []string{"secret-token-10-a", "secret-token-10-b", "secret-password-10", "secret-user-token-10", "secret-uuid-10"} {
+	for _, secret := range []string{"secret-token-10-a", "secret-token-10-b", "secret-password-10", "secret-user-token-10", "secret-uuid-10", "must-not-leak"} {
 		if strings.Contains(second.Body.String(), secret) {
 			t.Fatalf("UA search leaked sensitive value %q: %s", secret, second.Body.String())
 		}
@@ -1041,6 +1054,13 @@ func TestRouterAdminSubscribeGuardUASearchEndpoint(t *testing.T) {
 	row := secondPayload.Data[0]
 	if row["user_id"] != float64(10) || row["email"] != "ten@example.com" || row["count"] != float64(2) || row["allowed"] != float64(1) || row["blocked"] != float64(1) || row["ip_count"] != float64(2) || row["ua_count"] != float64(2) {
 		t.Fatalf("unexpected second UA search row: %#v", row)
+	}
+	secondPolicy, ok := row["entry_policy"].(map[string]any)
+	if !ok || secondPolicy["id"] != float64(9) || secondPolicy["name"] != "内鬼固定组" || secondPolicy["mode"] != admin.ClientEntryUserPolicyModeSplit || secondPolicy["entry_host"] != "fixed-entry.example.com" || secondPolicy["evaluated_ua"] != "CURL/8.1" {
+		t.Fatalf("unexpected second UA search entry policy: %#v", row["entry_policy"])
+	}
+	if got := adminService.lastClientEntryPolicyMatches; len(got) != 1 || got[0].UserID != 10 || got[0].UA != "CURL/8.1" {
+		t.Fatalf("unexpected second UA search match request: %#v", got)
 	}
 	recent, ok := row["recent"].([]any)
 	if !ok || len(recent) != 2 {
@@ -1062,6 +1082,9 @@ func TestRouterAdminSubscribeGuardUASearchEndpoint(t *testing.T) {
 	}
 	if len(thirdPayload.Data) != 1 || thirdPayload.Data[0]["user_id"] != float64(30) || thirdPayload.Data[0]["email"] != "legacy@example.com" || thirdPayload.Data[0]["count"] != float64(1) {
 		t.Fatalf("expected legacy token request to resolve to user 30, got %#v", thirdPayload.Data)
+	}
+	if thirdPayload.Data[0]["entry_policy"] != nil {
+		t.Fatalf("expected user without a current rule to have no entry policy, got %#v", thirdPayload.Data[0]["entry_policy"])
 	}
 	if userService.lastClientToken != "canonical-secret-token" {
 		t.Fatalf("expected canonical token to be used for legacy lookup, got %q", userService.lastClientToken)

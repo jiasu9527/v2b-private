@@ -137,12 +137,30 @@ func handleAdminSubscribeGuardUASearch(w http.ResponseWriter, r *http.Request, c
 		if end > total {
 			end = total
 		}
-		for _, group := range groups[start:end] {
+		pageGroups := groups[start:end]
+		matchRequests := make([]admin.ClientEntryUserPolicyMatchRequest, 0, len(pageGroups))
+		for _, group := range pageGroups {
+			matchRequests = append(matchRequests, admin.ClientEntryUserPolicyMatchRequest{
+				UserID: group.UserID,
+				UA:     subscribeGuardUASearchLatestUA(group),
+			})
+		}
+		matches, matchErr := adminService.MatchClientEntryUserPolicies(r.Context(), matchRequests)
+		if matchErr != nil {
+			return handleAdminError(w, matchErr)
+		}
+		matchesByUserID := make(map[int64]*admin.ClientEntryUserPolicyRecord, len(matches))
+		for _, match := range matches {
+			if match.Found {
+				matchesByUserID[match.UserID] = match.Matched
+			}
+		}
+		for _, group := range pageGroups {
 			info, infoErr := adminService.GetUserInfoByID(r.Context(), group.UserID)
 			if infoErr != nil {
 				return handleAdminError(w, infoErr)
 			}
-			rows = append(rows, subscribeGuardUASearchPublicRow(group, info))
+			rows = append(rows, subscribeGuardUASearchPublicRow(group, info, matchesByUserID[group.UserID]))
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -176,17 +194,18 @@ func subscribeGuardUASearchPagination(inputs map[string]string) (int64, int64, e
 	return current, pageSize, nil
 }
 
-func subscribeGuardUASearchPublicRow(group subscribeGuardUASearchGroup, info map[string]any) map[string]any {
+func subscribeGuardUASearchPublicRow(group subscribeGuardUASearchGroup, info map[string]any, matchedPolicy *admin.ClientEntryUserPolicyRecord) map[string]any {
 	row := map[string]any{
-		"user_id":  group.UserID,
-		"count":    group.Count,
-		"allowed":  group.Allowed,
-		"blocked":  group.Blocked,
-		"ip_count": group.IPCount,
-		"ua_count": group.UACount,
-		"first_at": group.FirstAt,
-		"last_at":  group.LastAt,
-		"recent":   group.Recent,
+		"user_id":      group.UserID,
+		"count":        group.Count,
+		"allowed":      group.Allowed,
+		"blocked":      group.Blocked,
+		"ip_count":     group.IPCount,
+		"ua_count":     group.UACount,
+		"first_at":     group.FirstAt,
+		"last_at":      group.LastAt,
+		"recent":       group.Recent,
+		"entry_policy": subscribeGuardUASearchEntryPolicyPublicRow(matchedPolicy, subscribeGuardUASearchLatestUA(group)),
 	}
 	for _, key := range []string{
 		"id", "email", "banned", "plan_id", "plan_name", "u", "d", "transfer_enable", "expired_at",
@@ -200,6 +219,28 @@ func subscribeGuardUASearchPublicRow(group subscribeGuardUASearchGroup, info map
 		row["email"] = fmt.Sprintf("用户 #%d", group.UserID)
 	}
 	return row
+}
+
+func subscribeGuardUASearchLatestUA(group subscribeGuardUASearchGroup) string {
+	if len(group.Recent) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(group.Recent[0].UA)
+}
+
+func subscribeGuardUASearchEntryPolicyPublicRow(policy *admin.ClientEntryUserPolicyRecord, evaluatedUA string) any {
+	if policy == nil {
+		return nil
+	}
+	return map[string]any{
+		"id":                 policy.ID,
+		"name":               strings.TrimSpace(policy.Name),
+		"mode":               strings.TrimSpace(policy.Mode),
+		"action":             strings.TrimSpace(policy.Action),
+		"entry_host":         strings.TrimSpace(policy.EntryHost),
+		"resolve_entry_host": policy.ResolveEntryHost,
+		"evaluated_ua":       strings.TrimSpace(evaluatedUA),
+	}
 }
 
 func isDecimalDigits(value string) bool {

@@ -338,6 +338,7 @@ type Service interface {
 	UpdateClientEntryUserPolicySplitGroupHost(ctx context.Context, req ClientEntryUserPolicyGroupHostUpdateRequest) (ClientEntryUserPolicyRecord, error)
 	ListClientEntryUserPolicySplitGroupUsers(ctx context.Context, req ClientEntryUserPolicySplitGroupUserListRequest) (ClientEntryUserPolicySplitGroupUserListResult, error)
 	SimulateClientEntryUserPolicy(ctx context.Context, req ClientEntryUserPolicySimulationRequest) (ClientEntryUserPolicySimulationResult, error)
+	MatchClientEntryUserPolicies(ctx context.Context, req []ClientEntryUserPolicyMatchRequest) ([]ClientEntryUserPolicyMatchResult, error)
 	SortClientEntryUserPolicySplitGroups(ctx context.Context, req ClientEntryUserPolicyGroupSortRequest) (bool, error)
 	MoveClientEntryUserPolicySplitGroupToRoot(ctx context.Context, req ClientEntryUserPolicyGroupMoveRequest) (bool, error)
 	SetClientEntryUserPolicyEnabled(ctx context.Context, id, enabled int64) (bool, error)
@@ -1423,6 +1424,20 @@ type ClientEntryUserPolicySimulationResult struct {
 	Found   bool                                 `json:"found"`
 	User    *ClientEntryUserPolicySimulationUser `json:"user,omitempty"`
 	Matched *ClientEntryUserPolicyRecord         `json:"matched,omitempty"`
+}
+
+// ClientEntryUserPolicyMatchRequest evaluates the current entry policy for an
+// existing user with a concrete User-Agent. It is intentionally keyed by user
+// ID so callers can batch users without repeating policy and assignment reads.
+type ClientEntryUserPolicyMatchRequest struct {
+	UserID int64
+	UA     string
+}
+
+type ClientEntryUserPolicyMatchResult struct {
+	UserID  int64
+	Found   bool
+	Matched *ClientEntryUserPolicyRecord
 }
 
 type ClientEntryUserPolicyGroupSortRequest struct {

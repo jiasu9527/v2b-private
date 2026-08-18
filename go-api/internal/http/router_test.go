@@ -923,6 +923,8 @@ type fakeAdminService struct {
 	lastClientEntryGroupUsers     admin.ClientEntryUserPolicySplitGroupUserListRequest
 	clientEntrySimulation         admin.ClientEntryUserPolicySimulationResult
 	lastClientEntrySimulation     admin.ClientEntryUserPolicySimulationRequest
+	clientEntryPolicyMatches      map[int64]*admin.ClientEntryUserPolicyRecord
+	lastClientEntryPolicyMatches  []admin.ClientEntryUserPolicyMatchRequest
 	lastClientEntryGroupSort      admin.ClientEntryUserPolicyGroupSortRequest
 	lastClientEntryGroupMove      admin.ClientEntryUserPolicyGroupMoveRequest
 	lastClientEntryPolicyEnabled  [2]int64
@@ -1190,6 +1192,19 @@ func (f *fakeAdminService) ListClientEntryUserPolicySplitGroupUsers(_ context.Co
 func (f *fakeAdminService) SimulateClientEntryUserPolicy(_ context.Context, req admin.ClientEntryUserPolicySimulationRequest) (admin.ClientEntryUserPolicySimulationResult, error) {
 	f.lastClientEntrySimulation = req
 	return f.clientEntrySimulation, f.err
+}
+
+func (f *fakeAdminService) MatchClientEntryUserPolicies(_ context.Context, req []admin.ClientEntryUserPolicyMatchRequest) ([]admin.ClientEntryUserPolicyMatchResult, error) {
+	f.lastClientEntryPolicyMatches = append([]admin.ClientEntryUserPolicyMatchRequest(nil), req...)
+	results := make([]admin.ClientEntryUserPolicyMatchResult, 0, len(req))
+	for _, item := range req {
+		results = append(results, admin.ClientEntryUserPolicyMatchResult{
+			UserID:  item.UserID,
+			Found:   true,
+			Matched: f.clientEntryPolicyMatches[item.UserID],
+		})
+	}
+	return results, f.err
 }
 
 func (f *fakeAdminService) SortClientEntryUserPolicySplitGroups(_ context.Context, req admin.ClientEntryUserPolicyGroupSortRequest) (bool, error) {

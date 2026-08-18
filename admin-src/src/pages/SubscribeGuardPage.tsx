@@ -201,6 +201,32 @@ function userExpiryText(value: any) {
   return timestamp > 0 ? dateText(timestamp) : '长期有效';
 }
 
+function entryPolicyCell(row: any) {
+  const policy = row?.entry_policy;
+  if (!policy) return <Tag>未命中入口规则</Tag>;
+  const name = String(policy.name || `规则 #${policy.id || '-'}`).trim();
+  const mode = String(policy.mode || 'standard').toLowerCase();
+  const action = String(policy.action || 'override').toLowerCase();
+  const entryHost = String(policy.entry_host || '').trim();
+  const evaluatedUA = String(policy.evaluated_ua || '').trim();
+  const actionDetail = action === 'hide'
+    ? <Tag color="red">命中后隐藏节点</Tag>
+    : action === 'original'
+      ? <Tag color="cyan">下发原入口地址</Tag>
+      : entryHost
+        ? <Typography.Text code copyable={{ text: entryHost }} ellipsis={{ tooltip: entryHost }}>{entryHost}</Typography.Text>
+        : <Typography.Text type="secondary">未配置入口地址</Typography.Text>;
+  return <Space direction="vertical" size={2} style={{ width: '100%' }}>
+    <Space size={4} wrap>
+      <Tag color={mode === 'split' ? 'purple' : 'blue'} title={evaluatedUA ? `按最近匹配的 UA 计算：${evaluatedUA}` : undefined}>
+        {mode === 'split' ? '固定分组' : '普通规则'}
+      </Tag>
+      <Typography.Text strong ellipsis={{ tooltip: name }}>{name}</Typography.Text>
+    </Space>
+    {actionDetail}
+  </Space>;
+}
+
 export default function SubscribeGuardPage() {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
@@ -514,6 +540,7 @@ export default function SubscribeGuardPage() {
     { title: 'ID', dataIndex: 'user_id', width: 85 },
     { title: '邮箱', dataIndex: 'email', width: 250, ellipsis: true, render: (value: any, row: any) => <a onClick={() => showUserDetail(row)}>{value || `用户 #${row.user_id}`}</a> },
     { title: '状态', dataIndex: 'banned', width: 100, render: (_: any, row: any) => userStatus(row) },
+    { title: '当前入口分组', dataIndex: 'entry_policy', width: 310, render: (_: any, row: any) => entryPolicyCell(row) },
     { title: '匹配请求', dataIndex: 'count', width: 105 },
     { title: '已放行', dataIndex: 'allowed', width: 90, render: (value: any) => <Tag color="green">{Number(value || 0)}</Tag> },
     { title: '已拦截', dataIndex: 'blocked', width: 90, render: (value: any) => <Tag color={Number(value || 0) ? 'red' : 'default'}>{Number(value || 0)}</Tag> },
@@ -752,7 +779,7 @@ export default function SubscribeGuardPage() {
                   pageSizeOptions: [10, 20, 50, 100],
                 }}
                 onChange={(pagination: any) => searchUsersByUA(uaSearch, pagination.current, pagination.pageSize)}
-                scroll={{ x: 1300 }}
+                scroll={{ x: 1620 }}
                 locale={{ emptyText: uaAppliedSearch && uaAppliedSearch === uaSearch ? '保留期内未找到使用该 UA 的用户' : uaSearch ? '点击“搜索”查看结果' : '输入 UA 关键词后搜索，例如 curl' }}
               />
             </Space>
