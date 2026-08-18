@@ -14,6 +14,7 @@ import (
 const (
 	defaultClientEntryBackupIPIntervalSec = defaultClientEntryMonitorIntervalSec
 	defaultClientEntryBackupIPTimeoutMS   = defaultClientEntryMonitorTimeoutMS
+	defaultClientEntryBackupIPPort        = int64(54101)
 	clientEntryBackupIPSuccessThreshold   = int64(2)
 	clientEntryBackupIPMaxBatch           = 500
 )
@@ -786,6 +787,9 @@ func normalizeClientEntryBackupIPSaveRequest(request ClientEntryBackupIPSaveRequ
 		return request, errors.New("备用 IP 必须是有效的 IPv4 或 IPv6 地址")
 	}
 	request.IP = address.String()
+	if create && request.Port == 0 {
+		request.Port = defaultClientEntryBackupIPPort
+	}
 	if request.Port <= 0 || request.Port > 65535 {
 		return request, errors.New("备用 IP TCP 端口必须在 1 到 65535 之间")
 	}
@@ -808,7 +812,6 @@ func normalizeClientEntryBackupIPSaveRequest(request ClientEntryBackupIPSaveRequ
 		value := true
 		request.Enabled = &value
 	}
-	_ = create // kept in the signature for future create-only defaults.
 	return request, nil
 }
 

@@ -30,6 +30,7 @@ const ENTRY_MONITOR_PATH = '/dns-failover/entry-monitors';
 const BACKUP_IP_PATH = `${ENTRY_MONITOR_PATH}/backup-ips`;
 const ENTRY_MONITOR_FAILURE_THRESHOLD = 2;
 const BACKUP_IP_SUCCESS_THRESHOLD = 2;
+const DEFAULT_BACKUP_IP_PORT = 54101;
 
 type EntryPolicyAction = 'override' | 'original' | 'hide';
 
@@ -199,7 +200,7 @@ function normalizeBackupIP(raw: any, index: number): BackupIP {
     id: numberValue(raw?.id) || -(index + 1),
     name: String(raw?.name || '').trim() || ip || `备用 IP #${index + 1}`,
     ip,
-    port: numberValue(raw?.port, 443),
+    port: numberValue(raw?.port, DEFAULT_BACKUP_IP_PORT),
     enabled: boolValue(raw?.enabled, true),
     status: String(raw?.status || raw?.availability_status || raw?.health_status || '').trim().toLowerCase(),
     used: boolValue(raw?.used ?? raw?.in_use, false) || usedBy.length > 0,
@@ -592,7 +593,7 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
   const [backupLoading, setBackupLoading] = useState(false);
   const [backupBatchOpen, setBackupBatchOpen] = useState(false);
   const [backupBatchText, setBackupBatchText] = useState('');
-  const [backupDefaultPort, setBackupDefaultPort] = useState(443);
+  const [backupDefaultPort, setBackupDefaultPort] = useState(DEFAULT_BACKUP_IP_PORT);
   const [backupBatchSaving, setBackupBatchSaving] = useState(false);
   const [editingBackupIP, setEditingBackupIP] = useState<BackupIPInput & { id: number } | null>(null);
   const [backupActionID, setBackupActionID] = useState<number | null>(null);
@@ -1893,13 +1894,13 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
               max={65535}
               precision={0}
               value={backupDefaultPort}
-              onChange={(value) => setBackupDefaultPort(numberValue(value, 443))}
+              onChange={(value) => setBackupDefaultPort(numberValue(value, DEFAULT_BACKUP_IP_PORT))}
             />
           </label>
           <Input.TextArea
             rows={10}
             value={backupBatchText}
-            placeholder={'香港备用,1.1.1.1,443\n8.8.8.8:443\n[2001:db8::1]:443'}
+            placeholder={'香港备用,1.1.1.1,54101\n8.8.8.8:54101\n[2001:db8::1]:54101'}
             onChange={(event) => setBackupBatchText(event.target.value)}
           />
           <div className={backupBatchPreview.errors.length ? 'dns-entry-backup-preview dns-entry-backup-preview--error' : 'dns-entry-backup-preview'}>

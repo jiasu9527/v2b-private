@@ -25,6 +25,10 @@ func TestNormalizeClientEntryBackupIPSaveRequestCanonicalizesAndDefaults(t *test
 	if req.Enabled == nil || !*req.Enabled || req.CheckIntervalSec != 30 || req.TCPTimeoutMS != 3000 {
 		t.Fatalf("defaults = %#v", req)
 	}
+	defaulted, err := normalizeClientEntryBackupIPSaveRequest(ClientEntryBackupIPSaveRequest{IP: "192.0.2.9"}, true)
+	if err != nil || defaulted.Port != defaultClientEntryBackupIPPort {
+		t.Fatalf("default port = %#v, %v", defaulted, err)
+	}
 	mapped, err := normalizeClientEntryBackupIPSaveRequest(ClientEntryBackupIPSaveRequest{
 		IP: "::ffff:192.0.2.1", Port: 443,
 	}, true)
