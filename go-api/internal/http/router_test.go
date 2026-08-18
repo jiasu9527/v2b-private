@@ -4495,7 +4495,7 @@ func TestRouterAdminClientEntryUserPolicySplitEndpoints(t *testing.T) {
 		path string
 		body string
 	}{
-		{"split-group", `{"policy_id":9,"group_id":20,"entry_host_a":"a1.example.com","entry_host_b":"a2.example.com"}`},
+		{"split-group", `{"policy_id":9,"group_id":20,"entry_host_a":"a1.example.com","entry_host_b":"a2.example.com","use_backup_ip_pool":true}`},
 		{"split-group-host", `{"policy_id":9,"group_id":21,"name":"内鬼入口 B","entry_host":"new.example.com","resolve_entry_host":1,"enabled":0,"remarks":"共享备注","members":[{"server_type":"vmess","server_id":11}]}`},
 		{"split-group-sort", `{"policy_id":9,"ids":[22,21]}`},
 		{"split-group-root", `{"policy_id":9,"group_id":22}`},
@@ -4510,7 +4510,7 @@ func TestRouterAdminClientEntryUserPolicySplitEndpoints(t *testing.T) {
 			t.Fatalf("%s: status=%d body=%s", item.path, rec.Code, rec.Body.String())
 		}
 	}
-	if adminService.lastClientEntryGroupSplit.PolicyID != 9 || adminService.lastClientEntryGroupSplit.GroupID != 20 || adminService.lastClientEntryGroupSplit.EntryHostA != "a1.example.com" {
+	if adminService.lastClientEntryGroupSplit.PolicyID != 9 || adminService.lastClientEntryGroupSplit.GroupID != 20 || adminService.lastClientEntryGroupSplit.EntryHostA != "a1.example.com" || !adminService.lastClientEntryGroupSplit.UseBackupIPPool {
 		t.Fatalf("split request = %#v", adminService.lastClientEntryGroupSplit)
 	}
 	if adminService.lastClientEntryGroupHost.PolicyID != 9 || adminService.lastClientEntryGroupHost.GroupID != 21 || adminService.lastClientEntryGroupHost.Name != "内鬼入口 B" || adminService.lastClientEntryGroupHost.EntryHost != "new.example.com" {

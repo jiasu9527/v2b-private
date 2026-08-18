@@ -106,6 +106,26 @@ func handleClientEntryBackupIPRefresh(w http.ResponseWriter, r *http.Request, se
 	return true
 }
 
+func handleClientEntryBackupIPBulkDelete(w http.ResponseWriter, r *http.Request, service admin.Service) bool {
+	if r.Method != http.MethodPost {
+		return dnsFailoverMethodNotAllowed(w, r, http.MethodPost)
+	}
+	backupService, ok := clientEntryBackupIPService(w, service)
+	if !ok {
+		return true
+	}
+	var request admin.ClientEntryBackupIPBulkDeleteRequest
+	if !decodeStrictDNSFailoverJSON(w, r, &request) {
+		return true
+	}
+	result, err := backupService.BulkDeleteClientEntryBackupIPs(r.Context(), request)
+	if err != nil {
+		return writeClientEntryBackupIPError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": result})
+	return true
+}
+
 func writeClientEntryBackupIPError(w http.ResponseWriter, err error) bool {
 	status := http.StatusBadRequest
 	if errors.Is(err, admin.ErrUnavailable) {

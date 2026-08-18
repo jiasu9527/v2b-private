@@ -341,6 +341,57 @@ func TestSplitClientEntryUserPolicyGroupKeepsParentAndMovesAssignments(t *testin
 	}
 }
 
+func TestSplitClientEntryUserPolicyGroupAtomicallyClaimsBackupIPs(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db}
+	readyClientEntrySchemaForPolicyTest(service)
+
+	mock.ExpectBegin()
+	expectClientEntryVisibleOrderLock(mock)
+	mock.ExpectQuery(`(?s)SELECT split_group.name, split_group.path, split_group.global_sort.*policy.mode = 'split'.*NOT EXISTS.*FOR UPDATE OF split_group`).
+		WithArgs(int64(101), int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"name", "path", "global_sort"}).AddRow("A", "A", int64(30)))
+	mock.ExpectQuery(`SELECT user_id\s+FROM v2_client_entry_user_policy_split_assignment.*FOR UPDATE`).
+		WithArgs(int64(9), int64(101)).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id"}).AddRow(int64(1)).AddRow(int64(2)))
+	mock.ExpectQuery(`(?s)SELECT backup.id, backup.name, backup.ip, backup.port.*FROM v2_client_entry_backup_ip backup.*FOR UPDATE OF backup SKIP LOCKED`).
+		WithArgs(sqlmock.AnyArg(), int64(defaultProbeOfflineSec), int64(clientEntryBackupIPSuccessThreshold), 2).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "ip", "port", "enabled", "check_interval_sec", "tcp_timeout_ms", "generation", "sort", "quarantine_until", "created_at", "updated_at"}).
+			AddRow(501, "备用 A", "192.0.2.51", 443, 1, 30, 3000, 1, 10, 0, 10, 10).
+			AddRow(502, "备用 B", "192.0.2.52", 443, 1, 30, 3000, 1, 20, 0, 10, 10))
+	expectShiftClientEntryVisibleSortsAfter(mock, 30, 10)
+	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
+		WithArgs(int64(9), int64(101), "A.1", "A.1", "192.0.2.51", int64(10), int64(30), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(201)))
+	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
+		WithArgs(int64(9), int64(101), "A.2", "A.2", "192.0.2.52", int64(20), int64(40), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(202)))
+	mock.ExpectExec(`(?s)WITH ranked AS .*UPDATE v2_client_entry_user_policy_split_assignment assignment.*SET group_id = CASE WHEN ranked.position <= \$3 THEN \$4::BIGINT ELSE \$5::BIGINT END`).
+		WithArgs(int64(9), int64(101), int64(1), int64(201), int64(202), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec(`UPDATE v2_client_entry_user_policy_split_group\s+SET entry_host = '', global_sort = NULL, updated_at = \$2`).
+		WithArgs(int64(101), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE v2_client_entry_user_policy SET updated_at = \$2 WHERE id = \$1`).
+		WithArgs(int64(9), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	record, err := service.SplitClientEntryUserPolicyGroup(context.Background(), ClientEntryUserPolicyGroupSplitRequest{
+		PolicyID: 9, GroupID: 101, UseBackupIPPool: true,
+	})
+	if err != nil || record.ID != 9 || record.Mode != ClientEntryUserPolicyModeSplit {
+		t.Fatalf("split group from backup pool: record=%#v err=%v", record, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func TestSortClientEntryUserPolicySplitGroupsRequiresExactLeafSet(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

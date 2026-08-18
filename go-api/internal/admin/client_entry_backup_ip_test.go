@@ -201,6 +201,85 @@ func TestDeleteClientEntryBackupIPRejectsAddressInUse(t *testing.T) {
 	}
 }
 
+func TestBulkDeleteClientEntryBackupIPsSelectedLocksRechecksUsageAndReportsSkips(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := NewDBService(config.Config{}, db)
+	service.dnsFailoverSchemaOK = true
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock\(\$1\)`).
+		WithArgs(clientEntryVisibleOrderLockKey).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`(?s)LOCK TABLE v2_client_entry_user_policy.*v2_client_entry_user_policy_split_group IN SHARE MODE`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`(?s)SELECT id, name, ip, port, enabled.*WHERE id IN \(\$1,\$2,\$3\).*FOR UPDATE`).
+		WithArgs(int64(2), int64(3), int64(99)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "ip", "port", "enabled", "check_interval_sec", "tcp_timeout_ms", "generation", "sort", "quarantine_until", "created_at", "updated_at"}).
+			AddRow(2, "可删除", "192.0.2.2", 443, 1, 30, 3000, 1, 0, 0, 10, 10).
+			AddRow(3, "已占用", "2001:db8::3", 443, 1, 30, 3000, 1, 0, 0, 10, 10))
+	mock.ExpectQuery(`SELECT policy.id, policy.name, policy.entry_host`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "entry_host"}).
+			AddRow(11, "IPv6 非规范写法占用", "2001:0db8:0:0:0:0:0:3"))
+	mock.ExpectQuery(`(?s)SELECT policy.id, policy.name, split_group.id`).
+		WillReturnRows(sqlmock.NewRows([]string{"policy_id", "policy_name", "split_group_id", "split_group_name", "path", "entry_host"}))
+	mock.ExpectExec(`DELETE FROM v2_client_entry_backup_ip WHERE id = \$1`).
+		WithArgs(int64(2)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	result, err := service.BulkDeleteClientEntryBackupIPs(context.Background(), ClientEntryBackupIPBulkDeleteRequest{
+		Scope: "selected", IDs: []int64{99, 3, 2, 3},
+	})
+	if err != nil {
+		t.Fatalf("bulk delete: %v", err)
+	}
+	if result.Requested != 3 || result.Deleted != 1 || result.SkippedInUse != 1 || result.SkippedNotFound != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestBulkDeleteFaultyCandidatesOnlyIncludeCanonicalUnhealthyStatus(t *testing.T) {
+	statuses := []string{"unhealthy", "checking", "no_probe", "probe_offline", "disabled", "quarantined", "in_use", "available"}
+	items := make([]ClientEntryBackupIPRecord, 0, len(statuses))
+	for index, status := range statuses {
+		items = append(items, ClientEntryBackupIPRecord{ID: int64(index + 1), Status: status})
+	}
+	got := clientEntryBackupIPBulkDeleteCandidates("faulty", items)
+	if len(got) != 1 || got[0].Status != "unhealthy" {
+		t.Fatalf("faulty candidates = %#v", got)
+	}
+	if got := clientEntryBackupIPBulkDeleteCandidates("all", items); len(got) != len(items) {
+		t.Fatalf("all candidates = %#v", got)
+	}
+}
+
+func TestBulkDeleteClientEntryBackupIPsRejectsInvalidScopeShapes(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := NewDBService(config.Config{}, db)
+	for _, request := range []ClientEntryBackupIPBulkDeleteRequest{
+		{},
+		{Scope: " all "},
+		{Scope: "selected"},
+		{Scope: "selected", IDs: []int64{0}},
+		{Scope: "faulty", IDs: []int64{1}},
+		{Scope: "all", IDs: []int64{1}},
+	} {
+		if _, err := service.BulkDeleteClientEntryBackupIPs(context.Background(), request); err == nil {
+			t.Fatalf("request %#v unexpectedly accepted", request)
+		}
+	}
+}
+
 func TestUpdateClientEntryBackupIPRejectsChangingAddressInUse(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

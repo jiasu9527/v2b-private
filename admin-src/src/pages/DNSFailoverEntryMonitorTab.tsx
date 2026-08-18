@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
-  Divider,
   Input,
   InputNumber,
   Modal,
@@ -10,11 +9,13 @@ import {
   Spin,
   Switch,
   Table,
+  Tabs,
   Tag,
   Tooltip,
   message,
 } from 'antd';
 import {
+  CopyOutlined,
   DeleteOutlined,
   EditOutlined,
   PlusOutlined,
@@ -301,6 +302,38 @@ function formatBackupEndpoint(ip: string, port: number) {
   return ip.includes(':') ? `[${ip}]:${port}` : `${ip}:${port}`;
 }
 
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Fall through for non-HTTPS panels or browsers that deny Clipboard API access.
+    }
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  let copied = false;
+  try {
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    copied = document.execCommand('copy');
+  } finally {
+    textarea.remove();
+  }
+  if (!copied) throw new Error('copy failed');
+}
+
+function isBackupIPAvailable(item: BackupIP) {
+  return !item.used && item.enabled && (
+    boolValue(item.available)
+    || ['available', 'healthy', 'ready', 'success', 'online'].includes(item.status)
+  );
+}
+
 function backupStatusMeta(item: BackupIP) {
   if (!item.enabled) return { label: '已禁用', color: 'default' };
   if (item.used) return { label: '使用中', color: 'blue' };
@@ -563,6 +596,8 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
   const [backupBatchSaving, setBackupBatchSaving] = useState(false);
   const [editingBackupIP, setEditingBackupIP] = useState<BackupIPInput & { id: number } | null>(null);
   const [backupActionID, setBackupActionID] = useState<number | null>(null);
+  const [selectedBackupIPIDs, setSelectedBackupIPIDs] = useState<number[]>([]);
+  const [backupBatchDeleting, setBackupBatchDeleting] = useState(false);
 
   const policiesRef = useRef<EntryPolicy[]>([]);
   const draftsRef = useRef<Record<number, EntryMonitorDraft>>({});
@@ -653,7 +688,9 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
       const rawItems = Array.isArray(payload)
         ? payload
         : list(payload.items ?? payload.backup_ips ?? payload.data);
-      setBackupIPs(rawItems.map(normalizeBackupIP).filter((item) => item.id > 0 && item.ip));
+      const nextItems = rawItems.map(normalizeBackupIP).filter((item) => item.id > 0 && item.ip);
+      setBackupIPs(nextItems);
+      setSelectedBackupIPIDs((current) => current.filter((id) => nextItems.some((item) => item.id === id && !item.used)));
       return true;
     } catch (error: any) {
       if (requestSequence !== backupRequestSequenceRef.current) return false;
@@ -795,6 +832,7 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
       await apiDelete(`${BACKUP_IP_PATH}/${item.id}`);
       message.success('备用 IP 已删除');
       setBackupIPs((current) => current.filter((candidate) => candidate.id !== item.id));
+      setSelectedBackupIPIDs((current) => current.filter((id) => id !== item.id));
       try {
         await fetchBackupIPs(true);
       } catch {
@@ -804,6 +842,64 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
       message.error(error?.message || '删除备用 IP 失败');
     } finally {
       setBackupActionID(null);
+    }
+  };
+
+  const deleteBackupIPs = async (scope: 'selected' | 'faulty' | 'all') => {
+    if (backupBatchDeleting || backupActionID !== null) return;
+    const ids = scope === 'selected' ? uniqueIDs(selectedBackupIPIDs) : undefined;
+    if (scope === 'selected' && !ids?.length) {
+      message.warning('请先选择要删除的备用 IP');
+      return;
+    }
+    setBackupBatchDeleting(true);
+    try {
+      const payload = unwrapData(await apiJsonPost(`${BACKUP_IP_PATH}/delete`, {
+        scope,
+        ...(ids ? { ids } : {}),
+      })) || {};
+      const deleted = numberValue(payload.deleted);
+      const skippedInUse = numberValue(payload.skipped_in_use);
+      const skippedNotFound = numberValue(payload.skipped_not_found);
+      const summary = [
+        `已删除 ${deleted} 个备用 IP`,
+        skippedInUse > 0 ? `使用中的 ${skippedInUse} 个已保留` : '',
+        skippedNotFound > 0 ? `不存在或已被删除的 ${skippedNotFound} 个已跳过` : '',
+      ].filter(Boolean).join('，');
+      message.success(summary);
+      setSelectedBackupIPIDs([]);
+      try {
+        await fetchBackupIPs(true);
+      } catch {
+        // Deletion has committed; the regular poll will retry the list refresh.
+      }
+    } catch (error: any) {
+      message.error(error?.message || '批量删除备用 IP 失败');
+    } finally {
+      setBackupBatchDeleting(false);
+    }
+  };
+
+  const copyAvailableBackupIPs = async () => {
+    const seen = new Set<string>();
+    const ips = backupIPs
+      .filter(isBackupIPAvailable)
+      .map((item) => item.ip.trim())
+      .filter((ip) => {
+        const key = ip.toLowerCase();
+        if (!ip || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    if (!ips.length) {
+      message.warning('当前没有健康且未使用的备用 IP');
+      return;
+    }
+    try {
+      await copyText(ips.join('\n'));
+      message.success(`已复制 ${ips.length} 个可用 IP`);
+    } catch {
+      message.error('复制失败，请稍后重试');
     }
   };
 
@@ -1537,6 +1633,13 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
 
   return <Spin spinning={loading}>
     <div className="dns-entry-monitor-tab">
+      <Tabs
+        className="dns-entry-section-tabs"
+        items={[
+          {
+            key: 'monitors',
+            label: `入口监控 (${selectedPolicyIDs.length}/${policies.length})`,
+            children: <>
       <div className="forest-table-action dns-entry-toolbar">
         <Space wrap>
           <Button
@@ -1588,26 +1691,94 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
         }}
         locale={{ emptyText: loaded ? '暂无用户入口规则' : '正在加载' }}
       />
-
-      <Divider orientation="left">备用 IP 池</Divider>
+            </>,
+          },
+          {
+            key: 'backup-ips',
+            label: `备用 IP 池 (${backupIPs.length})`,
+            children: <>
       <div className="dns-entry-backup-toolbar">
         <div className="dns-entry-backup-intro">
           <strong>全部启用探针同时测活</strong>
           <span>连续测通且未被入口规则使用的 IP 才会标记为可用；自动二分会从可用队列原子分配。</span>
           <Space size={4} wrap>
             <Tag>共 {backupIPs.length} 个</Tag>
-            <Tag color="success">可用 {backupIPs.filter((item) => boolValue(item.available) || item.status === 'available').length}</Tag>
+            <Tag color="success">可用 {backupIPs.filter(isBackupIPAvailable).length}</Tag>
             <Tag color="blue">使用中 {backupIPs.filter((item) => item.used).length}</Tag>
             <Tag color="warning">隔离 {backupIPs.filter((item) => backupStatusMeta(item).label === '隔离').length}</Tag>
           </Space>
         </div>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => setBackupBatchOpen(true)}
-        >
-          批量添加
-        </Button>
+        <Space className="dns-entry-backup-actions" wrap>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            disabled={backupBatchDeleting}
+            onClick={() => setBackupBatchOpen(true)}
+          >
+            批量添加
+          </Button>
+          <Button
+            icon={<CopyOutlined />}
+            disabled={!backupIPs.some(isBackupIPAvailable)}
+            onClick={() => void copyAvailableBackupIPs()}
+          >
+            复制可用 IP
+          </Button>
+          <Popconfirm
+            title={`确认删除所选的 ${selectedBackupIPIDs.length} 个备用 IP？`}
+            description="删除后将同时清除对应的探针测活记录；使用中的 IP 会自动保留。"
+            okText="删除所选"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            disabled={!selectedBackupIPIDs.length}
+            onConfirm={() => void deleteBackupIPs('selected')}
+          >
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              disabled={!selectedBackupIPIDs.length || backupActionID !== null}
+              loading={backupBatchDeleting}
+            >
+              删除所选{selectedBackupIPIDs.length ? ` (${selectedBackupIPIDs.length})` : ''}
+            </Button>
+          </Popconfirm>
+          <Popconfirm
+            title="确认删除全部故障 IP？"
+            description="仅删除状态为故障且未被入口使用的 IP；使用中的 IP 会自动保留。"
+            okText="删除故障 IP"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            disabled={!backupIPs.some((item) => item.status === 'unhealthy' && !item.used)}
+            onConfirm={() => void deleteBackupIPs('faulty')}
+          >
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              disabled={!backupIPs.some((item) => item.status === 'unhealthy' && !item.used) || backupActionID !== null}
+              loading={backupBatchDeleting}
+            >
+              删除故障 IP
+            </Button>
+          </Popconfirm>
+          <Popconfirm
+            title="确认删除池内全部未使用 IP？"
+            description="此操作会清空全部未占用备用 IP 及其测活记录；正在使用的 IP 会自动保留。"
+            okText="删除全部"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            disabled={!backupIPs.some((item) => !item.used)}
+            onConfirm={() => void deleteBackupIPs('all')}
+          >
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              disabled={!backupIPs.some((item) => !item.used) || backupActionID !== null}
+              loading={backupBatchDeleting}
+            >
+              删除全部
+            </Button>
+          </Popconfirm>
+        </Space>
       </div>
       <Table
         className="dns-entry-backup-table"
@@ -1616,6 +1787,13 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
         loading={backupLoading}
         dataSource={backupIPs}
         columns={backupColumns}
+        rowSelection={{
+          selectedRowKeys: selectedBackupIPIDs,
+          onChange: (keys) => setSelectedBackupIPIDs(uniqueIDs(keys as any[])),
+          getCheckboxProps: (item: BackupIP) => ({
+            disabled: item.used || backupBatchDeleting || backupActionID !== null,
+          }),
+        }}
         scroll={{ x: 1334 }}
         pagination={backupIPs.length > 20 ? {
           defaultPageSize: 20,
@@ -1629,10 +1807,14 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
         }}
         locale={{ emptyText: '暂无备用 IP，批量添加后将自动下发给全部启用探针测活' }}
       />
-
-      <Divider orientation="left">
-        <Space size={8}>
-          <span>近期检测</span>
+            </>,
+          },
+          {
+            key: 'runs',
+            label: `近期检测 (${runs.length})`,
+            children: <>
+        <div className="forest-table-action dns-entry-runs-toolbar">
+          <span className="dns-failover-sub">检测记录保留最近的任务和逐探针结果</span>
           <Popconfirm
             title="确认清理近期检测记录？"
             description="仅删除已经结束的检测任务及结果，不影响正在执行的任务、监控配置和告警状态。"
@@ -1651,8 +1833,7 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
               手动清理
             </Button>
           </Popconfirm>
-        </Space>
-      </Divider>
+        </div>
       <Table
         className="dns-entry-runs-table"
         rowKey={(run, index) => `${run.run_id ?? run.id ?? 'run'}-${run.target_id ?? run.source_key ?? index}-${run.probe_id ?? ''}`}
@@ -1679,6 +1860,10 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
           </>,
         }}
         locale={{ emptyText: '暂无检测任务' }}
+      />
+            </>,
+          },
+        ]}
       />
 
       <Modal

@@ -70,6 +70,9 @@ func handleAdminDNSFailover(w http.ResponseWriter, r *http.Request, sessions ses
 	if len(parts) == 3 && parts[0] == "entry-monitors" && parts[1] == "backup-ips" && parts[2] == "refresh" {
 		return handleClientEntryBackupIPRefresh(w, r, service)
 	}
+	if len(parts) == 3 && parts[0] == "entry-monitors" && parts[1] == "backup-ips" && parts[2] == "delete" {
+		return handleClientEntryBackupIPBulkDelete(w, r, service)
+	}
 	if len(parts) == 3 && parts[0] == "entry-monitors" && parts[1] == "backup-ips" {
 		return handleClientEntryBackupIP(w, r, service, parts[2])
 	}

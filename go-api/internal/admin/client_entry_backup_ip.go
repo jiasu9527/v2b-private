@@ -101,12 +101,25 @@ type ClientEntryBackupIPRefreshResult struct {
 	Updated int64 `json:"updated"`
 }
 
+type ClientEntryBackupIPBulkDeleteRequest struct {
+	Scope string  `json:"scope"`
+	IDs   []int64 `json:"ids,omitempty"`
+}
+
+type ClientEntryBackupIPBulkDeleteResult struct {
+	Requested       int64 `json:"requested"`
+	Deleted         int64 `json:"deleted"`
+	SkippedInUse    int64 `json:"skipped_in_use"`
+	SkippedNotFound int64 `json:"skipped_not_found"`
+}
+
 type ClientEntryBackupIPAdminService interface {
 	ListClientEntryBackupIPs(context.Context) (ClientEntryBackupIPList, error)
 	CreateClientEntryBackupIP(context.Context, ClientEntryBackupIPSaveRequest) (ClientEntryBackupIPRecord, error)
 	CreateClientEntryBackupIPs(context.Context, []ClientEntryBackupIPSaveRequest) ([]ClientEntryBackupIPRecord, error)
 	UpdateClientEntryBackupIP(context.Context, int64, ClientEntryBackupIPSaveRequest) (ClientEntryBackupIPRecord, error)
 	DeleteClientEntryBackupIP(context.Context, int64) (bool, error)
+	BulkDeleteClientEntryBackupIPs(context.Context, ClientEntryBackupIPBulkDeleteRequest) (ClientEntryBackupIPBulkDeleteResult, error)
 	RefreshClientEntryBackupIPs(context.Context, []int64) (ClientEntryBackupIPRefreshResult, error)
 }
 
@@ -132,7 +145,6 @@ ORDER BY sort ASC, id ASC`)
 		return ClientEntryBackupIPList{}, fmt.Errorf("查询备用 IP 池失败: %w", err)
 	}
 	items := make([]ClientEntryBackupIPRecord, 0)
-	locations := make(map[int64]int)
 	for rows.Next() {
 		var item ClientEntryBackupIPRecord
 		var enabled int64
@@ -145,7 +157,6 @@ ORDER BY sort ASC, id ASC`)
 		item.Enabled = enabled == 1
 		item.Usages = make([]ClientEntryBackupIPUsage, 0)
 		item.States = make([]ClientEntryBackupIPState, 0)
-		locations[item.ID] = len(items)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -157,11 +168,54 @@ ORDER BY sort ASC, id ASC`)
 		return ClientEntryBackupIPList{Items: items}, nil
 	}
 
-	probes, err := loadClientEntryBackupIPProbes(ctx, s.db)
-	if err != nil {
+	if err := hydrateClientEntryBackupIPStatuses(ctx, s.db, items, time.Now().Unix()); err != nil {
 		return ClientEntryBackupIPList{}, err
 	}
-	now := time.Now().Unix()
+	return ClientEntryBackupIPList{Items: items}, nil
+}
+
+func loadClientEntryBackupIPProbes(ctx context.Context, queryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}) ([]clientEntryBackupIPProbe, error) {
+	rows, err := queryer.QueryContext(ctx, `SELECT id, name, last_heartbeat_at
+FROM v2_dns_probe WHERE enabled = 1 ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("查询备用 IP 探针失败: %w", err)
+	}
+	defer rows.Close()
+	result := make([]clientEntryBackupIPProbe, 0)
+	for rows.Next() {
+		var probe clientEntryBackupIPProbe
+		if err := rows.Scan(&probe.ID, &probe.Name, &probe.LastHeartbeatAt); err != nil {
+			return nil, fmt.Errorf("读取备用 IP 探针失败: %w", err)
+		}
+		result = append(result, probe)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历备用 IP 探针失败: %w", err)
+	}
+	return result, nil
+}
+
+// hydrateClientEntryBackupIPStatuses uses the same ordering and predicates as
+// ListClientEntryBackupIPs. Bulk deletion calls it after locking pool rows so
+// the "faulty" scope cannot drift into a looser definition of failure.
+func hydrateClientEntryBackupIPStatuses(ctx context.Context, queryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, items []ClientEntryBackupIPRecord, now int64) error {
+	if len(items) == 0 {
+		return nil
+	}
+	locations := make(map[int64]int, len(items))
+	for index := range items {
+		items[index].Usages = make([]ClientEntryBackupIPUsage, 0)
+		items[index].States = make([]ClientEntryBackupIPState, 0)
+		locations[items[index].ID] = index
+	}
+	probes, err := loadClientEntryBackupIPProbes(ctx, queryer)
+	if err != nil {
+		return err
+	}
 	probeByID := make(map[int64]clientEntryBackupIPProbe, len(probes))
 	for _, probe := range probes {
 		probeByID[probe.ID] = probe
@@ -179,14 +233,14 @@ ORDER BY sort ASC, id ASC`)
 		}
 	}
 
-	stateRows, err := s.db.QueryContext(ctx, `SELECT state.backup_ip_id, state.probe_id, state.last_success,
+	stateRows, err := queryer.QueryContext(ctx, `SELECT state.backup_ip_id, state.probe_id, state.last_success,
 state.last_latency_ms, state.last_error, state.consecutive_success, state.consecutive_failure,
 state.last_reported_at
 FROM v2_client_entry_backup_ip_state state
 JOIN v2_dns_probe probe ON probe.id = state.probe_id AND probe.enabled = 1
 ORDER BY state.backup_ip_id, state.probe_id`)
 	if err != nil {
-		return ClientEntryBackupIPList{}, fmt.Errorf("查询备用 IP 测活状态失败: %w", err)
+		return fmt.Errorf("查询备用 IP 测活状态失败: %w", err)
 	}
 	stateLocations := make(map[int64]map[int64]int, len(items))
 	for index := range items {
@@ -203,7 +257,7 @@ ORDER BY state.backup_ip_id, state.probe_id`)
 		if err := stateRows.Scan(&backupIPID, &probeID, &success, &latency, &lastError,
 			&successStreak, &failureStreak, &reported); err != nil {
 			_ = stateRows.Close()
-			return ClientEntryBackupIPList{}, fmt.Errorf("读取备用 IP 测活状态失败: %w", err)
+			return fmt.Errorf("读取备用 IP 测活状态失败: %w", err)
 		}
 		itemIndex, exists := locations[backupIPID]
 		if !exists {
@@ -238,13 +292,13 @@ ORDER BY state.backup_ip_id, state.probe_id`)
 	}
 	if err := stateRows.Err(); err != nil {
 		_ = stateRows.Close()
-		return ClientEntryBackupIPList{}, fmt.Errorf("遍历备用 IP 测活状态失败: %w", err)
+		return fmt.Errorf("遍历备用 IP 测活状态失败: %w", err)
 	}
 	_ = stateRows.Close()
 
-	usageByIP, err := loadClientEntryBackupIPUsages(ctx, s.db)
+	usageByIP, err := loadClientEntryBackupIPUsages(ctx, queryer)
 	if err != nil {
-		return ClientEntryBackupIPList{}, err
+		return err
 	}
 	for index := range items {
 		items[index].Usages = append(items[index].Usages, usageByIP[items[index].IP]...)
@@ -257,30 +311,7 @@ ORDER BY state.backup_ip_id, state.probe_id`)
 		}
 		items[index].Status, items[index].Available = classifyClientEntryBackupIP(items[index], now)
 	}
-	return ClientEntryBackupIPList{Items: items}, nil
-}
-
-func loadClientEntryBackupIPProbes(ctx context.Context, queryer interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}) ([]clientEntryBackupIPProbe, error) {
-	rows, err := queryer.QueryContext(ctx, `SELECT id, name, last_heartbeat_at
-FROM v2_dns_probe WHERE enabled = 1 ORDER BY id`)
-	if err != nil {
-		return nil, fmt.Errorf("查询备用 IP 探针失败: %w", err)
-	}
-	defer rows.Close()
-	result := make([]clientEntryBackupIPProbe, 0)
-	for rows.Next() {
-		var probe clientEntryBackupIPProbe
-		if err := rows.Scan(&probe.ID, &probe.Name, &probe.LastHeartbeatAt); err != nil {
-			return nil, fmt.Errorf("读取备用 IP 探针失败: %w", err)
-		}
-		result = append(result, probe)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("遍历备用 IP 探针失败: %w", err)
-	}
-	return result, nil
+	return nil
 }
 
 func classifyClientEntryBackupIP(item ClientEntryBackupIPRecord, now int64) (string, bool) {
@@ -515,6 +546,152 @@ func (s *DBService) DeleteClientEntryBackupIP(ctx context.Context, id int64) (bo
 		return false, fmt.Errorf("提交备用 IP 删除失败: %w", err)
 	}
 	return true, nil
+}
+
+func (s *DBService) BulkDeleteClientEntryBackupIPs(ctx context.Context, request ClientEntryBackupIPBulkDeleteRequest) (ClientEntryBackupIPBulkDeleteResult, error) {
+	if s == nil || s.db == nil {
+		return ClientEntryBackupIPBulkDeleteResult{}, ErrUnavailable
+	}
+	if request.Scope != "selected" && request.Scope != "faulty" && request.Scope != "all" {
+		return ClientEntryBackupIPBulkDeleteResult{}, errors.New("批量删除范围必须是 selected、faulty 或 all")
+	}
+	var err error
+	if request.Scope == "selected" {
+		if len(request.IDs) == 0 {
+			return ClientEntryBackupIPBulkDeleteResult{}, errors.New("选择删除时备用 IP ID 列表不能为空")
+		}
+		if len(request.IDs) > clientEntryBackupIPMaxBatch {
+			return ClientEntryBackupIPBulkDeleteResult{}, fmt.Errorf("一次最多删除 %d 个备用 IP", clientEntryBackupIPMaxBatch)
+		}
+		request.IDs, err = normalizeClientEntryBackupIPIDs(request.IDs)
+		if err != nil {
+			return ClientEntryBackupIPBulkDeleteResult{}, err
+		}
+	} else if len(request.IDs) != 0 {
+		return ClientEntryBackupIPBulkDeleteResult{}, errors.New("faulty 或 all 范围不能指定备用 IP ID")
+	}
+	if err := s.ensureDNSFailoverSchema(ctx); err != nil {
+		return ClientEntryBackupIPBulkDeleteResult{}, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ClientEntryBackupIPBulkDeleteResult{}, fmt.Errorf("批量删除备用 IP 失败: %w", err)
+	}
+	defer tx.Rollback()
+	// Automatic and manual split transactions take the visible-order advisory
+	// lock before claiming pool rows. Follow the same order here so a bulk
+	// delete cannot hold a table SHARE lock while waiting for rows owned by a
+	// split that still needs a ROW EXCLUSIVE table lock to finish.
+	if err := lockClientEntryVisibleOrder(ctx, tx); err != nil {
+		return ClientEntryBackupIPBulkDeleteResult{}, fmt.Errorf("锁定入口规则变更失败: %w", err)
+	}
+	// Rule ownership is represented by host strings rather than a foreign key.
+	// Hold table share locks so no rule can start using a candidate between the
+	// ownership re-check below and commit. Take these before pool row locks to
+	// match entry-rule/auto-split lock order and avoid a lock-order cycle.
+	if _, err := tx.ExecContext(ctx, `LOCK TABLE v2_client_entry_user_policy,
+v2_client_entry_user_policy_split_group IN SHARE MODE`); err != nil {
+		return ClientEntryBackupIPBulkDeleteResult{}, fmt.Errorf("锁定备用 IP 占用关系失败: %w", err)
+	}
+	items, err := lockClientEntryBackupIPsForBulkDelete(ctx, tx, request)
+	if err != nil {
+		return ClientEntryBackupIPBulkDeleteResult{}, err
+	}
+	usageByIP, err := loadClientEntryBackupIPUsages(ctx, tx)
+	if err != nil {
+		return ClientEntryBackupIPBulkDeleteResult{}, err
+	}
+	result := ClientEntryBackupIPBulkDeleteResult{}
+	if request.Scope == "selected" {
+		result.Requested = int64(len(request.IDs))
+		result.SkippedNotFound = result.Requested - int64(len(items))
+	} else if request.Scope == "all" {
+		result.Requested = int64(len(items))
+	} else {
+		if err := hydrateClientEntryBackupIPStatuses(ctx, tx, items, time.Now().Unix()); err != nil {
+			return ClientEntryBackupIPBulkDeleteResult{}, err
+		}
+		items = clientEntryBackupIPBulkDeleteCandidates(request.Scope, items)
+		result.Requested = int64(len(items))
+	}
+
+	for _, item := range items {
+		// Ownership was re-read after both the pool rows and rule tables were
+		// locked. loadClientEntryBackupIPUsages canonicalizes IPv6 spelling too;
+		// an equivalent non-canonical entry_host must still protect the row.
+		if len(usageByIP[item.IP]) != 0 {
+			result.SkippedInUse++
+			continue
+		}
+		deleteResult, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_backup_ip WHERE id = $1`, item.ID)
+		if err != nil {
+			return ClientEntryBackupIPBulkDeleteResult{}, fmt.Errorf("批量删除备用 IP 失败: %w", err)
+		}
+		affected, err := deleteResult.RowsAffected()
+		if err != nil {
+			return ClientEntryBackupIPBulkDeleteResult{}, fmt.Errorf("确认备用 IP 批量删除结果失败: %w", err)
+		}
+		result.Deleted += affected
+	}
+	if err := tx.Commit(); err != nil {
+		return ClientEntryBackupIPBulkDeleteResult{}, fmt.Errorf("提交备用 IP 批量删除失败: %w", err)
+	}
+	return result, nil
+}
+
+func lockClientEntryBackupIPsForBulkDelete(ctx context.Context, tx *sql.Tx, request ClientEntryBackupIPBulkDeleteRequest) ([]ClientEntryBackupIPRecord, error) {
+	query := `SELECT id, name, ip, port, enabled, check_interval_sec,
+tcp_timeout_ms, generation, sort, quarantine_until, created_at, updated_at
+FROM v2_client_entry_backup_ip`
+	args := make([]any, 0, len(request.IDs))
+	if request.Scope == "selected" {
+		placeholders := make([]string, len(request.IDs))
+		for index, id := range request.IDs {
+			placeholders[index] = fmt.Sprintf("$%d", index+1)
+			args = append(args, id)
+		}
+		query += ` WHERE id IN (` + strings.Join(placeholders, ",") + `)`
+	}
+	query += ` ORDER BY id FOR UPDATE`
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("锁定待删除备用 IP 失败: %w", err)
+	}
+	defer rows.Close()
+	items := make([]ClientEntryBackupIPRecord, 0)
+	for rows.Next() {
+		var item ClientEntryBackupIPRecord
+		var enabled int64
+		if err := rows.Scan(&item.ID, &item.Name, &item.IP, &item.Port, &enabled,
+			&item.CheckIntervalSec, &item.TCPTimeoutMS, &item.Generation, &item.Sort,
+			&item.QuarantineUntil, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("读取待删除备用 IP 失败: %w", err)
+		}
+		item.Enabled = enabled == 1
+		item.Usages = make([]ClientEntryBackupIPUsage, 0)
+		item.States = make([]ClientEntryBackupIPState, 0)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历待删除备用 IP 失败: %w", err)
+	}
+	return items, nil
+}
+
+func clientEntryBackupIPBulkDeleteCandidates(scope string, items []ClientEntryBackupIPRecord) []ClientEntryBackupIPRecord {
+	if scope != "faulty" {
+		return items
+	}
+	result := make([]ClientEntryBackupIPRecord, 0, len(items))
+	for _, item := range items {
+		// Do not infer failure from unavailable/disabled/stale probe states.
+		// "faulty" is deliberately the canonical list status only.
+		if item.Status == "unhealthy" {
+			result = append(result, item)
+		}
+	}
+	return result
 }
 
 func clientEntryBackupIPHostInUse(ctx context.Context, queryer interface {

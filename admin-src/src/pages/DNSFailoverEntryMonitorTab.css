@@ -3,6 +3,10 @@
   padding-bottom: 18px;
 }
 
+.dns-entry-section-tabs > .ant-tabs-nav {
+  margin-bottom: 18px;
+}
+
 .dns-failover-tabs .ant-tabs-tab {
   white-space: nowrap;
   word-break: keep-all;
@@ -183,6 +187,19 @@
   margin-bottom: 14px;
 }
 
+.dns-entry-backup-actions {
+  justify-content: flex-end;
+  max-width: 720px;
+}
+
+.dns-entry-runs-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
 .dns-entry-backup-intro {
   display: grid;
   gap: 5px;
@@ -347,6 +364,16 @@
 
   .dns-entry-backup-toolbar > .ant-btn {
     align-self: flex-start;
+  }
+
+  .dns-entry-backup-actions {
+    justify-content: flex-start;
+    max-width: none;
+  }
+
+  .dns-entry-runs-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .dns-entry-monitor-fields {

@@ -1338,11 +1338,14 @@ function SplitGroupRowActions({
   const [editOpen, setEditOpen] = useState(false);
   const [usersOpen, setUsersOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [backupIPFilling, setBackupIPFilling] = useState(false);
+  const [useBackupIPPool, setUseBackupIPPool] = useState(false);
   const [splitForm] = Form.useForm();
   const [editForm] = Form.useForm();
 
   const openSplit = () => {
     splitForm.resetFields();
+    setUseBackupIPPool(false);
     setSplitOpen(true);
   };
   const openEdit = () => {
@@ -1357,6 +1360,45 @@ function SplitGroupRowActions({
     });
     setEditOpen(true);
   };
+  const fillSplitHostsFromBackupPool = async () => {
+    if (backupIPFilling) return;
+    setBackupIPFilling(true);
+    try {
+      const response = await apiGet('/dns-failover/entry-monitors/backup-ips');
+      const payload = response?.data ?? response;
+      const rawItems = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload?.items)
+          ? payload.items
+          : Array.isArray(payload?.backup_ips)
+            ? payload.backup_ips
+            : [];
+      const seen = new Set<string>();
+      const available = rawItems.filter((item: any) => {
+        const ip = String(item?.ip || '').trim();
+        const key = ip.toLowerCase();
+        if (!ip || seen.has(key) || item?.enabled === false || item?.used === true) return false;
+        const status = String(item?.status || '').trim().toLowerCase();
+        const healthy = item?.available === true || status === 'available';
+        if (!healthy) return false;
+        seen.add(key);
+        return true;
+      });
+      if (available.length < 2) {
+        message.warning(`健康且未使用的备用 IP 不足 2 个，当前只有 ${available.length} 个`);
+        return;
+      }
+      const hostA = String(available[0].ip).trim();
+      const hostB = String(available[1].ip).trim();
+      splitForm.setFieldsValue({ entry_host_a: hostA, entry_host_b: hostB });
+      setUseBackupIPPool(true);
+      message.success(`已自动填入备用 IP：${hostA}、${hostB}`);
+    } catch (error: any) {
+      message.error(error?.message || '读取备用 IP 池失败');
+    } finally {
+      setBackupIPFilling(false);
+    }
+  };
   const submitSplit = async () => {
     setSaving(true);
     try {
@@ -1366,6 +1408,7 @@ function SplitGroupRowActions({
         group_id: group.id,
         entry_host_a: String(values.entry_host_a || '').trim(),
         entry_host_b: String(values.entry_host_b || '').trim(),
+        use_backup_ip_pool: useBackupIPPool,
       });
       message.success(`“${splitGroupDisplayName(group)}”已继续二分，新规则已在原位置展开`);
       setSplitOpen(false);
@@ -1424,7 +1467,19 @@ function SplitGroupRowActions({
         description="当前行会被两个新叶子组原地替换；节点、解析设置和全局优先级都会继承。"
         style={{ marginBottom: 16 }}
       />
-      <Form form={splitForm} layout="vertical">
+      <Form form={splitForm} layout="vertical" onValuesChange={() => setUseBackupIPPool(false)}>
+        <Space style={{ marginBottom: 16 }} wrap>
+          <Button
+            icon={<BranchesOutlined />}
+            loading={backupIPFilling}
+            onClick={fillSplitHostsFromBackupPool}
+          >
+            从备用 IP 池自动填入
+          </Button>
+          <Typography.Text type="secondary">
+            {useBackupIPPool ? '已选择；确认二分时会在事务内重新领取，避免重复占用' : '自动选择前两个健康且未使用的 IP'}
+          </Typography.Text>
+        </Space>
         <Form.Item name="entry_host_a" label="第一个子规则入口" rules={[{ required: true, whitespace: true, message: '请输入第一个子规则入口' }]}>
           <Input placeholder="域名或 IP" />
         </Form.Item>

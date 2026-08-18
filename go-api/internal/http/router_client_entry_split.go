@@ -204,10 +204,11 @@ func handleAdminClientEntryUserPolicySplitGroup(w http.ResponseWriter, r *http.R
 		return true
 	}
 	var payload struct {
-		PolicyID   *json.Number `json:"policy_id"`
-		GroupID    *json.Number `json:"group_id"`
-		EntryHostA string       `json:"entry_host_a"`
-		EntryHostB string       `json:"entry_host_b"`
+		PolicyID        *json.Number `json:"policy_id"`
+		GroupID         *json.Number `json:"group_id"`
+		EntryHostA      string       `json:"entry_host_a"`
+		EntryHostB      string       `json:"entry_host_b"`
+		UseBackupIPPool bool         `json:"use_backup_ip_pool"`
 	}
 	if err := readJSONBody(r, &payload); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
@@ -219,6 +220,7 @@ func handleAdminClientEntryUserPolicySplitGroup(w http.ResponseWriter, r *http.R
 	}
 	result, err := adminService.SplitClientEntryUserPolicyGroup(r.Context(), admin.ClientEntryUserPolicyGroupSplitRequest{
 		PolicyID: policyID, GroupID: groupID, EntryHostA: payload.EntryHostA, EntryHostB: payload.EntryHostB,
+		UseBackupIPPool: payload.UseBackupIPPool,
 	})
 	if err != nil {
 		return handleAdminError(w, err)

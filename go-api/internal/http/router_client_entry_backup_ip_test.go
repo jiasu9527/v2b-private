@@ -19,6 +19,7 @@ type fakeClientEntryBackupIPService struct {
 	createdBatch  []admin.ClientEntryBackupIPRecord
 	updated       admin.ClientEntryBackupIPRecord
 	refresh       admin.ClientEntryBackupIPRefreshResult
+	bulkDelete    admin.ClientEntryBackupIPBulkDeleteResult
 	err           error
 	createRequest admin.ClientEntryBackupIPSaveRequest
 	batchRequest  []admin.ClientEntryBackupIPSaveRequest
@@ -26,6 +27,7 @@ type fakeClientEntryBackupIPService struct {
 	updateRequest admin.ClientEntryBackupIPSaveRequest
 	deleteID      int64
 	refreshIDs    []int64
+	bulkRequest   admin.ClientEntryBackupIPBulkDeleteRequest
 }
 
 func (f *fakeClientEntryBackupIPService) ListClientEntryBackupIPs(context.Context) (admin.ClientEntryBackupIPList, error) {
@@ -52,6 +54,11 @@ func (f *fakeClientEntryBackupIPService) DeleteClientEntryBackupIP(_ context.Con
 	return true, f.err
 }
 
+func (f *fakeClientEntryBackupIPService) BulkDeleteClientEntryBackupIPs(_ context.Context, request admin.ClientEntryBackupIPBulkDeleteRequest) (admin.ClientEntryBackupIPBulkDeleteResult, error) {
+	f.bulkRequest = request
+	return f.bulkDelete, f.err
+}
+
 func (f *fakeClientEntryBackupIPService) RefreshClientEntryBackupIPs(_ context.Context, ids []int64) (admin.ClientEntryBackupIPRefreshResult, error) {
 	f.refreshIDs = append([]int64(nil), ids...)
 	return f.refresh, f.err
@@ -73,6 +80,7 @@ func TestClientEntryBackupIPRoutesSupportCRUDAtomicBatchAndRefresh(t *testing.T)
 		createdBatch:     []admin.ClientEntryBackupIPRecord{{ID: 3, IP: "192.0.2.3"}, {ID: 4, IP: "192.0.2.4"}},
 		updated:          admin.ClientEntryBackupIPRecord{ID: 2, Name: "更新"},
 		refresh:          admin.ClientEntryBackupIPRefreshResult{Updated: 2},
+		bulkDelete:       admin.ClientEntryBackupIPBulkDeleteResult{Requested: 3, Deleted: 2, SkippedInUse: 1},
 	}
 	router := clientEntryBackupIPRouter(service)
 	base := "/api/v1/control/dns-failover/entry-monitors/backup-ips"
@@ -108,6 +116,12 @@ func TestClientEntryBackupIPRoutesSupportCRUDAtomicBatchAndRefresh(t *testing.T)
 	if len(service.refreshIDs) != 2 || service.refreshIDs[0] != 3 {
 		t.Fatalf("refresh ids = %#v", service.refreshIDs)
 	}
+	if rec := dnsFailoverRequest(router, http.MethodPost, base+"/delete", `{"scope":"selected","ids":[3,4,5]}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"skipped_in_use":1`) {
+		t.Fatalf("bulk delete: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if service.bulkRequest.Scope != "selected" || len(service.bulkRequest.IDs) != 3 {
+		t.Fatalf("bulk request = %#v", service.bulkRequest)
+	}
 }
 
 func TestClientEntryBackupIPRoutesRejectUnknownFieldsAndMapErrors(t *testing.T) {
@@ -118,6 +132,12 @@ func TestClientEntryBackupIPRoutesRejectUnknownFieldsAndMapErrors(t *testing.T) 
 	}
 	if rec := dnsFailoverRequest(clientEntryBackupIPRouter(service), http.MethodGet, base+"/bad", ""); rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad id: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := dnsFailoverRequest(clientEntryBackupIPRouter(service), http.MethodPost, base+"/delete", `{"scope":"all","unexpected":true}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("bulk unknown field: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := dnsFailoverRequest(clientEntryBackupIPRouter(service), http.MethodDelete, base+"/delete", ""); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("bulk method: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
 	for _, test := range []struct {
