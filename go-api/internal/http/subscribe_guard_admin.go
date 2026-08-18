@@ -44,7 +44,7 @@ func handleAdminSubscribeGuardStats(w http.ResponseWriter, r *http.Request, cfg 
 	return true
 }
 
-func handleAdminSubscribeGuardUserSearch(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+func handleAdminSubscribeGuardUserSearch(w http.ResponseWriter, r *http.Request, cfg config.Config, sessionService session.Service, adminService admin.Service) bool {
 	disableResponseCache(w)
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -92,12 +92,85 @@ func handleAdminSubscribeGuardUserSearch(w http.ResponseWriter, r *http.Request,
 	if err != nil {
 		return handleAdminError(w, err)
 	}
+	if len(result.Data) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{}, "total": result.Total})
+		return true
+	}
+	latestUAs := subscribeGuardLatestUserSearchUAs(subscribeGuardEventsSnapshot(cfg), result.Data)
+	matchRequests := make([]admin.ClientEntryUserPolicyMatchRequest, 0, len(result.Data))
+	for _, user := range result.Data {
+		userID := anyInt64(user["id"])
+		if userID <= 0 {
+			continue
+		}
+		matchRequests = append(matchRequests, admin.ClientEntryUserPolicyMatchRequest{
+			UserID: userID,
+			UA:     latestUAs[userID],
+		})
+	}
+	matches, err := adminService.MatchClientEntryUserPolicies(r.Context(), matchRequests)
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	matchesByUserID := make(map[int64]*admin.ClientEntryUserPolicyRecord, len(matches))
+	for _, match := range matches {
+		if match.Found {
+			matchesByUserID[match.UserID] = match.Matched
+		}
+	}
 	rows := make([]map[string]any, 0, len(result.Data))
 	for _, user := range result.Data {
-		rows = append(rows, subscribeGuardUserSearchPublicRow(user))
+		userID := anyInt64(user["id"])
+		row := subscribeGuardUserSearchPublicRow(user)
+		row["entry_policy"] = subscribeGuardEntryPolicyPublicRow(matchesByUserID[userID], latestUAs[userID])
+		rows = append(rows, row)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": rows, "total": result.Total})
 	return true
+}
+
+// subscribeGuardLatestUserSearchUAs finds the most recent retained request UA
+// for each searched user. New records carry user_id directly; canonical tokens
+// are only used as a best-effort bridge for older records.
+func subscribeGuardLatestUserSearchUAs(events []subscribeGuardEvent, users []map[string]any) map[int64]string {
+	wantedUserIDs := make(map[int64]struct{}, len(users))
+	userIDsByToken := make(map[string]int64, len(users))
+	for _, user := range users {
+		userID := anyInt64(user["id"])
+		if userID <= 0 {
+			continue
+		}
+		wantedUserIDs[userID] = struct{}{}
+		if token := stringValue(user["token"]); token != "" {
+			userIDsByToken[token] = userID
+		}
+	}
+
+	latestUAs := make(map[int64]string, len(wantedUserIDs))
+	latestTimes := make(map[int64]int64, len(wantedUserIDs))
+	latestIndexes := make(map[int64]int, len(wantedUserIDs))
+	for index, event := range events {
+		userID := event.UserID
+		if userID <= 0 {
+			if canonicalToken := strings.TrimSpace(event.CanonicalToken); canonicalToken != "" {
+				userID = userIDsByToken[canonicalToken]
+			}
+			if userID <= 0 {
+				userID = userIDsByToken[strings.TrimSpace(event.Token)]
+			}
+		}
+		if _, wanted := wantedUserIDs[userID]; !wanted {
+			continue
+		}
+		latestTime, alreadyFound := latestTimes[userID]
+		if alreadyFound && (event.Time < latestTime || (event.Time == latestTime && index < latestIndexes[userID])) {
+			continue
+		}
+		latestUAs[userID] = strings.TrimSpace(event.UA)
+		latestTimes[userID] = event.Time
+		latestIndexes[userID] = index
+	}
+	return latestUAs
 }
 
 const (
@@ -217,7 +290,7 @@ func subscribeGuardUASearchPublicRow(group subscribeGuardUASearchGroup, info map
 		"first_at":     group.FirstAt,
 		"last_at":      group.LastAt,
 		"recent":       group.Recent,
-		"entry_policy": subscribeGuardUASearchEntryPolicyPublicRow(matchedPolicy, subscribeGuardUASearchLatestUA(group)),
+		"entry_policy": subscribeGuardEntryPolicyPublicRow(matchedPolicy, subscribeGuardUASearchLatestUA(group)),
 	}
 	for _, key := range []string{
 		"id", "email", "banned", "plan_id", "plan_name", "u", "d", "transfer_enable", "expired_at",
@@ -240,7 +313,7 @@ func subscribeGuardUASearchLatestUA(group subscribeGuardUASearchGroup) string {
 	return strings.TrimSpace(group.Recent[0].UA)
 }
 
-func subscribeGuardUASearchEntryPolicyPublicRow(policy *admin.ClientEntryUserPolicyRecord, evaluatedUA string) any {
+func subscribeGuardEntryPolicyPublicRow(policy *admin.ClientEntryUserPolicyRecord, evaluatedUA string) any {
 	if policy == nil {
 		return nil
 	}

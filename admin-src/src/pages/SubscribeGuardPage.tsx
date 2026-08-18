@@ -563,6 +563,7 @@ export default function SubscribeGuardPage() {
     { title: 'ID', dataIndex: 'id', width: 85 },
     { title: '邮箱', dataIndex: 'email', width: 250, ellipsis: true, render: (value: any, row: any) => <a onClick={() => showUserDetail(row)}>{value || `用户 #${row.id}`}</a> },
     { title: '状态', dataIndex: 'banned', width: 95, render: (_: any, row: any) => userStatus(row) },
+    { title: '当前入口分组', dataIndex: 'entry_policy', width: 310, render: (_: any, row: any) => entryPolicyCell(row) },
     { title: '套餐', dataIndex: 'plan_name', width: 150, ellipsis: true, render: (value: any) => value || '-' },
     { title: '已用 / 总流量', width: 190, render: (_: any, row: any) => `${bytes(Number(row.u || 0) + Number(row.d || 0))} / ${bytes(row.transfer_enable)}` },
     { title: '到期时间', dataIndex: 'expired_at', width: 175, render: userExpiryText },
@@ -766,7 +767,7 @@ export default function SubscribeGuardPage() {
                 pagination={false}
                 columns={userSearchColumns}
                 dataSource={userSearchRows}
-                scroll={{ x: 1100 }}
+                scroll={{ x: 1420 }}
                 locale={{ emptyText: userSearch ? '未找到匹配用户' : '输入用户 ID 或邮箱后搜索' }}
               />
             </Space>

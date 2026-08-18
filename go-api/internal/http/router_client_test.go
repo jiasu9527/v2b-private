@@ -879,6 +879,17 @@ func TestRouterAdminSubscribeGuardUserDetailEndpoint(t *testing.T) {
 }
 
 func TestRouterAdminSubscribeGuardUserSearchEndpointOnlyReturnsPublicFields(t *testing.T) {
+	resetSubscribeGuardStateForTest()
+	publicDir := filepath.Join(t.TempDir(), "public")
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{AppName: "forest-go", AdminPath: "localadmin", PublicDir: publicDir, SubscribeGuardLogKeepDays: 7}
+	if err := writeSubscribeGuardEvents(cfg, []subscribeGuardEvent{{
+		Time: time.Now().Unix(), Token: "rotating-token-must-not-leak", CanonicalToken: "secret-token", UA: "ClashMeta/2.0",
+	}}); err != nil {
+		t.Fatal(err)
+	}
 	sessionService := &fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1, Email: "admin@example.com"}}
 	adminService := &fakeAdminService{userList: admin.UserListResult{
 		Data: []map[string]any{{
@@ -889,9 +900,11 @@ func TestRouterAdminSubscribeGuardUserSearchEndpointOnlyReturnsPublicFields(t *t
 			"subscribe_url": "https://example.com/secret-subscribe-url",
 		}},
 		Total: 1,
+	}, clientEntryPolicyMatches: map[int64]*admin.ClientEntryUserPolicyRecord{
+		10: {ID: 90, Name: "重点用户入口", Mode: admin.ClientEntryUserPolicyModeSplit, Action: "override", EntryHost: "special-entry.example.com"},
 	}}
 	router := NewRouter(
-		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
+		cfg,
 		WithSessionService(sessionService),
 		WithAdminService(adminService),
 	)
@@ -909,7 +922,7 @@ func TestRouterAdminSubscribeGuardUserSearchEndpointOnlyReturnsPublicFields(t *t
 	if filters := adminService.lastUserFetch.Filters; len(filters) != 1 || filters[0].Key != "email" || filters[0].Condition != "模糊" || filters[0].Value != "guard@example.com" {
 		t.Fatalf("unexpected search filters: %#v", filters)
 	}
-	for _, secret := range []string{"must-not-leak", "secret-token", "secret-uuid", "secret-subscribe-url"} {
+	for _, secret := range []string{"must-not-leak", "secret-token", "rotating-token-must-not-leak", "secret-uuid", "secret-subscribe-url"} {
 		if strings.Contains(rec.Body.String(), secret) {
 			t.Fatalf("sensitive user field leaked (%s): %s", secret, rec.Body.String())
 		}
@@ -924,6 +937,13 @@ func TestRouterAdminSubscribeGuardUserSearchEndpointOnlyReturnsPublicFields(t *t
 	if payload.Total != 1 || len(payload.Data) != 1 || payload.Data[0]["email"] != "guard-user@example.com" || payload.Data[0]["plan_name"] != "Pro" {
 		t.Fatalf("unexpected public user search payload: %#v", payload)
 	}
+	if got := adminService.lastClientEntryPolicyMatches; len(got) != 1 || got[0].UserID != 10 || got[0].UA != "ClashMeta/2.0" {
+		t.Fatalf("unexpected current entry policy match request: %#v", got)
+	}
+	entryPolicy, ok := payload.Data[0]["entry_policy"].(map[string]any)
+	if !ok || entryPolicy["id"] != float64(90) || entryPolicy["name"] != "重点用户入口" || entryPolicy["mode"] != admin.ClientEntryUserPolicyModeSplit || entryPolicy["entry_host"] != "special-entry.example.com" || entryPolicy["evaluated_ua"] != "ClashMeta/2.0" {
+		t.Fatalf("unexpected current entry policy: %#v", payload.Data[0]["entry_policy"])
+	}
 	for _, forbiddenKey := range []string{"password", "token", "uuid", "subscribe_url"} {
 		if _, ok := payload.Data[0][forbiddenKey]; ok {
 			t.Fatalf("forbidden field %q returned: %#v", forbiddenKey, payload.Data[0])
@@ -931,6 +951,24 @@ func TestRouterAdminSubscribeGuardUserSearchEndpointOnlyReturnsPublicFields(t *t
 	}
 	if cacheControl := rec.Header().Get("Cache-Control"); !strings.Contains(cacheControl, "no-store") {
 		t.Fatalf("expected no-store response, got %q", cacheControl)
+	}
+}
+
+func TestSubscribeGuardLatestUserSearchUAsUsesNewestDirectAndLegacyEvents(t *testing.T) {
+	users := []map[string]any{
+		{"id": int64(10), "token": "canonical-10"},
+		{"id": int64(20), "token": "canonical-20"},
+	}
+	events := []subscribeGuardEvent{
+		{Time: 200, UserID: 10, UA: "Clash/Newest"},
+		{Time: 100, UserID: 10, UA: "Clash/Appended-Later-But-Older"},
+		{Time: 150, Token: "dynamic-20", CanonicalToken: "canonical-20", UA: "Surge/Legacy"},
+		{Time: 300, UserID: 99, Token: "canonical-20", UA: "Must-Not-Be-Reattributed"},
+	}
+
+	latest := subscribeGuardLatestUserSearchUAs(events, users)
+	if latest[10] != "Clash/Newest" || latest[20] != "Surge/Legacy" {
+		t.Fatalf("unexpected latest user UAs: %#v", latest)
 	}
 }
 
