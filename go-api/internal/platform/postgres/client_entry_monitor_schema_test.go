@@ -51,6 +51,7 @@ func TestClientEntryMonitorSchemaKeepsMonitoringAndManualRunsIndependent(t *test
 		"source_key varchar(255) NOT NULL",
 		"name varchar(255) NOT NULL DEFAULT ''",
 		"generation BIGINT NOT NULL DEFAULT 1",
+		"auto_split_enabled SMALLINT NOT NULL DEFAULT 0",
 		"CREATE TABLE IF NOT EXISTS v2_client_entry_monitor_probe (",
 		"CREATE TABLE IF NOT EXISTS v2_client_entry_monitor_state (",
 		"last_success SMALLINT DEFAULT NULL",
@@ -79,6 +80,15 @@ func TestClientEntryMonitorSchemaKeepsMonitoringAndManualRunsIndependent(t *test
 		"probe_name varchar(255) NOT NULL DEFAULT ''",
 		"CREATE TABLE IF NOT EXISTS v2_client_entry_monitor_result_inbox (",
 		"result_id varchar(128) NOT NULL",
+		"CREATE TABLE IF NOT EXISTS v2_client_entry_backup_ip (",
+		"ip varchar(128) NOT NULL",
+		"quarantine_until BIGINT NOT NULL DEFAULT 0",
+		"CREATE TABLE IF NOT EXISTS v2_client_entry_backup_ip_state (",
+		"backup_ip_id BIGINT NOT NULL",
+		"CREATE TABLE IF NOT EXISTS v2_client_entry_backup_ip_result_inbox (",
+		"CREATE TABLE IF NOT EXISTS v2_client_entry_auto_split_operation (",
+		"source_group_id BIGINT NOT NULL",
+		"status varchar(32) NOT NULL DEFAULT 'pending'",
 	} {
 		if !strings.Contains(joinedTables, required) {
 			t.Errorf("monitor schema missing %q", required)
@@ -96,6 +106,7 @@ func TestClientEntryMonitorSchemaKeepsMonitoringAndManualRunsIndependent(t *test
 		"ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS progress_next_attempt_at",
 		"ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS progress_last_error",
 		"ALTER TABLE v2_client_entry_monitor_target ADD COLUMN IF NOT EXISTS generation",
+		"ALTER TABLE v2_client_entry_monitor_target ADD COLUMN IF NOT EXISTS auto_split_enabled",
 		"ALTER TABLE v2_client_entry_monitor_run_result ADD COLUMN IF NOT EXISTS target_name",
 		"ALTER TABLE v2_client_entry_monitor_run_result ADD COLUMN IF NOT EXISTS host",
 		"ALTER TABLE v2_client_entry_monitor_run_result ADD COLUMN IF NOT EXISTS port",
@@ -143,6 +154,13 @@ func TestClientEntryMonitorConstraintsDefineOwnershipAndDeduplication(t *testing
 		"chk_v2_client_entry_monitor_run_progress_attempts": "CHECK (progress_attempts >= 0)",
 		"uniq_v2_client_entry_monitor_run_result":           "UNIQUE (run_id, target_id, probe_id)",
 		"uniq_v2_client_entry_monitor_inbox_result":         "UNIQUE (probe_id, result_id)",
+		"uniq_v2_client_entry_backup_ip_value":              "UNIQUE (ip)",
+		"uniq_v2_client_entry_backup_ip_state":              "UNIQUE (backup_ip_id, probe_id)",
+		"uniq_v2_client_entry_backup_ip_inbox_result":       "UNIQUE (probe_id, result_id)",
+		"fk_v2_client_entry_backup_ip_state_ip":             "FOREIGN KEY (backup_ip_id) REFERENCES v2_client_entry_backup_ip(id) ON DELETE CASCADE",
+		"fk_v2_client_entry_backup_ip_state_probe":          "FOREIGN KEY (probe_id) REFERENCES v2_dns_probe(id) ON DELETE CASCADE",
+		"chk_v2_client_entry_auto_split_status":             "CHECK (status IN ('pending', 'succeeded', 'cancelled'))",
+		"chk_v2_client_entry_auto_split_attempts":           "CHECK (attempts >= 0)",
 		"fk_v2_client_entry_monitor_inbox_run":              "FOREIGN KEY (run_id) REFERENCES v2_client_entry_monitor_run(id) ON DELETE SET NULL",
 		"fk_v2_client_entry_monitor_run_result_run":         "FOREIGN KEY (run_id) REFERENCES v2_client_entry_monitor_run(id) ON DELETE CASCADE",
 		"fk_v2_client_entry_monitor_inbox_probe":            "FOREIGN KEY (probe_id) REFERENCES v2_dns_probe(id) ON DELETE CASCADE",
@@ -151,6 +169,11 @@ func TestClientEntryMonitorConstraintsDefineOwnershipAndDeduplication(t *testing
 		if !exists || got != want {
 			t.Errorf("constraint %s = %q, want %q", name, got, want)
 		}
+	}
+	joinedIndexes := strings.Join(clientEntryMonitorIndexStatements, "\n")
+	if !strings.Contains(joinedIndexes, "CREATE UNIQUE INDEX IF NOT EXISTS idx_v2_client_entry_auto_split_pending_group_unique") ||
+		!strings.Contains(joinedIndexes, "WHERE status = 'pending'") {
+		t.Fatal("automatic split schema must enforce one pending operation per leaf")
 	}
 	for _, removed := range []string{
 		"fk_v2_client_entry_monitor_event_monitor",

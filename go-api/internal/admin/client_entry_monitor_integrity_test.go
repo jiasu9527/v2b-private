@@ -191,22 +191,60 @@ func TestClientEntryMonitorEndpointChangesResetState(t *testing.T) {
 	}
 	mock.ExpectQuery(`(?s)SELECT id, host, port.*FROM v2_client_entry_monitor_target.*FOR UPDATE`).
 		WithArgs(int64(3), "policy:42").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "host", "port"}).AddRow(int64(5), "old.example.com", int64(443)))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "host", "port", "auto_split_enabled"}).
+			AddRow(int64(5), "old.example.com", int64(443), int64(0)))
 	mock.ExpectExec(`DELETE FROM v2_client_entry_monitor_state WHERE target_id = \$1`).
 		WithArgs(int64(5)).
 		WillReturnResult(sqlmock.NewResult(0, 2))
-	if err := resetClientEntryMonitorTargetState(context.Background(), tx, 3, "policy:42", "new.example.com", nil); err != nil {
+	mock.ExpectExec(`(?s)UPDATE v2_client_entry_auto_split_operation.*WHERE target_id = \$1 AND status = 'pending'`).
+		WithArgs(int64(5), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	if err := resetClientEntryMonitorTargetState(context.Background(), tx, 3, "policy:42", "new.example.com", nil, nil, false); err != nil {
 		t.Fatalf("reset host state: %v", err)
 	}
 	port := int64(8443)
 	mock.ExpectQuery(`(?s)SELECT id, host, port.*FROM v2_client_entry_monitor_target.*FOR UPDATE`).
 		WithArgs(int64(3), "policy:42").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "host", "port"}).AddRow(int64(5), "new.example.com", int64(443)))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "host", "port", "auto_split_enabled"}).
+			AddRow(int64(5), "new.example.com", int64(443), int64(0)))
 	mock.ExpectExec(`DELETE FROM v2_client_entry_monitor_state WHERE target_id = \$1`).
 		WithArgs(int64(5)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	if err := resetClientEntryMonitorTargetState(context.Background(), tx, 3, "policy:42", "new.example.com", &port); err != nil {
+	mock.ExpectExec(`(?s)UPDATE v2_client_entry_auto_split_operation.*WHERE target_id = \$1 AND status = 'pending'`).
+		WithArgs(int64(5), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	if err := resetClientEntryMonitorTargetState(context.Background(), tx, 3, "policy:42", "new.example.com", &port, nil, false); err != nil {
 		t.Fatalf("reset endpoint state: %v", err)
+	}
+	autoSplitEnabled := true
+	mock.ExpectQuery(`(?s)SELECT id, host, port.*FROM v2_client_entry_monitor_target.*FOR UPDATE`).
+		WithArgs(int64(3), "policy:42").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "host", "port", "auto_split_enabled"}).
+			AddRow(int64(5), "new.example.com", int64(8443), int64(0)))
+	mock.ExpectExec(`DELETE FROM v2_client_entry_monitor_state WHERE target_id = \$1`).
+		WithArgs(int64(5)).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec(`(?s)UPDATE v2_client_entry_auto_split_operation.*WHERE target_id = \$1 AND status = 'pending'`).
+		WithArgs(int64(5), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	if err := resetClientEntryMonitorTargetState(context.Background(), tx, 3, "policy:42", "new.example.com",
+		&port, &autoSplitEnabled, false); err != nil {
+		t.Fatalf("reset state when enabling automatic split: %v", err)
+	}
+	autoSplitEnabled = false
+	mock.ExpectQuery(`(?s)SELECT id, host, port.*FROM v2_client_entry_monitor_target.*FOR UPDATE`).
+		WithArgs(int64(3), "policy:42").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "host", "port", "auto_split_enabled"}).
+			AddRow(int64(5), "new.example.com", int64(8443), int64(1)))
+	mock.ExpectExec(`DELETE FROM v2_client_entry_monitor_state WHERE target_id = \$1`).
+		WithArgs(int64(5)).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec(`(?s)UPDATE v2_client_entry_auto_split_operation.*WHERE target_id = \$1 AND status = 'pending'`).
+		WithArgs(int64(5), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	if err := resetClientEntryMonitorTargetState(context.Background(), tx, 3, "policy:42", "new.example.com",
+		&port, &autoSplitEnabled, false); err != nil {
+		t.Fatalf("reset state when disabling automatic split: %v", err)
 	}
 	mock.ExpectRollback()
 	if err := tx.Rollback(); err != nil {
@@ -344,6 +382,72 @@ func expectClientEntryMonitorDeliverySuccess(mock sqlmock.Sqlmock, eventID, chat
 	mock.ExpectExec(`(?s)UPDATE v2_client_entry_monitor_event_delivery.*SET delivered_at =`).
 		WithArgs(eventID, chatID, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+}
+
+func TestClientEntryMonitorAutoSplitFailureDoesNotBlockTelegramEvents(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	notifier := &splitEntryMonitorNotifier{chatIDs: []int64{11}}
+	service := &DBService{db: db, dnsFailoverNotifier: notifier}
+	autoSplitFailure := errors.New("automatic split database failure")
+
+	mock.ExpectExec(`(?s)UPDATE v2_client_entry_monitor_run.*SET status = 'timeout'`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	// The automatic-split queue fails before it can claim an operation.
+	mock.ExpectBegin().WillReturnError(autoSplitFailure)
+	mock.ExpectQuery(`SELECT pg_try_advisory_lock\(\$1\)`).
+		WithArgs(clientEntryMonitorNotificationLockKey).
+		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+
+	// No manual-run progress update is due.
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT id, requested_by_user_id, request_chat_id, progress_message_id, progress_attempts.*FROM v2_client_entry_monitor_run.*FOR UPDATE SKIP LOCKED`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "requested_by_user_id", "request_chat_id", "progress_message_id", "progress_attempts"}))
+	mock.ExpectRollback()
+
+	// A normal fault/recovery event must still be delivered in this cycle.
+	expectClientEntryMonitorEventClaim(mock, 7, 0)
+	mock.ExpectBegin()
+	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_event_delivery`).
+		WithArgs(int64(7), int64(11), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`(?s)SELECT chat_id, delivered_at, attempts, next_attempt_at, last_error.*FROM v2_client_entry_monitor_event_delivery.*FOR UPDATE`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"chat_id", "delivered_at", "attempts", "next_attempt_at", "last_error"}).
+			AddRow(int64(11), nil, 0, 0, ""))
+	mock.ExpectCommit()
+	expectClientEntryMonitorDeliveryClaim(mock, 7, 11)
+	expectClientEntryMonitorDeliverySuccess(mock, 7, 11)
+	mock.ExpectExec(`(?s)UPDATE v2_client_entry_monitor_event.*SET notified_at = \$2`).
+		WithArgs(int64(7), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// No completed manual run is due.
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT id, requested_by_user_id, request_chat_id, notify_attempts.*FROM v2_client_entry_monitor_run.*FOR UPDATE SKIP LOCKED`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "requested_by_user_id", "request_chat_id", "notify_attempts"}))
+	mock.ExpectRollback()
+	mock.ExpectQuery(`SELECT pg_advisory_unlock\(\$1\)`).
+		WithArgs(clientEntryMonitorNotificationLockKey).
+		WillReturnRows(sqlmock.NewRows([]string{"unlocked"}).AddRow(true))
+
+	err = service.drainPendingClientEntryMonitorNotifications(context.Background(), 1)
+	if err == nil || !strings.Contains(err.Error(), autoSplitFailure.Error()) {
+		t.Fatalf("drain error = %v, want automatic-split failure", err)
+	}
+	if got, want := notifier.calls, []int64{11}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Telegram calls = %#v, want %#v", got, want)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
 }
 
 func TestClientEntryMonitorEventDeliveryRetriesOnlyFailedRecipient(t *testing.T) {

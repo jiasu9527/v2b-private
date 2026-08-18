@@ -184,12 +184,18 @@ func expectClientEntryMonitorCleanup(mock sqlmock.Sqlmock) {
 	for _, table := range []string{
 		"v2_client_entry_monitor_event",
 		"v2_client_entry_monitor_result_inbox",
-		"v2_client_entry_monitor_run_result",
+		"v2_client_entry_backup_ip_result_inbox",
 	} {
 		mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM `+table+` WHERE created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM `+table).
 			WithArgs(cleanupCutoffHours(24), int64(dnsFailoverCleanupBatchSize)).
 			WillReturnResult(sqlmock.NewResult(0, 4))
 	}
+	mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM v2_client_entry_auto_split_operation\s*WHERE status <> 'pending' AND COALESCE\(completed_at, updated_at, created_at\) < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM v2_client_entry_auto_split_operation`).
+		WithArgs(cleanupCutoffHours(24), int64(dnsFailoverCleanupBatchSize)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM v2_client_entry_monitor_run_result WHERE created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM v2_client_entry_monitor_run_result`).
+		WithArgs(cleanupCutoffHours(24), int64(dnsFailoverCleanupBatchSize)).
+		WillReturnResult(sqlmock.NewResult(0, 4))
 	mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM v2_client_entry_monitor_run WHERE status <> 'running' AND created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM v2_client_entry_monitor_run`).
 		WithArgs(cleanupCutoffHours(24), int64(dnsFailoverCleanupBatchSize)).
 		WillReturnResult(sqlmock.NewResult(0, 4))

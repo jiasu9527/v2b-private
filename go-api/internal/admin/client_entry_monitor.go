@@ -33,6 +33,7 @@ type ClientEntryMonitorCandidateTarget struct {
 type ClientEntryMonitorPolicy struct {
 	ID        int64                               `json:"id"`
 	Name      string                              `json:"name"`
+	Mode      string                              `json:"mode"`
 	Action    string                              `json:"action"`
 	EntryHost string                              `json:"entry_host"`
 	Enabled   bool                                `json:"enabled"`
@@ -53,13 +54,14 @@ type ClientEntryMonitorState struct {
 }
 
 type ClientEntryMonitorTarget struct {
-	ID        int64                     `json:"id"`
-	SourceKey string                    `json:"source_key"`
-	Name      string                    `json:"name"`
-	Host      string                    `json:"host"`
-	Port      int64                     `json:"port"`
-	Sort      int64                     `json:"sort"`
-	States    []ClientEntryMonitorState `json:"states"`
+	ID               int64                     `json:"id"`
+	SourceKey        string                    `json:"source_key"`
+	Name             string                    `json:"name"`
+	Host             string                    `json:"host"`
+	Port             int64                     `json:"port"`
+	Sort             int64                     `json:"sort"`
+	AutoSplitEnabled bool                      `json:"auto_split_enabled"`
+	States           []ClientEntryMonitorState `json:"states"`
 }
 
 type ClientEntryMonitorRecord struct {
@@ -83,8 +85,9 @@ type ClientEntryMonitorOverview struct {
 }
 
 type ClientEntryMonitorTargetSaveRequest struct {
-	SourceKey string `json:"source_key"`
-	Port      int64  `json:"port"`
+	SourceKey        string `json:"source_key"`
+	Port             int64  `json:"port"`
+	AutoSplitEnabled bool   `json:"auto_split_enabled"`
 }
 
 type ClientEntryMonitorSaveItem struct {
@@ -181,6 +184,7 @@ func (s *DBService) resolveClientEntryMonitorPolicies(ctx context.Context) ([]Cl
 		item := ClientEntryMonitorPolicy{
 			ID:        policy.ID,
 			Name:      policy.Name,
+			Mode:      policy.Mode,
 			Action:    policy.Action,
 			EntryHost: policy.EntryHost,
 			Enabled:   policy.Enabled == 1,
@@ -363,7 +367,7 @@ func (s *DBService) refreshClientEntryMonitorTargets(ctx context.Context) error 
 		keys := make([]string, 0, len(policy.Targets))
 		for index, target := range policy.Targets {
 			keys = append(keys, target.SourceKey)
-			if err := resetClientEntryMonitorTargetState(ctx, tx, monitor.id, target.SourceKey, target.Host, nil); err != nil {
+			if err := resetClientEntryMonitorTargetState(ctx, tx, monitor.id, target.SourceKey, target.Host, nil, nil, false); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_monitor_target AS current_target
@@ -438,21 +442,29 @@ WHERE monitor_id = $1 AND source_key NOT IN (`+strings.Join(placeholders, ",")+`
 	return nil
 }
 
-func resetClientEntryMonitorTargetState(ctx context.Context, tx *sql.Tx, monitorID int64, sourceKey, host string, port *int64) error {
-	var targetID, currentPort int64
+func resetClientEntryMonitorTargetState(ctx context.Context, tx *sql.Tx, monitorID int64, sourceKey, host string,
+	port *int64, autoSplitEnabled *bool, force bool,
+) error {
+	var targetID, currentPort, currentAutoSplitEnabled int64
 	var currentHost string
-	err := tx.QueryRowContext(ctx, `SELECT id, host, port
+	err := tx.QueryRowContext(ctx, `SELECT id, host, port, auto_split_enabled
 FROM v2_client_entry_monitor_target
 WHERE monitor_id = $1 AND source_key = $2
-FOR UPDATE`, monitorID, sourceKey).Scan(&targetID, &currentHost, &currentPort)
+FOR UPDATE`, monitorID, sourceKey).Scan(&targetID, &currentHost, &currentPort, &currentAutoSplitEnabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("lock client entry monitor target endpoint: %w", err)
 	}
-	changed := currentHost != host
+	changed := force || currentHost != host
 	if port != nil && currentPort != *port {
+		changed = true
+	}
+	// Toggling automatic splitting closes the previous incident.  Enabling it
+	// must also start from two fresh failed samples; disabling it must cancel a
+	// pending allocation immediately rather than waiting for the worker poll.
+	if autoSplitEnabled != nil && boolToInt64(*autoSplitEnabled) != currentAutoSplitEnabled {
 		changed = true
 	}
 	if !changed {
@@ -460,6 +472,18 @@ FOR UPDATE`, monitorID, sourceKey).Scan(&targetID, &currentHost, &currentPort)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_monitor_state WHERE target_id = $1`, targetID); err != nil {
 		return fmt.Errorf("reset changed client entry monitor target state: %w", err)
+	}
+	// Close the old incident in the same transaction as the state reset.  The
+	// pending-operation unique index is keyed by policy/leaf rather than target
+	// generation; leaving an older row pending could make the first confirmed
+	// failure for the new generation hit ON CONFLICT and disappear before the
+	// worker has a chance to cancel the stale row.
+	now := time.Now().Unix()
+	if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_auto_split_operation
+SET status = 'cancelled', last_error = '入口检测配置已变化，取消旧自动二分',
+    completed_at = $2, updated_at = $2
+WHERE target_id = $1 AND status = 'pending'`, targetID, now); err != nil {
+		return fmt.Errorf("cancel stale client entry automatic split: %w", err)
 	}
 	return nil
 }
@@ -534,7 +558,7 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 	if len(items) == 0 {
 		return items, nil
 	}
-	rows, err = s.db.QueryContext(ctx, `SELECT t.id, t.monitor_id, t.source_key, t.name, t.host, t.port, t.sort
+	rows, err = s.db.QueryContext(ctx, `SELECT t.id, t.monitor_id, t.source_key, t.name, t.host, t.port, t.sort, t.auto_split_enabled
 FROM v2_client_entry_monitor_target t
 ORDER BY t.monitor_id, t.sort, t.id`)
 	if err != nil {
@@ -544,10 +568,12 @@ ORDER BY t.monitor_id, t.sort, t.id`)
 	for rows.Next() {
 		var target ClientEntryMonitorTarget
 		var monitorID int64
-		if err := rows.Scan(&target.ID, &monitorID, &target.SourceKey, &target.Name, &target.Host, &target.Port, &target.Sort); err != nil {
+		var autoSplitEnabled int64
+		if err := rows.Scan(&target.ID, &monitorID, &target.SourceKey, &target.Name, &target.Host, &target.Port, &target.Sort, &autoSplitEnabled); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("scan client entry monitor target: %w", err)
 		}
+		target.AutoSplitEnabled = autoSplitEnabled == 1
 		itemIndex, ok := indexByID[monitorID]
 		if !ok {
 			continue
@@ -660,6 +686,7 @@ func (s *DBService) SaveClientEntryMonitors(ctx context.Context, request ClientE
 			candidateByKey[target.SourceKey] = target
 		}
 		portByKey := make(map[string]int64, len(item.Targets))
+		autoSplitByKey := make(map[string]bool, len(item.Targets))
 		for _, target := range item.Targets {
 			if _, ok := candidateByKey[target.SourceKey]; !ok {
 				return ClientEntryMonitorOverview{}, errors.New("入口检测地址已变化，请刷新后重试")
@@ -667,7 +694,14 @@ func (s *DBService) SaveClientEntryMonitors(ctx context.Context, request ClientE
 			if target.Port < 1 || target.Port > 65535 {
 				return ClientEntryMonitorOverview{}, errors.New("TCP 端口必须在 1 到 65535 之间")
 			}
+			if target.AutoSplitEnabled {
+				policyID, _, ok := parseClientEntryMonitorSplitGroupSourceKey(target.SourceKey)
+				if !ok || policyID != item.PolicyID || policy.Mode != ClientEntryUserPolicyModeSplit {
+					return ClientEntryMonitorOverview{}, errors.New("自动二分容灾只能用于固定二分叶子规则")
+				}
+			}
 			portByKey[target.SourceKey] = target.Port
+			autoSplitByKey[target.SourceKey] = target.AutoSplitEnabled
 		}
 		item.Targets = make([]ClientEntryMonitorTargetSaveRequest, 0, len(policy.Targets))
 		for _, target := range policy.Targets {
@@ -675,7 +709,9 @@ func (s *DBService) SaveClientEntryMonitors(ctx context.Context, request ClientE
 			if port == 0 {
 				port = target.SuggestedPort
 			}
-			item.Targets = append(item.Targets, ClientEntryMonitorTargetSaveRequest{SourceKey: target.SourceKey, Port: port})
+			item.Targets = append(item.Targets, ClientEntryMonitorTargetSaveRequest{
+				SourceKey: target.SourceKey, Port: port, AutoSplitEnabled: autoSplitByKey[target.SourceKey],
+			})
 		}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -694,6 +730,16 @@ func (s *DBService) SaveClientEntryMonitors(ctx context.Context, request ClientE
 	}
 	for _, item := range request.Items {
 		policy := policyByID[item.PolicyID]
+		var previousMonitorEnabled int64
+		previousMonitorFound := true
+		if err := tx.QueryRowContext(ctx, `SELECT enabled FROM v2_client_entry_monitor
+WHERE policy_id = $1 FOR UPDATE`, item.PolicyID).Scan(&previousMonitorEnabled); err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return ClientEntryMonitorOverview{}, fmt.Errorf("lock client entry monitor before save: %w", err)
+			}
+			previousMonitorFound = false
+		}
+		monitorReenabled := previousMonitorFound && previousMonitorEnabled != 1 && item.Enabled
 		var monitorID int64
 		if err := tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_monitor
 (policy_id, enabled, check_interval_sec, tcp_timeout_ms, created_at, updated_at)
@@ -705,30 +751,40 @@ RETURNING id`, item.PolicyID, boolToInt64(item.Enabled), item.CheckIntervalSec, 
 			return ClientEntryMonitorOverview{}, fmt.Errorf("save client entry monitor: %w", err)
 		}
 		portByKey := make(map[string]int64, len(item.Targets))
+		autoSplitByKey := make(map[string]bool, len(item.Targets))
 		for _, target := range item.Targets {
 			portByKey[target.SourceKey] = target.Port
+			autoSplitByKey[target.SourceKey] = target.AutoSplitEnabled
 		}
 		keys := make([]string, 0, len(policy.Targets))
 		for index, target := range policy.Targets {
 			keys = append(keys, target.SourceKey)
 			port := portByKey[target.SourceKey]
-			if err := resetClientEntryMonitorTargetState(ctx, tx, monitorID, target.SourceKey, target.Host, &port); err != nil {
+			autoSplitEnabled := autoSplitByKey[target.SourceKey]
+			if err := resetClientEntryMonitorTargetState(ctx, tx, monitorID, target.SourceKey, target.Host,
+				&port, &autoSplitEnabled, monitorReenabled); err != nil {
 				return ClientEntryMonitorOverview{}, err
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_monitor_target AS current_target
-(monitor_id, source_key, name, host, port, sort, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+(monitor_id, source_key, name, host, port, sort, auto_split_enabled, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
 ON CONFLICT (monitor_id, source_key) DO UPDATE SET name = EXCLUDED.name,
 host = EXCLUDED.host, port = EXCLUDED.port, sort = EXCLUDED.sort,
+auto_split_enabled = EXCLUDED.auto_split_enabled,
 generation = CASE WHEN current_target.host IS DISTINCT FROM EXCLUDED.host
     OR current_target.port IS DISTINCT FROM EXCLUDED.port
+	OR (current_target.auto_split_enabled = 0 AND EXCLUDED.auto_split_enabled = 1)
+	OR $9 = 1
   THEN current_target.generation + 1 ELSE current_target.generation END,
 updated_at = EXCLUDED.updated_at
 WHERE current_target.name IS DISTINCT FROM EXCLUDED.name
    OR current_target.host IS DISTINCT FROM EXCLUDED.host
    OR current_target.port IS DISTINCT FROM EXCLUDED.port
-   OR current_target.sort IS DISTINCT FROM EXCLUDED.sort`,
-				monitorID, target.SourceKey, target.Name, target.Host, portByKey[target.SourceKey], int64(index+1)*10, now); err != nil {
+   OR current_target.sort IS DISTINCT FROM EXCLUDED.sort
+   OR current_target.auto_split_enabled IS DISTINCT FROM EXCLUDED.auto_split_enabled
+	OR $9 = 1`,
+				monitorID, target.SourceKey, target.Name, target.Host, portByKey[target.SourceKey], int64(index+1)*10,
+				boolToInt64(autoSplitByKey[target.SourceKey]), now, boolToInt64(monitorReenabled)); err != nil {
 				return ClientEntryMonitorOverview{}, fmt.Errorf("save client entry monitor target: %w", err)
 			}
 		}

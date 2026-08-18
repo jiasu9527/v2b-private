@@ -2,7 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   Divider,
+  Input,
   InputNumber,
+  Modal,
   Popconfirm,
   Space,
   Spin,
@@ -14,6 +16,8 @@ import {
 } from 'antd';
 import {
   DeleteOutlined,
+  EditOutlined,
+  PlusOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
   SaveOutlined,
@@ -22,7 +26,9 @@ import { apiDelete, apiGet, apiJsonPost, apiPut, unwrapData } from '../lib/api';
 import './DNSFailoverEntryMonitorTab.css';
 
 const ENTRY_MONITOR_PATH = '/dns-failover/entry-monitors';
+const BACKUP_IP_PATH = `${ENTRY_MONITOR_PATH}/backup-ips`;
 const ENTRY_MONITOR_FAILURE_THRESHOLD = 2;
+const BACKUP_IP_SUCCESS_THRESHOLD = 2;
 
 type EntryPolicyAction = 'override' | 'original' | 'hide';
 
@@ -62,6 +68,7 @@ type EntryTarget = Record<string, any> & {
   host: string;
   port: number;
   sort: number;
+  auto_split_enabled: boolean;
   states: EntryTargetState[];
 };
 
@@ -97,6 +104,30 @@ type SavedEntryMonitorConfiguration = {
 
 type EntryMonitorTabProps = {
   active: boolean;
+};
+
+type BackupIPState = EntryTargetState & {
+  probe_id?: number;
+  probe_name?: string;
+};
+
+type BackupIP = Record<string, any> & {
+  id: number;
+  name: string;
+  ip: string;
+  port: number;
+  enabled: boolean;
+  status: string;
+  used: boolean;
+  used_by: any[];
+  quarantine_until?: any;
+  states: BackupIPState[];
+};
+
+type BackupIPInput = {
+  name: string;
+  ip: string;
+  port: number;
 };
 
 function list(value: any): any[] {
@@ -136,6 +167,156 @@ function formatTime(value: any) {
   if (!timestamp) return '—';
   const milliseconds = timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp;
   return new Date(milliseconds).toLocaleString();
+}
+
+function timestampMilliseconds(value: any) {
+  if (value === undefined || value === null || value === '') return 0;
+  if (typeof value === 'string' && !/^\d+(?:\.\d+)?$/.test(value.trim())) {
+    const parsed = new Date(value).getTime();
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+  const timestamp = numberValue(value);
+  return timestamp > 0 && timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp;
+}
+
+function normalizeBackupIP(raw: any, index: number): BackupIP {
+  const usage = raw?.used_by ?? raw?.usages ?? raw?.assignments ?? raw?.usage;
+  const usedBy = Array.isArray(usage)
+    ? usage
+    : usage && typeof usage === 'object'
+      ? [usage]
+      : [];
+  const states = list(raw?.states ?? raw?.probe_states ?? raw?.results).map((state) => ({
+    ...state,
+    probe_id: numberValue(state?.probe_id) || undefined,
+    probe_name: String(state?.probe_name || '').trim() || undefined,
+    stale: boolValue(state?.stale),
+  }));
+  const ip = String(raw?.ip || raw?.address || raw?.host || '').trim().replace(/^\[|\]$/g, '');
+  return {
+    ...raw,
+    id: numberValue(raw?.id) || -(index + 1),
+    name: String(raw?.name || '').trim() || ip || `备用 IP #${index + 1}`,
+    ip,
+    port: numberValue(raw?.port, 443),
+    enabled: boolValue(raw?.enabled, true),
+    status: String(raw?.status || raw?.availability_status || raw?.health_status || '').trim().toLowerCase(),
+    used: boolValue(raw?.used ?? raw?.in_use, false) || usedBy.length > 0,
+    used_by: usedBy,
+    quarantine_until: raw?.quarantine_until,
+    states,
+  };
+}
+
+function isIPv4Literal(value: string) {
+  const parts = value.split('.');
+  return parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part)
+    && Number(part) <= 255
+    && (part === '0' || !part.startsWith('0')))
+    && value !== '0.0.0.0';
+}
+
+function isIPv6Literal(value: string) {
+  if (!value.includes(':') || !/^[0-9a-f:.]+$/i.test(value)) return false;
+  try {
+    // URL performs the browser's IPv6 parser without issuing a network request.
+    const hostname = new URL(`http://[${value}]/`).hostname;
+    return hostname.length > 2 && hostname !== '[::]' && hostname !== '::';
+  } catch {
+    return false;
+  }
+}
+
+function normalizeIPLiteral(value: string) {
+  const ip = value.trim().replace(/^\[|\]$/g, '');
+  return isIPv4Literal(ip) || isIPv6Literal(ip) ? ip : '';
+}
+
+function parseBackupEndpoint(value: string, defaultPort: number) {
+  const endpoint = value.trim();
+  const bracketed = endpoint.match(/^\[([^\]]+)\](?::(\d+))?$/);
+  if (bracketed) {
+    return { ip: normalizeIPLiteral(bracketed[1]), port: numberValue(bracketed[2], defaultPort) };
+  }
+  const colonCount = (endpoint.match(/:/g) || []).length;
+  if (colonCount === 1) {
+    const separator = endpoint.lastIndexOf(':');
+    const portText = endpoint.slice(separator + 1);
+    if (/^\d+$/.test(portText)) {
+      return {
+        ip: normalizeIPLiteral(endpoint.slice(0, separator)),
+        port: numberValue(portText),
+      };
+    }
+  }
+  return { ip: normalizeIPLiteral(endpoint), port: defaultPort };
+}
+
+function parseBackupIPLines(value: string, defaultPort: number) {
+  const items: BackupIPInput[] = [];
+  const errors: string[] = [];
+  const seen = new Set<string>();
+  value.split(/\r?\n/).forEach((rawLine, index) => {
+    const line = rawLine.trim();
+    if (!line) return;
+    const parts = line.split(/[,，]/).map((part) => part.trim());
+    let name = '';
+    let endpoint = line;
+    let requestedPort = defaultPort;
+    if (parts.length === 3) {
+      [name, endpoint] = parts;
+      requestedPort = numberValue(parts[2]);
+    } else if (parts.length === 2) {
+      if (/^\d+$/.test(parts[1]) && normalizeIPLiteral(parts[0])) {
+        endpoint = parts[0];
+        requestedPort = numberValue(parts[1]);
+      } else {
+        [name, endpoint] = parts;
+      }
+    } else if (parts.length > 3) {
+      errors.push(`第 ${index + 1} 行格式无效`);
+      return;
+    }
+    const parsed = parseBackupEndpoint(endpoint, requestedPort);
+    if (!parsed.ip) {
+      errors.push(`第 ${index + 1} 行不是有效的 IPv4/IPv6 地址`);
+      return;
+    }
+    if (parsed.port < 1 || parsed.port > 65535) {
+      errors.push(`第 ${index + 1} 行端口必须在 1-65535 之间`);
+      return;
+    }
+    const key = parsed.ip.toLowerCase();
+    if (seen.has(key)) {
+      errors.push(`第 ${index + 1} 行与本次其他地址重复`);
+      return;
+    }
+    seen.add(key);
+    items.push({ name: name || parsed.ip, ip: parsed.ip, port: parsed.port });
+  });
+  return { items, errors };
+}
+
+function formatBackupEndpoint(ip: string, port: number) {
+  return ip.includes(':') ? `[${ip}]:${port}` : `${ip}:${port}`;
+}
+
+function backupStatusMeta(item: BackupIP) {
+  if (!item.enabled) return { label: '已禁用', color: 'default' };
+  if (item.used) return { label: '使用中', color: 'blue' };
+  const quarantined = boolValue(item.quarantined)
+    || item.status === 'quarantined'
+    || timestampMilliseconds(item.quarantine_until) > Date.now();
+  if (quarantined) return { label: '隔离', color: 'warning' };
+  if (['available', 'healthy', 'ready', 'success', 'online'].includes(item.status)) {
+    return { label: '可用', color: 'success' };
+  }
+  if (['failed', 'failure', 'unhealthy', 'offline', 'error'].includes(item.status)) {
+    return { label: '故障', color: 'error' };
+  }
+  if (item.status === 'no_probe') return { label: '无启用探针', color: 'warning' };
+  if (item.status === 'probe_offline') return { label: '探针离线', color: 'warning' };
+  return { label: '测活中', color: 'processing' };
 }
 
 function normalizeAction(value: any): EntryPolicyAction {
@@ -185,6 +366,7 @@ function derivedPolicyTargets(policy: EntryPolicy): EntryTarget[] {
       host: String(target?.host || '').trim(),
       port: numberValue(target?.port ?? target?.suggested_port, 443),
       sort: numberValue(target?.sort, index),
+      auto_split_enabled: boolValue(target?.auto_split_enabled),
       states: [],
     })).filter((target) => target.source_key && target.host);
   }
@@ -195,6 +377,7 @@ function derivedPolicyTargets(policy: EntryPolicy): EntryTarget[] {
       host,
       port: 443,
       sort: 0,
+      auto_split_enabled: false,
       states: [],
     }] : [];
   }
@@ -203,6 +386,7 @@ function derivedPolicyTargets(policy: EntryPolicy): EntryTarget[] {
     host: memberHost(member),
     port: numberValue(member.port || member.server_port, 443),
     sort: index,
+    auto_split_enabled: false,
     states: [],
   })).filter((target) => target.host);
 }
@@ -215,6 +399,7 @@ function normalizeTarget(raw: any, index: number): EntryTarget {
     host: String(raw?.host || '').trim(),
     port: numberValue(raw?.port, 443),
     sort: numberValue(raw?.sort, index),
+    auto_split_enabled: boolValue(raw?.auto_split_enabled),
     states: list(raw?.states).map((state) => ({
       ...state,
       stale: boolValue(state?.stale),
@@ -271,6 +456,10 @@ function mergeLiveState(current: Record<number, EntryMonitorDraft>, incoming: Re
 
 function isPolicySelectable(policy: EntryPolicy) {
   return policy.enabled && policy.action !== 'hide' && derivedPolicyTargets(policy).length > 0;
+}
+
+function isFixedSplitLeafTarget(target: EntryTarget) {
+  return /^policy:\d+:split-group:\d+$/.test(String(target.source_key || '').trim());
 }
 
 function normalizeConfigurationPayload(raw: EntryMonitorPayload): NormalizedEntryMonitorPayload {
@@ -366,6 +555,14 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   const [clearingRuns, setClearingRuns] = useState(false);
+  const [backupIPs, setBackupIPs] = useState<BackupIP[]>([]);
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [backupBatchOpen, setBackupBatchOpen] = useState(false);
+  const [backupBatchText, setBackupBatchText] = useState('');
+  const [backupDefaultPort, setBackupDefaultPort] = useState(443);
+  const [backupBatchSaving, setBackupBatchSaving] = useState(false);
+  const [editingBackupIP, setEditingBackupIP] = useState<BackupIPInput & { id: number } | null>(null);
+  const [backupActionID, setBackupActionID] = useState<number | null>(null);
 
   const policiesRef = useRef<EntryPolicy[]>([]);
   const draftsRef = useRef<Record<number, EntryMonitorDraft>>({});
@@ -378,6 +575,7 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
   const editVersionRef = useRef(0);
   const configurationRequestSequenceRef = useRef(0);
   const runsRequestSequenceRef = useRef(0);
+  const backupRequestSequenceRef = useRef(0);
   const loadingRequestSequenceRef = useRef(0);
 
   const policyByID = useMemo(
@@ -387,6 +585,14 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
   const probeByID = useMemo(
     () => new Map(probes.map((probe) => [probe.id, probe])),
     [probes],
+  );
+  const enabledProbes = useMemo(
+    () => probes.filter((probe) => probe.enabled),
+    [probes],
+  );
+  const backupBatchPreview = useMemo(
+    () => parseBackupIPLines(backupBatchText, backupDefaultPort),
+    [backupBatchText, backupDefaultPort],
   );
 
   const fetchConfiguration = async (quiet = false) => {
@@ -438,6 +644,26 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
     }
   };
 
+  const fetchBackupIPs = async (quiet = false) => {
+    const requestSequence = ++backupRequestSequenceRef.current;
+    if (!quiet) setBackupLoading(true);
+    try {
+      const payload = unwrapData(await apiGet(BACKUP_IP_PATH)) || {};
+      if (requestSequence !== backupRequestSequenceRef.current) return false;
+      const rawItems = Array.isArray(payload)
+        ? payload
+        : list(payload.items ?? payload.backup_ips ?? payload.data);
+      setBackupIPs(rawItems.map(normalizeBackupIP).filter((item) => item.id > 0 && item.ip));
+      return true;
+    } catch (error: any) {
+      if (requestSequence !== backupRequestSequenceRef.current) return false;
+      if (!quiet) message.error(error?.message || '加载备用 IP 池失败');
+      throw error;
+    } finally {
+      if (!quiet && requestSequence === backupRequestSequenceRef.current) setBackupLoading(false);
+    }
+  };
+
   const refresh = async (quiet = false) => {
     const loadingRequestSequence = quiet ? 0 : ++loadingRequestSequenceRef.current;
     if (!quiet) setLoading(true);
@@ -445,6 +671,7 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
       await Promise.all([
         fetchConfiguration(quiet),
         fetchRuns(quiet),
+        fetchBackupIPs(quiet),
       ]);
     } catch {
       // Individual loaders surface non-background errors.
@@ -473,6 +700,128 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
       message.error(error?.message || '清理近期检测失败');
     } finally {
       setClearingRuns(false);
+    }
+  };
+
+  const createBackupIPs = async () => {
+    if (backupBatchSaving) return;
+    const parsed = parseBackupIPLines(backupBatchText, backupDefaultPort);
+    if (parsed.errors.length) {
+      const extra = parsed.errors.length > 3 ? `；另有 ${parsed.errors.length - 3} 行错误` : '';
+      message.error(`${parsed.errors.slice(0, 3).join('；')}${extra}`);
+      return;
+    }
+    if (!parsed.items.length) {
+      message.warning('请先输入至少一个备用 IP');
+      return;
+    }
+    setBackupBatchSaving(true);
+    try {
+      const payload = unwrapData(await apiJsonPost(BACKUP_IP_PATH, {
+        items: parsed.items.map((item) => ({ ...item, enabled: true })),
+      })) || {};
+      const createdItems = list(payload.items);
+      const created = createdItems.length || parsed.items.length;
+      message.success(`已添加 ${created} 个备用 IP，等待全部启用探针测活`);
+      setBackupBatchOpen(false);
+      setBackupBatchText('');
+      try {
+        await fetchBackupIPs(true);
+      } catch {
+        // Creation has committed; the regular poll will retry the list refresh.
+      }
+    } catch (error: any) {
+      message.error(error?.message || '批量添加备用 IP 失败');
+    } finally {
+      setBackupBatchSaving(false);
+    }
+  };
+
+  const updateBackupIP = async (item: BackupIP, patch: Partial<BackupIPInput & { enabled: boolean }>) => {
+    if (backupActionID !== null) return false;
+    const nextIP = normalizeIPLiteral(String(patch.ip ?? item.ip));
+    const nextPort = numberValue(patch.port ?? item.port);
+    if (!nextIP) {
+      message.error('请输入有效的 IPv4/IPv6 地址');
+      return false;
+    }
+    if (nextPort < 1 || nextPort > 65535) {
+      message.error('TCP 端口必须在 1-65535 之间');
+      return false;
+    }
+    setBackupActionID(item.id);
+    try {
+      await apiPut(`${BACKUP_IP_PATH}/${item.id}`, {
+        name: String(patch.name ?? item.name).trim() || nextIP,
+        ip: nextIP,
+        port: nextPort,
+        enabled: patch.enabled ?? item.enabled,
+        check_interval_sec: numberValue(item.check_interval_sec, 30),
+        tcp_timeout_ms: numberValue(item.tcp_timeout_ms, 3000),
+        sort: numberValue(item.sort),
+      });
+      message.success('备用 IP 已更新');
+      try {
+        await fetchBackupIPs(true);
+      } catch {
+        // The update already succeeded; do not present a refresh failure as a save failure.
+      }
+      return true;
+    } catch (error: any) {
+      message.error(error?.message || '更新备用 IP 失败');
+      return false;
+    } finally {
+      setBackupActionID(null);
+    }
+  };
+
+  const saveEditingBackupIP = async () => {
+    const draft = editingBackupIP;
+    if (!draft) return;
+    const item = backupIPs.find((candidate) => candidate.id === draft.id);
+    if (!item) {
+      message.error('备用 IP 已不存在，请刷新后重试');
+      setEditingBackupIP(null);
+      return;
+    }
+    const saved = await updateBackupIP(item, draft);
+    if (saved) setEditingBackupIP(null);
+  };
+
+  const deleteBackupIP = async (item: BackupIP) => {
+    if (backupActionID !== null) return;
+    setBackupActionID(item.id);
+    try {
+      await apiDelete(`${BACKUP_IP_PATH}/${item.id}`);
+      message.success('备用 IP 已删除');
+      setBackupIPs((current) => current.filter((candidate) => candidate.id !== item.id));
+      try {
+        await fetchBackupIPs(true);
+      } catch {
+        // Deletion has committed; the regular poll will retry the list refresh.
+      }
+    } catch (error: any) {
+      message.error(error?.message || '删除备用 IP 失败');
+    } finally {
+      setBackupActionID(null);
+    }
+  };
+
+  const refreshBackupIP = async (item: BackupIP) => {
+    if (backupActionID !== null) return;
+    setBackupActionID(item.id);
+    try {
+      await apiJsonPost(`${BACKUP_IP_PATH}/refresh`, { ids: [item.id] });
+      message.success(`${item.name} 已提交全部探针重新测活`);
+      try {
+        await fetchBackupIPs(true);
+      } catch {
+        // The refresh task was accepted; the regular poll will retry status loading.
+      }
+    } catch (error: any) {
+      message.error(error?.message || '提交重新测活失败');
+    } finally {
+      setBackupActionID(null);
     }
   };
 
@@ -517,6 +866,16 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
     });
   };
 
+  const updateTargetAutoSplit = (policyID: number, sourceKey: string, enabled: boolean) => {
+    const draft = draftsRef.current[policyID];
+    if (!draft) return;
+    updateDraft(policyID, {
+      targets: draft.targets.map((target) => target.source_key === sourceKey
+        ? { ...target, auto_split_enabled: enabled }
+        : target),
+    });
+  };
+
   const selectPolicies = (keys: React.Key[]) => {
     const selectablePolicyIDs = new Set(policiesRef.current.filter(isPolicySelectable).map((policy) => policy.id));
     const next = uniqueIDs(keys as any[]).filter((policyID) => selectablePolicyIDs.has(policyID));
@@ -550,6 +909,9 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
       if (draft.tcp_timeout_ms < 100 || draft.tcp_timeout_ms > 60000) return `${policy.name} 的 TCP 超时必须在 100-60000 毫秒之间`;
       if (draft.targets.some((target) => !target.source_key || !target.host)) return `${policy.name} 包含无效检测地址`;
       if (draft.targets.some((target) => target.port < 1 || target.port > 65535)) return `${policy.name} 的 TCP 端口必须在 1-65535 之间`;
+      if (draft.targets.some((target) => target.auto_split_enabled && !isFixedSplitLeafTarget(target))) {
+        return `${policy.name} 只有固定二分叶子入口可以开启自动二分`;
+      }
     }
     return '';
   };
@@ -576,6 +938,7 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
         targets: draft.targets.map((target) => ({
           source_key: target.source_key,
           port: target.port,
+          auto_split_enabled: target.auto_split_enabled,
         })),
       };
     });
@@ -732,6 +1095,29 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
       />,
     },
     {
+      title: '自动二分',
+      key: 'auto_split_enabled',
+      width: 190,
+      render: (_: any, target: EntryTarget) => {
+        const supported = isFixedSplitLeafTarget(target);
+        return <Tooltip title={supported
+          ? '全部在线探针连续两次确认入口故障后，自动从备用池领取两个健康且未占用的 IP，并将固定名单继续二分。'
+          : '仅固定二分叶子入口支持自动二分'}>
+          <span>
+            <Switch
+              size="small"
+              checked={target.auto_split_enabled}
+              disabled={disabled || !supported}
+              checkedChildren="已开启"
+              unCheckedChildren="已关闭"
+              aria-label={`${target.name || target.host || '检测地址'} 自动二分`}
+              onChange={(enabled) => updateTargetAutoSplit(policyID, target.source_key, enabled)}
+            />
+          </span>
+        </Tooltip>;
+      },
+    },
+    {
       title: '最近检测',
       key: 'states',
       width: 680,
@@ -771,6 +1157,201 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
           })}
         </div>
         : <span className="dns-failover-sub">尚无检测记录</span>,
+    },
+  ];
+
+  const backupProbeRows = (item: BackupIP) => {
+    const statesByProbeID = new Map(item.states.map((state) => [numberValue(state.probe_id), state]));
+    if (enabledProbes.length) {
+      return enabledProbes.map((probe) => ({ probe, state: statesByProbeID.get(probe.id) }));
+    }
+    return item.states.map((state) => ({
+      probe: probeByID.get(numberValue(state.probe_id)),
+      state,
+    }));
+  };
+
+  const backupUsageLabel = (usage: any) => {
+    const policyName = String(usage?.policy_name || '').trim()
+      || (numberValue(usage?.policy_id) ? `规则 #${numberValue(usage.policy_id)}` : '入口规则');
+    const groupName = String(usage?.split_group_name || usage?.group_name || '').trim();
+    return groupName ? `${policyName} / ${groupName}` : policyName;
+  };
+
+  const renderBackupProbeStates = (item: BackupIP) => {
+    const rows = backupProbeRows(item);
+    if (!rows.length) return <div className="dns-entry-backup-empty-probes">暂无启用探针，备用 IP 不会进入可用队列。</div>;
+    return <div className="dns-entry-backup-probes">
+      <div className="dns-entry-backup-probe-head">
+        全部启用探针逐一测活；每个在线探针连续成功 {BACKUP_IP_SUCCESS_THRESHOLD} 次后，这个 IP 才可参与自动分配。
+      </div>
+      <div className="dns-entry-state-list">
+        {rows.map(({ probe, state }, index) => {
+          const probeID = numberValue(state?.probe_id ?? probe?.id);
+          const probeOnline = state ? boolValue(state.probe_online, true) : undefined;
+          const success = state ? stateSuccess(state) : undefined;
+          const successStreak = numberValue(state?.consecutive_success);
+          const latency = state ? stateLatency(state) : undefined;
+          const error = state ? stateError(state) : '';
+          const hasResult = !!state && !!timestampMilliseconds(stateTime(state));
+          const pendingSuccess = success === true && successStreak < BACKUP_IP_SUCCESS_THRESHOLD;
+          return <div className="dns-entry-state dns-entry-backup-probe-row" key={`${probeID || 'probe'}-${index}`}>
+            <Tooltip title={probe?.public_ip || ''}>
+              <span className="dns-entry-state-probe">
+                {probe?.name || state?.probe_name || (probeID ? `探针 #${probeID}` : '未知探针')}
+              </span>
+            </Tooltip>
+            {probeOnline === false
+              ? <Tag color="warning">探针离线</Tag>
+              : !hasResult
+                ? <Tag>无数据</Tag>
+                : state.stale
+                  ? <Tag color="warning">已过期</Tag>
+                  : pendingSuccess
+                    ? <Tag color="processing">确认中 {successStreak}/{BACKUP_IP_SUCCESS_THRESHOLD}</Tag>
+                    : success === true
+                      ? <Tag color="success">成功</Tag>
+                      : success === false
+                        ? <Tag color="error">失败</Tag>
+                        : <Tag>无数据</Tag>}
+            <span>{latency === undefined || state?.stale ? '—' : `${latency} ms`}</span>
+            <span className="dns-entry-state-result">{error ? <span className="text-danger">{error}</span> : '—'}</span>
+            <span className="dns-entry-state-time">{hasResult ? formatTime(stateTime(state)) : '—'}</span>
+          </div>;
+        })}
+      </div>
+    </div>;
+  };
+
+  const backupColumns: any[] = [
+    {
+      title: '备用 IP',
+      key: 'endpoint',
+      width: 290,
+      render: (_: any, item: BackupIP) => <div className="dns-entry-backup-address">
+        <strong title={item.name}>{item.name}</strong>
+        <div className="dns-entry-host">{formatBackupEndpoint(item.ip, item.port)}</div>
+      </div>,
+    },
+    {
+      title: '启用',
+      dataIndex: 'enabled',
+      width: 92,
+      render: (enabled: boolean, item: BackupIP) => <Switch
+        size="small"
+        checked={enabled}
+        loading={backupActionID === item.id}
+        disabled={backupActionID !== null && backupActionID !== item.id}
+        checkedChildren="启用"
+        unCheckedChildren="停用"
+        aria-label={`${item.name} 启用备用 IP 测活`}
+        onChange={(checked) => void updateBackupIP(item, { enabled: checked })}
+      />,
+    },
+    {
+      title: '池状态',
+      key: 'status',
+      width: 220,
+      render: (_: any, item: BackupIP) => {
+        const status = backupStatusMeta(item);
+        const enabledCount = numberValue(item.enabled_probe_count, backupProbeRows(item).length);
+        const onlineCount = numberValue(item.online_probe_count, enabledCount);
+        const healthyCount = numberValue(
+          item.healthy_probe_count,
+          item.states.filter((state) => !state.stale
+            && stateSuccess(state) === true
+            && numberValue(state.consecutive_success) >= BACKUP_IP_SUCCESS_THRESHOLD).length,
+        );
+        return <div className="dns-entry-backup-status">
+          <Space size={4} wrap>
+            <Tag color={status.color}>{status.label}</Tag>
+            {enabledCount > 0 && <Tag>{healthyCount}/{enabledCount} 探针健康</Tag>}
+          </Space>
+          {onlineCount < enabledCount && <div className="dns-failover-sub">在线探针 {onlineCount}/{enabledCount}</div>}
+          {timestampMilliseconds(item.quarantine_until) > Date.now() && <div className="dns-failover-sub">
+            隔离至 {formatTime(item.quarantine_until)}
+          </div>}
+          {enabledCount > 0 && <div className="dns-failover-sub">展开查看逐探针结果</div>}
+        </div>;
+      },
+    },
+    {
+      title: '占用入口',
+      key: 'usage',
+      width: 300,
+      render: (_: any, item: BackupIP) => item.used_by.length
+        ? <div className="dns-entry-backup-usages">
+          {item.used_by.map((usage, index) => <Tag color="blue" key={`${usage?.kind || 'usage'}-${usage?.policy_id || index}-${usage?.split_group_id || ''}`}>
+            {backupUsageLabel(usage)}
+          </Tag>)}
+        </div>
+        : item.used
+          ? <Tag color="blue">已被入口规则占用</Tag>
+          : <span className="dns-failover-sub">未占用</span>,
+    },
+    {
+      title: '最近测活',
+      key: 'last_checked_at',
+      width: 180,
+      render: (_: any, item: BackupIP) => {
+        const latest = item.states.reduce((current, state) => {
+          const timestamp = timestampMilliseconds(stateTime(state));
+          return timestamp > current ? timestamp : current;
+        }, 0);
+        return latest ? formatTime(latest) : '—';
+      },
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      fixed: 'right',
+      width: 252,
+      render: (_: any, item: BackupIP) => <Space size={4} wrap={false}>
+        <Button
+          type="link"
+          size="small"
+          icon={<EditOutlined />}
+          disabled={backupActionID !== null}
+          onClick={() => setEditingBackupIP({ id: item.id, name: item.name, ip: item.ip, port: item.port })}
+        >
+          编辑
+        </Button>
+        <Tooltip title={item.enabled ? '' : '请先启用这个备用 IP'}>
+          <Button
+            type="link"
+            size="small"
+            icon={<ReloadOutlined />}
+            loading={backupActionID === item.id}
+            disabled={!item.enabled || (backupActionID !== null && backupActionID !== item.id)}
+            onClick={() => void refreshBackupIP(item)}
+          >
+            重新测活
+          </Button>
+        </Tooltip>
+        <Tooltip title={item.used ? '这个 IP 正被入口规则使用，请先更换对应入口' : ''}>
+          <span>
+            <Popconfirm
+              title={`确认删除 ${item.name}？`}
+              description="删除后将同时清除全部探针测活记录。"
+              okText="删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              disabled={item.used}
+              onConfirm={() => deleteBackupIP(item)}
+            >
+              <Button
+                type="link"
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                disabled={item.used || backupActionID !== null}
+              >
+                删除
+              </Button>
+            </Popconfirm>
+          </span>
+        </Tooltip>
+      </Space>,
     },
   ];
 
@@ -842,7 +1423,7 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
           pagination={false}
           dataSource={draft.targets}
           columns={targetColumns(policy.id, !selected)}
-          scroll={{ x: 1110 }}
+          scroll={{ x: 1300 }}
           locale={{ emptyText: '没有可检测地址' }}
         />
       </div>;
@@ -1008,6 +1589,47 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
         locale={{ emptyText: loaded ? '暂无用户入口规则' : '正在加载' }}
       />
 
+      <Divider orientation="left">备用 IP 池</Divider>
+      <div className="dns-entry-backup-toolbar">
+        <div className="dns-entry-backup-intro">
+          <strong>全部启用探针同时测活</strong>
+          <span>连续测通且未被入口规则使用的 IP 才会标记为可用；自动二分会从可用队列原子分配。</span>
+          <Space size={4} wrap>
+            <Tag>共 {backupIPs.length} 个</Tag>
+            <Tag color="success">可用 {backupIPs.filter((item) => boolValue(item.available) || item.status === 'available').length}</Tag>
+            <Tag color="blue">使用中 {backupIPs.filter((item) => item.used).length}</Tag>
+            <Tag color="warning">隔离 {backupIPs.filter((item) => backupStatusMeta(item).label === '隔离').length}</Tag>
+          </Space>
+        </div>
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          onClick={() => setBackupBatchOpen(true)}
+        >
+          批量添加
+        </Button>
+      </div>
+      <Table
+        className="dns-entry-backup-table"
+        rowKey="id"
+        size="small"
+        loading={backupLoading}
+        dataSource={backupIPs}
+        columns={backupColumns}
+        scroll={{ x: 1334 }}
+        pagination={backupIPs.length > 20 ? {
+          defaultPageSize: 20,
+          showSizeChanger: true,
+          pageSizeOptions: [20, 50, 100],
+          showTotal: (total) => `共 ${total} 个备用 IP`,
+        } : false}
+        expandable={{
+          expandedRowRender: renderBackupProbeStates,
+          rowExpandable: () => true,
+        }}
+        locale={{ emptyText: '暂无备用 IP，批量添加后将自动下发给全部启用探针测活' }}
+      />
+
       <Divider orientation="left">
         <Space size={8}>
           <span>近期检测</span>
@@ -1058,6 +1680,101 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
         }}
         locale={{ emptyText: '暂无检测任务' }}
       />
+
+      <Modal
+        title="批量添加备用 IP"
+        open={backupBatchOpen}
+        width={680}
+        okText={`添加${backupBatchPreview.items.length ? ` ${backupBatchPreview.items.length} 个` : ''}`}
+        cancelText="取消"
+        confirmLoading={backupBatchSaving}
+        okButtonProps={{ disabled: !backupBatchPreview.items.length || backupBatchPreview.errors.length > 0 }}
+        closable={!backupBatchSaving}
+        maskClosable={!backupBatchSaving}
+        destroyOnHidden
+        onOk={() => void createBackupIPs()}
+        onCancel={() => {
+          if (!backupBatchSaving) setBackupBatchOpen(false);
+        }}
+      >
+        <div className="dns-entry-backup-batch-form">
+          <div className="dns-entry-backup-batch-help">
+            一行一个，支持 <code>名称,IP,端口</code>、<code>IP:端口</code>。IPv6 带端口请写成 <code>[IPv6]:端口</code>；省略端口时使用下方默认值。
+          </div>
+          <label className="dns-entry-backup-default-port">
+            <span>默认 TCP 端口</span>
+            <InputNumber
+              min={1}
+              max={65535}
+              precision={0}
+              value={backupDefaultPort}
+              onChange={(value) => setBackupDefaultPort(numberValue(value, 443))}
+            />
+          </label>
+          <Input.TextArea
+            rows={10}
+            value={backupBatchText}
+            placeholder={'香港备用,1.1.1.1,443\n8.8.8.8:443\n[2001:db8::1]:443'}
+            onChange={(event) => setBackupBatchText(event.target.value)}
+          />
+          <div className={backupBatchPreview.errors.length ? 'dns-entry-backup-preview dns-entry-backup-preview--error' : 'dns-entry-backup-preview'}>
+            {backupBatchPreview.errors.length
+              ? backupBatchPreview.errors.slice(0, 3).join('；')
+              : backupBatchPreview.items.length
+                ? `已识别 ${backupBatchPreview.items.length} 个地址`
+                : '等待输入地址'}
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        title="编辑备用 IP"
+        open={!!editingBackupIP}
+        width={520}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={!!editingBackupIP && backupActionID === editingBackupIP.id}
+        closable={backupActionID === null}
+        maskClosable={backupActionID === null}
+        destroyOnHidden
+        onOk={() => void saveEditingBackupIP()}
+        onCancel={() => {
+          if (backupActionID === null) setEditingBackupIP(null);
+        }}
+      >
+        {editingBackupIP && <div className="dns-entry-backup-edit-form">
+          <label>
+            <span>名称</span>
+            <Input
+              maxLength={255}
+              value={editingBackupIP.name}
+              placeholder="用于识别这个备用 IP"
+              onChange={(event) => setEditingBackupIP({ ...editingBackupIP, name: event.target.value })}
+            />
+          </label>
+          <label>
+            <span>IP 地址</span>
+            <Input
+              value={editingBackupIP.ip}
+              placeholder="IPv4 或 IPv6，不要填写域名"
+              disabled={backupIPs.some((item) => item.id === editingBackupIP.id && item.used)}
+              onChange={(event) => setEditingBackupIP({ ...editingBackupIP, ip: event.target.value })}
+            />
+            {backupIPs.some((item) => item.id === editingBackupIP.id && item.used)
+              && <span className="dns-failover-sub">使用中的 IP 不能更换地址，可继续修改名称和检测端口。</span>}
+          </label>
+          <label>
+            <span>TCP 端口</span>
+            <InputNumber
+              min={1}
+              max={65535}
+              precision={0}
+              value={editingBackupIP.port}
+              onChange={(value) => setEditingBackupIP({ ...editingBackupIP, port: numberValue(value) })}
+            />
+          </label>
+        </div>}
+      </Modal>
     </div>
   </Spin>;
 }

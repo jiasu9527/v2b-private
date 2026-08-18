@@ -64,6 +64,15 @@ func handleAdminDNSFailover(w http.ResponseWriter, r *http.Request, sessions ses
 	if len(parts) == 2 && parts[0] == "entry-monitors" && parts[1] == "runs" {
 		return handleClientEntryMonitorRuns(w, r, service)
 	}
+	if len(parts) == 2 && parts[0] == "entry-monitors" && parts[1] == "backup-ips" {
+		return handleClientEntryBackupIPs(w, r, service)
+	}
+	if len(parts) == 3 && parts[0] == "entry-monitors" && parts[1] == "backup-ips" && parts[2] == "refresh" {
+		return handleClientEntryBackupIPRefresh(w, r, service)
+	}
+	if len(parts) == 3 && parts[0] == "entry-monitors" && parts[1] == "backup-ips" {
+		return handleClientEntryBackupIP(w, r, service, parts[2])
+	}
 	writeJSON(w, http.StatusNotFound, map[string]any{"message": "DNS 故障转移接口不存在"})
 	return true
 }

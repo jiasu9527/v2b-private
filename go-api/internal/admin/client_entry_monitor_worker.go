@@ -46,23 +46,32 @@ SET status = 'timeout', completed_at = $1, updated_at = $1
 WHERE status = 'running' AND started_at < $2`, now, now-int64(clientEntryMonitorRunTimeout/time.Second)); err != nil {
 		return fmt.Errorf("expire client entry monitor runs: %w", err)
 	}
+	// Automatic splitting and Telegram delivery share this worker cycle, but
+	// they are independent durable queues. Keep draining notifications when a
+	// malformed or temporarily unavailable split operation fails; otherwise one
+	// permanently failing operation would suppress every fault/recovery alert
+	// and manual-run report on every subsequent cycle.
+	var autoSplitErr error
+	if err := s.drainPendingClientEntryAutoSplits(ctx, limit); err != nil {
+		autoSplitErr = fmt.Errorf("drain client entry automatic splits: %w", err)
+	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("open client entry notification connection: %w", err)
+		return errors.Join(autoSplitErr, fmt.Errorf("open client entry notification connection: %w", err))
 	}
 	defer conn.Close()
 	var locked bool
 	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, clientEntryMonitorNotificationLockKey).Scan(&locked); err != nil {
-		return fmt.Errorf("lock client entry notification delivery: %w", err)
+		return errors.Join(autoSplitErr, fmt.Errorf("lock client entry notification delivery: %w", err))
 	}
 	if !locked {
-		return nil
+		return autoSplitErr
 	}
 	defer releaseDNSFailoverSessionLock(conn, clientEntryMonitorNotificationLockKey)
 	for range limit {
 		processed, err := s.notifyNextClientEntryMonitorProgress(ctx, conn)
 		if err != nil {
-			return err
+			return errors.Join(autoSplitErr, err)
 		}
 		if !processed {
 			break
@@ -71,7 +80,7 @@ WHERE status = 'running' AND started_at < $2`, now, now-int64(clientEntryMonitor
 	for range limit {
 		processed, err := s.notifyNextClientEntryMonitorEvent(ctx, conn)
 		if err != nil {
-			return err
+			return errors.Join(autoSplitErr, err)
 		}
 		if !processed {
 			break
@@ -80,13 +89,13 @@ WHERE status = 'running' AND started_at < $2`, now, now-int64(clientEntryMonitor
 	for range limit {
 		processed, err := s.notifyNextClientEntryMonitorRun(ctx, conn)
 		if err != nil {
-			return err
+			return errors.Join(autoSplitErr, err)
 		}
 		if !processed {
 			break
 		}
 	}
-	return nil
+	return autoSplitErr
 }
 
 // notifyNextClientEntryMonitorProgress edits the original rule picker message

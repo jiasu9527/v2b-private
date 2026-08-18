@@ -227,6 +227,9 @@ WHERE gp.probe_id = $1 AND g.enabled = 1`, probeID).Scan(&configuredOffline)
 		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_monitor_state WHERE probe_id = $1`, probeID); err != nil {
 			return DNSProbeHeartbeatResult{}, fmt.Errorf("reset client entry monitor state: %w", err)
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_backup_ip_state WHERE probe_id = $1`, probeID); err != nil {
+			return DNSProbeHeartbeatResult{}, fmt.Errorf("reset client entry backup IP state: %w", err)
+		}
 		prewarmCount = 0
 	} else {
 		if _, err := tx.ExecContext(ctx, `UPDATE v2_dns_probe SET version = $2, arch = $3, public_ip = $4, last_heartbeat_at = $5, updated_at = $5 WHERE id = $1`, probeID, request.Version, request.Arch, request.PublicIP, now); err != nil {
@@ -312,6 +315,11 @@ ORDER BY g.id ASC, t.sort ASC, t.id ASC`, probeID)
 		return nil, err
 	}
 	tasks = append(tasks, entryTasks...)
+	backupIPTasks, err := s.listClientEntryBackupIPProbeTasks(ctx, probeID)
+	if err != nil {
+		return nil, err
+	}
+	tasks = append(tasks, backupIPTasks...)
 	return tasks, nil
 }
 
@@ -327,11 +335,22 @@ func (s *DBService) ReportDNSProbeResults(ctx context.Context, probeID int64, re
 	}
 	dnsResults := make([]DNSProbeResult, 0, len(request.Results))
 	entryResults := make([]DNSProbeResult, 0, len(request.Results))
+	backupIPResults := make([]DNSProbeResult, 0, len(request.Results))
 	for _, result := range request.Results {
-		if isClientEntryProbeTargetID(result.TargetID) {
+		if isClientEntryBackupIPProbeTargetID(result.TargetID) {
+			backupIPResults = append(backupIPResults, result)
+		} else if isClientEntryProbeTargetID(result.TargetID) {
 			entryResults = append(entryResults, result)
 		} else {
 			dnsResults = append(dnsResults, result)
+		}
+	}
+	backupIPSummary := DNSProbeReportResult{GroupIDs: make([]int64, 0)}
+	if len(backupIPResults) > 0 {
+		var err error
+		backupIPSummary, err = s.reportClientEntryBackupIPProbeResults(ctx, probeID, backupIPResults)
+		if err != nil {
+			return DNSProbeReportResult{}, err
 		}
 	}
 	entrySummary := DNSProbeReportResult{GroupIDs: make([]int64, 0)}
@@ -343,6 +362,9 @@ func (s *DBService) ReportDNSProbeResults(ctx context.Context, probeID int64, re
 		}
 	}
 	if len(dnsResults) == 0 {
+		entrySummary.Accepted += backupIPSummary.Accepted
+		entrySummary.Duplicates += backupIPSummary.Duplicates
+		entrySummary.Skipped += backupIPSummary.Skipped
 		return entrySummary, nil
 	}
 	dnsSummary, err := s.reportDNSFailoverProbeResults(ctx, probeID, DNSProbeResultsRequest{Results: dnsResults})
@@ -352,6 +374,9 @@ func (s *DBService) ReportDNSProbeResults(ctx context.Context, probeID int64, re
 	dnsSummary.Accepted += entrySummary.Accepted
 	dnsSummary.Duplicates += entrySummary.Duplicates
 	dnsSummary.Skipped += entrySummary.Skipped
+	dnsSummary.Accepted += backupIPSummary.Accepted
+	dnsSummary.Duplicates += backupIPSummary.Duplicates
+	dnsSummary.Skipped += backupIPSummary.Skipped
 	return dnsSummary, nil
 }
 

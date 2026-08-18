@@ -17,23 +17,27 @@ const (
 )
 
 type clientEntryProbeTargetSnapshot struct {
-	TargetID      int64
-	TargetVersion int64
-	MonitorID     int64
-	PolicyID      int64
-	PolicyName    string
-	TargetName    string
-	Host          string
-	Port          int64
-	ProbeName     string
+	TargetID         int64
+	TargetVersion    int64
+	MonitorID        int64
+	PolicyID         int64
+	PolicyName       string
+	TargetName       string
+	SourceKey        string
+	Host             string
+	Port             int64
+	ProbeName        string
+	AutoSplitEnabled bool
+	CheckIntervalSec int64
+	TCPTimeoutMS     int64
 }
 
 func isClientEntryProbeTargetID(targetID int64) bool {
-	return targetID >= clientEntryProbeTargetOffset
+	return targetID >= clientEntryProbeTargetOffset && targetID < clientEntryBackupIPProbeTargetOffset
 }
 
 func encodeClientEntryProbeTargetID(targetID int64) int64 {
-	if targetID <= 0 || targetID >= clientEntryProbeTargetOffset {
+	if targetID <= 0 || targetID >= clientEntryBackupIPProbeTargetLimit {
 		return 0
 	}
 	return clientEntryProbeTargetOffset + targetID
@@ -44,7 +48,7 @@ func decodeClientEntryProbeTargetID(targetID int64) (int64, bool) {
 		return 0, false
 	}
 	decoded := targetID - clientEntryProbeTargetOffset
-	return decoded, decoded > 0
+	return decoded, decoded > 0 && decoded < clientEntryBackupIPProbeTargetLimit
 }
 
 func (s *DBService) listClientEntryProbeTasks(ctx context.Context, probeID int64) ([]DNSProbeTask, error) {
@@ -167,14 +171,19 @@ RETURNING id`, probeID, targetID, nullablePositiveInt64(validRunID), result.Resu
 		if err != nil {
 			return summary, fmt.Errorf("deduplicate client entry probe result: %w", err)
 		}
-		var previousSuccess sql.NullInt64
+		var previousSuccess, previousReportedAt sql.NullInt64
 		var successStreak, failureStreak int64
-		err = tx.QueryRowContext(ctx, `SELECT last_success, consecutive_success, consecutive_failure
+		err = tx.QueryRowContext(ctx, `SELECT last_success, consecutive_success, consecutive_failure, last_reported_at
 FROM v2_client_entry_monitor_state
 WHERE target_id = $1 AND probe_id = $2
-FOR UPDATE`, targetID, probeID).Scan(&previousSuccess, &successStreak, &failureStreak)
+	FOR UPDATE`, targetID, probeID).Scan(&previousSuccess, &successStreak, &failureStreak, &previousReportedAt)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return summary, fmt.Errorf("load client entry monitor state: %w", err)
+		}
+		if !clientEntryMonitorStateFresh(previousReportedAt, now, snapshot.CheckIntervalSec, snapshot.TCPTimeoutMS) {
+			previousSuccess = sql.NullInt64{}
+			successStreak = 0
+			failureStreak = 0
 		}
 		success := result.Success != nil && *result.Success
 		if success {
@@ -212,6 +221,11 @@ last_reported_at = EXCLUDED.last_reported_at, updated_at = EXCLUDED.updated_at`,
 		if err != nil {
 			return summary, fmt.Errorf("save client entry monitor state: %w", err)
 		}
+		if success && snapshot.AutoSplitEnabled {
+			if err := cancelClientEntryAutoSplitOnSuccess(ctx, tx, snapshot, now); err != nil {
+				return summary, err
+			}
+		}
 		if transition != "" {
 			details, _ := json.Marshal(map[string]any{
 				"policy_id": snapshot.PolicyID, "policy_name": snapshot.PolicyName,
@@ -231,6 +245,11 @@ VALUES ($1, $2, $3, $4, $5, $6, NULL, 0, $7, '', $7)`, snapshot.MonitorID, targe
 				return summary, fmt.Errorf("create client entry monitor event: %w", err)
 			}
 			hasEvents = true
+			if transition == "down" && snapshot.AutoSplitEnabled {
+				if err := enqueueClientEntryAutoSplit(ctx, tx, snapshot, probeID, inboxID, now); err != nil {
+					return summary, err
+				}
+			}
 		}
 		if validRunID > 0 {
 			_, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_monitor_run_result
@@ -303,16 +322,19 @@ func confirmClientEntryMonitorAvailability(previous sql.NullInt64, success bool,
 
 func loadClientEntryProbeTargetSnapshot(ctx context.Context, tx *sql.Tx, probeID, targetID int64) (clientEntryProbeTargetSnapshot, error) {
 	var snapshot clientEntryProbeTargetSnapshot
+	var autoSplitEnabled int64
 	err := tx.QueryRowContext(ctx, `SELECT target.id, target.generation, monitor.id, monitor.policy_id,
-policy.name, target.name, target.host, target.port, probe.name
+policy.name, target.name, target.source_key, target.host, target.port, probe.name, target.auto_split_enabled,
+monitor.check_interval_sec, monitor.tcp_timeout_ms
 FROM v2_client_entry_monitor_target target
 JOIN v2_client_entry_monitor monitor ON monitor.id = target.monitor_id AND monitor.enabled = 1
 JOIN v2_client_entry_user_policy policy ON policy.id = monitor.policy_id AND policy.enabled = 1
 JOIN v2_dns_probe probe ON probe.id = $1 AND probe.enabled = 1
 WHERE target.id = $2
-FOR SHARE OF target, monitor, policy, probe`, probeID, targetID).Scan(
+	FOR SHARE OF target`, probeID, targetID).Scan(
 		&snapshot.TargetID, &snapshot.TargetVersion, &snapshot.MonitorID, &snapshot.PolicyID, &snapshot.PolicyName,
-		&snapshot.TargetName, &snapshot.Host, &snapshot.Port, &snapshot.ProbeName,
+		&snapshot.TargetName, &snapshot.SourceKey, &snapshot.Host, &snapshot.Port, &snapshot.ProbeName,
+		&autoSplitEnabled, &snapshot.CheckIntervalSec, &snapshot.TCPTimeoutMS,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -320,6 +342,7 @@ FOR SHARE OF target, monitor, policy, probe`, probeID, targetID).Scan(
 		}
 		return snapshot, fmt.Errorf("load allowed client entry probe target: %w", err)
 	}
+	snapshot.AutoSplitEnabled = autoSplitEnabled == 1
 	return snapshot, nil
 }
 

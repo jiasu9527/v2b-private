@@ -175,6 +175,159 @@
   margin-bottom: 4px;
 }
 
+.dns-entry-backup-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+
+.dns-entry-backup-intro {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: #777;
+  font-size: 13px;
+}
+
+.dns-entry-backup-intro > strong {
+  color: #262626;
+  font-size: 14px;
+}
+
+.dns-entry-backup-intro > span {
+  line-height: 1.6;
+}
+
+.dns-entry-backup-intro .ant-tag,
+.dns-entry-backup-usages .ant-tag {
+  margin-inline-end: 0;
+}
+
+.dns-entry-backup-table {
+  margin-bottom: 4px;
+}
+
+.dns-entry-backup-table .ant-table-expanded-row > td {
+  background: #fafafa;
+}
+
+.dns-entry-backup-address {
+  min-width: 0;
+}
+
+.dns-entry-backup-address strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dns-entry-backup-address .dns-entry-host {
+  color: #595959;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.dns-entry-backup-status {
+  display: grid;
+  gap: 4px;
+}
+
+.dns-entry-backup-usages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 78px;
+  overflow: auto;
+}
+
+.dns-entry-backup-usages .ant-tag {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dns-entry-backup-probes {
+  min-width: 720px;
+  padding: 6px 10px 10px;
+}
+
+.dns-entry-backup-probe-head,
+.dns-entry-backup-empty-probes {
+  margin-bottom: 10px;
+  color: #777;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.dns-entry-backup-empty-probes {
+  padding: 10px;
+}
+
+.dns-entry-backup-probe-row {
+  grid-template-columns: 150px 112px 72px minmax(180px, 1fr) 165px;
+}
+
+.dns-entry-backup-batch-form,
+.dns-entry-backup-edit-form {
+  display: grid;
+  gap: 14px;
+  padding-top: 4px;
+}
+
+.dns-entry-backup-batch-help {
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #f5f7fa;
+  color: #595959;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.dns-entry-backup-batch-help code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: #fff;
+  color: #1f1f1f;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.dns-entry-backup-default-port,
+.dns-entry-backup-edit-form > label {
+  display: grid;
+  gap: 7px;
+  color: #262626;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.dns-entry-backup-default-port {
+  grid-template-columns: 120px 150px;
+  align-items: center;
+}
+
+.dns-entry-backup-default-port .ant-input-number,
+.dns-entry-backup-edit-form .ant-input-number {
+  width: 100%;
+}
+
+.dns-entry-backup-edit-form > label > .dns-failover-sub {
+  font-weight: 400;
+}
+
+.dns-entry-backup-preview {
+  min-height: 22px;
+  color: #52c41a;
+  font-size: 12px;
+  line-height: 22px;
+}
+
+.dns-entry-backup-preview--error {
+  color: #ff4d4f;
+}
+
 @media (max-width: 1100px) {
   .dns-entry-monitor-fields {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -185,6 +338,15 @@
   .dns-entry-toolbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .dns-entry-backup-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .dns-entry-backup-toolbar > .ant-btn {
+    align-self: flex-start;
   }
 
   .dns-entry-monitor-fields {

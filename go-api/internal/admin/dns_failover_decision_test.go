@@ -234,6 +234,10 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		"v2_client_entry_monitor_run",
 		"v2_client_entry_monitor_run_result",
 		"v2_client_entry_monitor_result_inbox",
+		"v2_client_entry_backup_ip",
+		"v2_client_entry_backup_ip_state",
+		"v2_client_entry_backup_ip_result_inbox",
+		"v2_client_entry_auto_split_operation",
 	} {
 		mock.ExpectExec(`CREATE TABLE IF NOT EXISTS ` + table + ` \(`).
 			WillReturnResult(sqlmock.NewResult(0, 0))
@@ -250,18 +254,20 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	}
 	mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor_target ADD COLUMN IF NOT EXISTS generation`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor_target ADD COLUMN IF NOT EXISTS auto_split_enabled`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	for _, column := range []string{"target_name", "host", "port", "probe_name", "policy_id", "policy_name"} {
 		mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor_run_result ADD COLUMN IF NOT EXISTS ` + column).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 	mock.ExpectExec(`(?s)UPDATE v2_client_entry_monitor_run_result result.*SET policy_id = monitor.policy_id.*policy_name = policy.name.*FROM v2_client_entry_monitor_target target`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	for range 51 {
+	for range 75 {
 		mock.ExpectExec(`(?s)DO \$client_entry_monitor\$.*ADD CONSTRAINT`).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
-	for range 18 {
-		mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_monitor_`).
+	for range 27 {
+		mock.ExpectExec(`CREATE (?:UNIQUE )?INDEX IF NOT EXISTS (?:idx|uniq)_v2_client_entry_(?:monitor|backup|auto)_`).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 	mock.ExpectExec(`INSERT INTO v2_client_entry_monitor_config`).

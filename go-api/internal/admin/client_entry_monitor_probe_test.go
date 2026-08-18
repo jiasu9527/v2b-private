@@ -37,7 +37,7 @@ func TestConfirmClientEntryMonitorAvailability(t *testing.T) {
 	}
 }
 
-func TestClientEntryProbeFirstFailureStaysPendingWithoutAlert(t *testing.T) {
+func TestClientEntryProbeFailureAfterStaleGapStartsNewConfirmation(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -54,17 +54,17 @@ func TestClientEntryProbeFirstFailureStaysPendingWithoutAlert(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"enabled", "last_heartbeat_at"}).AddRow(int64(1), now))
 	mock.ExpectQuery(`(?s)SELECT target.id, target.generation, monitor.id, monitor.policy_id,.*FROM v2_client_entry_monitor_target target.*WHERE target.id = \$2`).
 		WithArgs(probeID, targetID).
-		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "policy_name", "target_name", "host", "port", "probe_name"}).
-			AddRow(targetID, int64(2), int64(3), int64(42), "高级入口", "独立入口", "entry.example.com", int64(443), "东京探针"))
+		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "policy_name", "target_name", "source_key", "host", "port", "probe_name", "auto_split_enabled", "check_interval_sec", "tcp_timeout_ms"}).
+			AddRow(targetID, int64(2), int64(3), int64(42), "高级入口", "独立入口", "policy:42", "entry.example.com", int64(443), "东京探针", int64(0), int64(30), int64(3000)))
 	mock.ExpectQuery(`(?s)INSERT INTO v2_client_entry_monitor_result_inbox.*ON CONFLICT \(probe_id, result_id\) DO NOTHING.*RETURNING id`).
 		WithArgs(probeID, targetID, nil, "entry-timeout-1", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
 	mock.ExpectQuery(`(?s)SELECT last_success, consecutive_success, consecutive_failure.*FROM v2_client_entry_monitor_state.*FOR UPDATE`).
 		WithArgs(targetID, probeID).
-		WillReturnRows(sqlmock.NewRows([]string{"last_success", "consecutive_success", "consecutive_failure"}).
-			AddRow(int64(1), int64(3), int64(0)))
+		WillReturnRows(sqlmock.NewRows([]string{"last_success", "consecutive_success", "consecutive_failure", "last_reported_at"}).
+			AddRow(int64(0), int64(0), int64(5), now-1000))
 	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_state.*ON CONFLICT \(target_id, probe_id\) DO UPDATE SET`).
-		WithArgs(targetID, probeID, int64(1), nil, "timeout", "203.0.113.9", int64(0), int64(1), sqlmock.AnyArg()).
+		WithArgs(targetID, probeID, nil, nil, "timeout", "203.0.113.9", int64(0), int64(1), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -101,15 +101,15 @@ func TestClientEntryProbeSecondFailureCreatesStateAndAlertEvent(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"enabled", "last_heartbeat_at"}).AddRow(int64(1), now))
 	mock.ExpectQuery(`(?s)SELECT target.id, target.generation, monitor.id, monitor.policy_id,.*FROM v2_client_entry_monitor_target target.*WHERE target.id = \$2`).
 		WithArgs(probeID, targetID).
-		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "policy_name", "target_name", "host", "port", "probe_name"}).
-			AddRow(targetID, int64(2), int64(3), int64(42), "高级入口", "独立入口", "entry.example.com", int64(443), "东京探针"))
+		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "policy_name", "target_name", "source_key", "host", "port", "probe_name", "auto_split_enabled", "check_interval_sec", "tcp_timeout_ms"}).
+			AddRow(targetID, int64(2), int64(3), int64(42), "高级入口", "独立入口", "policy:42", "entry.example.com", int64(443), "东京探针", int64(0), int64(30), int64(3000)))
 	mock.ExpectQuery(`(?s)INSERT INTO v2_client_entry_monitor_result_inbox.*ON CONFLICT \(probe_id, result_id\) DO NOTHING.*RETURNING id`).
 		WithArgs(probeID, targetID, nil, "entry-timeout-2", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
 	mock.ExpectQuery(`(?s)SELECT last_success, consecutive_success, consecutive_failure.*FROM v2_client_entry_monitor_state.*FOR UPDATE`).
 		WithArgs(targetID, probeID).
-		WillReturnRows(sqlmock.NewRows([]string{"last_success", "consecutive_success", "consecutive_failure"}).
-			AddRow(int64(1), int64(0), int64(1)))
+		WillReturnRows(sqlmock.NewRows([]string{"last_success", "consecutive_success", "consecutive_failure", "last_reported_at"}).
+			AddRow(int64(1), int64(0), int64(1), now))
 	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_state.*ON CONFLICT \(target_id, probe_id\) DO UPDATE SET`).
 		WithArgs(targetID, probeID, int64(0), nil, "timeout", "203.0.113.9", int64(0), int64(2), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -152,14 +152,14 @@ func TestClientEntryProbeRecoveryCreatesAlertEvent(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"enabled", "last_heartbeat_at"}).AddRow(int64(1), now))
 	mock.ExpectQuery(`(?s)SELECT target.id, target.generation, monitor.id, monitor.policy_id,.*FROM v2_client_entry_monitor_target target.*WHERE target.id = \$2`).
 		WithArgs(probeID, targetID).
-		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "policy_name", "target_name", "host", "port", "probe_name"}).
-			AddRow(targetID, int64(2), int64(3), int64(42), "高级入口", "独立入口", "entry.example.com", int64(443), "东京探针"))
+		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "policy_name", "target_name", "source_key", "host", "port", "probe_name", "auto_split_enabled", "check_interval_sec", "tcp_timeout_ms"}).
+			AddRow(targetID, int64(2), int64(3), int64(42), "高级入口", "独立入口", "policy:42", "entry.example.com", int64(443), "东京探针", int64(0), int64(30), int64(3000)))
 	mock.ExpectQuery(`(?s)INSERT INTO v2_client_entry_monitor_result_inbox.*ON CONFLICT \(probe_id, result_id\) DO NOTHING.*RETURNING id`).
 		WithArgs(probeID, targetID, nil, "entry-recovered-1", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(2)))
 	mock.ExpectQuery(`(?s)SELECT last_success, consecutive_success, consecutive_failure.*FROM v2_client_entry_monitor_state.*FOR UPDATE`).
 		WithArgs(targetID, probeID).
-		WillReturnRows(sqlmock.NewRows([]string{"last_success", "consecutive_success", "consecutive_failure"}).AddRow(int64(0), int64(0), int64(2)))
+		WillReturnRows(sqlmock.NewRows([]string{"last_success", "consecutive_success", "consecutive_failure", "last_reported_at"}).AddRow(int64(0), int64(0), int64(2), now))
 	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_state.*ON CONFLICT \(target_id, probe_id\) DO UPDATE SET`).
 		WithArgs(targetID, probeID, int64(1), latency, "", "203.0.113.9", int64(1), int64(0), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -263,8 +263,8 @@ func TestClientEntryProbeSkipsStaleTargetGeneration(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"enabled", "last_heartbeat_at"}).AddRow(int64(1), now))
 	mock.ExpectQuery(`(?s)SELECT target.id, target.generation, monitor.id, monitor.policy_id,.*WHERE target.id = \$2`).
 		WithArgs(probeID, targetID).
-		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "policy_name", "target_name", "host", "port", "probe_name"}).
-			AddRow(targetID, int64(2), int64(3), int64(42), "高级入口", "独立入口", "new.example.com", int64(443), "东京探针"))
+		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "policy_name", "target_name", "source_key", "host", "port", "probe_name", "auto_split_enabled", "check_interval_sec", "tcp_timeout_ms"}).
+			AddRow(targetID, int64(2), int64(3), int64(42), "高级入口", "独立入口", "policy:42", "new.example.com", int64(443), "东京探针", int64(0), int64(30), int64(3000)))
 	mock.ExpectCommit()
 	failed := false
 	result, err := service.ReportDNSProbeResults(context.Background(), probeID, DNSProbeResultsRequest{Results: []DNSProbeResult{{

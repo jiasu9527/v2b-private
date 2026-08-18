@@ -143,6 +143,8 @@ func TestDNSProbeHeartbeatFirstResetsSafelyAndContinuousPreservesPrewarm(t *test
 					WillReturnResult(sqlmock.NewResult(0, 0))
 				mock.ExpectExec(`DELETE FROM v2_client_entry_monitor_state WHERE probe_id = \$1`).
 					WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec(`DELETE FROM v2_client_entry_backup_ip_state WHERE probe_id = \$1`).
+					WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 0))
 			} else {
 				mock.ExpectExec(`UPDATE v2_dns_probe SET version = \$2, arch = \$3, public_ip = \$4, last_heartbeat_at = \$5, updated_at = \$5 WHERE id = \$1`).
 					WithArgs(int64(7), "v1.2.3", "amd64", "203.0.113.7", sqlmock.AnyArg()).
@@ -191,6 +193,8 @@ func TestDNSProbeHeartbeatOfflineReconnectResetsProbeAndState(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 4))
 	mock.ExpectExec(`DELETE FROM v2_client_entry_monitor_state WHERE probe_id = \$1`).
 		WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec(`DELETE FROM v2_client_entry_backup_ip_state WHERE probe_id = \$1`).
+		WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
 	result, err := service.HeartbeatDNSProbe(context.Background(), 7, DNSProbeHeartbeatRequest{
@@ -237,6 +241,8 @@ func TestDNSProbeHeartbeatResetsCorruptTimestampWithoutCallingItReconnect(t *tes
 			mock.ExpectExec(`UPDATE v2_dns_probe_target_state SET warmed_up = 0, consecutive_success = 0, consecutive_failure = 0`).
 				WillReturnResult(sqlmock.NewResult(0, 1))
 			mock.ExpectExec(`DELETE FROM v2_client_entry_monitor_state WHERE probe_id = \$1`).
+				WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectExec(`DELETE FROM v2_client_entry_backup_ip_state WHERE probe_id = \$1`).
 				WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 0))
 			mock.ExpectCommit()
 
@@ -353,6 +359,8 @@ func TestDNSProbeHeartbeatOfflineThresholdNullDefaultAndMinimumBinding(t *testin
 				mock.ExpectExec(`UPDATE v2_dns_probe SET .*prewarm_count = 0.*WHERE id = \$1`).WillReturnResult(sqlmock.NewResult(0, 1))
 				mock.ExpectExec(`UPDATE v2_dns_probe_target_state SET warmed_up = 0, consecutive_success = 0, consecutive_failure = 0`).WillReturnResult(sqlmock.NewResult(0, 2))
 				mock.ExpectExec(`DELETE FROM v2_client_entry_monitor_state WHERE probe_id = \$1`).WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec(`DELETE FROM v2_client_entry_backup_ip_state WHERE probe_id = \$1`).
+					WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 0))
 			} else {
 				mock.ExpectExec(`UPDATE v2_dns_probe SET version = \$2, arch = \$3, public_ip = \$4, last_heartbeat_at = \$5, updated_at = \$5 WHERE id = \$1`).WillReturnResult(sqlmock.NewResult(0, 1))
 			}
@@ -442,6 +450,13 @@ func expectEmptyClientEntryProbeTasks(mock sqlmock.Sqlmock, probeID int64) {
 	mock.ExpectQuery(`(?s)SELECT target.id, target.generation, monitor.id, monitor.policy_id,.*FROM v2_client_entry_monitor monitor.*EXISTS \(SELECT 1 FROM v2_dns_probe probe WHERE probe.id = \$1 AND probe.enabled = 1\).*ORDER BY monitor.id, target.sort, target.id`).
 		WithArgs(probeID).
 		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "host", "port", "timeout", "interval"}))
+	expectEmptyClientEntryBackupIPProbeTasks(mock, probeID)
+}
+
+func expectEmptyClientEntryBackupIPProbeTasks(mock sqlmock.Sqlmock, probeID int64) {
+	mock.ExpectQuery(`(?s)SELECT backup.id, backup.generation, backup.ip, backup.port,.*FROM v2_client_entry_backup_ip backup.*probe.id = \$1.*ORDER BY backup.sort ASC, backup.id ASC`).
+		WithArgs(probeID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "generation", "ip", "port", "timeout", "interval"}))
 }
 
 func TestDNSProbeTasksIncludeClientEntryTargetsAndManualRun(t *testing.T) {
@@ -461,6 +476,7 @@ func TestDNSProbeTasksIncludeClientEntryTargetsAndManualRun(t *testing.T) {
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"target_id", "generation", "monitor_id", "policy_id", "host", "port", "timeout", "interval"}).
 			AddRow(int64(5), int64(4), int64(3), int64(42), "entry.example.com", int64(8443), int64(2500), int64(20)))
+	expectEmptyClientEntryBackupIPProbeTasks(mock, 7)
 
 	tasks, err := service.ListDNSProbeTasks(context.Background(), 7)
 	if err != nil {
@@ -1574,6 +1590,8 @@ func TestDNSProbeStaleResultsThenHeartbeatResetStartsFirstPrewarmRound(t *testin
 	mock.ExpectExec(`UPDATE v2_dns_probe SET .*prewarm_count = 0.*WHERE id = \$1`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE v2_dns_probe_target_state SET warmed_up = 0, consecutive_success = 0, consecutive_failure = 0`).WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectExec(`DELETE FROM v2_client_entry_monitor_state WHERE probe_id = \$1`).WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`DELETE FROM v2_client_entry_backup_ip_state WHERE probe_id = \$1`).
+		WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
 	// The first new result after that reset is prewarm round one.
@@ -1631,6 +1649,8 @@ func TestDNSProbeNullHeartbeatLegacyStateResetsBeforeFirstPrewarmRound(t *testin
 	mock.ExpectExec(`UPDATE v2_dns_probe_target_state SET warmed_up = 0, consecutive_success = 0, consecutive_failure = 0`).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectExec(`DELETE FROM v2_client_entry_monitor_state WHERE probe_id = \$1`).WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`DELETE FROM v2_client_entry_backup_ip_state WHERE probe_id = \$1`).
+		WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
 	expectDNSProbeReportLock(mock, 7, 0)

@@ -62,7 +62,7 @@ func NormalizeHost(value string) (string, error) {
 		return "", errors.New("地址必须是单个域名或 IP")
 	}
 	if address, err := netip.ParseAddr(host); err == nil && address.Zone() == "" {
-		return address.String(), nil
+		return address.Unmap().String(), nil
 	}
 
 	host = strings.TrimSuffix(strings.ToLower(host), ".")

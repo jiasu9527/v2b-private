@@ -198,6 +198,8 @@ func TestDNSFailoverProbeListAndRevoke(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`DELETE FROM v2_client_entry_monitor_state WHERE probe_id = \$1`).
 		WithArgs(int64(3)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_client_entry_backup_ip_state WHERE probe_id = \$1`).
+		WithArgs(int64(3)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	if ok, err := service.SetDNSProbeEnabled(context.Background(), 3, false); err != nil || !ok {
 		t.Fatalf("SetDNSProbeEnabled revoke = %v, %v", ok, err)
@@ -210,6 +212,8 @@ func TestDNSFailoverProbeListAndRevoke(t *testing.T) {
 		WithArgs(int64(3), int64(1), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`DELETE FROM v2_client_entry_monitor_state WHERE probe_id = \$1`).
+		WithArgs(int64(3)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_client_entry_backup_ip_state WHERE probe_id = \$1`).
 		WithArgs(int64(3)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	if ok, err := service.SetDNSProbeEnabled(context.Background(), 3, true); err != nil || !ok {

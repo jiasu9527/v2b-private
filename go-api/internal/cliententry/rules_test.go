@@ -49,6 +49,9 @@ func TestNormalizeHostRejectsRetiredDSL(t *testing.T) {
 	if host, err := NormalizeHost("VIP.Example.com."); err != nil || host != "vip.example.com" {
 		t.Fatalf("normalize host = %q, %v", host, err)
 	}
+	if host, err := NormalizeHost("::ffff:192.0.2.1"); err != nil || host != "192.0.2.1" {
+		t.Fatalf("normalize mapped IPv4 host = %q, %v", host, err)
+	}
 	for _, value := range []string{
 		"default.example.com,clash.example.com(UClash)",
 		"https://example.com",

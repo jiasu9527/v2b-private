@@ -355,6 +355,9 @@ func (s *DBService) SetDNSProbeEnabled(ctx context.Context, id int64, enabled bo
 		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_monitor_state WHERE probe_id = $1`, id); err != nil {
 			return false, fmt.Errorf("重置入口检测探针状态失败: %w", err)
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_backup_ip_state WHERE probe_id = $1`, id); err != nil {
+			return false, fmt.Errorf("重置备用 IP 探针状态失败: %w", err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("提交探针状态失败: %w", err)
