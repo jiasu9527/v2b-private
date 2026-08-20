@@ -13,7 +13,7 @@ import (
 
 const (
 	defaultClientEntryBackupIPIntervalSec = defaultClientEntryMonitorIntervalSec
-	defaultClientEntryBackupIPTimeoutMS   = defaultClientEntryMonitorTimeoutMS
+	defaultClientEntryBackupIPTimeoutMS   = int64(3000)
 	defaultClientEntryBackupIPPort        = int64(54101)
 	clientEntryBackupIPSuccessThreshold   = int64(2)
 	clientEntryBackupIPMaxBatch           = 500

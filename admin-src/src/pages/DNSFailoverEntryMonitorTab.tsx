@@ -28,6 +28,7 @@ import './DNSFailoverEntryMonitorTab.css';
 
 const ENTRY_MONITOR_PATH = '/dns-failover/entry-monitors';
 const BACKUP_IP_PATH = `${ENTRY_MONITOR_PATH}/backup-ips`;
+const DEFAULT_ENTRY_MONITOR_TIMEOUT_MS = 5000;
 const DEFAULT_ENTRY_MONITOR_FAILURE_THRESHOLD = 3;
 const DEFAULT_ENTRY_MONITOR_SUCCESS_THRESHOLD = 2;
 const BACKUP_IP_SUCCESS_THRESHOLD = 2;
@@ -452,7 +453,7 @@ function normalizeDraft(policy: EntryPolicy, item?: any): EntryMonitorDraft {
     action: normalizeAction(item?.action || policy.action),
     enabled: boolValue(item?.enabled, true),
     check_interval_sec: numberValue(item?.check_interval_sec, 30),
-    tcp_timeout_ms: numberValue(item?.tcp_timeout_ms, 3000),
+    tcp_timeout_ms: numberValue(item?.tcp_timeout_ms, DEFAULT_ENTRY_MONITOR_TIMEOUT_MS),
     failure_threshold: numberValue(
       item?.failure_threshold ?? DEFAULT_ENTRY_MONITOR_FAILURE_THRESHOLD,
       DEFAULT_ENTRY_MONITOR_FAILURE_THRESHOLD,
@@ -1571,7 +1572,7 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
           </div>
         </div>
         <div className="dns-failover-sub">
-          高延迟线路建议将 TCP 超时设置为 5000-8000 ms；故障需连续失败 {draft.failure_threshold} 次、恢复需连续成功 {draft.success_threshold} 次才会通知，可减少网络抖动误报。
+          TCP 超时默认 5000 ms；更高延迟线路可调整到 8000 ms。故障需连续失败 {draft.failure_threshold} 次、恢复需连续成功 {draft.success_threshold} 次才会通知，可减少网络抖动误报。
         </div>
         <Table
           className="dns-entry-target-table"

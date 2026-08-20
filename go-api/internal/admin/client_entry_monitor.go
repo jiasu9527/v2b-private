@@ -16,7 +16,7 @@ import (
 
 const (
 	defaultClientEntryMonitorIntervalSec      int64 = 30
-	defaultClientEntryMonitorTimeoutMS        int64 = 3000
+	defaultClientEntryMonitorTimeoutMS        int64 = 5000
 	defaultClientEntryMonitorFailureThreshold int64 = 3
 	defaultClientEntryMonitorSuccessThreshold int64 = 2
 	minClientEntryMonitorFailureThreshold     int64 = 2

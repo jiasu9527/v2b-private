@@ -47,6 +47,7 @@ func TestClientEntryMonitorSchemaKeepsMonitoringAndManualRunsIndependent(t *test
 		"revision BIGINT NOT NULL DEFAULT 1",
 		"CREATE TABLE IF NOT EXISTS v2_client_entry_monitor (",
 		"policy_id INTEGER NOT NULL",
+		"tcp_timeout_ms INTEGER NOT NULL DEFAULT 5000",
 		"failure_threshold INTEGER NOT NULL DEFAULT 3",
 		"success_threshold INTEGER NOT NULL DEFAULT 2",
 		"CREATE TABLE IF NOT EXISTS v2_client_entry_monitor_target (",
@@ -98,6 +99,8 @@ func TestClientEntryMonitorSchemaKeepsMonitoringAndManualRunsIndependent(t *test
 	}
 	joinedMigrations := strings.Join(clientEntryMonitorMigrationStatements, "\n")
 	for _, required := range []string{
+		"UPDATE v2_client_entry_monitor SET tcp_timeout_ms = 5000 WHERE tcp_timeout_ms = 3000",
+		"ALTER TABLE v2_client_entry_monitor ALTER COLUMN tcp_timeout_ms SET DEFAULT 5000",
 		"ALTER TABLE v2_client_entry_monitor ADD COLUMN IF NOT EXISTS failure_threshold INTEGER NOT NULL DEFAULT 3",
 		"ALTER TABLE v2_client_entry_monitor ADD COLUMN IF NOT EXISTS success_threshold INTEGER NOT NULL DEFAULT 2",
 		"ALTER TABLE v2_client_entry_monitor_event ADD COLUMN IF NOT EXISTS notify_next_attempt_at",

@@ -49,6 +49,15 @@ func TestNormalizeClientEntryMonitorThresholds(t *testing.T) {
 	}
 }
 
+func TestClientEntryMonitorUsesFiveSecondDefaultWithoutChangingBackupPool(t *testing.T) {
+	if defaultClientEntryMonitorTimeoutMS != 5000 {
+		t.Fatalf("entry monitor timeout default = %d, want 5000", defaultClientEntryMonitorTimeoutMS)
+	}
+	if defaultClientEntryBackupIPTimeoutMS != 3000 {
+		t.Fatalf("backup IP timeout default = %d, want existing 3000", defaultClientEntryBackupIPTimeoutMS)
+	}
+}
+
 func TestLoadClientEntryMonitorRecordsIncludesConfirmationThresholds(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

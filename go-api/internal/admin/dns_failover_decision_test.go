@@ -242,6 +242,8 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		mock.ExpectExec(`CREATE TABLE IF NOT EXISTS ` + table + ` \(`).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
+	mock.ExpectExec(`(?s)DO \$client_entry_monitor_timeout\$.*UPDATE v2_client_entry_monitor SET tcp_timeout_ms = 5000.*ALTER TABLE v2_client_entry_monitor ALTER COLUMN tcp_timeout_ms SET DEFAULT 5000`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor ADD COLUMN IF NOT EXISTS failure_threshold`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor ADD COLUMN IF NOT EXISTS success_threshold`).
