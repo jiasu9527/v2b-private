@@ -28,7 +28,8 @@ import './DNSFailoverEntryMonitorTab.css';
 
 const ENTRY_MONITOR_PATH = '/dns-failover/entry-monitors';
 const BACKUP_IP_PATH = `${ENTRY_MONITOR_PATH}/backup-ips`;
-const ENTRY_MONITOR_FAILURE_THRESHOLD = 2;
+const DEFAULT_ENTRY_MONITOR_FAILURE_THRESHOLD = 3;
+const DEFAULT_ENTRY_MONITOR_SUCCESS_THRESHOLD = 2;
 const BACKUP_IP_SUCCESS_THRESHOLD = 2;
 const DEFAULT_BACKUP_IP_PORT = 54101;
 
@@ -81,6 +82,8 @@ type EntryMonitorDraft = {
   enabled: boolean;
   check_interval_sec: number;
   tcp_timeout_ms: number;
+  failure_threshold: number;
+  success_threshold: number;
   targets: EntryTarget[];
 };
 
@@ -450,6 +453,14 @@ function normalizeDraft(policy: EntryPolicy, item?: any): EntryMonitorDraft {
     enabled: boolValue(item?.enabled, true),
     check_interval_sec: numberValue(item?.check_interval_sec, 30),
     tcp_timeout_ms: numberValue(item?.tcp_timeout_ms, 3000),
+    failure_threshold: numberValue(
+      item?.failure_threshold ?? DEFAULT_ENTRY_MONITOR_FAILURE_THRESHOLD,
+      DEFAULT_ENTRY_MONITOR_FAILURE_THRESHOLD,
+    ),
+    success_threshold: numberValue(
+      item?.success_threshold ?? DEFAULT_ENTRY_MONITOR_SUCCESS_THRESHOLD,
+      DEFAULT_ENTRY_MONITOR_SUCCESS_THRESHOLD,
+    ),
     targets: (configuredTargets.length ? configuredTargets : derivedPolicyTargets(policy))
       .sort((left, right) => left.sort - right.sort),
   };
@@ -1004,6 +1015,12 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
       if (!draft.targets.length) return `${policy.name} 没有可检测地址`;
       if (draft.check_interval_sec < 5 || draft.check_interval_sec > 3600) return `${policy.name} 的检测间隔必须在 5-3600 秒之间`;
       if (draft.tcp_timeout_ms < 100 || draft.tcp_timeout_ms > 60000) return `${policy.name} 的 TCP 超时必须在 100-60000 毫秒之间`;
+      if (!Number.isInteger(draft.failure_threshold) || draft.failure_threshold < 2 || draft.failure_threshold > 10) {
+        return `${policy.name} 的故障确认次数必须在 2-10 次之间`;
+      }
+      if (!Number.isInteger(draft.success_threshold) || draft.success_threshold < 1 || draft.success_threshold > 10) {
+        return `${policy.name} 的恢复确认次数必须在 1-10 次之间`;
+      }
       if (draft.targets.some((target) => !target.source_key || !target.host)) return `${policy.name} 包含无效检测地址`;
       if (draft.targets.some((target) => target.port < 1 || target.port > 65535)) return `${policy.name} 的 TCP 端口必须在 1-65535 之间`;
       if (draft.targets.some((target) => target.auto_split_enabled && !isFixedSplitLeafTarget(target))) {
@@ -1032,6 +1049,8 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
         enabled: draft.enabled,
         check_interval_sec: draft.check_interval_sec,
         tcp_timeout_ms: draft.tcp_timeout_ms,
+        failure_threshold: draft.failure_threshold,
+        success_threshold: draft.success_threshold,
         targets: draft.targets.map((target) => ({
           source_key: target.source_key,
           port: target.port,
@@ -1166,7 +1185,12 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
     },
   ];
 
-  const targetColumns = (policyID: number, disabled = false): any[] => [
+  const targetColumns = (policyID: number, disabled = false): any[] => {
+    const failureThreshold = drafts[policyID]?.failure_threshold
+      || DEFAULT_ENTRY_MONITOR_FAILURE_THRESHOLD;
+    const successThreshold = drafts[policyID]?.success_threshold
+      || DEFAULT_ENTRY_MONITOR_SUCCESS_THRESHOLD;
+    return [
     {
       title: '地址',
       key: 'host',
@@ -1198,7 +1222,7 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
       render: (_: any, target: EntryTarget) => {
         const supported = isFixedSplitLeafTarget(target);
         return <Tooltip title={supported
-          ? '全部在线探针连续两次确认入口故障后，自动从备用池领取两个健康且未占用的 IP，并将固定名单继续二分。'
+          ? `全部在线探针连续达到 ${failureThreshold} 次失败后才确认入口故障，并自动从备用池领取两个健康且未占用的 IP，将固定名单继续二分。`
           : '仅固定二分叶子入口支持自动二分'}>
           <span>
             <Switch
@@ -1225,9 +1249,13 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
             const probe = probeByID.get(probeID);
             const success = stateSuccess(state);
             const failureStreak = numberValue(state.consecutive_failure);
+            const successStreak = numberValue(state.consecutive_success);
             const awaitingFailureConfirmation = success !== false
               && failureStreak > 0
-              && failureStreak < ENTRY_MONITOR_FAILURE_THRESHOLD;
+              && failureStreak < failureThreshold;
+            const awaitingRecoveryConfirmation = success === false
+              && successStreak > 0
+              && successStreak < successThreshold;
             const latency = stateLatency(state);
             const ip = stateIP(state);
             const error = stateError(state);
@@ -1238,12 +1266,14 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
               {state.stale
                 ? <Tag color="warning">已过期</Tag>
                 : awaitingFailureConfirmation
-                  ? <Tag color="warning">待复核 {failureStreak}/{ENTRY_MONITOR_FAILURE_THRESHOLD}</Tag>
-                : success === true
-                  ? <Tag color="success">成功</Tag>
-                  : success === false
-                    ? <Tag color="error">失败</Tag>
-                    : <Tag>无数据</Tag>}
+                  ? <Tag color="warning">待复核 {failureStreak}/{failureThreshold}</Tag>
+                  : awaitingRecoveryConfirmation
+                    ? <Tag color="processing">恢复复核 {successStreak}/{successThreshold}</Tag>
+                    : success === true
+                      ? <Tag color="success">成功</Tag>
+                      : success === false
+                        ? <Tag color="error">失败</Tag>
+                        : <Tag>无数据</Tag>}
               <span>{latency === undefined || state.stale ? '—' : `${latency} ms`}</span>
               <span className="dns-entry-state-result">
                 {ip || '—'}
@@ -1255,7 +1285,8 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
         </div>
         : <span className="dns-failover-sub">尚无检测记录</span>,
     },
-  ];
+    ];
+  };
 
   const backupProbeRows = (item: BackupIP) => {
     const statesByProbeID = new Map(item.states.map((state) => [numberValue(state.probe_id), state]));
@@ -1506,12 +1537,41 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
               onChange={(value) => updateDraft(policy.id, { tcp_timeout_ms: numberValue(value) })}
             />
           </div>
+          <div className="dns-entry-monitor-field">
+            <span>故障确认次数</span>
+            <InputNumber
+              min={2}
+              max={10}
+              precision={0}
+              addonAfter="次"
+              value={draft.failure_threshold}
+              disabled={!selected}
+              aria-label={`${policy.name} 故障确认次数`}
+              onChange={(value) => updateDraft(policy.id, { failure_threshold: numberValue(value) })}
+            />
+          </div>
+          <div className="dns-entry-monitor-field">
+            <span>恢复确认次数</span>
+            <InputNumber
+              min={1}
+              max={10}
+              precision={0}
+              addonAfter="次"
+              value={draft.success_threshold}
+              disabled={!selected}
+              aria-label={`${policy.name} 恢复确认次数`}
+              onChange={(value) => updateDraft(policy.id, { success_threshold: numberValue(value) })}
+            />
+          </div>
           <div className="dns-entry-monitor-field dns-entry-monitor-field--probe-scope">
             <span>检测探针</span>
             {enabledProbeCount > 0
               ? <Tag color="blue">全部启用探针 · {enabledProbeCount}</Tag>
               : <Tag color="error">暂无启用探针</Tag>}
           </div>
+        </div>
+        <div className="dns-failover-sub">
+          高延迟线路建议将 TCP 超时设置为 5000-8000 ms；故障需连续失败 {draft.failure_threshold} 次、恢复需连续成功 {draft.success_threshold} 次才会通知，可减少网络抖动误报。
         </div>
         <Table
           className="dns-entry-target-table"

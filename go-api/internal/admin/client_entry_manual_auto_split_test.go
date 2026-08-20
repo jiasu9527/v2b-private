@@ -18,8 +18,8 @@ func TestListClientEntryManualAutoSplitOptionsReturnsOnlyQueryEligibleLeaves(t *
 	}
 	defer db.Close()
 	service := &DBService{db: db, dnsFailoverSchemaOK: true, clientEntryMonitorAt: time.Now()}
-	mock.ExpectQuery(`(?s)WITH online_probe AS .*state\.consecutive_failure >= \$3.*NOT EXISTS \(.*v2_client_entry_auto_split_operation.*HAVING COUNT\(online_probe\.id\) > 0`).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), int64(clientEntryMonitorFailureThreshold)).
+	mock.ExpectQuery(`(?s)WITH online_probe AS .*state\.consecutive_failure >= monitor\.failure_threshold.*NOT EXISTS \(.*v2_client_entry_auto_split_operation.*HAVING COUNT\(online_probe\.id\) > 0`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"target_id", "policy_id", "group_id", "policy_name", "group_name", "host", "port",
 			"user_count", "online_probe_count", "failed_probe_count", "auto_split_enabled",
@@ -52,7 +52,7 @@ func TestRequestClientEntryManualAutoSplitAllowsDisabledAutomaticFlag(t *testing
 	service := &DBService{db: db, dnsFailoverSchemaOK: true}
 	now := time.Now().Unix()
 	expectManualClientEntrySplitValidation(mock, now, []any{
-		[]any{int64(101), int64(0), int64(2), now},
+		[]any{int64(101), int64(0), int64(3), now},
 		[]any{int64(102), int64(0), int64(3), now},
 	})
 	mock.ExpectQuery(`(?s)INSERT INTO v2_client_entry_auto_split_operation AS current_operation.*trigger_probe_id, trigger_result_inbox_id.*VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, NULL, NULL.*ON CONFLICT.*DO UPDATE SET\s*updated_at = current_operation\.updated_at\s*RETURNING current_operation\.id`).
@@ -81,9 +81,35 @@ func TestRequestClientEntryManualAutoSplitRejectsRecoveredProbe(t *testing.T) {
 	service := &DBService{db: db, dnsFailoverSchemaOK: true}
 	now := time.Now().Unix()
 	expectManualClientEntrySplitValidation(mock, now, []any{
-		[]any{int64(101), int64(0), int64(2), now},
+		[]any{int64(101), int64(0), int64(3), now},
 		[]any{int64(102), int64(1), int64(0), now},
 	})
+	mock.ExpectRollback()
+
+	operationID, err := service.RequestClientEntryManualAutoSplit(context.Background(), 5, 88)
+	if !errors.Is(err, ErrClientEntryManualAutoSplitUnavailable) {
+		t.Fatalf("error = %v, want unavailable", err)
+	}
+	if operationID != 0 {
+		t.Fatalf("operation id = %d, want 0", operationID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestRequestClientEntryManualAutoSplitHonorsMonitorFailureThreshold(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	now := time.Now().Unix()
+	expectManualClientEntrySplitValidation(mock, now, []any{
+		[]any{int64(101), int64(0), int64(3), now},
+		[]any{int64(102), int64(0), int64(4), now},
+	}, 4)
 	mock.ExpectRollback()
 
 	operationID, err := service.RequestClientEntryManualAutoSplit(context.Background(), 5, 88)
@@ -144,25 +170,25 @@ func TestLoadClientEntryAutoSplitSourceStatesAllowsManualRequestWhenAutomaticFla
 	mock.ExpectQuery(`(?s)SELECT target.source_key, target.host, target.generation,.*target.auto_split_enabled.*FOR UPDATE OF target`).
 		WithArgs(int64(5), int64(3)).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"source_key", "host", "generation", "auto_split_enabled", "enabled", "check_interval_sec", "tcp_timeout_ms",
-		}).AddRow("policy:42:split-group:9", "198.51.100.9", int64(2), int64(0), int64(1), int64(30), int64(3000)))
+			"source_key", "host", "generation", "auto_split_enabled", "enabled", "check_interval_sec", "tcp_timeout_ms", "failure_threshold",
+		}).AddRow("policy:42:split-group:9", "198.51.100.9", int64(2), int64(0), int64(1), int64(30), int64(3000), int64(3)))
 	mock.ExpectQuery(`(?s)SELECT probe_id, last_success,.*FROM v2_client_entry_monitor_state.*ORDER BY probe_id`).
 		WithArgs(int64(5), int64(101)).
 		WillReturnRows(sqlmock.NewRows([]string{"probe_id", "last_success", "consecutive_failure", "last_reported_at"}).
-			AddRow(int64(101), int64(0), int64(2), now))
+			AddRow(int64(101), int64(0), int64(3), now))
 
 	operation := clientEntryAutoSplitOperation{
 		MonitorID: 3, TargetID: 5, TargetGeneration: 2, PolicyID: 42,
 		SourceGroupID: 9, SourceHost: "198.51.100.9", TriggerProbeID: sql.NullInt64{},
 	}
-	_, _, sourceAutoSplitEnabled, states, err := loadClientEntryAutoSplitSourceStates(context.Background(), tx, operation, now)
+	_, _, failureThreshold, sourceAutoSplitEnabled, states, err := loadClientEntryAutoSplitSourceStates(context.Background(), tx, operation, now)
 	if err != nil {
 		t.Fatalf("loadClientEntryAutoSplitSourceStates: %v", err)
 	}
 	if sourceAutoSplitEnabled {
 		t.Fatal("source automatic split flag = true, want false")
 	}
-	if len(states) != 1 || states[0].ProbeID != 101 || states[0].ConsecutiveFailure != 2 {
+	if failureThreshold != 3 || len(states) != 1 || states[0].ProbeID != 101 || states[0].ConsecutiveFailure != 3 {
 		t.Fatalf("states = %#v", states)
 	}
 	mock.ExpectRollback()
@@ -174,7 +200,11 @@ func TestLoadClientEntryAutoSplitSourceStatesAllowsManualRequestWhenAutomaticFla
 	}
 }
 
-func expectManualClientEntrySplitValidation(mock sqlmock.Sqlmock, now int64, states []any) {
+func expectManualClientEntrySplitValidation(mock sqlmock.Sqlmock, now int64, states []any, failureThresholdValues ...int64) {
+	failureThreshold := int64(3)
+	if len(failureThresholdValues) > 0 {
+		failureThreshold = failureThresholdValues[0]
+	}
 	mock.ExpectBegin()
 	mock.ExpectQuery(`(?s)SELECT id.*FROM v2_user.*is_admin = 1 OR is_staff = 1`).
 		WithArgs(int64(88)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(88)))
@@ -195,8 +225,8 @@ func expectManualClientEntrySplitValidation(mock sqlmock.Sqlmock, now int64, sta
 	mock.ExpectQuery(`(?s)SELECT target.source_key, target.host, target.generation,.*monitor.enabled.*FOR UPDATE OF target`).
 		WithArgs(int64(5), int64(3)).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"source_key", "host", "generation", "policy_id", "enabled", "check_interval_sec", "tcp_timeout_ms",
-		}).AddRow("policy:42:split-group:9", "198.51.100.9", int64(2), int64(42), int64(1), int64(30), int64(3000)))
+			"source_key", "host", "generation", "policy_id", "enabled", "check_interval_sec", "tcp_timeout_ms", "failure_threshold",
+		}).AddRow("policy:42:split-group:9", "198.51.100.9", int64(2), int64(42), int64(1), int64(30), int64(3000), failureThreshold))
 	mock.ExpectQuery(`(?s)SELECT policy.name, split_group.name,.*FOR KEY SHARE OF split_group, policy`).
 		WithArgs(int64(9), int64(42)).
 		WillReturnRows(sqlmock.NewRows([]string{"policy_name", "group_name", "entry_host", "global_sort"}).

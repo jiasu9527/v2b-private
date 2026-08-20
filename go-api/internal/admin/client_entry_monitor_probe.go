@@ -12,8 +12,7 @@ import (
 )
 
 const (
-	clientEntryProbeTargetOffset       int64 = 1 << 62
-	clientEntryMonitorFailureThreshold int64 = 2
+	clientEntryProbeTargetOffset int64 = 1 << 62
 )
 
 type clientEntryProbeTargetSnapshot struct {
@@ -30,6 +29,8 @@ type clientEntryProbeTargetSnapshot struct {
 	AutoSplitEnabled bool
 	CheckIntervalSec int64
 	TCPTimeoutMS     int64
+	FailureThreshold int64
+	SuccessThreshold int64
 }
 
 func isClientEntryProbeTargetID(targetID int64) bool {
@@ -201,7 +202,8 @@ WHERE target_id = $1 AND probe_id = $2
 		if success {
 			errorText = ""
 		}
-		confirmedSuccess, transition := confirmClientEntryMonitorAvailability(previousSuccess, success, failureStreak)
+		confirmedSuccess, transition := confirmClientEntryMonitorAvailability(previousSuccess, success,
+			successStreak, failureStreak, snapshot.FailureThreshold, snapshot.SuccessThreshold)
 		var confirmedSuccessValue any
 		if confirmedSuccess.Valid {
 			confirmedSuccessValue = confirmedSuccess.Int64
@@ -221,8 +223,8 @@ last_reported_at = EXCLUDED.last_reported_at, updated_at = EXCLUDED.updated_at`,
 		if err != nil {
 			return summary, fmt.Errorf("save client entry monitor state: %w", err)
 		}
-		if success {
-			if err := cancelClientEntryAutoSplitOnSuccess(ctx, tx, snapshot, now); err != nil {
+		if transition == "recovered" {
+			if err := cancelClientEntryAutoSplitOnRecovery(ctx, tx, snapshot, now); err != nil {
 				return summary, err
 			}
 		}
@@ -234,8 +236,10 @@ last_reported_at = EXCLUDED.last_reported_at, updated_at = EXCLUDED.updated_at`,
 				"probe_id": probeID, "probe_name": snapshot.ProbeName,
 				"success": success, "latency_ms": result.LatencyMS,
 				"error": errorText, "resolved_ip": result.ResolvedIP,
+				"consecutive_success": successStreak,
 				"consecutive_failure": failureStreak,
-				"failure_threshold":   clientEntryMonitorFailureThreshold,
+				"failure_threshold":   snapshot.FailureThreshold,
+				"success_threshold":   snapshot.SuccessThreshold,
 			})
 			message := formatClientEntryMonitorTransition(snapshot, transition, result, now)
 			if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_monitor_event
@@ -297,20 +301,26 @@ WHERE id = $1`, runID, received, status, completedAt, now); err != nil {
 }
 
 // confirmClientEntryMonitorAvailability keeps last_success as the confirmed
-// availability state instead of the latest raw sample. The first failed check
-// preserves the previous state, so a transient timeout produces neither a
-// false down event nor a later false recovery. The second consecutive failure
-// confirms the target as down.
-func confirmClientEntryMonitorAvailability(previous sql.NullInt64, success bool, failureStreak int64) (sql.NullInt64, string) {
+// availability state instead of the latest raw sample. Failures must reach the
+// configured failure threshold before declaring a target down, while a target
+// already confirmed down must reach the configured success threshold before
+// declaring it recovered. A successful first observation can establish the
+// initial healthy baseline immediately because it does not emit a transition.
+func confirmClientEntryMonitorAvailability(previous sql.NullInt64, success bool, successStreak, failureStreak,
+	failureThreshold, successThreshold int64,
+) (sql.NullInt64, string) {
 	confirmed := previous
 	if success {
+		if previous.Valid && previous.Int64 == 0 && successStreak < successThreshold {
+			return confirmed, ""
+		}
 		confirmed = sql.NullInt64{Int64: 1, Valid: true}
 		if previous.Valid && previous.Int64 == 0 {
 			return confirmed, "recovered"
 		}
 		return confirmed, ""
 	}
-	if failureStreak < clientEntryMonitorFailureThreshold {
+	if failureStreak < failureThreshold {
 		return confirmed, ""
 	}
 	confirmed = sql.NullInt64{Int64: 0, Valid: true}
@@ -325,7 +335,7 @@ func loadClientEntryProbeTargetSnapshot(ctx context.Context, tx *sql.Tx, probeID
 	var autoSplitEnabled int64
 	err := tx.QueryRowContext(ctx, `SELECT target.id, target.generation, monitor.id, monitor.policy_id,
 policy.name, target.name, target.source_key, target.host, target.port, probe.name, target.auto_split_enabled,
-monitor.check_interval_sec, monitor.tcp_timeout_ms
+monitor.check_interval_sec, monitor.tcp_timeout_ms, monitor.failure_threshold, monitor.success_threshold
 FROM v2_client_entry_monitor_target target
 JOIN v2_client_entry_monitor monitor ON monitor.id = target.monitor_id AND monitor.enabled = 1
 JOIN v2_client_entry_user_policy policy ON policy.id = monitor.policy_id AND policy.enabled = 1
@@ -335,6 +345,7 @@ WHERE target.id = $2
 		&snapshot.TargetID, &snapshot.TargetVersion, &snapshot.MonitorID, &snapshot.PolicyID, &snapshot.PolicyName,
 		&snapshot.TargetName, &snapshot.SourceKey, &snapshot.Host, &snapshot.Port, &snapshot.ProbeName,
 		&autoSplitEnabled, &snapshot.CheckIntervalSec, &snapshot.TCPTimeoutMS,
+		&snapshot.FailureThreshold, &snapshot.SuccessThreshold,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

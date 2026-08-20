@@ -63,11 +63,41 @@ func TestClientEntryAutoSplitWaitsForEveryOnlineProbe(t *testing.T) {
 	now := time.Now().Unix()
 	expectClientEntryAutoSplitClaim(mock, now)
 	expectClientEntryAutoSplitSource(mock, now, []any{
-		[]any{int64(101), int64(0), int64(2), now},
+		[]any{int64(101), int64(0), int64(3), now},
 		[]any{int64(102), int64(1), int64(0), now},
 	})
 	mock.ExpectExec(`(?s)UPDATE v2_client_entry_auto_split_operation.*SET last_error = \$2, next_attempt_at = \$3`).
-		WithArgs(int64(1), "尚未满足所有在线探针连续两次失败", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(int64(1), "尚未满足所有在线探针连续 3 次失败", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	processed, changed, err := service.processNextClientEntryAutoSplit(context.Background())
+	if err != nil {
+		t.Fatalf("processNextClientEntryAutoSplit: %v", err)
+	}
+	if !processed || changed {
+		t.Fatalf("result = (%v, %v), want (true, false)", processed, changed)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestClientEntryAutoSplitHonorsMonitorFailureThreshold(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	now := time.Now().Unix()
+	expectClientEntryAutoSplitClaim(mock, now)
+	expectClientEntryAutoSplitSourceWithThreshold(mock, now, []any{
+		[]any{int64(101), int64(0), int64(3), now},
+		[]any{int64(102), int64(0), int64(3), now},
+	}, "", int64(101), int64(1), 4)
+	mock.ExpectExec(`(?s)UPDATE v2_client_entry_auto_split_operation.*SET last_error = \$2, next_attempt_at = \$3`).
+		WithArgs(int64(1), "尚未满足所有在线探针连续 4 次失败", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -91,11 +121,11 @@ func TestClientEntryAutoSplitKeepsPendingWhenBackupPoolIsInsufficient(t *testing
 	defer db.Close()
 	service := &DBService{db: db, dnsFailoverSchemaOK: true}
 	now := time.Now().Unix()
-	expectClientEntryAutoSplitClaim(mock, now, "尚未满足所有在线探针连续两次失败")
+	expectClientEntryAutoSplitClaim(mock, now, "尚未满足所有在线探针连续 3 次失败")
 	expectClientEntryAutoSplitSource(mock, now, []any{
-		[]any{int64(101), int64(0), int64(2), now},
-		[]any{int64(102), int64(0), int64(3), now},
-	}, "尚未满足所有在线探针连续两次失败")
+		[]any{int64(101), int64(0), int64(3), now},
+		[]any{int64(102), int64(0), int64(4), now},
+	}, "尚未满足所有在线探针连续 3 次失败")
 	expectClientEntryAutoSplitLeafAndAssignments(mock, 4)
 	mock.ExpectQuery(`(?s)SELECT backup.id, backup.name, backup.ip, backup.port,.*FOR UPDATE OF backup SKIP LOCKED`).
 		WillReturnRows(clientEntryAutoSplitBackupRows().
@@ -132,8 +162,8 @@ func TestClientEntryAutoSplitDoesNotRepeatBackupPoolShortageEvent(t *testing.T) 
 	now := time.Now().Unix()
 	expectClientEntryAutoSplitClaim(mock, now, clientEntryAutoSplitBackupIPInsufficientReason)
 	expectClientEntryAutoSplitSource(mock, now, []any{
-		[]any{int64(101), int64(0), int64(2), now},
-		[]any{int64(102), int64(0), int64(3), now},
+		[]any{int64(101), int64(0), int64(3), now},
+		[]any{int64(102), int64(0), int64(4), now},
 	}, clientEntryAutoSplitBackupIPInsufficientReason)
 	expectClientEntryAutoSplitLeafAndAssignments(mock, 4)
 	mock.ExpectQuery(`(?s)SELECT backup.id, backup.name, backup.ip, backup.port,.*FOR UPDATE OF backup SKIP LOCKED`).
@@ -176,8 +206,8 @@ func testClientEntryAutoSplitAtomicallyAssignsTwoHealthyIPs(t *testing.T, trigge
 	now := time.Now().Unix()
 	expectClientEntryAutoSplitClaimFor(mock, now, "", triggerProbeID)
 	expectClientEntryAutoSplitSourceFor(mock, now, []any{
-		[]any{int64(101), int64(0), int64(2), now},
-		[]any{int64(102), int64(0), int64(2), now},
+		[]any{int64(101), int64(0), int64(3), now},
+		[]any{int64(102), int64(0), int64(3), now},
 	}, "", triggerProbeID, sourceAutoSplitEnabled)
 	expectClientEntryAutoSplitLeafAndAssignments(mock, 4)
 	mock.ExpectQuery(`(?s)SELECT backup.id, backup.name, backup.ip, backup.port,.*FOR UPDATE OF backup SKIP LOCKED`).
@@ -264,6 +294,10 @@ func expectClientEntryAutoSplitSource(mock sqlmock.Sqlmock, now int64, states []
 }
 
 func expectClientEntryAutoSplitSourceFor(mock sqlmock.Sqlmock, now int64, states []any, lastError string, triggerProbeID any, sourceAutoSplitEnabled int64) {
+	expectClientEntryAutoSplitSourceWithThreshold(mock, now, states, lastError, triggerProbeID, sourceAutoSplitEnabled, 3)
+}
+
+func expectClientEntryAutoSplitSourceWithThreshold(mock sqlmock.Sqlmock, now int64, states []any, lastError string, triggerProbeID any, sourceAutoSplitEnabled, failureThreshold int64) {
 	probeRows := sqlmock.NewRows([]string{"id"})
 	for _, raw := range states {
 		values := raw.([]any)
@@ -277,8 +311,8 @@ func expectClientEntryAutoSplitSourceFor(mock sqlmock.Sqlmock, now int64, states
 	mock.ExpectQuery(`(?s)SELECT target.source_key, target.host, target.generation,.*FOR UPDATE OF target`).
 		WithArgs(int64(5), int64(3)).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"source_key", "host", "generation", "auto_split_enabled", "enabled", "check_interval_sec", "tcp_timeout_ms",
-		}).AddRow("policy:42:split-group:9", "198.51.100.9", int64(2), sourceAutoSplitEnabled, int64(1), int64(30), int64(3000)))
+			"source_key", "host", "generation", "auto_split_enabled", "enabled", "check_interval_sec", "tcp_timeout_ms", "failure_threshold",
+		}).AddRow("policy:42:split-group:9", "198.51.100.9", int64(2), sourceAutoSplitEnabled, int64(1), int64(30), int64(3000), failureThreshold))
 	stateRows := sqlmock.NewRows([]string{"probe_id", "last_success", "consecutive_failure", "last_reported_at"})
 	for _, raw := range states {
 		values := raw.([]any)

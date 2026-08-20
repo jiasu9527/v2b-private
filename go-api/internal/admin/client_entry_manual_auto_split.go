@@ -43,9 +43,9 @@ func (s *DBService) ListClientEntryManualAutoSplitOptions(ctx context.Context) (
 SELECT target.id, policy.id, split_group.id, policy.name, split_group.name,
        target.host, target.port, members.user_count,
        COUNT(online_probe.id) AS online_probe_count,
-       COUNT(state.probe_id) FILTER (
+	   COUNT(state.probe_id) FILTER (
 		WHERE state.last_success = 0
-		  AND state.consecutive_failure >= $3
+		  AND state.consecutive_failure >= monitor.failure_threshold
 		  AND state.last_reported_at IS NOT NULL
 		  AND state.last_reported_at BETWEEN
 		      $2 - 2 * (monitor.check_interval_sec::BIGINT + ((monitor.tcp_timeout_ms::BIGINT + 999) / 1000))
@@ -80,19 +80,20 @@ WHERE BTRIM(split_group.entry_host) <> ''
 	  AND operation.status = 'pending'
   )
 GROUP BY target.id, policy.id, split_group.id, policy.name, split_group.name,
-         target.host, target.port, members.user_count, target.auto_split_enabled,
-         policy.sort, split_group.global_sort, monitor.check_interval_sec, monitor.tcp_timeout_ms
+	 target.host, target.port, members.user_count, target.auto_split_enabled,
+	 policy.sort, split_group.global_sort, monitor.check_interval_sec, monitor.tcp_timeout_ms,
+	 monitor.failure_threshold
 HAVING COUNT(online_probe.id) > 0
-   AND COUNT(state.probe_id) FILTER (
+	AND COUNT(state.probe_id) FILTER (
 		WHERE state.last_success = 0
-		  AND state.consecutive_failure >= $3
+		  AND state.consecutive_failure >= monitor.failure_threshold
 		  AND state.last_reported_at IS NOT NULL
 		  AND state.last_reported_at BETWEEN
 		      $2 - 2 * (monitor.check_interval_sec::BIGINT + ((monitor.tcp_timeout_ms::BIGINT + 999) / 1000))
 		      AND $2
 	   ) = COUNT(online_probe.id)
 ORDER BY split_group.global_sort ASC, policy.sort ASC NULLS LAST, policy.id ASC, split_group.id ASC`,
-		onlineCutoff, now, clientEntryMonitorFailureThreshold)
+		onlineCutoff, now)
 	if err != nil {
 		return nil, fmt.Errorf("query manual client entry split options: %w", err)
 	}
@@ -207,14 +208,15 @@ FOR KEY SHARE`, monitorID).Scan(&lockedMonitorID); err != nil {
 	}
 
 	var sourceKey, targetHost string
-	var generation, monitorPolicyID, monitorEnabled, checkIntervalSec, tcpTimeoutMS int64
+	var generation, monitorPolicyID, monitorEnabled, checkIntervalSec, tcpTimeoutMS, failureThreshold int64
 	if err := tx.QueryRowContext(ctx, `SELECT target.source_key, target.host, target.generation,
-monitor.policy_id, monitor.enabled, monitor.check_interval_sec, monitor.tcp_timeout_ms
+	monitor.policy_id, monitor.enabled, monitor.check_interval_sec, monitor.tcp_timeout_ms,
+	monitor.failure_threshold
 FROM v2_client_entry_monitor_target target
 JOIN v2_client_entry_monitor monitor ON monitor.id = target.monitor_id
 WHERE target.id = $1 AND target.monitor_id = $2
-FOR UPDATE OF target`, targetID, monitorID).Scan(&sourceKey, &targetHost, &generation,
-		&monitorPolicyID, &monitorEnabled, &checkIntervalSec, &tcpTimeoutMS); err != nil {
+	FOR UPDATE OF target`, targetID, monitorID).Scan(&sourceKey, &targetHost, &generation,
+		&monitorPolicyID, &monitorEnabled, &checkIntervalSec, &tcpTimeoutMS, &failureThreshold); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, ErrClientEntryManualAutoSplitUnavailable
 		}
@@ -265,7 +267,7 @@ FOR KEY SHARE OF split_group, policy`, groupID, policyID).Scan(
 	}
 	for _, state := range states {
 		if !state.LastSuccess.Valid || state.LastSuccess.Int64 != 0 ||
-			state.ConsecutiveFailure < clientEntryMonitorFailureThreshold ||
+			state.ConsecutiveFailure < failureThreshold ||
 			!clientEntryMonitorStateFresh(state.LastReportedAt, now, checkIntervalSec, tcpTimeoutMS) {
 			return 0, ErrClientEntryManualAutoSplitUnavailable
 		}

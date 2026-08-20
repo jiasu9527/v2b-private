@@ -63,6 +63,8 @@ policy_id INTEGER NOT NULL,
 enabled SMALLINT NOT NULL DEFAULT 1,
 check_interval_sec INTEGER NOT NULL DEFAULT 30,
 tcp_timeout_ms INTEGER NOT NULL DEFAULT 3000,
+failure_threshold INTEGER NOT NULL DEFAULT 3,
+success_threshold INTEGER NOT NULL DEFAULT 2,
 created_at BIGINT NOT NULL,
 updated_at BIGINT NOT NULL,
 PRIMARY KEY (id)
@@ -245,6 +247,8 @@ PRIMARY KEY (id)
 }
 
 var clientEntryMonitorMigrationStatements = []string{
+	`ALTER TABLE v2_client_entry_monitor ADD COLUMN IF NOT EXISTS failure_threshold INTEGER NOT NULL DEFAULT 3`,
+	`ALTER TABLE v2_client_entry_monitor ADD COLUMN IF NOT EXISTS success_threshold INTEGER NOT NULL DEFAULT 2`,
 	`ALTER TABLE v2_client_entry_monitor_event ADD COLUMN IF NOT EXISTS notify_next_attempt_at BIGINT NOT NULL DEFAULT 0`,
 	`ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS request_key varchar(255) DEFAULT NULL`,
 	`ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS expected_pairs jsonb NOT NULL DEFAULT '[]'::jsonb`,
@@ -287,6 +291,7 @@ var clientEntryMonitorConstraints = []struct {
 	{"v2_client_entry_monitor", "uniq_v2_client_entry_monitor_policy", "UNIQUE (policy_id)"},
 	{"v2_client_entry_monitor", "chk_v2_client_entry_monitor_enabled", "CHECK (enabled IN (0, 1))"},
 	{"v2_client_entry_monitor", "chk_v2_client_entry_monitor_timing", "CHECK (check_interval_sec > 0 AND tcp_timeout_ms > 0)"},
+	{"v2_client_entry_monitor", "chk_v2_client_entry_monitor_thresholds", "CHECK (failure_threshold BETWEEN 2 AND 10 AND success_threshold BETWEEN 1 AND 10)"},
 	{"v2_client_entry_monitor_target", "fk_v2_client_entry_monitor_target_monitor", "FOREIGN KEY (monitor_id) REFERENCES v2_client_entry_monitor(id) ON DELETE CASCADE"},
 	{"v2_client_entry_monitor_target", "uniq_v2_client_entry_monitor_target_source", "UNIQUE (monitor_id, source_key)"},
 	{"v2_client_entry_monitor_target", "chk_v2_client_entry_monitor_target_source", "CHECK (btrim(source_key) <> '')"},

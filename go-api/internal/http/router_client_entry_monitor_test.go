@@ -129,6 +129,23 @@ func TestClientEntryMonitorRoutesRejectInvalidContracts(t *testing.T) {
 	}
 }
 
+func TestClientEntryMonitorRouteAcceptsConfirmationThresholds(t *testing.T) {
+	service := &fakeClientEntryMonitorAdminService{
+		fakeAdminService: &fakeAdminService{},
+		savedOverview:    admin.ClientEntryMonitorOverview{Revision: 2},
+	}
+	rec := dnsFailoverRequest(clientEntryMonitorRouter(service), http.MethodPut,
+		"/api/v1/control/dns-failover/entry-monitors",
+		`{"revision":1,"items":[{"policy_id":9,"enabled":true,"check_interval_sec":30,"tcp_timeout_ms":5000,"failure_threshold":5,"success_threshold":3,"targets":[]}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT thresholds: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(service.lastSave.Items) != 1 || service.lastSave.Items[0].FailureThreshold != 5 ||
+		service.lastSave.Items[0].SuccessThreshold != 3 {
+		t.Fatalf("save request = %#v", service.lastSave)
+	}
+}
+
 func TestClientEntryMonitorRevisionConflictIsHTTP409(t *testing.T) {
 	service := &fakeClientEntryMonitorAdminService{
 		fakeAdminService: &fakeAdminService{},

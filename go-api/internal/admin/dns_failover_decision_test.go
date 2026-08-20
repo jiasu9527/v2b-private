@@ -242,6 +242,10 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 		mock.ExpectExec(`CREATE TABLE IF NOT EXISTS ` + table + ` \(`).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
+	mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor ADD COLUMN IF NOT EXISTS failure_threshold`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor ADD COLUMN IF NOT EXISTS success_threshold`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor_event ADD COLUMN IF NOT EXISTS notify_next_attempt_at`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS request_key`).
@@ -262,7 +266,7 @@ func expectAdminDNSFailoverSchema(mock sqlmock.Sqlmock) {
 	}
 	mock.ExpectExec(`(?s)UPDATE v2_client_entry_monitor_run_result result.*SET policy_id = monitor.policy_id.*policy_name = policy.name.*FROM v2_client_entry_monitor_target target`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	for range 75 {
+	for range 76 {
 		mock.ExpectExec(`(?s)DO \$client_entry_monitor\$.*ADD CONSTRAINT`).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}

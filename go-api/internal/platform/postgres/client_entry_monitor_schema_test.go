@@ -47,6 +47,8 @@ func TestClientEntryMonitorSchemaKeepsMonitoringAndManualRunsIndependent(t *test
 		"revision BIGINT NOT NULL DEFAULT 1",
 		"CREATE TABLE IF NOT EXISTS v2_client_entry_monitor (",
 		"policy_id INTEGER NOT NULL",
+		"failure_threshold INTEGER NOT NULL DEFAULT 3",
+		"success_threshold INTEGER NOT NULL DEFAULT 2",
 		"CREATE TABLE IF NOT EXISTS v2_client_entry_monitor_target (",
 		"source_key varchar(255) NOT NULL",
 		"name varchar(255) NOT NULL DEFAULT ''",
@@ -96,6 +98,8 @@ func TestClientEntryMonitorSchemaKeepsMonitoringAndManualRunsIndependent(t *test
 	}
 	joinedMigrations := strings.Join(clientEntryMonitorMigrationStatements, "\n")
 	for _, required := range []string{
+		"ALTER TABLE v2_client_entry_monitor ADD COLUMN IF NOT EXISTS failure_threshold INTEGER NOT NULL DEFAULT 3",
+		"ALTER TABLE v2_client_entry_monitor ADD COLUMN IF NOT EXISTS success_threshold INTEGER NOT NULL DEFAULT 2",
 		"ALTER TABLE v2_client_entry_monitor_event ADD COLUMN IF NOT EXISTS notify_next_attempt_at",
 		"ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS request_key",
 		"ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS expected_pairs",
@@ -143,6 +147,7 @@ func TestClientEntryMonitorConstraintsDefineOwnershipAndDeduplication(t *testing
 		"chk_v2_client_entry_monitor_config_singleton":      "CHECK (id = 1)",
 		"fk_v2_client_entry_monitor_policy":                 "FOREIGN KEY (policy_id) REFERENCES v2_client_entry_user_policy(id) ON DELETE CASCADE",
 		"uniq_v2_client_entry_monitor_policy":               "UNIQUE (policy_id)",
+		"chk_v2_client_entry_monitor_thresholds":            "CHECK (failure_threshold BETWEEN 2 AND 10 AND success_threshold BETWEEN 1 AND 10)",
 		"uniq_v2_client_entry_monitor_target_source":        "UNIQUE (monitor_id, source_key)",
 		"uniq_v2_client_entry_monitor_probe":                "UNIQUE (monitor_id, probe_id)",
 		"uniq_v2_client_entry_monitor_state":                "UNIQUE (target_id, probe_id)",

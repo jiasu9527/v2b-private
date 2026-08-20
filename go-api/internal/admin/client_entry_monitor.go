@@ -15,10 +15,14 @@ import (
 )
 
 const (
-	defaultClientEntryMonitorIntervalSec int64 = 30
-	defaultClientEntryMonitorTimeoutMS   int64 = 3000
-	clientEntryMonitorRunMaxPolicies           = 500
-	clientEntryMonitorRefreshInterval          = 30 * time.Second
+	defaultClientEntryMonitorIntervalSec      int64 = 30
+	defaultClientEntryMonitorTimeoutMS        int64 = 3000
+	defaultClientEntryMonitorFailureThreshold int64 = 3
+	defaultClientEntryMonitorSuccessThreshold int64 = 2
+	minClientEntryMonitorFailureThreshold     int64 = 2
+	maxClientEntryMonitorThreshold            int64 = 10
+	clientEntryMonitorRunMaxPolicies                = 500
+	clientEntryMonitorRefreshInterval               = 30 * time.Second
 )
 
 var ErrClientEntryMonitorRevisionConflict = errors.New("用户入口检测配置已被其他操作修改，请刷新后重试")
@@ -72,6 +76,8 @@ type ClientEntryMonitorRecord struct {
 	Enabled          bool                       `json:"enabled"`
 	CheckIntervalSec int64                      `json:"check_interval_sec"`
 	TCPTimeoutMS     int64                      `json:"tcp_timeout_ms"`
+	FailureThreshold int64                      `json:"failure_threshold"`
+	SuccessThreshold int64                      `json:"success_threshold"`
 	Targets          []ClientEntryMonitorTarget `json:"targets"`
 	CreatedAt        int64                      `json:"created_at"`
 	UpdatedAt        int64                      `json:"updated_at"`
@@ -95,6 +101,8 @@ type ClientEntryMonitorSaveItem struct {
 	Enabled          bool                                  `json:"enabled"`
 	CheckIntervalSec int64                                 `json:"check_interval_sec"`
 	TCPTimeoutMS     int64                                 `json:"tcp_timeout_ms"`
+	FailureThreshold int64                                 `json:"failure_threshold"`
+	SuccessThreshold int64                                 `json:"success_threshold"`
 	Targets          []ClientEntryMonitorTargetSaveRequest `json:"targets"`
 }
 
@@ -480,8 +488,9 @@ FOR UPDATE`, monitorID, sourceKey).Scan(&targetID, &currentHost, &currentPort, &
 		changed = true
 	}
 	// Toggling automatic splitting closes the previous incident.  Enabling it
-	// must also start from two fresh failed samples; disabling it must cancel a
-	// pending allocation immediately rather than waiting for the worker poll.
+	// must also start from a fresh failure-confirmation window; disabling it must
+	// cancel a pending allocation immediately rather than waiting for the worker
+	// poll.
 	if autoSplitEnabled != nil && boolToInt64(*autoSplitEnabled) != currentAutoSplitEnabled {
 		changed = true
 	}
@@ -545,7 +554,8 @@ func (s *DBService) loadClientEntryMonitorRevision(ctx context.Context) (int64, 
 
 func (s *DBService) loadClientEntryMonitorRecords(ctx context.Context) ([]ClientEntryMonitorRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT m.id, m.policy_id, p.name, p.action, m.enabled,
-m.check_interval_sec, m.tcp_timeout_ms, m.created_at, m.updated_at
+	m.check_interval_sec, m.tcp_timeout_ms, m.failure_threshold, m.success_threshold,
+	m.created_at, m.updated_at
 FROM v2_client_entry_monitor m
 JOIN v2_client_entry_user_policy p ON p.id = m.policy_id
 ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
@@ -559,7 +569,8 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 		var item ClientEntryMonitorRecord
 		var enabled int64
 		if err := rows.Scan(&item.ID, &item.PolicyID, &item.PolicyName, &item.Action, &enabled,
-			&item.CheckIntervalSec, &item.TCPTimeoutMS, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			&item.CheckIntervalSec, &item.TCPTimeoutMS, &item.FailureThreshold,
+			&item.SuccessThreshold, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("scan client entry monitor: %w", err)
 		}
@@ -692,6 +703,9 @@ func (s *DBService) SaveClientEntryMonitors(ctx context.Context, request ClientE
 		if item.TCPTimeoutMS == 0 {
 			item.TCPTimeoutMS = defaultClientEntryMonitorTimeoutMS
 		}
+		if err := normalizeClientEntryMonitorThresholds(item); err != nil {
+			return ClientEntryMonitorOverview{}, err
+		}
 		if item.CheckIntervalSec < 5 || item.CheckIntervalSec > 3600 {
 			return ClientEntryMonitorOverview{}, errors.New("检测间隔必须在 5 到 3600 秒之间")
 		}
@@ -751,21 +765,27 @@ func (s *DBService) SaveClientEntryMonitors(ctx context.Context, request ClientE
 		var previousMonitorEnabled int64
 		previousMonitorFound := true
 		if err := tx.QueryRowContext(ctx, `SELECT enabled FROM v2_client_entry_monitor
-WHERE policy_id = $1 FOR UPDATE`, item.PolicyID).Scan(&previousMonitorEnabled); err != nil {
+	WHERE policy_id = $1 FOR UPDATE`, item.PolicyID).Scan(&previousMonitorEnabled); err != nil {
 			if !errors.Is(err, sql.ErrNoRows) {
 				return ClientEntryMonitorOverview{}, fmt.Errorf("lock client entry monitor before save: %w", err)
 			}
 			previousMonitorFound = false
 		}
 		monitorReenabled := previousMonitorFound && previousMonitorEnabled != 1 && item.Enabled
+		// Threshold edits deliberately keep the confirmed state, streaks and any
+		// pending incident. Resetting here would erase a real outage, emit another
+		// down transition later and cancel an already queued automatic split. The
+		// new thresholds therefore take effect naturally on subsequent samples.
 		var monitorID int64
 		if err := tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_monitor
-(policy_id, enabled, check_interval_sec, tcp_timeout_ms, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $5)
-ON CONFLICT (policy_id) DO UPDATE SET enabled = EXCLUDED.enabled,
-check_interval_sec = EXCLUDED.check_interval_sec, tcp_timeout_ms = EXCLUDED.tcp_timeout_ms,
-updated_at = EXCLUDED.updated_at
-RETURNING id`, item.PolicyID, boolToInt64(item.Enabled), item.CheckIntervalSec, item.TCPTimeoutMS, now).Scan(&monitorID); err != nil {
+	(policy_id, enabled, check_interval_sec, tcp_timeout_ms, failure_threshold, success_threshold, created_at, updated_at)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+	ON CONFLICT (policy_id) DO UPDATE SET enabled = EXCLUDED.enabled,
+	check_interval_sec = EXCLUDED.check_interval_sec, tcp_timeout_ms = EXCLUDED.tcp_timeout_ms,
+	failure_threshold = EXCLUDED.failure_threshold, success_threshold = EXCLUDED.success_threshold,
+	updated_at = EXCLUDED.updated_at
+	RETURNING id`, item.PolicyID, boolToInt64(item.Enabled), item.CheckIntervalSec, item.TCPTimeoutMS,
+			item.FailureThreshold, item.SuccessThreshold, now).Scan(&monitorID); err != nil {
 			return ClientEntryMonitorOverview{}, fmt.Errorf("save client entry monitor: %w", err)
 		}
 		portByKey := make(map[string]int64, len(item.Targets))
@@ -838,6 +858,25 @@ SET revision = revision + 1, updated_at = $1 WHERE id = 1`, now); err != nil {
 		return ClientEntryMonitorOverview{}, fmt.Errorf("commit client entry monitor settings: %w", err)
 	}
 	return s.ListClientEntryMonitors(ctx)
+}
+
+func normalizeClientEntryMonitorThresholds(item *ClientEntryMonitorSaveItem) error {
+	if item == nil {
+		return errors.New("入口检测规则不能为空")
+	}
+	if item.FailureThreshold == 0 {
+		item.FailureThreshold = defaultClientEntryMonitorFailureThreshold
+	}
+	if item.SuccessThreshold == 0 {
+		item.SuccessThreshold = defaultClientEntryMonitorSuccessThreshold
+	}
+	if item.FailureThreshold < minClientEntryMonitorFailureThreshold || item.FailureThreshold > maxClientEntryMonitorThreshold {
+		return errors.New("故障确认次数必须在 2 到 10 之间")
+	}
+	if item.SuccessThreshold < 1 || item.SuccessThreshold > maxClientEntryMonitorThreshold {
+		return errors.New("恢复确认次数必须在 1 到 10 之间")
+	}
+	return nil
 }
 
 func requireEnabledClientEntryMonitorProbe(ctx context.Context, tx *sql.Tx) error {
