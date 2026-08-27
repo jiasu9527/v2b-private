@@ -6794,9 +6794,6 @@ func handlePaymentError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, payment.ErrPaymentMethodUnavailable):
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "Payment method is not available"})
 		return true
-	case errors.Is(err, payment.ErrPaymentMethodLocked):
-		writeJSON(w, http.StatusConflict, map[string]any{"message": "This order is already linked to another payment method. Cancel it and create a new order to switch methods."})
-		return true
 	case errors.Is(err, payment.ErrCheckoutInProgress):
 		writeJSON(w, http.StatusConflict, map[string]any{"message": "Payment checkout is being created. Please wait and retry."})
 		return true

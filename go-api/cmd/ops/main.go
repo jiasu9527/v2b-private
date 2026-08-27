@@ -158,6 +158,15 @@ func verifyRequiredUpdateSchema(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("required database migration is incomplete: v2_order.%s is missing", column)
 		}
 	}
+	for _, column := range []string{"order_id", "payment_id", "handling_amount", "amount", "checkout_result", "checkout_claim", "checkout_claim_expires_at", "checkout_fingerprint", "callback_no", "status", "paid_at"} {
+		exists, err := postgresColumnExists(ctx, db, "v2_order_payment_attempt", column)
+		if err != nil {
+			return fmt.Errorf("verify required v2_order_payment_attempt.%s column: %w", column, err)
+		}
+		if !exists {
+			return fmt.Errorf("required database migration is incomplete: v2_order_payment_attempt.%s is missing", column)
+		}
+	}
 	return nil
 }
 

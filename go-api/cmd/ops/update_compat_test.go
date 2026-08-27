@@ -245,6 +245,33 @@ func TestVerifyRequiredUpdateSchemaRejectsMissingCheckoutResult(t *testing.T) {
 	}
 }
 
+func TestVerifyRequiredUpdateSchemaRejectsMissingPaymentAttemptTable(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	for _, column := range []string{"checkout_result", "checkout_claim", "checkout_claim_expires_at", "checkout_fingerprint"} {
+		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+			WithArgs("v2_order", column).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	}
+	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+		WithArgs("v2_order_payment_attempt", "order_id").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	err = verifyRequiredUpdateSchema(context.Background(), db)
+	if err == nil || !strings.Contains(err.Error(), "v2_order_payment_attempt.order_id is missing") {
+		t.Fatalf("expected a required payment-attempt schema error, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestVerifyRequiredUpdateSchemaAcceptsCheckoutResult(t *testing.T) {
 	t.Parallel()
 
@@ -257,6 +284,11 @@ func TestVerifyRequiredUpdateSchemaAcceptsCheckoutResult(t *testing.T) {
 	for _, column := range []string{"checkout_result", "checkout_claim", "checkout_claim_expires_at", "checkout_fingerprint"} {
 		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
 			WithArgs("v2_order", column).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	}
+	for _, column := range []string{"order_id", "payment_id", "handling_amount", "amount", "checkout_result", "checkout_claim", "checkout_claim_expires_at", "checkout_fingerprint", "callback_no", "status", "paid_at"} {
+		mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM information_schema.columns`).
+			WithArgs("v2_order_payment_attempt", column).
 			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	}
 

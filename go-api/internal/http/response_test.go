@@ -79,6 +79,22 @@ func TestWriteJSONFallsBackToGenericChineseForUnknownEnglishError(t *testing.T) 
 	}
 }
 
+func TestWriteJSONExplainsCheckoutCreationConflict(t *testing.T) {
+	rec := httptest.NewRecorder()
+
+	writeJSON(rec, http.StatusConflict, map[string]any{
+		"message": "Payment checkout is being created. Please wait and retry.",
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload["message"] != "支付单正在创建，请稍后重试，请勿重复点击" {
+		t.Fatalf("expected a clear checkout conflict message, got %#v", payload["message"])
+	}
+}
+
 func TestWritePlainTextTranslatesErrorBodyToChinese(t *testing.T) {
 	rec := httptest.NewRecorder()
 

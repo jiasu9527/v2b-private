@@ -3379,25 +3379,6 @@ func TestRouterUserOrderCheckoutUnsupportedPaymentGatewayMessage(t *testing.T) {
 	}
 }
 
-func TestRouterUserOrderCheckoutRejectsSwitchingLockedPaymentMethod(t *testing.T) {
-	sessionService := &fakeSessionService{user: &session.Identity{ID: 10}}
-	paymentService := &fakePaymentService{err: payment.ErrPaymentMethodLocked}
-	router := NewRouter(
-		config.Config{AppName: "forest-go"},
-		WithSessionService(sessionService),
-		WithPaymentService(paymentService),
-	)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/user/order/checkout", strings.NewReader(`{"auth_data":"jwt-order","trade_no":"T201","method":"10"}`))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("expected 409, got %d body=%s", rec.Code, rec.Body.String())
-	}
-}
-
 func TestRouterUserOrderCheckoutPassesCurrentAccessDomainToPaymentService(t *testing.T) {
 	sessionService := &fakeSessionService{user: &session.Identity{ID: 10}}
 	paymentService := &fakePaymentService{

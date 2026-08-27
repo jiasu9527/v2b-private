@@ -25,7 +25,6 @@ var (
 	ErrInvalidParameter         = errors.New("invalid parameter")
 	ErrOrderPaidOrMissing       = errors.New("order does not exist or has been paid")
 	ErrPaymentMethodUnavailable = errors.New("payment method unavailable")
-	ErrPaymentMethodLocked      = errors.New("payment method is already locked for this order")
 	ErrCheckoutInProgress       = errors.New("payment checkout is already being created")
 	ErrCheckoutConfigChanged    = errors.New("payment checkout configuration changed after the first attempt")
 	ErrUnsupportedGateway       = errors.New("payment gateway unsupported")
@@ -98,6 +97,19 @@ type orderRecord struct {
 	PaymentID      sql.NullInt64
 	TotalAmount    int64
 	HandlingAmount sql.NullInt64
+	CheckoutResult sql.NullString
+	CheckoutClaim  sql.NullString
+	Fingerprint    sql.NullString
+	ClaimActive    bool
+	Status         int64
+}
+
+type paymentAttemptRecord struct {
+	ID             int64
+	OrderID        int64
+	PaymentID      int64
+	HandlingAmount int64
+	Amount         int64
 	CheckoutResult sql.NullString
 	CheckoutClaim  sql.NullString
 	Fingerprint    sql.NullString
@@ -191,32 +203,69 @@ func (s *DBService) Checkout(ctx context.Context, userID int64, req CheckoutRequ
 	if order.HandlingAmount.Valid {
 		handlingAmount = order.HandlingAmount.Int64
 	}
-	if order.PaymentID.Valid {
-		// A generated payment link remains payable until the order is cancelled.
-		// Do not invalidate it by allowing a later checkout to overwrite the
-		// payment method or the amount that was signed for that link.
-		if order.PaymentID.Int64 != req.MethodID {
+	switchingMethod := order.PaymentID.Valid && order.PaymentID.Int64 != req.MethodID
+	if !switchingMethod {
+		if handlingAmount < 0 || order.TotalAmount > math.MaxInt64-handlingAmount {
 			_ = tx.Rollback()
-			return CheckoutResult{}, ErrPaymentMethodLocked
+			return CheckoutResult{}, ErrInvalidParameter
 		}
-	}
-	if handlingAmount < 0 || order.TotalAmount > math.MaxInt64-handlingAmount {
-		_ = tx.Rollback()
-		return CheckoutResult{}, ErrInvalidParameter
-	}
-	total := order.TotalAmount + handlingAmount
-	if total <= 0 {
-		_ = tx.Rollback()
-		return CheckoutResult{}, ErrInvalidParameter
-	}
-	if order.CheckoutResult.Valid && strings.TrimSpace(order.CheckoutResult.String) != "" {
-		result, err := decodeCheckoutSnapshot(order.CheckoutResult.String, req.MethodID, total)
-		_ = tx.Rollback()
-		return result, err
+		total := order.TotalAmount + handlingAmount
+		if total <= 0 {
+			_ = tx.Rollback()
+			return CheckoutResult{}, ErrInvalidParameter
+		}
+		if order.CheckoutResult.Valid && strings.TrimSpace(order.CheckoutResult.String) != "" {
+			result, err := decodeCheckoutSnapshot(order.CheckoutResult.String, req.MethodID, total)
+			_ = tx.Rollback()
+			return result, err
+		}
 	}
 	if order.ClaimActive {
 		_ = tx.Rollback()
 		return CheckoutResult{}, ErrCheckoutInProgress
+	}
+
+	var selectedAttempt paymentAttemptRecord
+	if switchingMethod {
+		if err := archiveCurrentPaymentAttemptTx(ctx, tx, order); err != nil {
+			_ = tx.Rollback()
+			return CheckoutResult{}, err
+		}
+		selectedAttempt, ok, err = loadPaymentAttemptTx(ctx, tx, order.ID, req.MethodID)
+		if err != nil {
+			_ = tx.Rollback()
+			return CheckoutResult{}, err
+		}
+		if ok {
+			if selectedAttempt.Status != 0 {
+				_ = tx.Rollback()
+				return CheckoutResult{}, ErrOrderPaidOrMissing
+			}
+			if selectedAttempt.ClaimActive {
+				_ = tx.Rollback()
+				return CheckoutResult{}, ErrCheckoutInProgress
+			}
+			handlingAmount = selectedAttempt.HandlingAmount
+			if !validAttemptAmount(order.TotalAmount, handlingAmount, selectedAttempt.Amount) {
+				_ = tx.Rollback()
+				return CheckoutResult{}, ErrInvalidParameter
+			}
+			if selectedAttempt.CheckoutResult.Valid && strings.TrimSpace(selectedAttempt.CheckoutResult.String) != "" {
+				result, decodeErr := decodeCheckoutSnapshot(selectedAttempt.CheckoutResult.String, req.MethodID, selectedAttempt.Amount)
+				if decodeErr != nil {
+					_ = tx.Rollback()
+					return CheckoutResult{}, decodeErr
+				}
+				if err := selectCachedPaymentAttemptTx(ctx, tx, order.ID, selectedAttempt, time.Now().Unix()); err != nil {
+					_ = tx.Rollback()
+					return CheckoutResult{}, err
+				}
+				if err := tx.Commit(); err != nil {
+					return CheckoutResult{}, fmt.Errorf("commit cached payment method switch: %w", err)
+				}
+				return result, nil
+			}
+		}
 	}
 
 	paymentMethod, ok, err := s.loadPaymentMethodTx(ctx, tx, req.MethodID)
@@ -229,7 +278,7 @@ func (s *DBService) Checkout(ctx context.Context, userID int64, req CheckoutRequ
 		return CheckoutResult{}, ErrPaymentMethodUnavailable
 	}
 
-	if !order.PaymentID.Valid {
+	if !order.PaymentID.Valid || (switchingMethod && selectedAttempt.ID == 0) {
 		handlingAmount = 0
 		if paymentMethod.HandlingFeeFixed.Valid || paymentMethod.HandlingFeePercent.Valid {
 			if paymentMethod.HandlingFeeFixed.Int64 < 0 || paymentMethod.HandlingFeePercent.Float64 < 0 || math.IsNaN(paymentMethod.HandlingFeePercent.Float64) || math.IsInf(paymentMethod.HandlingFeePercent.Float64, 0) {
@@ -243,7 +292,7 @@ func (s *DBService) Checkout(ctx context.Context, userID int64, req CheckoutRequ
 		_ = tx.Rollback()
 		return CheckoutResult{}, ErrInvalidParameter
 	}
-	total = order.TotalAmount + handlingAmount
+	total := order.TotalAmount + handlingAmount
 	if total <= 0 {
 		_ = tx.Rollback()
 		return CheckoutResult{}, ErrInvalidParameter
@@ -251,7 +300,11 @@ func (s *DBService) Checkout(ctx context.Context, userID int64, req CheckoutRequ
 	notifyURL := s.notifyURL(paymentMethod)
 	returnURL := s.returnURL(req.RequestBaseURL, req.TradeNo)
 	fingerprint := checkoutFingerprint(paymentMethod, req, userID, total, notifyURL, returnURL)
-	if order.Fingerprint.Valid && strings.TrimSpace(order.Fingerprint.String) != "" && order.Fingerprint.String != fingerprint {
+	existingFingerprint := order.Fingerprint
+	if switchingMethod && selectedAttempt.ID != 0 {
+		existingFingerprint = selectedAttempt.Fingerprint
+	}
+	if existingFingerprint.Valid && strings.TrimSpace(existingFingerprint.String) != "" && existingFingerprint.String != fingerprint {
 		_ = tx.Rollback()
 		return CheckoutResult{}, ErrCheckoutConfigChanged
 	}
@@ -261,12 +314,17 @@ func (s *DBService) Checkout(ctx context.Context, userID int64, req CheckoutRequ
 		_ = tx.Rollback()
 		return CheckoutResult{}, err
 	}
+	if err := claimPaymentAttemptTx(ctx, tx, order.ID, paymentMethod.ID, handlingAmount, total, claim, fingerprint, time.Now().Unix()); err != nil {
+		_ = tx.Rollback()
+		return CheckoutResult{}, err
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE v2_order
 SET payment_id = $2,
     handling_amount = $3,
     checkout_claim = $4,
     checkout_claim_expires_at = EXTRACT(EPOCH FROM NOW())::BIGINT + $5,
     checkout_fingerprint = $6,
+    checkout_result = NULL,
     updated_at = $7
 WHERE id = $1`,
 		order.ID,
@@ -285,6 +343,145 @@ WHERE id = $1`,
 		return CheckoutResult{}, fmt.Errorf("commit checkout creation claim: %w", err)
 	}
 	return s.createCheckoutOnce(ctx, userID, req, paymentMethod, total, handlingAmount, claim, fingerprint, notifyURL, returnURL)
+}
+
+func archiveCurrentPaymentAttemptTx(ctx context.Context, tx *sql.Tx, order orderRecord) error {
+	if !order.PaymentID.Valid || order.PaymentID.Int64 <= 0 {
+		return nil
+	}
+	handlingAmount := nullablePaymentInt64(order.HandlingAmount)
+	if handlingAmount < 0 || order.TotalAmount <= 0 || order.TotalAmount > math.MaxInt64-handlingAmount {
+		return ErrInvalidParameter
+	}
+	amount := order.TotalAmount + handlingAmount
+	if amount <= 0 {
+		return ErrInvalidParameter
+	}
+	now := time.Now().Unix()
+	_, err := tx.ExecContext(ctx, `INSERT INTO v2_order_payment_attempt (
+order_id, payment_id, handling_amount, amount, checkout_result,
+checkout_claim, checkout_claim_expires_at, checkout_fingerprint,
+status, created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, NULL, NULL, $6, 0, $7, $7)
+ON CONFLICT (order_id, payment_id) DO UPDATE SET
+    handling_amount = EXCLUDED.handling_amount,
+    amount = EXCLUDED.amount,
+    checkout_result = COALESCE(v2_order_payment_attempt.checkout_result, EXCLUDED.checkout_result),
+    checkout_claim = NULL,
+    checkout_claim_expires_at = NULL,
+    checkout_fingerprint = COALESCE(v2_order_payment_attempt.checkout_fingerprint, EXCLUDED.checkout_fingerprint),
+    updated_at = EXCLUDED.updated_at
+WHERE v2_order_payment_attempt.status = 0`,
+		order.ID,
+		order.PaymentID.Int64,
+		handlingAmount,
+		amount,
+		nullableStringValue(order.CheckoutResult),
+		nullableStringValue(order.Fingerprint),
+		now,
+	)
+	if err != nil {
+		return fmt.Errorf("archive current payment attempt: %w", err)
+	}
+	return nil
+}
+
+func loadPaymentAttemptTx(ctx context.Context, tx *sql.Tx, orderID, paymentID int64) (paymentAttemptRecord, bool, error) {
+	var attempt paymentAttemptRecord
+	err := tx.QueryRowContext(ctx, `SELECT
+id, order_id, payment_id, handling_amount, amount, checkout_result,
+checkout_claim, checkout_fingerprint,
+COALESCE(checkout_claim IS NOT NULL AND checkout_claim_expires_at > EXTRACT(EPOCH FROM NOW())::BIGINT, FALSE) AS checkout_claim_active,
+status
+FROM v2_order_payment_attempt
+WHERE order_id = $1 AND payment_id = $2
+FOR UPDATE`, orderID, paymentID).Scan(
+		&attempt.ID,
+		&attempt.OrderID,
+		&attempt.PaymentID,
+		&attempt.HandlingAmount,
+		&attempt.Amount,
+		&attempt.CheckoutResult,
+		&attempt.CheckoutClaim,
+		&attempt.Fingerprint,
+		&attempt.ClaimActive,
+		&attempt.Status,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return paymentAttemptRecord{}, false, nil
+		}
+		return paymentAttemptRecord{}, false, fmt.Errorf("load payment attempt: %w", err)
+	}
+	return attempt, true, nil
+}
+
+func selectCachedPaymentAttemptTx(ctx context.Context, tx *sql.Tx, orderID int64, attempt paymentAttemptRecord, now int64) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE v2_order
+SET payment_id = $2,
+    handling_amount = $3,
+    checkout_result = $4,
+    checkout_claim = NULL,
+    checkout_claim_expires_at = NULL,
+    checkout_fingerprint = $5,
+    updated_at = $6
+WHERE id = $1 AND status = 0`,
+		orderID,
+		attempt.PaymentID,
+		nullInt64Value(attempt.HandlingAmount),
+		nullableStringValue(attempt.CheckoutResult),
+		nullableStringValue(attempt.Fingerprint),
+		now,
+	); err != nil {
+		return fmt.Errorf("select cached payment attempt: %w", err)
+	}
+	return nil
+}
+
+func claimPaymentAttemptTx(ctx context.Context, tx *sql.Tx, orderID, paymentID, handlingAmount, amount int64, claim, fingerprint string, now int64) error {
+	result, err := tx.ExecContext(ctx, `INSERT INTO v2_order_payment_attempt (
+order_id, payment_id, handling_amount, amount, checkout_result,
+checkout_claim, checkout_claim_expires_at, checkout_fingerprint,
+status, created_at, updated_at
+) VALUES ($1, $2, $3, $4, NULL, $5, $6 + $7, $8, 0, $6, $6)
+ON CONFLICT (order_id, payment_id) DO UPDATE SET
+    handling_amount = EXCLUDED.handling_amount,
+    amount = EXCLUDED.amount,
+    checkout_result = NULL,
+    checkout_claim = EXCLUDED.checkout_claim,
+    checkout_claim_expires_at = EXCLUDED.checkout_claim_expires_at,
+    checkout_fingerprint = EXCLUDED.checkout_fingerprint,
+    updated_at = EXCLUDED.updated_at
+WHERE v2_order_payment_attempt.status = 0
+  AND COALESCE(
+    v2_order_payment_attempt.checkout_claim IS NULL
+      OR v2_order_payment_attempt.checkout_claim_expires_at <= $6,
+    TRUE
+  )`,
+		orderID,
+		paymentID,
+		handlingAmount,
+		amount,
+		claim,
+		now,
+		int64(checkoutClaimLease/time.Second),
+		fingerprint,
+	)
+	if err != nil {
+		return fmt.Errorf("claim payment attempt: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count claimed payment attempt: %w", err)
+	}
+	if affected != 1 {
+		return ErrCheckoutInProgress
+	}
+	return nil
+}
+
+func validAttemptAmount(orderAmount, handlingAmount, amount int64) bool {
+	return orderAmount > 0 && handlingAmount >= 0 && orderAmount <= math.MaxInt64-handlingAmount && orderAmount+handlingAmount == amount
 }
 
 func (s *DBService) createCheckoutOnce(ctx context.Context, userID int64, req CheckoutRequest, paymentMethod paymentRecord, total, handlingAmount int64, claim, fingerprint, notifyURL, returnURL string) (CheckoutResult, error) {
@@ -313,11 +510,13 @@ func (s *DBService) createCheckoutOnce(ctx context.Context, userID int64, req Ch
 		Token:     strings.TrimSpace(req.Token),
 	})
 	if err != nil {
+		s.releaseCheckoutClaim(userID, req.TradeNo, claim)
 		return CheckoutResult{}, err
 	}
 
 	encoded, err := encodeCheckoutSnapshot(paymentMethod.ID, total, result)
 	if err != nil {
+		s.releaseCheckoutClaim(userID, req.TradeNo, claim)
 		return CheckoutResult{}, err
 	}
 	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -367,6 +566,16 @@ func (s *DBService) newCheckoutClaim() (string, error) {
 func (s *DBService) releaseCheckoutClaim(userID int64, tradeNo, claim string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	_, _ = s.db.ExecContext(ctx, `UPDATE v2_order_payment_attempt AS attempt
+SET checkout_claim = NULL,
+    checkout_claim_expires_at = NULL,
+    checkout_fingerprint = NULL,
+    updated_at = $4
+FROM v2_order AS orders
+WHERE attempt.order_id = orders.id
+  AND orders.user_id = $1 AND orders.trade_no = $2
+  AND attempt.checkout_claim = $3
+  AND attempt.status = 0 AND attempt.checkout_result IS NULL`, userID, tradeNo, claim, time.Now().Unix())
 	_, _ = s.db.ExecContext(ctx, `UPDATE v2_order
 SET checkout_claim = NULL,
     checkout_claim_expires_at = NULL,
@@ -407,8 +616,23 @@ FOR UPDATE`, tradeNo, userID).Scan(
 		}
 		return CheckoutResult{}, fmt.Errorf("lock checkout result order: %w", err)
 	}
-	if current.CheckoutResult.Valid && strings.TrimSpace(current.CheckoutResult.String) != "" {
-		return decodeCheckoutSnapshot(current.CheckoutResult.String, paymentID, total)
+	// Persist the provider result in its own attempt row first. This keeps an
+	// older link usable when the user has already switched the order to another
+	// payment method while the provider request was in flight.
+	attemptPersisted := false
+	if attemptUpdate, updateErr := tx.ExecContext(ctx, `UPDATE v2_order_payment_attempt
+SET checkout_result = $4,
+    checkout_claim = NULL,
+    checkout_claim_expires_at = NULL,
+    updated_at = $5
+WHERE order_id = $1 AND payment_id = $2 AND checkout_claim = $3
+  AND checkout_fingerprint = $6 AND checkout_result IS NULL AND status IN (0, 1)`,
+		current.ID, paymentID, claim, encoded, time.Now().Unix(), fingerprint); updateErr != nil {
+		return CheckoutResult{}, fmt.Errorf("persist payment attempt result: %w", updateErr)
+	} else if affected, affectedErr := attemptUpdate.RowsAffected(); affectedErr != nil {
+		return CheckoutResult{}, fmt.Errorf("count payment attempt result: %w", affectedErr)
+	} else {
+		attemptPersisted = affected == 1
 	}
 	if current.Status == 1 || current.Status == 3 || current.Status == 4 {
 		if current.CheckoutClaim.Valid && current.CheckoutClaim.String == claim {
@@ -419,15 +643,49 @@ FOR UPDATE`, tradeNo, userID).Scan(
 		if err := tx.Commit(); err != nil {
 			return CheckoutResult{}, fmt.Errorf("commit completed checkout observation: %w", err)
 		}
-		return result, nil
+		return CheckoutResult{Type: -1, Data: true}, nil
+	}
+	if current.CheckoutResult.Valid && strings.TrimSpace(current.CheckoutResult.String) != "" {
+		return decodeCheckoutSnapshot(current.CheckoutResult.String, paymentID, total)
 	}
 	if current.Status != 0 || !current.PaymentID.Valid || current.PaymentID.Int64 != paymentID || current.TotalAmount != total-handlingAmount || nullablePaymentInt64(current.HandlingAmount) != handlingAmount || !current.Fingerprint.Valid || current.Fingerprint.String != fingerprint {
+		if attemptPersisted {
+			if err := tx.Commit(); err != nil {
+				return CheckoutResult{}, fmt.Errorf("commit switched payment attempt result: %w", err)
+			}
+		}
 		return CheckoutResult{}, ErrOrderPaidOrMissing
 	}
 	if !current.CheckoutClaim.Valid || current.CheckoutClaim.String != claim {
+		if attemptPersisted {
+			if err := tx.Commit(); err != nil {
+				return CheckoutResult{}, fmt.Errorf("commit stale payment attempt result: %w", err)
+			}
+		}
 		return CheckoutResult{}, ErrCheckoutInProgress
 	}
 
+	if !attemptPersisted {
+		// Legacy orders created before the attempt table are still supported;
+		// create their attempt record when the first result is successfully
+		// persisted.
+		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_order_payment_attempt (
+order_id, payment_id, handling_amount, amount, checkout_result,
+checkout_claim, checkout_claim_expires_at, checkout_fingerprint,
+status, created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, NULL, NULL, $6, 0, $7, $7)
+ON CONFLICT (order_id, payment_id) DO UPDATE SET
+    handling_amount = EXCLUDED.handling_amount,
+    amount = EXCLUDED.amount,
+    checkout_result = EXCLUDED.checkout_result,
+    checkout_claim = NULL,
+    checkout_claim_expires_at = NULL,
+    checkout_fingerprint = EXCLUDED.checkout_fingerprint,
+    updated_at = EXCLUDED.updated_at`,
+			current.ID, paymentID, handlingAmount, total, encoded, fingerprint, time.Now().Unix()); err != nil {
+			return CheckoutResult{}, fmt.Errorf("create legacy payment attempt result: %w", err)
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE v2_order
 SET checkout_result = $2, checkout_claim = NULL, checkout_claim_expires_at = NULL, updated_at = $3
 WHERE id = $1`, current.ID, encoded, time.Now().Unix()); err != nil {
@@ -710,6 +968,13 @@ func nullInt64Value(value int64) any {
 		return nil
 	}
 	return value
+}
+
+func nullableStringValue(value sql.NullString) any {
+	if !value.Valid || strings.TrimSpace(value.String) == "" {
+		return nil
+	}
+	return value.String
 }
 
 func configValue(values map[string]string, key string) string {

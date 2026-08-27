@@ -15,6 +15,32 @@ var paymentSecurityOrderColumns = []string{
 	"invite_user_id", "invite_campaign_id", "invite_campaign_discount_amount", "paid_at", "created_at", "updated_at",
 }
 
+var paymentSecurityAttemptColumns = []string{
+	"id", "order_id", "payment_id", "handling_amount", "amount", "callback_no", "status", "paid_at",
+}
+
+const paymentSecurityCallbackConflictPattern = `SELECT EXISTS\(\s*SELECT 1 FROM v2_order WHERE payment_id = \$1 AND callback_no = \$2 AND trade_no <> \$3\s*UNION ALL\s*SELECT 1\s*FROM v2_order_payment_attempt AS attempt\s*JOIN v2_order AS attempt_order ON attempt_order.id = attempt.order_id\s*WHERE attempt.payment_id = \$1 AND attempt.callback_no = \$2 AND attempt_order.trade_no <> \$3\s*\)`
+
+func expectNoPaymentAttempt(mock sqlmock.Sqlmock, orderID, paymentID int64) {
+	mock.ExpectQuery(`SELECT id, order_id, payment_id, handling_amount, amount, callback_no, status, paid_at\s+FROM v2_order_payment_attempt\s+WHERE order_id = \$1 AND payment_id = \$2\s+FOR UPDATE`).
+		WithArgs(orderID, paymentID).
+		WillReturnRows(sqlmock.NewRows(paymentSecurityAttemptColumns))
+}
+
+func paymentSecurityAttemptRow(paymentID, handlingAmount, amount, status int64, callback any) *sqlmock.Rows {
+	return sqlmock.NewRows(paymentSecurityAttemptColumns).AddRow(
+		int64(70), int64(9), paymentID, handlingAmount, amount, callback, status, nil,
+	)
+}
+
+func paymentSecurityDepositOrderRow(status int64, callback any, paymentID, handlingAmount int64) *sqlmock.Rows {
+	return sqlmock.NewRows(paymentSecurityOrderColumns).AddRow(
+		int64(9), int64(5), int64(0), nil, paymentID, int64(9), "deposit", "T900", callback,
+		int64(1000), handlingAmount, nil, nil, nil, nil, nil,
+		status, int64(0), int64(0), nil, nil, nil, int64(0), nil, int64(1200), int64(1250),
+	)
+}
+
 func paymentSecurityOrderRow(status int64, callback any) *sqlmock.Rows {
 	return paymentSecurityOrderRowForPayment(status, callback, 7)
 }
@@ -38,10 +64,11 @@ func TestMarkOrderPaidScopesCallbackToPaymentMethod(t *testing.T) {
 	mock.ExpectQuery(`FROM v2_order\s+WHERE trade_no = \$1\s+FOR UPDATE`).
 		WithArgs("T900").
 		WillReturnRows(paymentSecurityOrderRowForPayment(3, "P900", 8))
+	expectNoPaymentAttempt(mock, 9, 8)
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
 		WithArgs("payment:8:P900").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT EXISTS\(\s*SELECT 1 FROM v2_order WHERE payment_id = \$1 AND callback_no = \$2 AND trade_no <> \$3\s*\)`).
+	mock.ExpectQuery(paymentSecurityCallbackConflictPattern).
 		WithArgs(int64(8), "P900", "T900").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectRollback()
@@ -95,6 +122,7 @@ func TestMarkOrderPaidRejectsMismatchedGatewayConfirmation(t *testing.T) {
 			mock.ExpectQuery(`FROM v2_order\s+WHERE trade_no = \$1\s+FOR UPDATE`).
 				WithArgs("T900").
 				WillReturnRows(paymentSecurityOrderRow(0, nil))
+			expectNoPaymentAttempt(mock, 9, *test.confirmation.PaymentID)
 			mock.ExpectRollback()
 
 			service := &DBService{db: db}
@@ -171,10 +199,11 @@ func TestMarkOrderPaidRejectsCallbackAlreadyUsedByAnotherOrder(t *testing.T) {
 	mock.ExpectQuery(`FROM v2_order\s+WHERE trade_no = \$1\s+FOR UPDATE`).
 		WithArgs("T900").
 		WillReturnRows(paymentSecurityOrderRow(0, nil))
+	expectNoPaymentAttempt(mock, 9, 7)
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
 		WithArgs("payment:7:P900").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT EXISTS\(\s*SELECT 1 FROM v2_order WHERE payment_id = \$1 AND callback_no = \$2 AND trade_no <> \$3\s*\)`).
+	mock.ExpectQuery(paymentSecurityCallbackConflictPattern).
 		WithArgs(int64(7), "P900", "T900").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectRollback()
@@ -204,10 +233,11 @@ func TestMarkOrderPaidRepairsLegacyCallbackWithoutOpeningTwice(t *testing.T) {
 	mock.ExpectQuery(`FROM v2_order\s+WHERE trade_no = \$1\s+FOR UPDATE`).
 		WithArgs("T900").
 		WillReturnRows(paymentSecurityOrderRow(3, "T900"))
+	expectNoPaymentAttempt(mock, 9, 7)
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
 		WithArgs("payment:7:P900").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT EXISTS\(\s*SELECT 1 FROM v2_order WHERE payment_id = \$1 AND callback_no = \$2 AND trade_no <> \$3\s*\)`).
+	mock.ExpectQuery(paymentSecurityCallbackConflictPattern).
 		WithArgs(int64(7), "P900", "T900").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectExec(`UPDATE v2_order SET status = \$2, callback_no = \$3, paid_at = \$4, updated_at = \$5 WHERE id = \$1`).
@@ -229,6 +259,48 @@ func TestMarkOrderPaidRepairsLegacyCallbackWithoutOpeningTwice(t *testing.T) {
 	}
 }
 
+func TestMarkOrderPaidRepairsMigratedAttemptLegacyCallback(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new sql mock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FROM v2_order\s+WHERE trade_no = \$1\s+FOR UPDATE`).
+		WithArgs("T900").
+		WillReturnRows(paymentSecurityOrderRow(3, "T900"))
+	mock.ExpectQuery(`FROM v2_order_payment_attempt\s+WHERE order_id = \$1 AND payment_id = \$2\s+FOR UPDATE`).
+		WithArgs(int64(9), int64(7)).
+		WillReturnRows(paymentSecurityAttemptRow(7, 100, 1100, paymentAttemptWinner, "T900"))
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
+		WithArgs("payment:7:P900").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(paymentSecurityCallbackConflictPattern).
+		WithArgs(int64(7), "P900", "T900").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectExec(`UPDATE v2_order_payment_attempt\s+SET callback_no = \$2, updated_at = \$3\s+WHERE id = \$1 AND status = 1`).
+		WithArgs(int64(70), "P900", sqlmock.AnyArg(), "T900").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE v2_order SET status = \$2, callback_no = \$3, paid_at = \$4, updated_at = \$5 WHERE id = \$1`).
+		WithArgs(int64(9), int64(3), "P900", int64(1234), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	service := &DBService{db: db}
+	err = service.MarkOrderPaid(context.Background(), "T900", OrderPaymentConfirmation{
+		CallbackNo: "P900",
+		PaymentID:  testInt64Pointer(7),
+		Amount:     testInt64Pointer(1100),
+	})
+	if err != nil {
+		t.Fatalf("repair migrated legacy callback: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestMarkOrderPaidTreatsExactGatewayReplayAsIdempotent(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -240,10 +312,11 @@ func TestMarkOrderPaidTreatsExactGatewayReplayAsIdempotent(t *testing.T) {
 	mock.ExpectQuery(`FROM v2_order\s+WHERE trade_no = \$1\s+FOR UPDATE`).
 		WithArgs("T900").
 		WillReturnRows(paymentSecurityOrderRow(3, "P900"))
+	expectNoPaymentAttempt(mock, 9, 7)
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
 		WithArgs("payment:7:P900").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT EXISTS\(\s*SELECT 1 FROM v2_order WHERE payment_id = \$1 AND callback_no = \$2 AND trade_no <> \$3\s*\)`).
+	mock.ExpectQuery(paymentSecurityCallbackConflictPattern).
 		WithArgs(int64(7), "P900", "T900").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectRollback()
@@ -256,6 +329,144 @@ func TestMarkOrderPaidTreatsExactGatewayReplayAsIdempotent(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("idempotent replay: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestMarkOrderPaidLetsAnEarlierPaymentAttemptWinAfterMethodSwitch(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new sql mock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FROM v2_order\s+WHERE trade_no = \$1\s+FOR UPDATE`).
+		WithArgs("T900").
+		WillReturnRows(paymentSecurityDepositOrderRow(0, nil, 8, 50))
+	mock.ExpectQuery(`FROM v2_order_payment_attempt\s+WHERE order_id = \$1 AND payment_id = \$2\s+FOR UPDATE`).
+		WithArgs(int64(9), int64(7)).
+		WillReturnRows(paymentSecurityAttemptRow(7, 100, 1100, paymentAttemptPending, nil))
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
+		WithArgs("payment:7:P700").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(paymentSecurityCallbackConflictPattern).
+		WithArgs(int64(7), "P700", "T900").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectExec(`UPDATE v2_order_payment_attempt\s+SET callback_no = \$2, status = \$3, paid_at = \$4, updated_at = \$4\s+WHERE id = \$1 AND status = 0`).
+		WithArgs(int64(70), "P700", paymentAttemptWinner, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE v2_order SET payment_id = \$2, handling_amount = \$3, updated_at = \$4 WHERE id = \$1`).
+		WithArgs(int64(9), int64(7), int64(100), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`FROM v2_user\s+WHERE id = \$1\s+FOR UPDATE`).
+		WithArgs(int64(5)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "invite_user_id", "balance", "commission_balance", "discount", "commission_type", "commission_rate",
+			"u", "d", "transfer_enable", "device_limit", "banned", "group_id", "plan_id", "speed_limit", "expired_at",
+		}).AddRow(
+			int64(5), nil, int64(0), int64(0), nil, int64(0), nil,
+			int64(0), int64(0), int64(0), nil, int64(0), nil, nil, nil, nil,
+		))
+	mock.ExpectExec(`UPDATE v2_order\s+SET commission_balance = 0, commission_status = 2, actual_commission_balance = 0, updated_at = \$2\s+WHERE id = \$1`).
+		WithArgs(int64(9), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE v2_user SET balance = \$2, updated_at = \$3 WHERE id = \$1`).
+		WithArgs(int64(5), int64(1000), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE v2_order SET status = \$2, callback_no = \$3, paid_at = \$4, updated_at = \$5 WHERE id = \$1`).
+		WithArgs(int64(9), int64(3), "P700", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM v2_runtime_kv WHERE k = \$1`).
+		WithArgs("order:cancel:recover:T900").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
+	service := &DBService{db: db}
+	err = service.MarkOrderPaid(context.Background(), "T900", OrderPaymentConfirmation{
+		CallbackNo: "P700",
+		PaymentID:  testInt64Pointer(7),
+		Amount:     testInt64Pointer(1100),
+	})
+	if err != nil {
+		t.Fatalf("settle earlier payment attempt: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestMarkOrderPaidRecordsLateAlternateAttemptWithoutOpeningTwice(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new sql mock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FROM v2_order\s+WHERE trade_no = \$1\s+FOR UPDATE`).
+		WithArgs("T900").
+		WillReturnRows(paymentSecurityOrderRowForPayment(3, "P800", 8))
+	mock.ExpectQuery(`FROM v2_order_payment_attempt\s+WHERE order_id = \$1 AND payment_id = \$2\s+FOR UPDATE`).
+		WithArgs(int64(9), int64(7)).
+		WillReturnRows(paymentSecurityAttemptRow(7, 100, 1100, paymentAttemptPending, nil))
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
+		WithArgs("payment:7:P700").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(paymentSecurityCallbackConflictPattern).
+		WithArgs(int64(7), "P700", "T900").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectExec(`UPDATE v2_order_payment_attempt\s+SET callback_no = \$2, status = \$3, paid_at = \$4, updated_at = \$4\s+WHERE id = \$1 AND status = 0`).
+		WithArgs(int64(70), "P700", paymentAttemptDuplicate, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	service := &DBService{db: db}
+	err = service.MarkOrderPaid(context.Background(), "T900", OrderPaymentConfirmation{
+		CallbackNo: "P700",
+		PaymentID:  testInt64Pointer(7),
+		Amount:     testInt64Pointer(1100),
+	})
+	if err != nil {
+		t.Fatalf("record late alternate payment: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestMarkOrderPaidTreatsDuplicateAttemptCallbackReplayAsIdempotent(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new sql mock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FROM v2_order\s+WHERE trade_no = \$1\s+FOR UPDATE`).
+		WithArgs("T900").
+		WillReturnRows(paymentSecurityOrderRowForPayment(3, "P800", 8))
+	mock.ExpectQuery(`FROM v2_order_payment_attempt\s+WHERE order_id = \$1 AND payment_id = \$2\s+FOR UPDATE`).
+		WithArgs(int64(9), int64(7)).
+		WillReturnRows(paymentSecurityAttemptRow(7, 100, 1100, paymentAttemptDuplicate, "P700"))
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
+		WithArgs("payment:7:P700").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(paymentSecurityCallbackConflictPattern).
+		WithArgs(int64(7), "P700", "T900").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectRollback()
+
+	service := &DBService{db: db}
+	err = service.MarkOrderPaid(context.Background(), "T900", OrderPaymentConfirmation{
+		CallbackNo: "P700",
+		PaymentID:  testInt64Pointer(7),
+		Amount:     testInt64Pointer(1100),
+	})
+	if err != nil {
+		t.Fatalf("replay duplicate payment callback: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
