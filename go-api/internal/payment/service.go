@@ -443,7 +443,7 @@ func claimPaymentAttemptTx(ctx context.Context, tx *sql.Tx, orderID, paymentID, 
 order_id, payment_id, handling_amount, amount, checkout_result,
 checkout_claim, checkout_claim_expires_at, checkout_fingerprint,
 status, created_at, updated_at
-) VALUES ($1, $2, $3, $4, NULL, $5, $6 + $7, $8, 0, $6, $6)
+) VALUES ($1, $2, $3, $4, NULL, $5, $6::BIGINT + $7::BIGINT, $8, 0, $6, $6)
 ON CONFLICT (order_id, payment_id) DO UPDATE SET
     handling_amount = EXCLUDED.handling_amount,
     amount = EXCLUDED.amount,

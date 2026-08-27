@@ -61,6 +61,34 @@ func (m *recordingPaymentOrderManager) MarkOrderPaid(ctx context.Context, tradeN
 	return nil
 }
 
+func TestClaimPaymentAttemptTypesExpiryParameters(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("new sql mock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	mock.ExpectExec(`VALUES \(\$1, \$2, \$3, \$4, NULL, \$5, \$6::BIGINT \+ \$7::BIGINT, \$8, 0, \$6, \$6\)`).
+		WithArgs(int64(9), int64(7), int64(100), int64(1100), "claim", int64(1700000000), int64(120), "fingerprint").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := claimPaymentAttemptTx(context.Background(), tx, 9, 7, 100, 1100, "claim", "fingerprint", 1700000000); err != nil {
+		t.Fatalf("claim payment attempt: %v", err)
+	}
+	mock.ExpectRollback()
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback transaction: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
