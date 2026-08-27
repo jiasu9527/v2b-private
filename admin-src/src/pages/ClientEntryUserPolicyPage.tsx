@@ -1761,6 +1761,19 @@ export default function ClientEntryUserPolicyPage() {
       render: (_: any, __: any, index: number) => <Space><MenuOutlined className="drag-handle" title="拖动调整匹配顺序" /><span>{index + 1}</span></Space>,
     },
     {
+      title: '启用状态',
+      dataIndex: 'enabled',
+      width: 130,
+      render: (value: any, row: any) => {
+        const enabled = Number(value) !== 0;
+        const title = isSplitGroupDisplayRow(row) ? '切换整套固定二分规则的启用状态' : '切换这条入口规则的启用状态';
+        return <Space size={6} title={title}>
+          <Switch size="small" checked={enabled} onChange={(checked) => toggle(row, checked)} />
+          <Typography.Text type={enabled ? undefined : 'secondary'}>{enabled ? '已启用' : '已禁用'}</Typography.Text>
+        </Space>;
+      },
+    },
+    {
       title: '规则名称',
       dataIndex: 'name',
       width: 210,
@@ -1841,12 +1854,6 @@ export default function ClientEntryUserPolicyPage() {
       width: 190,
       render: (value: any, row: any) => isSplitPolicy(row) ? <Typography.Text type="secondary">二分组不使用</Typography.Text> : <ExtraNodesSummary value={value} position={row.extra_nodes_position} />,
     },
-    {
-      title: '状态',
-      dataIndex: 'enabled',
-      width: 100,
-      render: (value: any, row: any) => <Switch size="small" checked={Number(value) !== 0} onChange={(checked) => toggle(row, checked)} />,
-    },
     { title: '备注', dataIndex: 'remarks', width: 180, ellipsis: true, render: (value: any) => value || '-' },
     {
       title: '操作',
@@ -1897,7 +1904,7 @@ export default function ClientEntryUserPolicyPage() {
           columns={columns}
           dataSource={rows}
           pagination={false}
-          scroll={{ x: 2505 }}
+          scroll={{ x: 2535 }}
           rowClassName={(row) => `sortable-row ${draggingKey === displayRowKey(row) ? 'dragging-row' : ''}`}
           onRow={(row) => ({
             draggable: true,
