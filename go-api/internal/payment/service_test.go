@@ -1031,6 +1031,10 @@ func TestPaymentCheckoutSwitchesAnExistingPaymentMethod(t *testing.T) {
 		Config: `{"url":"https://pay.example.com","pid":"10001","key":"secret"}`,
 	}
 	switchRequest := CheckoutRequest{TradeNo: "TLOCKED", MethodID: 8}
+	oldResult, err := encodeCheckoutSnapshot(7, 1100, CheckoutResult{Type: 1, Data: "https://pay.example.com/original-a"})
+	if err != nil {
+		t.Fatalf("encode existing checkout result: %v", err)
+	}
 	switchFingerprint := checkoutFingerprint(
 		switchMethod,
 		switchRequest,
@@ -1043,9 +1047,11 @@ func TestPaymentCheckoutSwitchesAnExistingPaymentMethod(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(checkoutOrderLockPattern).
 		WithArgs("TLOCKED", int64(5)).
-		WillReturnRows(checkoutOrderRow("TLOCKED", int64(7), 1000, int64(100), nil, nil, false, 0))
+		WillReturnRows(sqlmock.NewRows(checkoutOrderColumns).AddRow(
+			int64(9), int64(5), "TLOCKED", int64(7), int64(1000), int64(100), oldResult, nil, "old-method-fingerprint", false, int64(0),
+		))
 	mock.ExpectExec(`INSERT INTO v2_order_payment_attempt`).
-		WithArgs(int64(9), int64(7), int64(100), int64(1100), nil, nil, sqlmock.AnyArg()).
+		WithArgs(int64(9), int64(7), int64(100), int64(1100), oldResult, "old-method-fingerprint", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(paymentAttemptLockPattern).
 		WithArgs(int64(9), int64(8)).

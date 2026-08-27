@@ -300,8 +300,10 @@ func (s *DBService) Checkout(ctx context.Context, userID int64, req CheckoutRequ
 	notifyURL := s.notifyURL(paymentMethod)
 	returnURL := s.returnURL(req.RequestBaseURL, req.TradeNo)
 	fingerprint := checkoutFingerprint(paymentMethod, req, userID, total, notifyURL, returnURL)
-	existingFingerprint := order.Fingerprint
-	if switchingMethod && selectedAttempt.ID != 0 {
+	existingFingerprint := sql.NullString{}
+	if !switchingMethod {
+		existingFingerprint = order.Fingerprint
+	} else if selectedAttempt.ID != 0 {
 		existingFingerprint = selectedAttempt.Fingerprint
 	}
 	if existingFingerprint.Valid && strings.TrimSpace(existingFingerprint.String) != "" && existingFingerprint.String != fingerprint {
