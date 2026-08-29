@@ -132,6 +132,10 @@ func TestClientEntryProbeCoalescesSameAddressPendingEvents(t *testing.T) {
 		mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_state.*ON CONFLICT \(target_id, probe_id\) DO UPDATE SET`).
 			WithArgs(target.id, probeID, int64(0), nil, "timeout", "", int64(0), int64(3), sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectExec(`SELECT pg_advisory_xact_lock\(hashtextextended\(\$1, 0::bigint\)\)`).
+			WithArgs("entry.example.com:443").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+
 		insertExpectation := mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_event.*ON CONFLICT \(address_key, event_type\).*DO NOTHING`)
 		insertExpectation.WithArgs(target.monitorID, target.id, probeID, "down", sqlmock.AnyArg(), sqlmock.AnyArg(), "entry.example.com:443", sqlmock.AnyArg())
 		if target.id == 5 {

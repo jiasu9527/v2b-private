@@ -120,6 +120,9 @@ func TestClientEntryProbeThirdFailureCreatesStateAndAlertEvent(t *testing.T) {
 	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_state.*ON CONFLICT \(target_id, probe_id\) DO UPDATE SET`).
 		WithArgs(targetID, probeID, int64(0), nil, "timeout", "203.0.113.9", int64(0), int64(3), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock\(hashtextextended\(\$1, 0::bigint\)\)`).
+		WithArgs("entry.example.com:443").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_event.*VALUES`).
 		WithArgs(int64(3), targetID, probeID, "down", sqlmock.AnyArg(), sqlmock.AnyArg(), "entry.example.com:443", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -172,6 +175,9 @@ func TestClientEntryProbeSecondRecoveryCreatesAlertEvent(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`(?s)UPDATE v2_client_entry_auto_split_operation.*last_error = '入口已有探针恢复，取消待处理二分'.*target_generation = \$2`).
 		WithArgs(targetID, int64(2), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock\(hashtextextended\(\$1, 0::bigint\)\)`).
+		WithArgs("entry.example.com:443").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_event.*VALUES`).
 		WithArgs(int64(3), targetID, probeID, "recovered", sqlmock.AnyArg(), sqlmock.AnyArg(), "entry.example.com:443", sqlmock.AnyArg()).
