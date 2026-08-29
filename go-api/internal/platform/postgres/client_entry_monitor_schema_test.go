@@ -74,6 +74,7 @@ func TestClientEntryMonitorSchemaKeepsMonitoringAndManualRunsIndependent(t *test
 		"progress_next_attempt_at BIGINT NOT NULL DEFAULT 0",
 		"progress_last_error text NOT NULL DEFAULT ''",
 		"notify_next_attempt_at BIGINT NOT NULL DEFAULT 0",
+		"address_key text DEFAULT NULL",
 		"CREATE TABLE IF NOT EXISTS v2_client_entry_monitor_run_result (",
 		"policy_id INTEGER NOT NULL DEFAULT 0",
 		"policy_name varchar(255) NOT NULL DEFAULT ''",
@@ -104,6 +105,7 @@ func TestClientEntryMonitorSchemaKeepsMonitoringAndManualRunsIndependent(t *test
 		"ALTER TABLE v2_client_entry_monitor ADD COLUMN IF NOT EXISTS failure_threshold INTEGER NOT NULL DEFAULT 3",
 		"ALTER TABLE v2_client_entry_monitor ADD COLUMN IF NOT EXISTS success_threshold INTEGER NOT NULL DEFAULT 2",
 		"ALTER TABLE v2_client_entry_monitor_event ADD COLUMN IF NOT EXISTS notify_next_attempt_at",
+		"ALTER TABLE v2_client_entry_monitor_event ADD COLUMN IF NOT EXISTS address_key",
 		"ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS request_key",
 		"ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS expected_pairs",
 		"ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS progress_message_id",
@@ -179,6 +181,11 @@ func TestClientEntryMonitorConstraintsDefineOwnershipAndDeduplication(t *testing
 		}
 	}
 	joinedIndexes := strings.Join(clientEntryMonitorIndexStatements, "\n")
+	if !strings.Contains(joinedIndexes, "idx_v2_client_entry_monitor_event_pending_address_type") ||
+		!strings.Contains(joinedIndexes, "ON v2_client_entry_monitor_event(address_key, event_type)") ||
+		!strings.Contains(joinedIndexes, "WHERE notified_at IS NULL AND address_key IS NOT NULL") {
+		t.Fatal("monitor event schema must enforce pending address/type deduplication")
+	}
 	if !strings.Contains(joinedIndexes, "CREATE UNIQUE INDEX IF NOT EXISTS idx_v2_client_entry_auto_split_pending_group_unique") ||
 		!strings.Contains(joinedIndexes, "WHERE status = 'pending'") {
 		t.Fatal("automatic split schema must enforce one pending operation per leaf")

@@ -121,7 +121,7 @@ func TestClientEntryProbeThirdFailureCreatesStateAndAlertEvent(t *testing.T) {
 		WithArgs(targetID, probeID, int64(0), nil, "timeout", "203.0.113.9", int64(0), int64(3), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_event.*VALUES`).
-		WithArgs(int64(3), targetID, probeID, "down", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(int64(3), targetID, probeID, "down", sqlmock.AnyArg(), sqlmock.AnyArg(), "entry.example.com:443", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -174,7 +174,7 @@ func TestClientEntryProbeSecondRecoveryCreatesAlertEvent(t *testing.T) {
 		WithArgs(targetID, int64(2), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_event.*VALUES`).
-		WithArgs(int64(3), targetID, probeID, "recovered", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(int64(3), targetID, probeID, "recovered", sqlmock.AnyArg(), sqlmock.AnyArg(), "entry.example.com:443", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
