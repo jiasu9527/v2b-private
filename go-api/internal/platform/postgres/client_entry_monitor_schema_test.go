@@ -106,8 +106,7 @@ func TestClientEntryMonitorSchemaKeepsMonitoringAndManualRunsIndependent(t *test
 		"ALTER TABLE v2_client_entry_monitor ADD COLUMN IF NOT EXISTS success_threshold INTEGER NOT NULL DEFAULT 2",
 		"ALTER TABLE v2_client_entry_monitor_event ADD COLUMN IF NOT EXISTS notify_next_attempt_at",
 		"ALTER TABLE v2_client_entry_monitor_event ADD COLUMN IF NOT EXISTS address_key",
-		"UPDATE v2_client_entry_monitor_event event",
-		"DELETE FROM v2_client_entry_monitor_event duplicate",
+		"DROP INDEX IF EXISTS idx_v2_client_entry_monitor_event_pending_address_type",
 		"ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS request_key",
 		"ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS expected_pairs",
 		"ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS progress_message_id",
@@ -132,8 +131,8 @@ func TestClientEntryMonitorSchemaKeepsMonitoringAndManualRunsIndependent(t *test
 			t.Errorf("monitor migration missing %q", required)
 		}
 	}
-	if !strings.Contains(joinedMigrations, `regexp_replace(btrim(target.host), '\.$', '')`) {
-		t.Fatal("monitor event backfill must normalize trailing dots with a single regex escape")
+	if strings.Contains(joinedMigrations, "UPDATE v2_client_entry_monitor_event event") {
+		t.Fatal("monitor event migration must not rewrite historical target snapshots")
 	}
 	if !strings.Contains(clientEntryMonitorConfigSeedStatement, "ON CONFLICT (id) DO NOTHING") {
 		t.Fatal("config singleton seed must be repeatable")
@@ -186,10 +185,8 @@ func TestClientEntryMonitorConstraintsDefineOwnershipAndDeduplication(t *testing
 		}
 	}
 	joinedIndexes := strings.Join(clientEntryMonitorIndexStatements, "\n")
-	if !strings.Contains(joinedIndexes, "idx_v2_client_entry_monitor_event_pending_address_type") ||
-		!strings.Contains(joinedIndexes, "ON v2_client_entry_monitor_event(address_key, event_type)") ||
-		!strings.Contains(joinedIndexes, "WHERE notified_at IS NULL AND address_key IS NOT NULL") {
-		t.Fatal("monitor event schema must enforce pending address/type deduplication")
+	if strings.Contains(joinedIndexes, "idx_v2_client_entry_monitor_event_pending_address_type") {
+		t.Fatal("monitor event schema must not use a pending-only address/type unique index")
 	}
 	if !strings.Contains(joinedIndexes, "idx_v2_client_entry_monitor_event_address_history") ||
 		!strings.Contains(joinedIndexes, "ON v2_client_entry_monitor_event(address_key, created_at DESC, id DESC)") {

@@ -6,13 +6,23 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"forest/go-api/internal/cliententry"
 )
 
 const (
 	clientEntryProbeTargetOffset int64 = 1 << 62
+	// Client-entry probe reports are serialized while they update availability
+	// state and decide address-level transitions. Taking one transaction lock
+	// before any state row is touched prevents both duplicate address events and
+	// the A→B / B→A row-lock deadlock possible with per-address lazy locks.
+	// Telegram delivery happens later in the worker and is not covered by it.
+	clientEntryMonitorEventLockKey int64 = -7_642_309_020
 )
 
 type clientEntryProbeTargetSnapshot struct {
@@ -129,6 +139,13 @@ func (s *DBService) reportClientEntryProbeResults(ctx context.Context, probeID i
 	if !dnsProbeHeartbeatFresh(heartbeat, now, defaultProbeOfflineSec) {
 		return summary, ErrDNSProbeHeartbeatRequired
 	}
+	// This must happen before the first monitor-state read/write. Otherwise two
+	// reports can each lock a different state row before waiting on the shared
+	// event lock, then deadlock when their batches contain the rows in opposite
+	// order.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, clientEntryMonitorEventLockKey); err != nil {
+		return summary, fmt.Errorf("lock client entry monitor events: %w", err)
+	}
 	seenResultIDs := make(map[string]struct{}, len(results))
 	touchedRuns := make(map[int64]struct{})
 	hasEvents := false
@@ -229,26 +246,45 @@ last_reported_at = EXCLUDED.last_reported_at, updated_at = EXCLUDED.updated_at`,
 			}
 		}
 		if transition != "" {
-			details, _ := json.Marshal(map[string]any{
-				"policy_id": snapshot.PolicyID, "policy_name": snapshot.PolicyName,
-				"target_id": targetID, "target_name": snapshot.TargetName,
-				"host": snapshot.Host, "port": snapshot.Port,
-				"probe_id": probeID, "probe_name": snapshot.ProbeName,
-				"success": success, "latency_ms": result.LatencyMS,
-				"error": errorText, "resolved_ip": result.ResolvedIP,
-				"consecutive_success": successStreak,
-				"consecutive_failure": failureStreak,
-				"failure_threshold":   snapshot.FailureThreshold,
-				"success_threshold":   snapshot.SuccessThreshold,
-			})
-			message := formatClientEntryMonitorTransition(snapshot, transition, result, now)
-			if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_monitor_event
-(monitor_id, target_id, probe_id, event_type, message, details, notified_at,
-notify_attempts, notify_next_attempt_at, last_notify_error, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, NULL, 0, $7, '', $7)`, snapshot.MonitorID, targetID, probeID, transition, message, string(details), now); err != nil {
-				return summary, fmt.Errorf("create client entry monitor event: %w", err)
+			addressKey := clientEntryMonitorAddressKey(snapshot.Host, snapshot.Port)
+			var eventAddressKey any
+			if addressKey != "" {
+				eventAddressKey = addressKey
 			}
-			hasEvents = true
+			shouldEnqueue := true
+			if addressKey != "" {
+				otherDown, err := clientEntryMonitorAddressHasOtherDown(ctx, tx, addressKey, targetID, probeID, now, defaultProbeOfflineSec)
+				if err != nil {
+					return summary, err
+				}
+				// For a down transition, any other confirmed-down state means the
+				// address incident already exists. For recovery, the address is
+				// considered recovered only after this is the last down state.
+				shouldEnqueue = !otherDown
+			}
+			if shouldEnqueue {
+				details, _ := json.Marshal(map[string]any{
+					"policy_id": snapshot.PolicyID, "policy_name": snapshot.PolicyName,
+					"target_id": targetID, "target_name": snapshot.TargetName,
+					"host": snapshot.Host, "port": snapshot.Port,
+					"probe_id": probeID, "probe_name": snapshot.ProbeName,
+					"success": success, "latency_ms": result.LatencyMS,
+					"error": errorText, "resolved_ip": result.ResolvedIP,
+					"consecutive_success": successStreak,
+					"consecutive_failure": failureStreak,
+					"failure_threshold":   snapshot.FailureThreshold,
+					"success_threshold":   snapshot.SuccessThreshold,
+				})
+				message := formatClientEntryMonitorTransition(snapshot, transition, result, now)
+				if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_monitor_event
+(monitor_id, target_id, probe_id, event_type, message, details, address_key, notified_at,
+notify_attempts, notify_next_attempt_at, last_notify_error, created_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, 0, $8, '', $8)`,
+					snapshot.MonitorID, targetID, probeID, transition, message, string(details), eventAddressKey, now); err != nil {
+					return summary, fmt.Errorf("create client entry monitor event: %w", err)
+				}
+				hasEvents = true
+			}
 			if transition == "down" && snapshot.AutoSplitEnabled {
 				if err := enqueueClientEntryAutoSplit(ctx, tx, snapshot, probeID, inboxID, now); err != nil {
 					return summary, err
@@ -298,6 +334,81 @@ WHERE id = $1`, runID, received, status, completedAt, now); err != nil {
 		requestDNSFailoverEvaluationWake(ctx, s.dnsFailoverEvaluator, nil)
 	}
 	return summary, nil
+}
+
+// clientEntryMonitorAddressKey returns the canonical host:port identity used
+// to coalesce availability notifications from multiple policy groups.  The
+// monitor state remains per target/probe; this key is only for the Telegram
+// event queue.  Keep the port in the key so the same host on different ports
+// is not incorrectly merged, and use JoinHostPort for unambiguous IPv6.
+func clientEntryMonitorAddressKey(host string, port int64) string {
+	host = strings.TrimSpace(host)
+	if host == "" || port < 1 || port > 65535 {
+		return ""
+	}
+	// NormalizeHost intentionally rejects bracketed IPv6 because policy input
+	// stores a host without transport syntax.  Historical rows can still carry
+	// brackets, so strip one pair before normalization.
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	}
+	if normalized, err := cliententry.NormalizeHost(host); err == nil {
+		host = normalized
+	} else {
+		// A malformed legacy target must not be put into a broad, guessed
+		// deduplication bucket. Valid targets are normalized when saved; for
+		// historical rows with invalid data, leave the key NULL and preserve the
+		// event independently.
+		return ""
+	}
+	return net.JoinHostPort(host, strconv.FormatInt(port, 10))
+}
+
+// clientEntryMonitorAddressHasOtherDown reports whether another enabled
+// target/probe currently confirms the same endpoint as down. The caller has
+// already updated the current target's state, so that pair is excluded from
+// the query. Keeping the comparison here (rather than relying on event
+// history) means a stale/cleaned event cannot suppress a genuinely new outage.
+func clientEntryMonitorAddressHasOtherDown(ctx context.Context, tx *sql.Tx, addressKey string,
+	targetID, probeID, now, probeOfflineSec int64,
+) (bool, error) {
+	if tx == nil || strings.TrimSpace(addressKey) == "" || probeOfflineSec <= 0 {
+		return false, nil
+	}
+	var hasOtherDown bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS (
+	SELECT 1
+	FROM v2_client_entry_monitor_state monitor_state
+	JOIN v2_client_entry_monitor_target monitor_target
+	  ON monitor_target.id = monitor_state.target_id
+	JOIN v2_client_entry_monitor monitor
+	  ON monitor.id = monitor_target.monitor_id
+	  AND monitor.enabled = 1
+	JOIN v2_client_entry_user_policy policy
+	  ON policy.id = monitor.policy_id
+	 AND policy.enabled = 1
+	JOIN v2_dns_probe probe
+	  ON probe.id = monitor_state.probe_id
+	  AND probe.enabled = 1
+	  AND probe.last_heartbeat_at IS NOT NULL
+	  AND probe.last_heartbeat_at <= $4::bigint
+	  AND probe.last_heartbeat_at >= $4::bigint - $5::bigint
+	WHERE monitor_state.last_success = 0
+	  AND monitor_state.last_reported_at IS NOT NULL
+	  AND monitor_state.last_reported_at <= $4::bigint
+	  AND monitor_state.last_reported_at >= $4::bigint -
+		((monitor.check_interval_sec::bigint + ((monitor.tcp_timeout_ms::bigint + 999) / 1000)) * 2)
+	  AND NOT (monitor_state.target_id = $2::bigint AND monitor_state.probe_id = $3::bigint)
+	  AND CASE
+		WHEN position(':' IN btrim(monitor_target.host)) > 0
+			THEN format('[%s]:%s', trim(BOTH '[]' FROM lower(regexp_replace(btrim(monitor_target.host), '\.$', ''))), monitor_target.port::text)
+		ELSE lower(regexp_replace(btrim(monitor_target.host), '\.$', '')) || ':' || monitor_target.port::text
+	  END = $1::text
+	)`, addressKey, targetID, probeID, now, probeOfflineSec).Scan(&hasOtherDown)
+	if err != nil {
+		return false, fmt.Errorf("check other down states for client entry address: %w", err)
+	}
+	return hasOtherDown, nil
 }
 
 // confirmClientEntryMonitorAvailability keeps last_success as the confirmed
@@ -384,21 +495,18 @@ FROM v2_client_entry_monitor_run WHERE id = $1 FOR UPDATE`, runID).Scan(&selecte
 	return 0, nil
 }
 
-func formatClientEntryMonitorTransition(snapshot clientEntryProbeTargetSnapshot, transition string, result DNSProbeResult, now int64) string {
+func formatClientEntryMonitorTransition(snapshot clientEntryProbeTargetSnapshot, transition string, _ DNSProbeResult, _ int64) string {
 	status := "掉线"
-	detail := strings.TrimSpace(result.Error)
 	if transition == "recovered" {
 		status = "恢复"
-		if result.LatencyMS != nil {
-			detail = fmt.Sprintf("延迟 %d ms", *result.LatencyMS)
-		}
 	}
-	if detail == "" {
-		detail = "无详情"
+	address := clientEntryMonitorAddressKey(snapshot.Host, snapshot.Port)
+	if address == "" {
+		// Keep a readable fallback for an invalid legacy target.  Valid policy
+		// targets always use the canonical key above.
+		address = fmt.Sprintf("%s:%d", strings.TrimSpace(snapshot.Host), snapshot.Port)
 	}
-	return fmt.Sprintf("用户入口%s\n规则：%s\n地址：%s:%d\n探针：%s\n详情：%s\n时间：%s",
-		status, snapshot.PolicyName, snapshot.Host, snapshot.Port, snapshot.ProbeName,
-		detail, time.Unix(now, 0).Format("2006-01-02 15:04:05"))
+	return fmt.Sprintf("用户入口%s：%s", status, address)
 }
 
 func sortedClientEntryRunIDs(values map[int64]struct{}) []int64 {

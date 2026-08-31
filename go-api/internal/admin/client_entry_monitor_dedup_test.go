@@ -66,33 +66,29 @@ func TestFormatClientEntryMonitorTransitionIsAddressOnly(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		transition string
-		result     DNSProbeResult
-		wantStatus string
-		wantDetail string
+		want       string
 	}{
-		{name: "down", transition: "down", result: DNSProbeResult{Error: "timeout"}, wantStatus: "用户入口掉线", wantDetail: "详情：timeout"},
-		{name: "recovered", transition: "recovered", result: DNSProbeResult{LatencyMS: int64PtrForDedupTest(31)}, wantStatus: "用户入口恢复", wantDetail: "详情：延迟 31 ms"},
+		{name: "down", transition: "down", want: "用户入口掉线：entry.example.com:443"},
+		{name: "recovered", transition: "recovered", want: "用户入口恢复：entry.example.com:443"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			message := formatClientEntryMonitorTransition(snapshot, test.transition, test.result, 0)
-			if !strings.Contains(message, test.wantStatus) || !strings.Contains(message, "地址：entry.example.com:443") || !strings.Contains(message, test.wantDetail) {
-				t.Fatalf("address-only alert = %q", message)
+		message := formatClientEntryMonitorTransition(snapshot, test.transition, DNSProbeResult{}, 0)
+			if message != test.want {
+				t.Fatalf("address-only alert = %q, want %q", message, test.want)
 			}
-			if strings.Contains(message, "规则：") || strings.Contains(message, "探针：") || strings.Contains(message, snapshot.PolicyName) || strings.Contains(message, snapshot.ProbeName) {
+			if strings.Contains(message, "规则：") || strings.Contains(message, "探针：") || strings.Contains(message, "详情：") || strings.Contains(message, "时间：") || strings.Contains(message, snapshot.PolicyName) || strings.Contains(message, snapshot.ProbeName) {
 				t.Fatalf("alert still contains group/probe details: %q", message)
 			}
 		})
 	}
 }
 
-func int64PtrForDedupTest(value int64) *int64 { return &value }
-
 // A probe can report two different policy targets that point at the same
-// address in one batch.  State remains independent per target, but the event
-// queue must only retain one pending transition for that address/type.  The
-// second INSERT therefore legitimately affects zero rows through the partial
-// unique index; treating that as an error would make an otherwise valid probe
-// report fail and could trigger retries/duplicate alerts.
+// address in one batch. State remains independent per target, but the event
+// queue must only retain one transition for the currently active address
+// incident. The second INSERT therefore legitimately affects zero rows; it is
+// filtered by the address-level state check rather than by a brittle pending
+// event unique index.
 func TestClientEntryProbeCoalescesSameAddressPendingEvents(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -108,6 +104,9 @@ func TestClientEntryProbeCoalescesSameAddressPendingEvents(t *testing.T) {
 	mock.ExpectQuery(`SELECT enabled, last_heartbeat_at FROM v2_dns_probe WHERE id = \$1 FOR UPDATE`).
 		WithArgs(probeID).
 		WillReturnRows(sqlmock.NewRows([]string{"enabled", "last_heartbeat_at"}).AddRow(int64(1), now))
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock\(\$1\)`).
+		WithArgs(clientEntryMonitorEventLockKey).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	for _, target := range []struct {
 		id        int64
@@ -132,16 +131,14 @@ func TestClientEntryProbeCoalescesSameAddressPendingEvents(t *testing.T) {
 		mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_state.*ON CONFLICT \(target_id, probe_id\) DO UPDATE SET`).
 			WithArgs(target.id, probeID, int64(0), nil, "timeout", "", int64(0), int64(3), sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(1, 1))
-		mock.ExpectExec(`SELECT pg_advisory_xact_lock\(hashtextextended\(\$1, 0::bigint\)\)`).
-			WithArgs("entry.example.com:443").
-			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectQuery(`(?s)SELECT EXISTS \(.*FROM v2_client_entry_monitor_state.*`).
+			WithArgs("entry.example.com:443", target.id, probeID, sqlmock.AnyArg(), defaultProbeOfflineSec).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(target.id != 5))
 
-		insertExpectation := mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_event.*ON CONFLICT \(address_key, event_type\).*DO NOTHING`)
-		insertExpectation.WithArgs(target.monitorID, target.id, probeID, "down", sqlmock.AnyArg(), sqlmock.AnyArg(), "entry.example.com:443", sqlmock.AnyArg())
 		if target.id == 5 {
-			insertExpectation.WillReturnResult(sqlmock.NewResult(1, 1))
-		} else {
-			insertExpectation.WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectExec(`(?s)INSERT INTO v2_client_entry_monitor_event.*VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, NULL, 0, \$8, '', \$8\)`).
+				WithArgs(target.monitorID, target.id, probeID, "down", sqlmock.AnyArg(), sqlmock.AnyArg(), "entry.example.com:443", sqlmock.AnyArg()).
+				WillReturnResult(sqlmock.NewResult(1, 1))
 		}
 	}
 	mock.ExpectCommit()
@@ -162,10 +159,9 @@ func TestClientEntryProbeCoalescesSameAddressPendingEvents(t *testing.T) {
 }
 
 func TestClientEntryMonitorAddressKeyDoesNotTreatEmptyKeyAsDeduplicable(t *testing.T) {
-	// Invalid/legacy targets intentionally leave address_key NULL.  PostgreSQL
-	// partial unique indexes ignore NULL values, so each such historical event
-	// remains independently auditable rather than being collapsed into one
-	// arbitrary bucket.
+	// Invalid/legacy targets intentionally leave address_key NULL.  Without a
+	// trustworthy address identity they are kept as independent events rather
+	// than being collapsed into an arbitrary deduplication bucket.
 	if got := clientEntryMonitorAddressKey("bad host", 443); got != "" {
 		t.Fatalf("invalid host key = %q, want empty", got)
 	}

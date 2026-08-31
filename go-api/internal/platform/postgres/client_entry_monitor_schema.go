@@ -112,6 +112,7 @@ probe_id BIGINT DEFAULT NULL,
 event_type varchar(32) NOT NULL,
 message text NOT NULL DEFAULT '',
 details text NOT NULL DEFAULT '{}',
+address_key text DEFAULT NULL,
 notified_at BIGINT DEFAULT NULL,
 notify_attempts INTEGER NOT NULL DEFAULT 0,
 notify_next_attempt_at BIGINT NOT NULL DEFAULT 0,
@@ -267,6 +268,17 @@ $client_entry_monitor_timeout$;`,
 	`ALTER TABLE v2_client_entry_monitor ADD COLUMN IF NOT EXISTS failure_threshold INTEGER NOT NULL DEFAULT 3`,
 	`ALTER TABLE v2_client_entry_monitor ADD COLUMN IF NOT EXISTS success_threshold INTEGER NOT NULL DEFAULT 2`,
 	`ALTER TABLE v2_client_entry_monitor_event ADD COLUMN IF NOT EXISTS notify_next_attempt_at BIGINT NOT NULL DEFAULT 0`,
+	`ALTER TABLE v2_client_entry_monitor_event ADD COLUMN IF NOT EXISTS address_key text DEFAULT NULL`,
+	// Older builds used a pending-only unique index for address/type. It cannot
+	// represent a new outage after a recovery while the previous event is still
+	// waiting for Telegram delivery, so address-level state is now decided under
+	// the transaction lock instead. Drop the obsolete index on upgrade.
+	`DROP INDEX IF EXISTS idx_v2_client_entry_monitor_event_pending_address_type`,
+	// Do not backfill historical events here. Target addresses can be edited
+	// after an event was recorded, and attempting to parse old free-form values
+	// during startup would make one malformed legacy row able to block the whole
+	// service. New transitions always write a canonical address_key; old rows
+	// remain available in the event log with a NULL key.
 	`ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS request_key varchar(255) DEFAULT NULL`,
 	`ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS expected_pairs jsonb NOT NULL DEFAULT '[]'::jsonb`,
 	`ALTER TABLE v2_client_entry_monitor_run ADD COLUMN IF NOT EXISTS progress_message_id BIGINT DEFAULT NULL`,
@@ -387,6 +399,9 @@ var clientEntryMonitorIndexStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_monitor_state_probe ON v2_client_entry_monitor_state(probe_id, target_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_monitor_state_reported ON v2_client_entry_monitor_state(last_reported_at, target_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_monitor_event_notify_due ON v2_client_entry_monitor_event(notified_at, notify_next_attempt_at, id)`,
+	`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_monitor_event_address_history
+ON v2_client_entry_monitor_event(address_key, created_at DESC, id DESC)
+WHERE address_key IS NOT NULL`,
 	`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_monitor_event_monitor_created ON v2_client_entry_monitor_event(monitor_id, created_at DESC, id DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_monitor_event_created ON v2_client_entry_monitor_event(created_at, id)`,
 	`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_monitor_event_delivery_due ON v2_client_entry_monitor_event_delivery(event_id, delivered_at, next_attempt_at, chat_id)`,
