@@ -21,6 +21,9 @@ type Config struct {
 	AdminPath                          string
 	PlanChangeEnable                   bool
 	SurplusEnable                      bool
+	NewOrderEventID                    int64
+	RenewOrderEventID                  int64
+	ChangeOrderEventID                 int64
 	InviteCommission                   int64
 	InviteGenLimit                     int64
 	InviteCampaignEnable               bool
@@ -171,6 +174,9 @@ func Load() Config {
 		AdminPath:                          managedString("ADMIN_PATH", "secure_path", "localadmin"),
 		PlanChangeEnable:                   managedBool("PLAN_CHANGE_ENABLE", "plan_change_enable", true),
 		SurplusEnable:                      managedBool("SURPLUS_ENABLE", "surplus_enable", true),
+		NewOrderEventID:                    managedInt64("NEW_ORDER_EVENT_ID", "new_order_event_id", 0),
+		RenewOrderEventID:                  managedInt64("RENEW_ORDER_EVENT_ID", "renew_order_event_id", 0),
+		ChangeOrderEventID:                 managedInt64("CHANGE_ORDER_EVENT_ID", "change_order_event_id", 0),
 		InviteCommission:                   managedInt64("INVITE_COMMISSION", "invite_commission", 10),
 		InviteGenLimit:                     managedInt64("INVITE_GEN_LIMIT", "invite_gen_limit", 5),
 		InviteCampaignEnable:               managedBool("INVITE_CAMPAIGN_ENABLE", "invite_campaign_enable", true),

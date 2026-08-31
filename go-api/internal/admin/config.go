@@ -864,6 +864,12 @@ func validateConfigValue(key string, value phpConfigValue) error {
 		if err != nil || parsed < 0 {
 			return errors.New("失败任务保留天数必须为大于等于0的整数")
 		}
+	case "new_order_event_id", "renew_order_event_id", "change_order_event_id":
+		raw := strings.TrimSpace(valueToString(value))
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || (parsed != 0 && parsed != 1) {
+			return errors.New("订单完成后的动作只支持不执行动作或重置用户流量")
+		}
 	}
 	return nil
 }

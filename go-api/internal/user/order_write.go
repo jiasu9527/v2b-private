@@ -867,6 +867,7 @@ func (s *DBService) openOrderTx(ctx context.Context, tx *sql.Tx, order *orderRec
 	default:
 		applyOrderPeriod(&userRow, *order, plan)
 	}
+	s.applyOrderCompletionEvent(&userRow, order.Type)
 	if plan.SpeedLimit.Valid {
 		userRow.SpeedLimit = plan.SpeedLimit
 	} else {
@@ -884,6 +885,32 @@ func (s *DBService) openOrderTx(ctx context.Context, tx *sql.Tx, order *orderRec
 	order.Status = 3
 	order.UpdatedAt = now
 	return s.updateOrderPaymentStateTx(ctx, tx, *order)
+}
+
+// applyOrderCompletionEvent preserves the legacy order-event behaviour. The
+// configured action is selected by the actual order type; traffic reset
+// packages (type 4) already reset usage in the period switch above and do not
+// run a purchase, renewal, or plan-change event.
+func (s *DBService) applyOrderCompletionEvent(userRow *userRecord, orderType int64) {
+	if userRow == nil {
+		return
+	}
+	cfg := s.currentConfig()
+	var eventID int64
+	switch orderType {
+	case 1:
+		eventID = cfg.NewOrderEventID
+	case 2:
+		eventID = cfg.RenewOrderEventID
+	case 3:
+		eventID = cfg.ChangeOrderEventID
+	default:
+		return
+	}
+	if eventID == 1 {
+		userRow.U = 0
+		userRow.D = 0
+	}
 }
 
 func validOrderAmountState(order orderRecord) bool {

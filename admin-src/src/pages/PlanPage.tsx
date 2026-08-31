@@ -99,8 +99,8 @@ export default function PlanPage() {
 
   const columns: any[] = [
     { title: '排序', dataIndex: 'sort', width: 80, render: () => <MenuOutlined className="drag-handle" /> },
-    { title: '销售状态', dataIndex: 'show', width: 100, render: (v: any, row: any) => <Switch size="small" checked={!!Number(v)} onClick={() => update(row, 'show', Number(v) ? 0 : 1)} /> },
-    { title: <span>续费 <Tooltip title="在订阅停止销售时，已购用户是否可以续费"><QuestionCircleOutlined /></Tooltip></span>, dataIndex: 'renew', width: 90, render: (v: any, row: any) => <Switch size="small" checked={!!Number(v)} onClick={() => update(row, 'renew', Number(v) ? 0 : 1)} /> },
+    { title: <span>允许新购 <Tooltip title="开启后订阅会上架销售，用户可新购或变更到此订阅"><QuestionCircleOutlined /></Tooltip></span>, dataIndex: 'show', width: 120, render: (v: any, row: any) => <Switch size="small" checked={!!Number(v)} onClick={() => update(row, 'show', Number(v) ? 0 : 1)} /> },
+    { title: <span>允许续费 <Tooltip title="订阅停止新购后，已购此订阅的用户是否仍可续费"><QuestionCircleOutlined /></Tooltip></span>, dataIndex: 'renew', width: 120, render: (v: any, row: any) => <Switch size="small" checked={!!Number(v)} onClick={() => update(row, 'renew', Number(v) ? 0 : 1)} /> },
     { title: '名称', dataIndex: 'name', width: 180 },
     { title: '统计', dataIndex: 'count', width: 90, render: (v: any) => <><UserOutlined className="drag-handle" /> {v || 0}</> },
     { title: '流量', dataIndex: 'transfer_enable', width: 100, render: (v: any) => <>{gb(v)} GB</> },
@@ -112,7 +112,7 @@ export default function PlanPage() {
     { title: '两年付', dataIndex: 'two_year_price', width: 90, render: price },
     { title: '三年付', dataIndex: 'three_year_price', width: 90, render: price },
     { title: '一次性', dataIndex: 'onetime_price', width: 90, render: price },
-    { title: '重置包', dataIndex: 'reset_price', width: 90, render: price },
+    { title: '流量重置包', dataIndex: 'reset_price', width: 120, render: price },
     { title: '权限组', dataIndex: 'group_id', width: 130, render: (id: any) => <Tag>{groups.find((group) => Number(group.id) === Number(id))?.name || id}</Tag> },
     { title: '操作', fixed: 'right', align: 'right', width: 120, render: (_: any, row: any) => <Dropdown trigger={['click']} menu={{ items: [
       { key: 'edit', label: <span><EditOutlined /> 编辑</span>, onClick: () => openEdit(row) },
@@ -130,10 +130,14 @@ export default function PlanPage() {
       <Form form={form} layout="vertical" className="modal-grid-form">
         <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item>
         <Form.Item name="group_id" label="权限组" rules={[{ required: true }]}><Select options={groups.map((group) => ({ label: group.name, value: group.id }))} /></Form.Item>
+        <Form.Item name="show" label={<Tooltip title="允许新用户购买，也允许已有用户变更到此订阅">允许新购（上架销售） <QuestionCircleOutlined /></Tooltip>}><Select options={[{ label: '允许新购', value: 1 }, { label: '停止新购', value: 0 }]} /></Form.Item>
+        <Form.Item name="renew" label={<Tooltip title="停止新购后，可以单独决定已购用户能否续费">允许续费 <QuestionCircleOutlined /></Tooltip>}><Select options={[{ label: '允许续费', value: 1 }, { label: '禁止续费', value: 0 }]} /></Form.Item>
         <Form.Item name="transfer_enable" label="流量(GB)" rules={[{ required: true }]}><InputNumber style={{ width: '100%' }} /></Form.Item>
         <Form.Item name="device_limit" label="设备数限制"><InputNumber style={{ width: '100%' }} /></Form.Item>
         <Form.Item name="speed_limit" label="限速 Mbps"><InputNumber style={{ width: '100%' }} /></Form.Item>
         <Form.Item name="capacity_limit" label="最大容纳用户"><InputNumber style={{ width: '100%' }} /></Form.Item>
+        <Form.Item name="reset_price" label={<Tooltip title="用户单独购买一次流量重置包的价格；留空表示不提供付费重置">付费重置流量价格（元） <QuestionCircleOutlined /></Tooltip>}><InputNumber placeholder="留空表示不提供" style={{ width: '100%' }} /></Form.Item>
+        <Form.Item name="reset_traffic_method" label={<Tooltip title="套餐自动重置流量的周期，与上方付费重置包不是同一个功能">自动流量重置周期 <QuestionCircleOutlined /></Tooltip>}><Select allowClear placeholder="跟随系统订阅配置" options={resetOptions} /></Form.Item>
         <Form.Item name="month_price" label="月付(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
         <Form.Item name="quarter_price" label="季付(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
         <Form.Item name="half_year_price" label="半年付(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
@@ -141,10 +145,6 @@ export default function PlanPage() {
         <Form.Item name="two_year_price" label="两年付(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
         <Form.Item name="three_year_price" label="三年付(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
         <Form.Item name="onetime_price" label="一次性(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
-        <Form.Item name="reset_price" label="重置包(元)"><InputNumber style={{ width: '100%' }} /></Form.Item>
-        <Form.Item name="reset_traffic_method" label="流量重置方式"><Select allowClear placeholder="跟随系统配置" options={resetOptions} /></Form.Item>
-        <Form.Item name="show" label="销售状态"><Select options={[{ label: '显示', value: 1 }, { label: '隐藏', value: 0 }]} /></Form.Item>
-        <Form.Item name="renew" label="续费"><Select options={[{ label: '允许', value: 1 }, { label: '禁止', value: 0 }]} /></Form.Item>
         <Form.Item name="force_update" label={<Tooltip title="开启后会把当前套餐的权限组、总流量、设备数限制、限速同步到已购买该套餐的用户">强制更新用户 <QuestionCircleOutlined /></Tooltip>} valuePropName="checked"><Switch /></Form.Item>
         <Form.Item name="content" label="说明"><Input.TextArea rows={4} /></Form.Item>
       </Form>

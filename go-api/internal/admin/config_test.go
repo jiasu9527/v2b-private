@@ -237,12 +237,28 @@ func TestDBServiceSaveConfigPersistsJSONValues(t *testing.T) {
 	}
 }
 
+func TestValidateConfigValueRestrictsOrderCompletionActions(t *testing.T) {
+	for _, key := range []string{"new_order_event_id", "renew_order_event_id", "change_order_event_id"} {
+		for _, value := range []string{"0", "1"} {
+			if err := validateConfigValue(key, phpConfigValue{kind: phpConfigScalar, scalar: value}); err != nil {
+				t.Fatalf("expected %s=%s to be valid: %v", key, value, err)
+			}
+		}
+		if err := validateConfigValue(key, phpConfigValue{kind: phpConfigScalar, scalar: "2"}); err == nil {
+			t.Fatalf("expected %s=2 to be rejected", key)
+		}
+	}
+}
+
 func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 	root := t.TempDir()
 	writeAdminJSONFixture(t, root, map[string]any{
 		"secure_path":                   "localadmin",
 		"allow_new_period":              0,
 		"reset_traffic_method":          0,
+		"new_order_event_id":            0,
+		"renew_order_event_id":          0,
+		"change_order_event_id":         0,
 		"commission_auto_check_minutes": 4320,
 		"order_keep_days":               0,
 		"mail_log_keep_days":            0,
@@ -270,6 +286,9 @@ func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 
 	t.Setenv("ALLOW_NEW_PERIOD", "")
 	t.Setenv("RESET_TRAFFIC_METHOD", "")
+	t.Setenv("NEW_ORDER_EVENT_ID", "")
+	t.Setenv("RENEW_ORDER_EVENT_ID", "")
+	t.Setenv("CHANGE_ORDER_EVENT_ID", "")
 
 	cfg := cfgpkg.Load()
 	runtimeState := cfgpkg.NewRuntimeState(cfg)
@@ -280,6 +299,9 @@ func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 	}
 	if runtimeState.Current().ResetTrafficMethod != 0 {
 		t.Fatalf("expected reset_traffic_method=0 before save, got %d", runtimeState.Current().ResetTrafficMethod)
+	}
+	if current := runtimeState.CurrentConfig(); current.NewOrderEventID != 0 || current.RenewOrderEventID != 0 || current.ChangeOrderEventID != 0 {
+		t.Fatalf("expected order completion actions disabled before save, got new=%d renew=%d change=%d", current.NewOrderEventID, current.RenewOrderEventID, current.ChangeOrderEventID)
 	}
 	if runtimeState.Current().CommissionAutoCheckMinutes != 4320 {
 		t.Fatalf("expected commission_auto_check_minutes=4320 before save, got %d", runtimeState.Current().CommissionAutoCheckMinutes)
@@ -312,6 +334,9 @@ func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 	ok, err := service.SaveConfig(context.Background(), map[string]any{
 		"allow_new_period":              1,
 		"reset_traffic_method":          4,
+		"new_order_event_id":            1,
+		"renew_order_event_id":          1,
+		"change_order_event_id":         1,
 		"commission_auto_check_minutes": 90,
 		"order_keep_days":               45,
 		"mail_log_keep_days":            15,
@@ -334,6 +359,9 @@ func TestDBServiceSaveConfigReloadsRuntimeConfig(t *testing.T) {
 	}
 	if runtimeState.Current().ResetTrafficMethod != 4 {
 		t.Fatalf("expected reset_traffic_method=4 after save, got %d", runtimeState.Current().ResetTrafficMethod)
+	}
+	if current := runtimeState.CurrentConfig(); current.NewOrderEventID != 1 || current.RenewOrderEventID != 1 || current.ChangeOrderEventID != 1 {
+		t.Fatalf("expected order completion actions hot-reloaded after save, got new=%d renew=%d change=%d", current.NewOrderEventID, current.RenewOrderEventID, current.ChangeOrderEventID)
 	}
 	if runtimeState.Current().CommissionAutoCheckMinutes != 90 {
 		t.Fatalf("expected commission_auto_check_minutes=90 after save, got %d", runtimeState.Current().CommissionAutoCheckMinutes)

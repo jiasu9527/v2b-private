@@ -16,6 +16,11 @@ const subscribeMethodOptions = [
   { label: '永久有效', value: 0 }, { label: '一次性有效', value: 1 }, { label: '限时有效', value: 2 }
 ];
 
+const orderEventOptions = [
+  { label: '不执行任何动作', value: 0 },
+  { label: '重置用户流量', value: 1 },
+];
+
 const emailTemplateOptions = [
   { label: 'default', value: 'default' }
 ];
@@ -45,11 +50,11 @@ const fieldOrders: Record<string, string[]> = {
   ],
   subscribe: [
     'plan_change_enable', 'reset_traffic_method', 'surplus_enable', 'allow_new_period',
-    'order_keep_days', 'mail_log_keep_days', 'log_keep_days', 'stat_user_keep_days', 'stat_server_keep_days',
-    'auth_session_keep_days', 'runtime_kv_keep_days', 'failed_jobs_keep_days',
     'new_order_event_id', 'renew_order_event_id', 'change_order_event_id',
     'show_info_to_server_enable', 'show_subscribe_method', 'subscribe_cache_enable',
-    'subscribe_cache_expire', 'show_subscribe_expire', 'subscribe_lifetime'
+    'subscribe_cache_expire', 'show_subscribe_expire', 'subscribe_lifetime',
+    'order_keep_days', 'mail_log_keep_days', 'log_keep_days', 'stat_user_keep_days', 'stat_server_keep_days',
+    'auth_session_keep_days', 'runtime_kv_keep_days', 'failed_jobs_keep_days'
   ],
   invite: [
     'invite_force', 'invite_commission', 'invite_gen_limit', 'invite_never_expire',
@@ -155,10 +160,10 @@ const configLabels: Record<string, ConfigMeta> = {
   password_limit_count: { title: '次数', description: '达到失败次数后开启惩罚。', child: true },
   password_limit_expire: { title: '惩罚时间(分钟)', description: '需要等待惩罚时间过后才可以再次登陆。', child: true },
 
-  plan_change_enable: { title: '允许用户更改订阅', description: '开启后用户将会可以对订阅计划进行变更。' },
+  plan_change_enable: { title: '允许用户更改订阅', description: '开启后用户将会可以对订阅计划进行变更。', switch: true },
   reset_traffic_method: { title: '月流量重置方式', description: '全局流量重置方式，默认每月1号。可以在订阅管理为订阅单独设置。', options: resetOptions },
-  surplus_enable: { title: '开启折抵方案', description: '开启后用户更换订阅将会由系统对原有订阅进行折抵。' },
-  allow_new_period: { title: '允许提前开启流量周期', description: '开启后用户流量用尽时可以选择扣除订阅时长为代价重置流量。' },
+  surplus_enable: { title: '开启折抵方案', description: '开启后用户更换订阅将会由系统对原有订阅进行折抵。', switch: true },
+  allow_new_period: { title: '允许提前开启流量周期', description: '开启后用户流量用尽时可以选择扣除订阅时长为代价重置流量。', switch: true },
   order_keep_days: { title: '订单保留天数', description: '超过该天数的订单记录将会被清理。' },
   mail_log_keep_days: { title: '邮件日志保留天数', description: '超过该天数的邮件日志将会被清理。' },
   log_keep_days: { title: '系统日志保留天数', description: '超过该天数的系统日志将会被清理。' },
@@ -167,12 +172,12 @@ const configLabels: Record<string, ConfigMeta> = {
   auth_session_keep_days: { title: '登录会话保留天数', description: '超过该天数的登录会话将会被清理。' },
   runtime_kv_keep_days: { title: '运行时缓存保留天数', description: '超过该天数的运行时缓存将会被清理。' },
   failed_jobs_keep_days: { title: '失败任务保留天数', description: '超过该天数的失败任务将会被清理。' },
-  new_order_event_id: { title: '当订阅新购时触发事件', description: '新购订阅完成时将触发该任务。' },
-  renew_order_event_id: { title: '当订阅续费时触发事件', description: '续费订阅完成时将触发该任务。' },
-  change_order_event_id: { title: '当订阅变更时触发事件', description: '变更订阅完成时将触发该任务。' },
-  show_info_to_server_enable: { title: '在订阅中展示订阅信息', description: '开启后会在订阅中展示套餐、流量、到期时间等信息。' },
+  new_order_event_id: { title: '新购完成后的动作', description: '用户首次购买订阅并支付完成后执行的动作。', options: orderEventOptions },
+  renew_order_event_id: { title: '续费完成后的动作', description: '用户续费订阅并支付完成后执行的动作。', options: orderEventOptions },
+  change_order_event_id: { title: '变更订阅完成后的动作', description: '用户更换订阅并支付完成后执行的动作。', options: orderEventOptions },
+  show_info_to_server_enable: { title: '在订阅中展示订阅信息', description: '开启后会在订阅中展示套餐、流量、到期时间等信息。', switch: true },
   show_subscribe_method: { title: '订阅链接生效模式', description: '用户获取订阅链接后的有效期。', options: subscribeMethodOptions },
-  subscribe_cache_enable: { title: '订阅缓存', description: '开启后订阅内容会使用缓存。' },
+  subscribe_cache_enable: { title: '订阅缓存', description: '开启后订阅内容会使用缓存。', switch: true },
   subscribe_cache_expire: { title: '订阅缓存时间(秒)', child: true, addonAfter: '秒' },
   show_subscribe_expire: { title: '订阅链接有效时间(分钟)', description: '订阅链接获取后经过该时间将失效。', child: true, addonAfter: '分钟' },
   subscribe_lifetime: { title: '订阅链接有效时间(分钟)', description: '订阅链接获取后经过该时间将失效。', child: true, addonAfter: '分钟' },
