@@ -124,6 +124,10 @@ func expectCurrentClientEntrySchema(mock sqlmock.Sqlmock, columnsExist bool, leg
 	} {
 		mock.ExpectExec(index).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
+	for _, stmt := range []string{`CREATE TABLE IF NOT EXISTS v2_client_entry_collection`, `CREATE TABLE IF NOT EXISTS v2_client_entry_collection_member`, `CREATE INDEX IF NOT EXISTS idx_v2_client_entry_collection_member_collection`} {
+		mock.ExpectExec(stmt).WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+
 }
 
 func TestEnsureClientEntrySchemaCreatesCurrentTablesAndColumns(t *testing.T) {

@@ -299,6 +299,9 @@ RETURNING group_id`, minimum, maximum, req.PolicyID, groupA, groupB, now)
 		return ClientEntryUserPolicyRecord{}, errors.New("二分用户人数异常，请重试")
 	}
 
+	if err := detachClientEntryCollectionMembers(ctx, tx, "policy", req.PolicyID); err != nil {
+		return ClientEntryUserPolicyRecord{}, err
+	}
 	result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
 SET mode = 'split', entry_host = '', extra_nodes = '[]', snapshot_from = NULL, snapshot_to = NULL, updated_at = $2
 WHERE id = $1 AND mode = 'standard'`, req.PolicyID, now)
@@ -446,6 +449,9 @@ WHERE assignment.policy_id = $1 AND assignment.user_id = ranked.user_id`, req.Po
 	if err != nil || affected != userCount {
 		return ClientEntryUserPolicyRecord{}, errors.New("分组用户已变化，请刷新后重试")
 	}
+	if err := detachClientEntryCollectionMembers(ctx, tx, "split_group", req.GroupID); err != nil {
+		return ClientEntryUserPolicyRecord{}, err
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy_split_group
 SET entry_host = '', global_sort = NULL, updated_at = $2
 WHERE id = $1`, req.GroupID, now); err != nil {
@@ -510,6 +516,9 @@ func (s *DBService) UpdateClientEntryUserPolicySplitGroupHost(ctx context.Contex
 		return ClientEntryUserPolicyRecord{}, errors.New("更新二分规则失败")
 	}
 	defer tx.Rollback()
+	if err := lockClientEntryVisibleOrder(ctx, tx); err != nil {
+		return ClientEntryUserPolicyRecord{}, err
+	}
 	if updateSharedSettings {
 		if err := validateClientEntryRuleMembers(ctx, tx, members); err != nil {
 			return ClientEntryUserPolicyRecord{}, err
@@ -518,6 +527,9 @@ func (s *DBService) UpdateClientEntryUserPolicySplitGroupHost(ctx context.Contex
 	result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy_split_group split_group
 SET name = $3, entry_host = $4, updated_at = $5
 WHERE split_group.id = $1 AND split_group.policy_id = $2
+  AND NOT EXISTS (SELECT 1 FROM v2_client_entry_collection_member member
+    JOIN v2_client_entry_collection collection ON collection.id=member.collection_id
+    WHERE member.split_group_id=$1 AND collection.entry_host<>$4)
   AND NOT EXISTS (
 	SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = split_group.id
   )
@@ -528,7 +540,7 @@ WHERE split_group.id = $1 AND split_group.policy_id = $2
 		return ClientEntryUserPolicyRecord{}, errors.New("更新二分规则失败")
 	}
 	if err := requireClientEntryRuleAffected(result, "二分组"); err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("只能编辑当前叶子组")
+		return ClientEntryUserPolicyRecord{}, errors.New("只能编辑当前叶子组；合集成员的入口请在合集中统一修改，单独设置前请先移出合集")
 	}
 	if updateSharedSettings {
 		result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy

@@ -311,14 +311,20 @@ RETURNING id`, prepared.Name, nextSort, prepared.Action, conditions, prepared.En
 		if policyID <= 0 {
 			return false, errors.New("规则不存在")
 		}
+		if err := lockClientEntryVisibleOrder(ctx, tx); err != nil {
+			return false, err
+		}
 		result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
 SET name = $2, action = $3, conditions = $4, entry_host = $5, resolve_entry_host = $6, extra_nodes = $7, extra_nodes_position = $8, enabled = $9, remarks = $10, updated_at = $11
-WHERE id = $1 AND mode = 'standard'`, policyID, prepared.Name, prepared.Action, conditions, prepared.EntryHost, prepared.ResolveEntryHost, extraNodes, prepared.ExtraNodesPosition, prepared.Enabled, prepared.Remarks, now)
+WHERE id = $1 AND mode = 'standard'
+AND NOT EXISTS (SELECT 1 FROM v2_client_entry_collection_member member
+JOIN v2_client_entry_collection collection ON collection.id=member.collection_id
+WHERE member.policy_id=$1 AND (collection.entry_host<>$5 OR $3<>'override'))`, policyID, prepared.Name, prepared.Action, conditions, prepared.EntryHost, prepared.ResolveEntryHost, extraNodes, prepared.ExtraNodesPosition, prepared.Enabled, prepared.Remarks, now)
 		if err != nil {
 			return false, errors.New("保存失败")
 		}
 		if err := requireClientEntryRuleAffected(result, "规则"); err != nil {
-			return false, errors.New("规则不存在")
+			return false, errors.New("规则已变化或入口由合集统一管理，请刷新后在合集中修改入口；如需单独设置，请先移出合集")
 		}
 	}
 
@@ -547,6 +553,12 @@ func (s *DBService) DeleteClientEntryUserPolicy(ctx context.Context, id int64) (
 		return false, errors.New("删除失败")
 	}
 	defer tx.Rollback()
+	if err := lockClientEntryVisibleOrder(ctx, tx); err != nil {
+		return false, err
+	}
+	if err := detachClientEntryCollectionMembers(ctx, tx, "policy", id); err != nil {
+		return false, err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_user_policy_member WHERE policy_id = $1`, id); err != nil {
 		return false, errors.New("删除失败")
 	}

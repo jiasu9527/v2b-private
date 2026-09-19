@@ -98,6 +98,10 @@ func expectEnsureClientEntrySchema(mock sqlmock.Sqlmock) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_assignment_user ON v2_client_entry_user_policy_split_assignment\(user_id, policy_id\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	for _, stmt := range []string{`CREATE TABLE IF NOT EXISTS v2_client_entry_collection`, `CREATE TABLE IF NOT EXISTS v2_client_entry_collection_member`, `CREATE INDEX IF NOT EXISTS idx_v2_client_entry_collection_member_collection`} {
+		mock.ExpectExec(stmt).WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+
 }
 
 func TestDBServiceClientEntryGroupsReturnsShownGroupsWithBindingsAndIPs(t *testing.T) {

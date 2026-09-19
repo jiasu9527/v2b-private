@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Checkbox,
+  Collapse,
   Form,
   Input,
   InputNumber,
@@ -29,8 +30,10 @@ import {
   PlusOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
-import { apiGet, apiPost, bytes } from '../lib/api';
+import { apiGet, apiPost, apiJsonPost, bytes } from '../lib/api';
 import { moveItem } from '../lib/drag';
+import EntryCollectionEditor from './EntryCollectionEditor';
+import { attachEntryCollections, parseEntryCollections, canJoinEntryCollection, entryCollectionMember, entryCollectionMemberKey, type EntryCollection, type EntryCollectionOption } from './clientEntryCollections';
 import { buildVisibleServerOptions, memberKey, splitMemberKey, type ClientEntryServerOption } from './clientEntryHelpers';
 
 type ConditionField = 'user_id' | 'email' | 'registration_days' | 'ua' | 'plan_id';
@@ -563,7 +566,7 @@ function PolicyEditor({
     form.setFieldsValue({
       id: row?.id,
       name: row?.name || '',
-      entry_host: row?.entry_host || '',
+      entry_host: row?.__entry_collection?.entry_host || row?.entry_host || '',
       resolve_entry_host: normalizeResolveEntryHost(row?.resolve_entry_host),
       action: normalizePolicyAction(row?.action),
       conditions,
@@ -673,7 +676,7 @@ function PolicyEditor({
           <Input placeholder="例如：新用户 Clash 独立入口" maxLength={100} showCount />
         </Form.Item>
         <Form.Item name="action" label="命中后动作" rules={[{ required: true }]}>
-          <Select options={[
+          <Select disabled={Boolean(row?.__entry_collection)} options={[
             { label: '覆盖入口地址', value: 'override' },
             { label: '下发原入口地址', value: 'original' },
             { label: '不下发所选节点', value: 'hide' },
@@ -686,6 +689,7 @@ function PolicyEditor({
           description="可以在下方一次选择多个节点。节点需在编辑页开启“仅入口分配用户可见”，这样未命中本规则的用户不会收到这些节点。"
           style={{ marginBottom: 24 }}
         />}
+        {row?.__entry_collection && <Alert type="info" showIcon message={`入口由合集「${row.__entry_collection.name}」统一管理`} description="如需修改统一入口，请编辑合集；如需只改这条规则的入口或命中动作，请先将规则移出合集。其他条件和设置可以照常编辑。" style={{ marginBottom: 18 }} />}
         {action === 'override' && <>
           <Form.Item
             name="entry_host"
@@ -696,7 +700,7 @@ function PolicyEditor({
             ]}
             tooltip="规则命中时，所选节点会下发这个地址。这里只填写普通域名或 IP。"
           >
-            <Input placeholder="例如 vip.example.com 或 1.2.3.4" />
+            <Input disabled={Boolean(row?.__entry_collection)} placeholder="例如 vip.example.com 或 1.2.3.4" />
           </Form.Item>
           <Form.Item
             name="resolve_entry_host"
@@ -1035,6 +1039,7 @@ function RangePolicySplitConverter({ row, onDone }: { row: any; onDone: () => vo
         description={`转换后仍沿用原规则的名称、${Array.isArray(row?.members) ? row.members.length : 0} 个生效节点、规则顺序、启停状态和${normalizeResolveEntryHost(row?.resolve_entry_host) ? '已开启的' : '未开启的'}域名解析设置。用户名单会固定为静态快照；只要当前叶子组仍有至少 2 人，就可以继续逐层二分。这里只需填写 A、B 两组入口。`}
         style={{ marginBottom: 18 }}
       />
+      {row?.__entry_collection && <Alert type="warning" showIcon message="二分后将自动退出当前入口合集" description="新的 A、B 组作为独立规则显示，分别使用下方填写的入口，不再由合集统一覆盖。" style={{ marginBottom: 18 }} />}
       <Form form={form} layout="vertical">
         <Space align="start" wrap style={{ width: '100%' }}>
           <Form.Item name="entry_host_a" label="A 组入口" rules={[{ required: true, whitespace: true, message: '请输入 A 组入口' }]} style={{ minWidth: 290, flex: 1 }}>
@@ -1352,7 +1357,7 @@ function SplitGroupRowActions({
     editForm.resetFields();
     editForm.setFieldsValue({
       name: splitGroupDisplayName(group),
-      entry_host: group.entry_host,
+      entry_host: row.__entry_collection?.entry_host || group.entry_host,
       resolve_entry_host: normalizeResolveEntryHost(row.resolve_entry_host),
       members: normalizedMembers(row),
       enabled: Number(row.enabled) !== 0,
@@ -1467,6 +1472,7 @@ function SplitGroupRowActions({
         description="当前行会被两个新叶子组原地替换；节点、解析设置和全局优先级都会继承。"
         style={{ marginBottom: 16 }}
       />
+      {row.__entry_collection && <Alert type="warning" showIcon message="继续二分后将自动退出入口合集" description="两个新叶子组独立显示，使用各自的新入口；其他合集成员不受影响。" style={{ marginBottom: 16 }} />}
       <Form form={splitForm} layout="vertical" onValuesChange={() => setUseBackupIPPool(false)}>
         <Space style={{ marginBottom: 16 }} wrap>
           <Button
@@ -1505,6 +1511,7 @@ function SplitGroupRowActions({
         description="名称和入口地址只修改当前规则；固定用户名单不会变化。解析设置、生效节点、状态和备注由同一套固定规则共同使用。"
         style={{ marginBottom: 16 }}
       />
+      {row.__entry_collection && <Alert type="info" showIcon message={`入口由合集「${row.__entry_collection.name}」统一管理`} description="请编辑合集来统一换入口；如需单独修改，请先移出合集。名称、固定名单等功能不受影响。" style={{ marginBottom: 16 }} />}
       <Form form={editForm} layout="vertical">
         <Form.Item name="name" label="规则名称" rules={[{ required: true, whitespace: true, message: '请输入规则名称' }]}>
           <Input placeholder="例如：内鬼入口 B" maxLength={255} showCount />
@@ -1517,7 +1524,7 @@ function SplitGroupRowActions({
             { validator: (_, value) => /[,，()]/.test(String(value || '')) ? Promise.reject(new Error('这里只能填写单个普通域名或 IP')) : Promise.resolve() },
           ]}
         >
-          <Input placeholder="例如 vip.example.com 或 1.2.3.4" />
+          <Input disabled={Boolean(row.__entry_collection)} placeholder="例如 vip.example.com 或 1.2.3.4" />
         </Form.Item>
         <Form.Item
           name="resolve_entry_host"
@@ -1641,14 +1648,23 @@ export default function ClientEntryUserPolicyPage() {
   const [loading, setLoading] = useState(false);
   const [draggingKey, setDraggingKey] = useState<string | null>(null);
   const [simulatorOpen, setSimulatorOpen] = useState(false);
+  const [collections, setCollections] = useState<EntryCollection[]>([]);
+  const [loadError, setLoadError] = useState('');
+  const [view, setView] = useState<'manage' | 'sort'>('manage');
+  const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([]);
+  const [collectionEditorOpen, setCollectionEditorOpen] = useState(false);
+  const [editingCollection, setEditingCollection] = useState<EntryCollection | undefined>();
+  const [expandedCollections, setExpandedCollections] = useState<string[]>([]);
 
   const load = async () => {
     setLoading(true);
     try {
-      const [policyRes, nodeRes] = await Promise.all([
+      const [policyRes, nodeRes, collectionRes] = await Promise.all([
         apiGet('/server/client-entry-user-policy/fetch'),
         apiGet('/server/manage/getNodes').catch(() => ({ data: [] })),
+        apiGet('/server/client-entry-user-policy/collection/fetch'),
       ]);
+      const nextCollections = parseEntryCollections(collectionRes.data);
       const policies = Array.isArray(policyRes.data) ? policyRes.data : [];
       const normalizedPolicies = policies.map((row: any) => ({
         ...row,
@@ -1668,10 +1684,15 @@ export default function ClientEntryUserPolicyPage() {
         extra_nodes: parseExtraNodes(row.extra_nodes),
         extra_nodes_position: normalizeExtraNodePosition(row.extra_nodes_position),
       }));
-      setRows(buildPolicyDisplayRows(normalizedPolicies));
+      setRows(attachEntryCollections(buildPolicyDisplayRows(normalizedPolicies), nextCollections));
+      setCollections(nextCollections);
+      setSelectedKeys([]);
+      setLoadError('');
       setServerOptions(buildVisibleServerOptions(Array.isArray(nodeRes.data) ? nodeRes.data : []));
     } catch (error: any) {
-      message.error(error?.message || '加载失败');
+      const detail = error?.message || '加载失败';
+      setLoadError(detail);
+      message.error(detail);
     } finally {
       setLoading(false);
     }
@@ -1681,6 +1702,37 @@ export default function ClientEntryUserPolicyPage() {
 
   const serverOptionMap = useMemo(() => Object.fromEntries(serverOptions.map((item) => [item.value, item.label])), [serverOptions]);
   const entryHosts = useMemo(() => collectEntryHosts(rows), [rows]);
+  const ungroupedRows = useMemo(() => rows.filter((row) => !row.__entry_collection), [rows]);
+  const collectionOptions: EntryCollectionOption[] = useMemo(() => rows.filter(canJoinEntryCollection).map((row) => {
+    const item = entryCollectionMember(row);
+    const name = isSplitGroupDisplayRow(row) ? splitGroupDisplayName(row.__split_group) : row.name || `规则 #${row.id}`;
+    const host = String((isSplitGroupDisplayRow(row) ? row.__split_group.entry_host : row.entry_host) || '');
+    return { value: entryCollectionMemberKey(item), label: `${name} · ${item.kind === 'split_group' ? '固定名单' : '规则'} #${item.id} · ${host}`, item, entry_host: host, collection_id: row.__entry_collection?.id };
+  }), [rows]);
+
+  const editCollection = (collection?: EntryCollection) => {
+    setEditingCollection(collection);
+    setCollectionEditorOpen(true);
+  };
+  const dissolveCollection = async (collection: EntryCollection) => {
+    try {
+      await apiJsonPost('/server/client-entry-user-policy/collection/drop', { id: collection.id, version: collection.version });
+      message.success('合集已解散，原规则及当前入口均已保留');
+      await load();
+    } catch (error: any) {
+      message.error(error?.message || '解散合集失败');
+    }
+  };
+  const removeCollectionMember = async (row: any) => {
+    const collection: EntryCollection = row.__entry_collection;
+    try {
+      await apiJsonPost('/server/client-entry-user-policy/collection/remove', { id: collection.id, version: collection.version, item: entryCollectionMember(row) });
+      message.success('规则已移出合集，当前入口保持不变');
+      await load();
+    } catch (error: any) {
+      message.error(error?.message || '移出合集失败');
+    }
+  };
 
   const copyAllEntryHosts = async () => {
     if (!entryHosts.length) {
@@ -1721,14 +1773,12 @@ export default function ClientEntryUserPolicyPage() {
 
   const saveSort = async (nextRows: any[]) => {
     await apiPost('/server/client-entry-user-policy/sort', {
-      items: nextRows.map((row) => isSplitGroupDisplayRow(row)
-        ? { kind: 'split_group', id: Number(row.__split_group.id) }
-        : { kind: 'policy', id: Number(row.id) }),
+      items: nextRows.map(entryCollectionMember),
     });
   };
 
   const handleDrop = async (targetRow: any) => {
-    if (!draggingKey) return;
+    if (view !== 'sort' || !draggingKey) return;
     const targetKey = displayRowKey(targetRow);
     if (draggingKey === targetKey) {
       setDraggingKey(null);
@@ -1781,10 +1831,10 @@ export default function ClientEntryUserPolicyPage() {
         if (isSplitGroupDisplayRow(row)) {
           const group = row.__split_group as SplitGroup;
           const text = splitGroupDisplayName(group);
-          return <span className="client-entry-rule-name" title={text}>{text}</span>;
+          return <Space direction="vertical" size={4}><span className="client-entry-rule-name" title={text}>{text}</span>{view === 'sort' && row.__entry_collection && <Tag color="blue">合集：{row.__entry_collection.name}</Tag>}</Space>;
         }
         const text = String(value || `规则 #${row.id}`);
-        return <span className="client-entry-rule-name" title={text}>{text}</span>;
+        return <Space direction="vertical" size={4}><span className="client-entry-rule-name" title={text}>{text}</span>{view === 'sort' && row.__entry_collection && <Tag color="blue">合集：{row.__entry_collection.name}</Tag>}</Space>;
       },
     },
     {
@@ -1864,18 +1914,37 @@ export default function ClientEntryUserPolicyPage() {
       render: (_: any, row: any) => {
         if (isSplitGroupDisplayRow(row)) return <Space className="client-entry-actions" size={10}>
           <SplitGroupRowActions row={row} group={row.__split_group} serverOptions={serverOptions} onDone={load} />
+          {row.__entry_collection && <Popconfirm title="移出合集？当前入口地址会保留，规则不会删除。" onConfirm={() => removeCollectionMember(row)}><a>移出合集</a></Popconfirm>}
           <Popconfirm title={`确认删除“${splitGroupDisplayName(row.__split_group)}”所属的整套固定规则及全部名单？`} onConfirm={() => drop(row)}><a>删除整组</a></Popconfirm>
         </Space>;
-        const copyRow = { ...row, id: undefined, name: `${row.name || `规则 #${row.id}`} - 副本` };
+        const copyRow = { ...row, id: undefined, __entry_collection: undefined, name: `${row.name || `规则 #${row.id}`} - 副本` };
         return <Space className="client-entry-actions" size={10}>
           <PolicyEditor row={row} onDone={load} serverOptions={serverOptions}><a>编辑</a></PolicyEditor>
           {canConvertRangeToSplit(row) && <RangePolicySplitConverter row={row} onDone={load} />}
           <PolicyEditor row={copyRow} onDone={load} serverOptions={serverOptions}><a><CopyOutlined /> 复制</a></PolicyEditor>
+          {row.__entry_collection && <Popconfirm title="移出合集？当前入口地址会保留，规则不会删除。" onConfirm={() => removeCollectionMember(row)}><a>移出合集</a></Popconfirm>}
           <Popconfirm title="确认删除这条入口规则？" onConfirm={() => drop(row)}><a>删除</a></Popconfirm>
         </Space>;
       },
     },
   ];
+
+  const managementColumns = columns.filter((column) => column.key !== 'sequence');
+  const renderManagementTable = (data: any[], selectable = false) => <Table
+    className="forest-table"
+    rowKey={displayRowKey}
+    tableLayout="fixed"
+    columns={managementColumns}
+    dataSource={data}
+    pagination={false}
+    scroll={{ x: 2445 }}
+    rowSelection={selectable ? {
+      selectedRowKeys: selectedKeys,
+      onChange: setSelectedKeys,
+      getCheckboxProps: (row) => ({ disabled: !canJoinEntryCollection(row) }),
+      columnWidth: 48,
+    } : undefined}
+  />;
 
   return <div className="legacy-page client-entry-page">
     <div className="content-heading">用户入口分配</div>
@@ -1884,38 +1953,80 @@ export default function ClientEntryUserPolicyPage() {
         className="client-entry-help"
         type="info"
         showIcon
-        message="仅入口分配节点的下发规则"
-        description="节点编辑中标记为“仅入口分配”的节点，请先保持节点“显示”为“显示”。固定二分的每个当前叶子组都会直接显示为主表独立行，不再显示父容器；这些行可与普通规则一起拖动，页面顺序就是实际订阅匹配优先级。名单固定后可继续二分任意叶子组。"
+        message={view === 'manage' ? '入口合集：多个规则共用一个入口，默认折叠' : '全局排序：从上到下依次匹配'}
+        description={view === 'manage'
+          ? '勾选未归入合集的规则，点击“合并到合集”，只填写一个统一入口。合集只影响入口地址和页面收纳，不改变用户名单、生效节点及实际匹配优先级；当前管理视图不是匹配顺序，调整优先级请切换到“全局排序”。'
+          : '所有普通规则和二分叶子组均在此完整平铺，页面顺序就是实际订阅匹配优先级；拖动任意行即可调整。所属合集只作为标签展示，不会让整个合集跳过其他规则优先匹配。'}
       />
-      <Card className="block-card" styles={{ body: { padding: 0 } }}>
-        <div className="forest-table-action">
-          <Space wrap>
-            <PolicyEditor onDone={load} serverOptions={serverOptions}><Button type="primary" icon={<PlusOutlined />}>新增入口规则</Button></PolicyEditor>
-            <SplitPolicyCreator onDone={load} serverOptions={serverOptions}><Button icon={<BranchesOutlined />}>近期用户固定二分</Button></SplitPolicyCreator>
-            <Button icon={<PlayCircleOutlined />} onClick={() => setSimulatorOpen(true)}>模拟匹配</Button>
-            <Button icon={<CopyOutlined />} disabled={!entryHosts.length} onClick={copyAllEntryHosts}>复制所有入口</Button>
-            <Typography.Text type="secondary">普通规则和二分叶子组统一从上到下匹配；拖动任意行即可调整全局优先级。</Typography.Text>
-          </Space>
-        </div>
-        <Table
-          className="forest-table"
-          rowKey={displayRowKey}
-          tableLayout="fixed"
-          columns={columns}
-          dataSource={rows}
-          pagination={false}
-          scroll={{ x: 2535 }}
-          rowClassName={(row) => `sortable-row ${draggingKey === displayRowKey(row) ? 'dragging-row' : ''}`}
-          onRow={(row) => ({
-            draggable: true,
-            onDragStart: () => setDraggingKey(displayRowKey(row)),
-            onDragOver: (event) => event.preventDefault(),
-            onDrop: () => handleDrop(row),
-            onDragEnd: () => setDraggingKey(null),
-          })}
-        />
-      </Card>
+      {loadError ? <Alert type="error" showIcon message="入口规则或合集加载失败" description={`${loadError}。为避免误把合集成员当作独立规则，已暂停展示与编辑。`} action={<Button onClick={load}>重新加载</Button>} /> : <>
+        <Card className="block-card" styles={{ body: { padding: 0 } }}>
+          <div className="forest-table-action">
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <Space wrap>
+                <PolicyEditor onDone={load} serverOptions={serverOptions}><Button type="primary" icon={<PlusOutlined />}>新增入口规则</Button></PolicyEditor>
+                <SplitPolicyCreator onDone={load} serverOptions={serverOptions}><Button icon={<BranchesOutlined />}>近期用户固定二分</Button></SplitPolicyCreator>
+                <Button icon={<PlayCircleOutlined />} onClick={() => setSimulatorOpen(true)}>模拟匹配</Button>
+                <Button icon={<CopyOutlined />} disabled={!entryHosts.length} onClick={copyAllEntryHosts}>复制所有入口</Button>
+                <Button onClick={load}>刷新</Button>
+              </Space>
+              <Space wrap>
+                <Segmented value={view} options={[{ value: 'manage', label: '合集管理' }, { value: 'sort', label: '全局排序' }]} onChange={(value) => { setView(value as 'manage' | 'sort'); setDraggingKey(null); }} />
+                <Typography.Text type="secondary">共 {rows.length} 条规则 · {collections.length} 个合集 · {ungroupedRows.length} 条未归入合集</Typography.Text>
+                {view === 'manage' && <Button icon={<PlusOutlined />} onClick={() => editCollection()}>{selectedKeys.length ? `合并已选 ${selectedKeys.length} 条到合集` : '新建入口合集'}</Button>}
+                {view === 'manage' && selectedKeys.length > 0 && <Button type="link" onClick={() => setSelectedKeys([])}>取消选择</Button>}
+              </Space>
+            </Space>
+          </div>
+          {view === 'sort' ? <Table
+            className="forest-table"
+            rowKey={displayRowKey}
+            tableLayout="fixed"
+            columns={columns}
+            dataSource={rows}
+            pagination={false}
+            scroll={{ x: 2535 }}
+            rowClassName={(row) => `sortable-row ${draggingKey === displayRowKey(row) ? 'dragging-row' : ''}`}
+            onRow={(row) => ({
+              draggable: true,
+              onDragStart: () => setDraggingKey(displayRowKey(row)),
+              onDragOver: (event) => event.preventDefault(),
+              onDrop: () => handleDrop(row),
+              onDragEnd: () => setDraggingKey(null),
+            })}
+          /> : <>
+            {collections.length > 0 && <Collapse
+              className="entry-collections"
+              ghost
+              activeKey={expandedCollections}
+              onChange={(keys) => setExpandedCollections(Array.isArray(keys) ? keys : [keys])}
+              items={collections.map((collection) => ({
+                key: String(collection.id),
+                label: <Space wrap size={10}>
+                  <Typography.Text strong>{collection.name}</Typography.Text>
+                  <Tag color="blue">{collection.items.length} 条规则</Tag>
+                  <Typography.Text type="secondary">统一入口：</Typography.Text>
+                  <Typography.Text code style={{ overflowWrap: 'anywhere' }}>{collection.entry_host}</Typography.Text>
+                </Space>,
+                extra: <Space wrap onClick={(event) => event.stopPropagation()}>
+                  <Button size="small" icon={<CopyOutlined />} onClick={async () => { try { await copyText(collection.entry_host); message.success('已复制合集入口'); } catch { message.error('复制失败'); } }}>复制入口</Button>
+                  <Button size="small" onClick={() => editCollection(collection)}>编辑入口 / 成员</Button>
+                  <Popconfirm title="解散这个合集？" description="只解除统一入口管理；所有原规则、用户名单及当前入口地址都保留。" onConfirm={() => dissolveCollection(collection)}><Button size="small" danger>解散合集</Button></Popconfirm>
+                </Space>,
+                children: <>
+                  <Typography.Paragraph type="secondary">以下是本合集成员；实际匹配仍按“全局排序”执行。可正常编辑名称、条件、固定名单等；单独修改入口须先移出合集。</Typography.Paragraph>
+                  {renderManagementTable(rows.filter((row) => row.__entry_collection?.id === collection.id))}
+                </>,
+              }))}
+            />}
+            <div style={{ padding: '16px 20px', borderTop: collections.length ? '1px solid #f0f0f0' : undefined }}>
+              <Space wrap><Typography.Text strong>未归入合集的规则（{ungroupedRows.length}）</Typography.Text><Typography.Text type="secondary">勾选多条可合并到一个合集；下发原入口 / 隐藏节点规则不参与合并。</Typography.Text></Space>
+            </div>
+            {renderManagementTable(ungroupedRows, true)}
+          </>}
+        </Card>
+      </>}
     </Spin>
+    <EntryCollectionEditor open={collectionEditorOpen} collection={editingCollection} options={collectionOptions} initialKeys={selectedKeys.map(String)} onClose={() => setCollectionEditorOpen(false)} onDone={load} />
     <SimulationModal open={simulatorOpen} onClose={() => setSimulatorOpen(false)} serverOptions={serverOptions} />
   </div>;
 }

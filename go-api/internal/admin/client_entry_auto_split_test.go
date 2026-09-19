@@ -229,6 +229,7 @@ func testClientEntryAutoSplitAtomicallyAssignsTwoHealthyIPs(t *testing.T, trigge
 	mock.ExpectExec(`(?s)WITH ranked AS .*UPDATE v2_client_entry_user_policy_split_assignment`).
 		WithArgs(int64(42), int64(9), int64(2), int64(91), int64(92), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 4))
+	expectDetachClientEntryCollectionMembers(mock)
 	mock.ExpectExec(`(?s)UPDATE v2_client_entry_user_policy_split_group.*SET entry_host = '', global_sort = NULL`).
 		WithArgs(int64(9), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`(?s)UPDATE v2_client_entry_user_policy.*SET updated_at = \$2.*mode = 'split'`).

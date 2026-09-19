@@ -355,6 +355,9 @@ WHERE assignment.policy_id = $1 AND assignment.user_id = ranked.user_id`,
 	if err != nil || affected != userCount {
 		return true, false, errors.New("automatic split assignments changed concurrently")
 	}
+	if err := detachClientEntryCollectionMembers(ctx, tx, "split_group", operation.SourceGroupID); err != nil {
+		return true, false, err
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy_split_group
 SET entry_host = '', global_sort = NULL, updated_at = $2 WHERE id = $1`, operation.SourceGroupID, now); err != nil {
 		return true, false, fmt.Errorf("retire automatic split parent: %w", err)

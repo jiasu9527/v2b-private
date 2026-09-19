@@ -714,6 +714,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminClientEntryGroupDrop(w, r, state.session, state.admin) {
 				return
 			}
+		case strings.HasPrefix(r.URL.Path, adminPrefix+"/server/client-entry-user-policy/collection/"):
+			if handleAdminClientEntryCollection(w, r, state.session, state.admin, strings.TrimPrefix(r.URL.Path, adminPrefix+"/server/client-entry-user-policy/collection/")) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/server/client-entry-user-policy/fetch":
 			if handleAdminClientEntryUserPolicyFetch(w, r, state.session, state.admin) {
 				return

@@ -176,6 +176,7 @@ func TestDBServiceSaveClientEntryUserPolicyUpdatesResolveEntryHost(t *testing.T)
 	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM "v2_server_vmess" WHERE id = \$1\)`).
 		WithArgs(int64(11)).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	expectClientEntryCollectionOrderLock(mock)
 	mock.ExpectExec(`UPDATE v2_client_entry_user_policy\s+SET name = \$2, action = \$3, conditions = \$4, entry_host = \$5, resolve_entry_host = \$6, extra_nodes = \$7, extra_nodes_position = \$8, enabled = \$9, remarks = \$10, updated_at = \$11\s+WHERE id = \$1 AND mode = 'standard'`).
 		WithArgs(int64(9), "DNS entry", "override", `[]`, "entry.example.com", int64(1), `[]`, "after", int64(1), "", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))

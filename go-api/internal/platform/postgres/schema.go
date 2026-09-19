@@ -272,7 +272,7 @@ $client_entry_split$;`, constraint.table, constraint.name, constraint.definition
 			return fmt.Errorf("ensure client entry index: %w", err)
 		}
 	}
-	return nil
+	return ensureClientEntryCollectionSchema(ctx, db)
 }
 
 // backfillClientEntrySplitGlobalSort expands legacy split policies into the
