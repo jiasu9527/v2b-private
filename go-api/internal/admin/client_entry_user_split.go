@@ -97,11 +97,11 @@ VALUES ($1, $2, $3, $4, $5, $5)`, policyID, member.ServerType, member.ServerID, 
 	}
 
 	globalSortA, globalSortB := nextSort, nextSort+clientEntryRuleSortStep
-	groupA, err := insertClientEntryUserPolicySplitGroup(ctx, tx, policyID, nil, "A", "A", prepared.EntryHostA, clientEntryRuleSortStep, globalSortA, now)
+	groupA, err := insertClientEntryUserPolicySplitGroup(ctx, tx, policyID, nil, "A", "A", prepared.EntryHostA, clientEntryRuleSortStep, globalSortA, now, nil)
 	if err != nil {
 		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("创建 A 组", err)
 	}
-	groupB, err := insertClientEntryUserPolicySplitGroup(ctx, tx, policyID, nil, "B", "B", prepared.EntryHostB, 2*clientEntryRuleSortStep, globalSortB, now)
+	groupB, err := insertClientEntryUserPolicySplitGroup(ctx, tx, policyID, nil, "B", "B", prepared.EntryHostB, 2*clientEntryRuleSortStep, globalSortB, now, nil)
 	if err != nil {
 		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("创建 B 组", err)
 	}
@@ -249,11 +249,11 @@ FOR UPDATE`, req.PolicyID).Scan(&action, &conditionsRaw, &extraNodesRaw, &policy
 		return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
 	}
 	globalSortA, globalSortB := policySort, policySort+clientEntryRuleSortStep
-	groupA, err := insertClientEntryUserPolicySplitGroup(ctx, tx, req.PolicyID, nil, "A", "A", hostA, clientEntryRuleSortStep, globalSortA, now)
+	groupA, err := insertClientEntryUserPolicySplitGroup(ctx, tx, req.PolicyID, nil, "A", "A", hostA, clientEntryRuleSortStep, globalSortA, now, nil)
 	if err != nil {
 		return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
 	}
-	groupB, err := insertClientEntryUserPolicySplitGroup(ctx, tx, req.PolicyID, nil, "B", "B", hostB, 2*clientEntryRuleSortStep, globalSortB, now)
+	groupB, err := insertClientEntryUserPolicySplitGroup(ctx, tx, req.PolicyID, nil, "B", "B", hostB, 2*clientEntryRuleSortStep, globalSortB, now, nil)
 	if err != nil {
 		return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
 	}
@@ -355,14 +355,15 @@ func (s *DBService) SplitClientEntryUserPolicyGroup(ctx context.Context, req Cli
 
 	var parentName, parentPath string
 	var parentGlobalSort sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `SELECT split_group.name, split_group.path, split_group.global_sort
+	var parentResolveEntryHost int64
+	if err := tx.QueryRowContext(ctx, `SELECT split_group.name, split_group.path, split_group.global_sort, COALESCE(split_group.resolve_entry_host, policy.resolve_entry_host)
 FROM v2_client_entry_user_policy_split_group split_group
 JOIN v2_client_entry_user_policy policy ON policy.id = split_group.policy_id
 WHERE split_group.id = $1 AND split_group.policy_id = $2 AND policy.mode = 'split'
   AND NOT EXISTS (
 	SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = split_group.id
   )
-FOR UPDATE OF split_group`, req.GroupID, req.PolicyID).Scan(&parentName, &parentPath, &parentGlobalSort); err != nil {
+FOR UPDATE OF split_group`, req.GroupID, req.PolicyID).Scan(&parentName, &parentPath, &parentGlobalSort, &parentResolveEntryHost); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ClientEntryUserPolicyRecord{}, errors.New("只能继续二分当前叶子组")
 		}
@@ -423,11 +424,11 @@ FOR UPDATE`, req.PolicyID, req.GroupID)
 		return ClientEntryUserPolicyRecord{}, errors.New("继续二分失败")
 	}
 	globalSortA, globalSortB := parentGlobalSort.Int64, parentGlobalSort.Int64+clientEntryRuleSortStep
-	groupA, err := insertClientEntryUserPolicySplitGroup(ctx, tx, req.PolicyID, &parentID, pathA, pathA, hostA, clientEntryRuleSortStep, globalSortA, now)
+	groupA, err := insertClientEntryUserPolicySplitGroup(ctx, tx, req.PolicyID, &parentID, pathA, pathA, hostA, clientEntryRuleSortStep, globalSortA, now, &parentResolveEntryHost)
 	if err != nil {
 		return ClientEntryUserPolicyRecord{}, errors.New("继续二分失败")
 	}
-	groupB, err := insertClientEntryUserPolicySplitGroup(ctx, tx, req.PolicyID, &parentID, pathB, pathB, hostB, 2*clientEntryRuleSortStep, globalSortB, now)
+	groupB, err := insertClientEntryUserPolicySplitGroup(ctx, tx, req.PolicyID, &parentID, pathB, pathB, hostB, 2*clientEntryRuleSortStep, globalSortB, now, &parentResolveEntryHost)
 	if err != nil {
 		return ClientEntryUserPolicyRecord{}, errors.New("继续二分失败")
 	}
@@ -488,12 +489,12 @@ func (s *DBService) UpdateClientEntryUserPolicySplitGroupHost(ctx context.Contex
 	if err != nil {
 		return ClientEntryUserPolicyRecord{}, fmt.Errorf("分组入口地址无效: %w", err)
 	}
-	updateSharedSettings := req.ResolveEntryHost != nil || req.Enabled != nil || req.Members != nil
+	if req.ResolveEntryHost != nil && *req.ResolveEntryHost != 0 && *req.ResolveEntryHost != 1 {
+		return ClientEntryUserPolicyRecord{}, errors.New("解析域名下发 IP 设置无效")
+	}
+	updateSharedSettings := req.Enabled != nil || req.Members != nil
 	var members []ClientEntryGroupMemberSaveRequest
 	if updateSharedSettings {
-		if req.ResolveEntryHost == nil || (*req.ResolveEntryHost != 0 && *req.ResolveEntryHost != 1) {
-			return ClientEntryUserPolicyRecord{}, errors.New("解析域名下发 IP 设置无效")
-		}
 		if req.Enabled == nil || (*req.Enabled != 0 && *req.Enabled != 1) {
 			return ClientEntryUserPolicyRecord{}, errors.New("规则状态无效")
 		}
@@ -525,27 +526,27 @@ func (s *DBService) UpdateClientEntryUserPolicySplitGroupHost(ctx context.Contex
 		}
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy_split_group split_group
-SET name = $3, entry_host = $4, updated_at = $5
+SET name = $3, entry_host = $4, updated_at = $5, resolve_entry_host = COALESCE($6::SMALLINT, split_group.resolve_entry_host)
 WHERE split_group.id = $1 AND split_group.policy_id = $2
   AND NOT EXISTS (SELECT 1 FROM v2_client_entry_collection_member member
     JOIN v2_client_entry_collection collection ON collection.id=member.collection_id
-    WHERE member.split_group_id=$1 AND collection.entry_host<>$4)
+    WHERE member.split_group_id=$1 AND (collection.entry_host<>$4 OR (collection.resolve_entry_host IS NOT NULL AND $6::SMALLINT IS NOT NULL AND collection.resolve_entry_host<>$6::SMALLINT)))
   AND NOT EXISTS (
 	SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = split_group.id
   )
   AND EXISTS (
 	SELECT 1 FROM v2_client_entry_user_policy policy WHERE policy.id = split_group.policy_id AND policy.mode = 'split'
-  )`, req.GroupID, req.PolicyID, name, host, now)
+  )`, req.GroupID, req.PolicyID, name, host, now, req.ResolveEntryHost)
 	if err != nil {
 		return ClientEntryUserPolicyRecord{}, errors.New("更新二分规则失败")
 	}
 	if err := requireClientEntryRuleAffected(result, "二分组"); err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("只能编辑当前叶子组；合集成员的入口请在合集中统一修改，单独设置前请先移出合集")
+		return ClientEntryUserPolicyRecord{}, errors.New("只能编辑当前叶子组；合集成员的入口及解析设置请在合集中统一修改，单独设置前请先移出合集")
 	}
 	if updateSharedSettings {
 		result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
-SET resolve_entry_host = $2, enabled = $3, remarks = $4, updated_at = $5
-WHERE id = $1 AND mode = 'split'`, req.PolicyID, *req.ResolveEntryHost, *req.Enabled, req.Remarks, now)
+SET enabled = $2, remarks = $3, updated_at = $4
+WHERE id = $1 AND mode = 'split'`, req.PolicyID, *req.Enabled, req.Remarks, now)
 		if err != nil {
 			return ClientEntryUserPolicyRecord{}, errors.New("更新入口规则失败")
 		}
@@ -997,7 +998,7 @@ func (s *DBService) loadClientEntryUserPolicySplitGroups(ctx context.Context, po
        NOT EXISTS (
 	       SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = split_group.id
 	       ) AS is_leaf,
-       split_group.created_at, split_group.updated_at
+       split_group.created_at, split_group.updated_at, split_group.resolve_entry_host
 FROM v2_client_entry_user_policy_split_group split_group
 LEFT JOIN v2_client_entry_user_policy_split_assignment assignment
   ON assignment.policy_id = split_group.policy_id AND assignment.group_id = split_group.id
@@ -1016,7 +1017,7 @@ ORDER BY split_group.policy_id ASC, is_leaf DESC, split_group.global_sort ASC NU
 			parentID   sql.NullInt64
 			globalSort sql.NullInt64
 		)
-		if err := rows.Scan(&record.ID, &record.PolicyID, &parentID, &record.Name, &record.Path, &record.EntryHost, &record.Sort, &globalSort, &record.UserCount, &record.IsLeaf, &record.CreatedAt, &record.UpdatedAt); err != nil {
+		if err := rows.Scan(&record.ID, &record.PolicyID, &parentID, &record.Name, &record.Path, &record.EntryHost, &record.Sort, &globalSort, &record.UserCount, &record.IsLeaf, &record.CreatedAt, &record.UpdatedAt, &record.ResolveEntryHost); err != nil {
 			return nil, nil, fmt.Errorf("scan client entry split group: %w", err)
 		}
 		if parentID.Valid {
@@ -1123,12 +1124,12 @@ func normalizeClientEntryUserPolicySplitHosts(valueA, valueB string) (string, st
 	return hostA, hostB, nil
 }
 
-func insertClientEntryUserPolicySplitGroup(ctx context.Context, tx *sql.Tx, policyID int64, parentID *int64, name, path, entryHost string, sortValue, globalSort, now int64) (int64, error) {
+func insertClientEntryUserPolicySplitGroup(ctx context.Context, tx *sql.Tx, policyID int64, parentID *int64, name, path, entryHost string, sortValue, globalSort, now int64, resolveEntryHost *int64) (int64, error) {
 	var id int64
 	if err := tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_user_policy_split_group
-(policy_id, parent_id, name, path, entry_host, sort, global_sort, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
-RETURNING id`, policyID, parentID, name, path, entryHost, sortValue, globalSort, now).Scan(&id); err != nil {
+(policy_id, parent_id, name, path, entry_host, sort, global_sort, created_at, updated_at, resolve_entry_host)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9)
+RETURNING id`, policyID, parentID, name, path, entryHost, sortValue, globalSort, now, resolveEntryHost).Scan(&id); err != nil {
 		return 0, err
 	}
 	return id, nil

@@ -319,12 +319,12 @@ SET name = $2, action = $3, conditions = $4, entry_host = $5, resolve_entry_host
 WHERE id = $1 AND mode = 'standard'
 AND NOT EXISTS (SELECT 1 FROM v2_client_entry_collection_member member
 JOIN v2_client_entry_collection collection ON collection.id=member.collection_id
-WHERE member.policy_id=$1 AND (collection.entry_host<>$5 OR $3<>'override'))`, policyID, prepared.Name, prepared.Action, conditions, prepared.EntryHost, prepared.ResolveEntryHost, extraNodes, prepared.ExtraNodesPosition, prepared.Enabled, prepared.Remarks, now)
+WHERE member.policy_id=$1 AND (collection.entry_host<>$5 OR $3<>'override' OR (collection.resolve_entry_host IS NOT NULL AND collection.resolve_entry_host<>$6)))`, policyID, prepared.Name, prepared.Action, conditions, prepared.EntryHost, prepared.ResolveEntryHost, extraNodes, prepared.ExtraNodesPosition, prepared.Enabled, prepared.Remarks, now)
 		if err != nil {
 			return false, errors.New("保存失败")
 		}
 		if err := requireClientEntryRuleAffected(result, "规则"); err != nil {
-			return false, errors.New("规则已变化或入口由合集统一管理，请刷新后在合集中修改入口；如需单独设置，请先移出合集")
+			return false, errors.New("规则已变化或入口由合集统一管理，请刷新后在合集中修改入口及解析设置；如需单独设置，请先移出合集")
 		}
 	}
 

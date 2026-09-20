@@ -268,6 +268,9 @@ func selectClientEntryUserPolicySimulation(policies []ClientEntryUserPolicyRecor
 			}
 			candidate.Name = strings.TrimSpace(group.Name)
 			candidate.EntryHost = strings.TrimSpace(group.EntryHost)
+			if group.ResolveEntryHost != nil {
+				candidate.ResolveEntryHost = *group.ResolveEntryHost
+			}
 			candidate.SnapshotUserCount = group.UserCount
 			candidate.SplitGroups = nil
 			if group.GlobalSort != nil {

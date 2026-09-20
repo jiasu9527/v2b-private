@@ -243,8 +243,9 @@ func (s *DBService) processNextClientEntryAutoSplit(ctx context.Context) (proces
 	}
 	var policyName, parentName, parentPath, currentHost string
 	var parentGlobalSort sql.NullInt64
+	var parentResolveEntryHost int64
 	err = tx.QueryRowContext(ctx, `SELECT policy.name, split_group.name, split_group.path,
-split_group.entry_host, split_group.global_sort
+split_group.entry_host, split_group.global_sort, COALESCE(split_group.resolve_entry_host, policy.resolve_entry_host)
 FROM v2_client_entry_user_policy_split_group split_group
 JOIN v2_client_entry_user_policy policy ON policy.id = split_group.policy_id
 WHERE split_group.id = $1 AND split_group.policy_id = $2
@@ -253,7 +254,7 @@ WHERE split_group.id = $1 AND split_group.policy_id = $2
 	SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = split_group.id
   )
 FOR UPDATE OF split_group, policy`, operation.SourceGroupID, operation.PolicyID).Scan(
-		&policyName, &parentName, &parentPath, &currentHost, &parentGlobalSort,
+		&policyName, &parentName, &parentPath, &currentHost, &parentGlobalSort, &parentResolveEntryHost,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := finishClientEntryAutoSplitOperation(ctx, tx, operation.ID, "cancelled", "固定二分叶子已变化", now, 0, 0, 0, 0); err != nil {
@@ -327,12 +328,12 @@ FOR UPDATE OF split_group, policy`, operation.SourceGroupID, operation.PolicyID)
 	parentID := operation.SourceGroupID
 	nameA, nameB := automaticClientEntrySplitChildNames(parentName, pathA, pathB)
 	groupA, err := insertClientEntryUserPolicySplitGroup(ctx, tx, operation.PolicyID, &parentID,
-		nameA, pathA, backupIPs[0].IP, clientEntryRuleSortStep, globalSortA, now)
+		nameA, pathA, backupIPs[0].IP, clientEntryRuleSortStep, globalSortA, now, &parentResolveEntryHost)
 	if err != nil {
 		return true, false, fmt.Errorf("create automatic split group A: %w", err)
 	}
 	groupB, err := insertClientEntryUserPolicySplitGroup(ctx, tx, operation.PolicyID, &parentID,
-		nameB, pathB, backupIPs[1].IP, 2*clientEntryRuleSortStep, globalSortB, now)
+		nameB, pathB, backupIPs[1].IP, 2*clientEntryRuleSortStep, globalSortB, now, &parentResolveEntryHost)
 	if err != nil {
 		return true, false, fmt.Errorf("create automatic split group B: %w", err)
 	}

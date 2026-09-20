@@ -3,6 +3,7 @@ export type EntryCollection = {
   id: number;
   name: string;
   entry_host: string;
+  resolve_entry_host: 0 | 1 | null;
   version: number;
   items: EntryCollectionMember[];
 };
@@ -11,8 +12,29 @@ export type EntryCollectionOption = {
   label: string;
   item: EntryCollectionMember;
   entry_host: string;
+  resolve_entry_host: boolean;
   collection_id?: number;
 };
+
+export function effectiveEntryResolveHost(row: any, group = row?.__split_group) {
+  const value = group?.resolve_entry_host ?? row?.resolve_entry_host;
+  if (value === true || value === 'true') return true;
+  const number = Number(value);
+  return Number.isFinite(number) && number !== 0;
+}
+
+export function collectionResolveDefaults(options: EntryCollectionOption[], keys: string[], collection?: EntryCollection) {
+  const values = new Set(options.filter((option) => keys.includes(option.value)).map((option) => option.resolve_entry_host));
+  return {
+    enabled: collection?.resolve_entry_host != null ? collection.resolve_entry_host === 1 : values.size === 1 && values.has(true),
+    mixed: values.size > 1,
+  };
+}
+
+export function entryCollectionResolveLabel(collection: EntryCollection) {
+  if (collection.resolve_entry_host === null) return '解析设置待统一';
+  return collection.resolve_entry_host === 1 ? '解析为 IP' : '直接下发域名 / IP';
+}
 
 export function entryCollectionMemberKey(item: EntryCollectionMember) {
   return `${item.kind}:${Number(item.id)}`;
@@ -53,12 +75,14 @@ export function parseEntryCollections(value: unknown): EntryCollection[] {
     if (!Number.isSafeInteger(id) || id <= 0 || ids.has(id) || !Number.isSafeInteger(version) || version <= 0 || !String(raw?.name || '').trim() || !String(raw?.entry_host || '').trim() || !Array.isArray(raw?.items)) {
       throw new Error('入口合集数据不完整，请刷新重试');
     }
+    const resolveEntryHost = raw.resolve_entry_host == null ? null : raw.resolve_entry_host;
+    if (resolveEntryHost !== null && resolveEntryHost !== 0 && resolveEntryHost !== 1) throw new Error('入口合集解析设置无效，请刷新重试');
     ids.add(id);
     const items = raw.items.map((item: any): EntryCollectionMember => {
       const memberID = Number(item?.id);
       if (!['policy', 'split_group'].includes(item?.kind) || !Number.isSafeInteger(memberID) || memberID <= 0) throw new Error('入口合集成员无效，请刷新重试');
       return { kind: item.kind, id: memberID };
     });
-    return { id, version, name: String(raw.name), entry_host: String(raw.entry_host), items };
+    return { id, version, name: String(raw.name), entry_host: String(raw.entry_host), resolve_entry_host: resolveEntryHost, items };
   });
 }

@@ -29,6 +29,7 @@ func TestNormalizeClientEntryCollectionSaveRequest(t *testing.T) {
 		edit func(*ClientEntryCollectionSaveRequest)
 	}{
 		{"one member create", func(r *ClientEntryCollectionSaveRequest) { r.Items = r.Items[:1] }},
+		{"bad resolve", func(r *ClientEntryCollectionSaveRequest) { r.ResolveEntryHost = 2 }},
 		{"blank host", func(r *ClientEntryCollectionSaveRequest) { r.EntryHost = "" }},
 		{"duplicate", func(r *ClientEntryCollectionSaveRequest) {
 			r.Items = []ClientEntryCollectionItem{{Kind: "policy", ID: 1}, {Kind: "policy", ID: 1}}
@@ -63,12 +64,12 @@ func TestSaveClientEntryCollectionSharesHostWithoutReordering(t *testing.T) {
 	expectClientEntryCollectionOrderLock(mock)
 	mock.ExpectQuery(`(?s)SELECT m.collection_id FROM v2_client_entry_user_policy p.*p.mode='standard' AND p.action='override'.*FOR UPDATE OF p`).WithArgs(int64(1)).WillReturnRows(sqlmock.NewRows([]string{"collection_id"}).AddRow(nil))
 	mock.ExpectQuery(`(?s)SELECT m.collection_id FROM v2_client_entry_user_policy_split_group g.*NOT EXISTS.*FOR UPDATE OF g`).WithArgs(int64(2)).WillReturnRows(sqlmock.NewRows([]string{"collection_id"}).AddRow(nil))
-	mock.ExpectQuery(`INSERT INTO v2_client_entry_collection`).WithArgs("Shared", "entry.example.com", sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(4))
+	mock.ExpectQuery(`INSERT INTO v2_client_entry_collection`).WithArgs("Shared", "entry.example.com", int64(0), sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(4))
 	mock.ExpectExec(`DELETE FROM v2_client_entry_collection_member WHERE collection_id=\$1`).WithArgs(int64(4)).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`INSERT INTO v2_client_entry_collection_member`).WithArgs(int64(4), int64(1), nil).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE v2_client_entry_user_policy SET entry_host=\$2,updated_at=\$3 WHERE id=\$1`).WithArgs(int64(1), "entry.example.com", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE v2_client_entry_user_policy SET entry_host=\$2,resolve_entry_host=\$3,updated_at=\$4 WHERE id=\$1`).WithArgs(int64(1), "entry.example.com", int64(0), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO v2_client_entry_collection_member`).WithArgs(int64(4), nil, int64(2)).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE v2_client_entry_user_policy_split_group SET entry_host=\$2,updated_at=\$3 WHERE id=\$1`).WithArgs(int64(2), "entry.example.com", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE v2_client_entry_user_policy_split_group SET entry_host=\$2,resolve_entry_host=\$3,updated_at=\$4 WHERE id=\$1`).WithArgs(int64(2), "entry.example.com", int64(0), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	got, err := s.SaveClientEntryCollection(context.Background(), ClientEntryCollectionSaveRequest{Name: "Shared", EntryHost: "entry.example.com", Items: []ClientEntryCollectionItem{{Kind: "policy", ID: 1}, {Kind: "split_group", ID: 2}}})
 	if err != nil || got.ID != 4 || got.Version != 1 || len(got.Items) != 2 {
@@ -156,9 +157,9 @@ func TestListClientEntryCollectionsReturnsMixedMembers(t *testing.T) {
 	defer db.Close()
 	s := &DBService{db: db}
 	readyClientEntrySchemaForPolicyTest(s)
-	mock.ExpectQuery(`(?s)SELECT c.id, c.name, c.entry_host, c.version, m.policy_id, m.split_group_id.*LEFT JOIN`).WillReturnRows(sqlmock.NewRows([]string{"id", "name", "entry_host", "version", "policy_id", "split_group_id"}).AddRow(4, "Shared", "entry.example.com", 2, 1, nil).AddRow(4, "Shared", "entry.example.com", 2, nil, 3))
+	mock.ExpectQuery(`(?s)SELECT c.id, c.name, c.entry_host, c.resolve_entry_host, c.version, m.policy_id, m.split_group_id.*LEFT JOIN`).WillReturnRows(sqlmock.NewRows([]string{"id", "name", "entry_host", "resolve_entry_host", "version", "policy_id", "split_group_id"}).AddRow(4, "Shared", "entry.example.com", 1, 2, 1, nil).AddRow(4, "Shared", "entry.example.com", 1, 2, nil, 3))
 	got, err := s.ListClientEntryCollections(context.Background())
-	if err != nil || len(got) != 1 || len(got[0].Items) != 2 {
+	if err != nil || len(got) != 1 || len(got[0].Items) != 2 || got[0].ResolveEntryHost == nil || *got[0].ResolveEntryHost != 1 {
 		t.Fatalf("%#v %v", got, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -178,9 +179,9 @@ func TestSaveClientEntryCollectionRollsBackPartialHostUpdate(t *testing.T) {
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_collection`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(4))
 	mock.ExpectExec(`DELETE FROM v2_client_entry_collection_member`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`INSERT INTO v2_client_entry_collection_member`).WithArgs(int64(4), int64(1), nil).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE v2_client_entry_user_policy SET entry_host`).WithArgs(int64(1), "entry.example.com", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE v2_client_entry_user_policy SET entry_host`).WithArgs(int64(1), "entry.example.com", int64(0), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO v2_client_entry_collection_member`).WithArgs(int64(4), nil, int64(2)).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE v2_client_entry_user_policy_split_group SET entry_host`).WithArgs(int64(2), "entry.example.com", sqlmock.AnyArg()).WillReturnError(errors.New("simulated write failure"))
+	mock.ExpectExec(`UPDATE v2_client_entry_user_policy_split_group SET entry_host`).WithArgs(int64(2), "entry.example.com", int64(0), sqlmock.AnyArg()).WillReturnError(errors.New("simulated write failure"))
 	mock.ExpectRollback()
 	_, err := s.SaveClientEntryCollection(context.Background(), ClientEntryCollectionSaveRequest{Name: "Shared", EntryHost: "entry.example.com", Items: []ClientEntryCollectionItem{{Kind: "policy", ID: 1}, {Kind: "split_group", ID: 2}}})
 	if err == nil || !strings.Contains(err.Error(), "simulated write failure") {

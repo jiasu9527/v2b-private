@@ -8,7 +8,7 @@ const source = readFileSync(new URL('../src/pages/clientEntryCollections.ts', im
 const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS } }).outputText;
 const sandbox = { exports: {} };
 vm.runInNewContext(compiled, sandbox);
-const { attachEntryCollections, availableEntryCollectionOptions, canJoinEntryCollection, entryCollectionMember, entryCollectionMemberKey, parseEntryCollections } = sandbox.exports;
+const { attachEntryCollections, availableEntryCollectionOptions, collectionResolveDefaults, effectiveEntryResolveHost, entryCollectionResolveLabel, canJoinEntryCollection, entryCollectionMember, entryCollectionMemberKey, parseEntryCollections } = sandbox.exports;
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const rows = [
   { id: 9, __row_kind: 'policy', action: 'override', name: 'A' },
@@ -16,7 +16,7 @@ const rows = [
   { id: 3, __row_kind: 'policy', action: 'original', name: 'C' },
   { id: 4, __row_kind: 'policy', action: 'hide', name: 'D' },
 ];
-const collection = { id: 1, name: 'shared', version: 2, entry_host: 'entry.example.com', items: [{ kind: 'policy', id: 9 }, { kind: 'split_group', id: 17 }] };
+const collection = { id: 1, name: 'shared', version: 2, entry_host: 'entry.example.com', resolve_entry_host: null, items: [{ kind: 'policy', id: 9 }, { kind: 'split_group', id: 17 }] };
 
 test('collections keep original rows and global priority order intact', () => {
   const output = attachEntryCollections(rows, [collection]);
@@ -49,4 +49,46 @@ test('failed or malformed collection fetch does not turn grouped members into un
 test('duplicate membership and stale missing rules are rejected', () => {
   assert.throws(() => attachEntryCollections(rows, [collection, { ...collection, id: 2 }]));
   assert.throws(() => attachEntryCollections(rows.slice(1), [collection]));
+});
+
+
+test('split leaf resolution overrides its parent and legacy leaves inherit the parent', () => {
+  assert.equal(effectiveEntryResolveHost({ resolve_entry_host: 1, __split_group: { resolve_entry_host: 0 } }), false);
+  assert.equal(effectiveEntryResolveHost({ resolve_entry_host: 0, __split_group: { resolve_entry_host: 1 } }), true);
+  assert.equal(effectiveEntryResolveHost({ resolve_entry_host: 1, __split_group: { resolve_entry_host: null } }), true);
+  assert.equal(effectiveEntryResolveHost({ resolve_entry_host: 0, __split_group: {} }), false);
+  assert.equal(effectiveEntryResolveHost({ resolve_entry_host: 1 }), true);
+  assert.equal(effectiveEntryResolveHost({ resolve_entry_host: 0 }), false);
+});
+
+test('new and legacy collections default from selected members without silently enabling mixed settings', () => {
+  const options = [
+    { value: 'policy:1', resolve_entry_host: true },
+    { value: 'split_group:2', resolve_entry_host: true },
+    { value: 'split_group:3', resolve_entry_host: false },
+  ];
+  assert.deepEqual(plain(collectionResolveDefaults(options, ['policy:1', 'split_group:2'])), { enabled: true, mixed: false });
+  assert.deepEqual(plain(collectionResolveDefaults(options, ['policy:1', 'split_group:3'])), { enabled: false, mixed: true });
+  assert.deepEqual(plain(collectionResolveDefaults(options, ['split_group:3'])), { enabled: false, mixed: false });
+  assert.deepEqual(plain(collectionResolveDefaults(options, ['policy:1', 'split_group:2'], collection)), { enabled: true, mixed: false });
+  assert.deepEqual(plain(collectionResolveDefaults(options, [])), { enabled: false, mixed: false });
+});
+
+test('configured collection keeps its setting when members are changed', () => {
+  const options = [{ value: 'policy:1', resolve_entry_host: false }];
+  assert.equal(collectionResolveDefaults(options, ['policy:1'], { ...collection, resolve_entry_host: 1 }).enabled, true);
+  assert.equal(collectionResolveDefaults([{ value: 'policy:1', resolve_entry_host: true }], ['policy:1'], { ...collection, resolve_entry_host: 0 }).enabled, false);
+});
+
+test('collection resolution states are parsed distinctly and invalid states fail closed', () => {
+  for (const value of [0, 1, null]) {
+    assert.equal(parseEntryCollections([{ ...collection, resolve_entry_host: value }])[0].resolve_entry_host, value);
+  }
+  const old = { ...collection };
+  delete old.resolve_entry_host;
+  assert.equal(parseEntryCollections([old])[0].resolve_entry_host, null);
+  for (const value of [2, -1, false, '1']) assert.throws(() => parseEntryCollections([{ ...collection, resolve_entry_host: value }]));
+  assert.equal(entryCollectionResolveLabel(collection), '解析设置待统一');
+  assert.equal(entryCollectionResolveLabel({ ...collection, resolve_entry_host: 1 }), '解析为 IP');
+  assert.equal(entryCollectionResolveLabel({ ...collection, resolve_entry_host: 0 }), '直接下发域名 / IP');
 });

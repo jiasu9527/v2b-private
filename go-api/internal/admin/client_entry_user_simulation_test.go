@@ -28,8 +28,8 @@ func TestSimulateClientEntryUserPolicyReadsPersistedAssignment(t *testing.T) {
 	mock.ExpectQuery(`SELECT policy_id, server_type, server_id, sort\s+FROM v2_client_entry_user_policy_member`).
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"policy_id", "server_type", "server_id", "sort"}).AddRow(int64(9), "vmess", int64(11), int64(10)))
-	groupRows := sqlmock.NewRows([]string{"id", "policy_id", "parent_id", "name", "path", "entry_host", "sort", "global_sort", "user_count", "is_leaf", "created_at", "updated_at"}).
-		AddRow(int64(201), int64(9), nil, "独立规则 C", "C", "split-c.example.com", int64(10), int64(10), int64(8), true, int64(100), int64(200))
+	groupRows := sqlmock.NewRows([]string{"id", "policy_id", "parent_id", "name", "path", "entry_host", "sort", "global_sort", "user_count", "is_leaf", "created_at", "updated_at", "resolve_entry_host"}).
+		AddRow(int64(201), int64(9), nil, "独立规则 C", "C", "split-c.example.com", int64(10), int64(10), int64(8), true, int64(100), int64(200), nil)
 	mock.ExpectQuery(`(?s)SELECT split_group.id, split_group.policy_id.*FROM v2_client_entry_user_policy_split_group split_group.*WHERE split_group.policy_id IN \(\$1\)`).
 		WithArgs(int64(9)).WillReturnRows(groupRows)
 	mock.ExpectQuery(`SELECT policy_id, group_id\s+FROM v2_client_entry_user_policy_split_assignment\s+WHERE user_id = \$1`).
@@ -108,8 +108,8 @@ func TestMatchClientEntryUserPoliciesUsesPersistedSplitAssignment(t *testing.T) 
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"policy_id", "server_type", "server_id", "sort"}).AddRow(int64(9), "vmess", int64(11), int64(10)))
 	globalSort := int64(10)
-	groupRows := sqlmock.NewRows([]string{"id", "policy_id", "parent_id", "name", "path", "entry_host", "sort", "global_sort", "user_count", "is_leaf", "created_at", "updated_at"}).
-		AddRow(int64(201), int64(9), nil, "内鬼固定组", "C", "fixed-entry.example.com", int64(10), globalSort, int64(8), true, int64(100), int64(200))
+	groupRows := sqlmock.NewRows([]string{"id", "policy_id", "parent_id", "name", "path", "entry_host", "sort", "global_sort", "user_count", "is_leaf", "created_at", "updated_at", "resolve_entry_host"}).
+		AddRow(int64(201), int64(9), nil, "内鬼固定组", "C", "fixed-entry.example.com", int64(10), globalSort, int64(8), true, int64(100), int64(200), nil)
 	mock.ExpectQuery(`(?s)SELECT split_group.id, split_group.policy_id.*FROM v2_client_entry_user_policy_split_group split_group.*WHERE split_group.policy_id IN \(\$1\)`).
 		WithArgs(int64(9)).WillReturnRows(groupRows)
 	mock.ExpectQuery(`SELECT user_id, policy_id, group_id\s+FROM v2_client_entry_user_policy_split_assignment\s+WHERE user_id IN \(\$1\)`).

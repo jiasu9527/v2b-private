@@ -12,25 +12,27 @@ import (
 	"forest/go-api/internal/cliententry"
 )
 
-// Collections only own the shared host. Matching, users, nodes and global order
+// Collections own the shared host and its DNS-resolution setting. Matching, users, nodes and global order
 // remain on their original policy/leaf rows, including when a collection is dissolved.
 type ClientEntryCollectionItem struct {
 	Kind string `json:"kind"`
 	ID   int64  `json:"id"`
 }
 type ClientEntryCollectionRecord struct {
-	ID        int64                       `json:"id"`
-	Name      string                      `json:"name"`
-	EntryHost string                      `json:"entry_host"`
-	Items     []ClientEntryCollectionItem `json:"items"`
-	Version   int64                       `json:"version"`
+	ID               int64                       `json:"id"`
+	Name             string                      `json:"name"`
+	EntryHost        string                      `json:"entry_host"`
+	ResolveEntryHost *int64                      `json:"resolve_entry_host"`
+	Items            []ClientEntryCollectionItem `json:"items"`
+	Version          int64                       `json:"version"`
 }
 type ClientEntryCollectionSaveRequest struct {
-	ID        int64                       `json:"id,omitempty"`
-	Name      string                      `json:"name"`
-	EntryHost string                      `json:"entry_host"`
-	Items     []ClientEntryCollectionItem `json:"items"`
-	Version   int64                       `json:"version,omitempty"`
+	ID               int64                       `json:"id,omitempty"`
+	Name             string                      `json:"name"`
+	EntryHost        string                      `json:"entry_host"`
+	ResolveEntryHost int64                       `json:"resolve_entry_host"`
+	Items            []ClientEntryCollectionItem `json:"items"`
+	Version          int64                       `json:"version,omitempty"`
 }
 type ClientEntryCollectionMemberRemoveRequest struct {
 	ID       int64  `json:"id"`
@@ -48,7 +50,7 @@ func (s *DBService) ListClientEntryCollections(ctx context.Context) ([]ClientEnt
 	if err := s.ensureClientEntrySchema(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.name, c.entry_host, c.version, m.policy_id, m.split_group_id
+	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.name, c.entry_host, c.resolve_entry_host, c.version, m.policy_id, m.split_group_id
 FROM v2_client_entry_collection c
 LEFT JOIN v2_client_entry_collection_member m ON m.collection_id = c.id
 ORDER BY c.id, m.policy_id NULLS LAST, m.split_group_id NULLS LAST`)
@@ -60,7 +62,7 @@ ORDER BY c.id, m.policy_id NULLS LAST, m.split_group_id NULLS LAST`)
 	for rows.Next() {
 		var record ClientEntryCollectionRecord
 		var policyID, groupID sql.NullInt64
-		if err := rows.Scan(&record.ID, &record.Name, &record.EntryHost, &record.Version, &policyID, &groupID); err != nil {
+		if err := rows.Scan(&record.ID, &record.Name, &record.EntryHost, &record.ResolveEntryHost, &record.Version, &policyID, &groupID); err != nil {
 			return nil, err
 		}
 		if len(result) == 0 || result[len(result)-1].ID != record.ID {
@@ -87,6 +89,9 @@ func normalizeClientEntryCollectionSaveRequest(req ClientEntryCollectionSaveRequ
 		return req, errors.New("请填写有效的统一入口域名或 IP")
 	}
 	req.EntryHost = host
+	if req.ResolveEntryHost != 0 && req.ResolveEntryHost != 1 {
+		return req, errors.New("解析域名下发 IP 设置无效")
+	}
 	minimum := 2
 	if req.ID != 0 {
 		if req.ID <= 0 || req.Version <= 0 {
@@ -136,7 +141,7 @@ func (s *DBService) SaveClientEntryCollection(ctx context.Context, req ClientEnt
 		return ClientEntryCollectionRecord{}, err
 	}
 	now := time.Now().Unix()
-	record := ClientEntryCollectionRecord{Name: prepared.Name, EntryHost: prepared.EntryHost, Items: prepared.Items, Version: 1}
+	record := ClientEntryCollectionRecord{Name: prepared.Name, EntryHost: prepared.EntryHost, ResolveEntryHost: &prepared.ResolveEntryHost, Items: prepared.Items, Version: 1}
 	if prepared.ID != 0 {
 		record.ID = prepared.ID
 		if err = lockClientEntryCollectionVersion(ctx, tx, record.ID, prepared.Version); err != nil {
@@ -169,9 +174,9 @@ FOR UPDATE OF g`
 		}
 	}
 	if prepared.ID == 0 {
-		err = tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_collection(name,entry_host,version,created_at,updated_at) VALUES($1,$2,1,$3,$3) RETURNING id`, record.Name, record.EntryHost, now).Scan(&record.ID)
+		err = tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_collection(name,entry_host,resolve_entry_host,version,created_at,updated_at) VALUES($1,$2,$3,1,$4,$4) RETURNING id`, record.Name, record.EntryHost, prepared.ResolveEntryHost, now).Scan(&record.ID)
 	} else {
-		_, err = tx.ExecContext(ctx, `UPDATE v2_client_entry_collection SET name=$2,entry_host=$3,version=version+1,updated_at=$4 WHERE id=$1`, record.ID, record.Name, record.EntryHost, now)
+		_, err = tx.ExecContext(ctx, `UPDATE v2_client_entry_collection SET name=$2,entry_host=$3,resolve_entry_host=$4,version=version+1,updated_at=$5 WHERE id=$1`, record.ID, record.Name, record.EntryHost, prepared.ResolveEntryHost, now)
 	}
 	if err != nil {
 		return ClientEntryCollectionRecord{}, err
@@ -184,15 +189,15 @@ FOR UPDATE OF g`
 		var update string
 		if item.Kind == "policy" {
 			policyID = item.ID
-			update = `UPDATE v2_client_entry_user_policy SET entry_host=$2,updated_at=$3 WHERE id=$1`
+			update = `UPDATE v2_client_entry_user_policy SET entry_host=$2,resolve_entry_host=$3,updated_at=$4 WHERE id=$1`
 		} else {
 			groupID = item.ID
-			update = `UPDATE v2_client_entry_user_policy_split_group SET entry_host=$2,updated_at=$3 WHERE id=$1`
+			update = `UPDATE v2_client_entry_user_policy_split_group SET entry_host=$2,resolve_entry_host=$3,updated_at=$4 WHERE id=$1`
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO v2_client_entry_collection_member(collection_id,policy_id,split_group_id) VALUES($1,$2::INTEGER,$3::BIGINT)`, record.ID, policyID, groupID); err != nil {
 			return ClientEntryCollectionRecord{}, err
 		}
-		if _, err = tx.ExecContext(ctx, update, item.ID, record.EntryHost, now); err != nil {
+		if _, err = tx.ExecContext(ctx, update, item.ID, record.EntryHost, prepared.ResolveEntryHost, now); err != nil {
 			return ClientEntryCollectionRecord{}, err
 		}
 	}

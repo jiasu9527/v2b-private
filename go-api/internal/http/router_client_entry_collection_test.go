@@ -30,7 +30,7 @@ func (f *fakeEntryCollectionService) ListClientEntryCollections(context.Context)
 func (f *fakeEntryCollectionService) SaveClientEntryCollection(_ context.Context, req admin.ClientEntryCollectionSaveRequest) (admin.ClientEntryCollectionRecord, error) {
 	f.calls++
 	f.lastSave = req
-	return admin.ClientEntryCollectionRecord{ID: 7, Name: req.Name, EntryHost: req.EntryHost, Items: req.Items, Version: 4}, f.err
+	return admin.ClientEntryCollectionRecord{ID: 7, Name: req.Name, EntryHost: req.EntryHost, ResolveEntryHost: &req.ResolveEntryHost, Items: req.Items, Version: 4}, f.err
 }
 func (f *fakeEntryCollectionService) DeleteClientEntryCollection(_ context.Context, id, version int64) (bool, error) {
 	f.calls++
@@ -71,9 +71,12 @@ func TestRouterEntryCollectionsCRUD(t *testing.T) {
 	if !strings.Contains(response.Body.String(), `"name":"常用入口"`) || !strings.Contains(response.Body.String(), `"kind":"split_group"`) {
 		t.Fatalf("unexpected collection response: %s", response.Body.String())
 	}
-	request(http.MethodPost, "save", `{"id":7,"version":3,"name":"新入口","entry_host":"new.example.com","items":[{"kind":"policy","id":5},{"kind":"split_group","id":6}]}`)
-	if service.lastSave.Name != "新入口" || service.lastSave.EntryHost != "new.example.com" || service.lastSave.Version != 3 || !reflect.DeepEqual(service.lastSave.Items, []admin.ClientEntryCollectionItem{{Kind: "policy", ID: 5}, {Kind: "split_group", ID: 6}}) {
+	saved := request(http.MethodPost, "save", `{"id":7,"version":3,"name":"新入口","entry_host":"new.example.com","resolve_entry_host":1,"items":[{"kind":"policy","id":5},{"kind":"split_group","id":6}]}`)
+	if service.lastSave.Name != "新入口" || service.lastSave.EntryHost != "new.example.com" || service.lastSave.Version != 3 || service.lastSave.ResolveEntryHost != 1 || !reflect.DeepEqual(service.lastSave.Items, []admin.ClientEntryCollectionItem{{Kind: "policy", ID: 5}, {Kind: "split_group", ID: 6}}) {
 		t.Fatalf("unexpected save: %#v", service.lastSave)
+	}
+	if !strings.Contains(saved.Body.String(), `"resolve_entry_host":1`) {
+		t.Fatalf("missing resolve setting: %s", saved.Body.String())
 	}
 	request(http.MethodPost, "remove", `{"id":7,"version":4,"item":{"kind":"split_group","id":6}}`)
 	if service.lastDelete != [2]int64{7, 4} || service.lastRemove.ID != 6 || service.lastRemove.Kind != "split_group" {

@@ -221,10 +221,10 @@ func testClientEntryAutoSplitAtomicallyAssignsTwoHealthyIPs(t *testing.T, trigge
 	mock.ExpectExec(`(?s)UPDATE v2_client_entry_user_policy policy.*SET sort = positions.global_sort::INTEGER`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`(?s)INSERT INTO v2_client_entry_user_policy_split_group.*RETURNING id`).
-		WithArgs(int64(42), sqlmock.AnyArg(), "旧入口 A", "A.1", "203.0.113.51", clientEntryRuleSortStep, int64(20), sqlmock.AnyArg()).
+		WithArgs(int64(42), sqlmock.AnyArg(), "旧入口 A", "A.1", "203.0.113.51", clientEntryRuleSortStep, int64(20), sqlmock.AnyArg(), int64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(91)))
 	mock.ExpectQuery(`(?s)INSERT INTO v2_client_entry_user_policy_split_group.*RETURNING id`).
-		WithArgs(int64(42), sqlmock.AnyArg(), "旧入口 B", "A.2", "203.0.113.52", 2*clientEntryRuleSortStep, int64(30), sqlmock.AnyArg()).
+		WithArgs(int64(42), sqlmock.AnyArg(), "旧入口 B", "A.2", "203.0.113.52", 2*clientEntryRuleSortStep, int64(30), sqlmock.AnyArg(), int64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(92)))
 	mock.ExpectExec(`(?s)WITH ranked AS .*UPDATE v2_client_entry_user_policy_split_assignment`).
 		WithArgs(int64(42), int64(9), int64(2), int64(91), int64(92), sqlmock.AnyArg()).
@@ -335,8 +335,8 @@ func expectClientEntryAutoSplitLeafAndAssignments(mock sqlmock.Sqlmock, userCoun
 		WithArgs(clientEntryVisibleOrderLockKey).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`(?s)SELECT policy.name, split_group.name, split_group.path,.*FOR UPDATE OF split_group, policy`).
 		WithArgs(int64(9), int64(42)).
-		WillReturnRows(sqlmock.NewRows([]string{"policy_name", "name", "path", "entry_host", "global_sort"}).
-			AddRow("高级入口", "旧入口", "A", "198.51.100.9", int64(20)))
+		WillReturnRows(sqlmock.NewRows([]string{"policy_name", "name", "path", "entry_host", "global_sort", "resolve_entry_host"}).
+			AddRow("高级入口", "旧入口", "A", "198.51.100.9", int64(20), int64(1)))
 	assignmentRows := sqlmock.NewRows([]string{"user_id"})
 	for index := 1; index <= userCount; index++ {
 		assignmentRows.AddRow(int64(index))

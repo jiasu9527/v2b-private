@@ -47,6 +47,7 @@ func expectCurrentClientEntrySchema(mock sqlmock.Sqlmock, columnsExist bool, leg
 		{"v2_client_entry_user_policy", "snapshot_from", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN snapshot_from BIGINT DEFAULT NULL`},
 		{"v2_client_entry_user_policy", "snapshot_to", `ALTER TABLE v2_client_entry_user_policy ADD COLUMN snapshot_to BIGINT DEFAULT NULL`},
 		{"v2_client_entry_user_policy_split_group", "global_sort", `ALTER TABLE v2_client_entry_user_policy_split_group ADD COLUMN global_sort BIGINT DEFAULT NULL`},
+		{"v2_client_entry_user_policy_split_group", "resolve_entry_host", `ALTER TABLE v2_client_entry_user_policy_split_group ADD COLUMN resolve_entry_host SMALLINT DEFAULT NULL`},
 		{"v2_server_shadowsocks", "client_entry_only", `ALTER TABLE v2_server_shadowsocks ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
 		{"v2_server_vmess", "client_entry_only", `ALTER TABLE v2_server_vmess ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
 		{"v2_server_vless", "client_entry_only", `ALTER TABLE v2_server_vless ADD COLUMN IF NOT EXISTS client_entry_only SMALLINT NOT NULL DEFAULT 0`},
@@ -124,7 +125,7 @@ func expectCurrentClientEntrySchema(mock sqlmock.Sqlmock, columnsExist bool, leg
 	} {
 		mock.ExpectExec(index).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
-	for _, stmt := range []string{`CREATE TABLE IF NOT EXISTS v2_client_entry_collection`, `CREATE TABLE IF NOT EXISTS v2_client_entry_collection_member`, `CREATE INDEX IF NOT EXISTS idx_v2_client_entry_collection_member_collection`} {
+	for _, stmt := range []string{`CREATE TABLE IF NOT EXISTS v2_client_entry_collection`, `ALTER TABLE v2_client_entry_collection ADD COLUMN IF NOT EXISTS resolve_entry_host SMALLINT DEFAULT NULL`, `CREATE TABLE IF NOT EXISTS v2_client_entry_collection_member`, `CREATE INDEX IF NOT EXISTS idx_v2_client_entry_collection_member_collection`} {
 		mock.ExpectExec(stmt).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 

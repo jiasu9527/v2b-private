@@ -1315,18 +1315,19 @@ const (
 )
 
 type ClientEntryUserPolicySplitGroupRecord struct {
-	ID         int64  `json:"id"`
-	PolicyID   int64  `json:"policy_id"`
-	ParentID   *int64 `json:"parent_id,omitempty"`
-	Name       string `json:"name"`
-	Path       string `json:"path"`
-	EntryHost  string `json:"entry_host"`
-	Sort       int64  `json:"sort"`
-	GlobalSort *int64 `json:"global_sort,omitempty"`
-	UserCount  int64  `json:"user_count"`
-	IsLeaf     bool   `json:"is_leaf"`
-	CreatedAt  int64  `json:"created_at,omitempty"`
-	UpdatedAt  int64  `json:"updated_at,omitempty"`
+	ID               int64  `json:"id"`
+	PolicyID         int64  `json:"policy_id"`
+	ParentID         *int64 `json:"parent_id,omitempty"`
+	Name             string `json:"name"`
+	Path             string `json:"path"`
+	EntryHost        string `json:"entry_host"`
+	ResolveEntryHost *int64 `json:"resolve_entry_host"`
+	Sort             int64  `json:"sort"`
+	GlobalSort       *int64 `json:"global_sort,omitempty"`
+	UserCount        int64  `json:"user_count"`
+	IsLeaf           bool   `json:"is_leaf"`
+	CreatedAt        int64  `json:"created_at,omitempty"`
+	UpdatedAt        int64  `json:"updated_at,omitempty"`
 }
 
 type ClientEntryUserPolicySplitPreviewRequest struct {

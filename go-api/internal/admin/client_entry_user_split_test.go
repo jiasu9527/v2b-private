@@ -69,10 +69,10 @@ func TestCreateClientEntryUserPolicySplitSnapshotsAndBalancesUsers(t *testing.T)
 		WithArgs(int64(9), "vmess", int64(11), int64(10), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
-		WithArgs(int64(9), nil, "A", "A", "a.example.com", int64(10), int64(10), sqlmock.AnyArg()).
+		WithArgs(int64(9), nil, "A", "A", "a.example.com", int64(10), int64(10), sqlmock.AnyArg(), nil).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(101)))
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
-		WithArgs(int64(9), nil, "B", "B", "b.example.com", int64(20), int64(20), sqlmock.AnyArg()).
+		WithArgs(int64(9), nil, "B", "B", "b.example.com", int64(20), int64(20), sqlmock.AnyArg(), nil).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(102)))
 	mock.ExpectQuery(`(?s)WITH eligible AS \(.*ROW_NUMBER\(\) OVER \(ORDER BY activity.user_id ASC\).*INSERT INTO v2_client_entry_user_policy_split_assignment.*CASE WHEN position <= \(total \+ 1\) / 2 THEN \$4::BIGINT ELSE \$5::BIGINT END.*RETURNING group_id`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), int64(9), int64(101), int64(102)).
@@ -180,10 +180,10 @@ func TestConvertClientEntryUserPolicyToSplitKeepsOnePolicyAndBalancesCurrentUser
 			AddRow("override", `[{"field":"user_id","operator":"between","min":100,"max":200}]`, `[]`, int64(30)))
 	expectShiftClientEntryVisibleSortsAfter(mock, 30, 10)
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
-		WithArgs(int64(9), nil, "A", "A", "a.example.com", int64(10), int64(30), sqlmock.AnyArg()).
+		WithArgs(int64(9), nil, "A", "A", "a.example.com", int64(10), int64(30), sqlmock.AnyArg(), nil).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(101)))
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
-		WithArgs(int64(9), nil, "B", "B", "b.example.com", int64(20), int64(40), sqlmock.AnyArg()).
+		WithArgs(int64(9), nil, "B", "B", "b.example.com", int64(20), int64(40), sqlmock.AnyArg(), nil).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(102)))
 	mock.ExpectQuery(`(?s)WITH eligible AS \(.*FROM v2_user users.*WHERE users.id BETWEEN \$1 AND \$2.*INSERT INTO v2_client_entry_user_policy_split_assignment.*CASE WHEN position <= \(total \+ 1\) / 2 THEN \$4::BIGINT ELSE \$5::BIGINT END.*RETURNING group_id`).
 		WithArgs(int64(100), int64(200), int64(9), int64(101), int64(102), sqlmock.AnyArg()).
@@ -277,10 +277,10 @@ func TestConvertClientEntryUserPolicyToSplitRollsBackWhenRangeHasOneUser(t *test
 			AddRow("override", `[{"field":"user_id","operator":"between","min":100,"max":200}]`, `[]`, int64(30)))
 	expectShiftClientEntryVisibleSortsAfter(mock, 30, 10)
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
-		WithArgs(int64(9), nil, "A", "A", "a.example.com", int64(10), int64(30), sqlmock.AnyArg()).
+		WithArgs(int64(9), nil, "A", "A", "a.example.com", int64(10), int64(30), sqlmock.AnyArg(), nil).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(101)))
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
-		WithArgs(int64(9), nil, "B", "B", "b.example.com", int64(20), int64(40), sqlmock.AnyArg()).
+		WithArgs(int64(9), nil, "B", "B", "b.example.com", int64(20), int64(40), sqlmock.AnyArg(), nil).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(102)))
 	mock.ExpectQuery(`(?s)WITH eligible AS .*RETURNING group_id`).
 		WillReturnRows(sqlmock.NewRows([]string{"group_id"}).AddRow(int64(101)))
@@ -309,16 +309,16 @@ func TestSplitClientEntryUserPolicyGroupKeepsParentAndMovesAssignments(t *testin
 	expectClientEntryVisibleOrderLock(mock)
 	mock.ExpectQuery(`(?s)SELECT split_group.name, split_group.path, split_group.global_sort.*policy.mode = 'split'.*NOT EXISTS.*FOR UPDATE OF split_group`).
 		WithArgs(int64(101), int64(9)).
-		WillReturnRows(sqlmock.NewRows([]string{"name", "path", "global_sort"}).AddRow("A", "A", int64(30)))
+		WillReturnRows(sqlmock.NewRows([]string{"name", "path", "global_sort", "resolve_entry_host"}).AddRow("A", "A", int64(30), int64(1)))
 	mock.ExpectQuery(`SELECT user_id\s+FROM v2_client_entry_user_policy_split_assignment.*FOR UPDATE`).
 		WithArgs(int64(9), int64(101)).
 		WillReturnRows(sqlmock.NewRows([]string{"user_id"}).AddRow(int64(1)).AddRow(int64(2)).AddRow(int64(3)).AddRow(int64(4)).AddRow(int64(5)))
 	expectShiftClientEntryVisibleSortsAfter(mock, 30, 10)
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
-		WithArgs(int64(9), int64(101), "A.1", "A.1", "a1.example.com", int64(10), int64(30), sqlmock.AnyArg()).
+		WithArgs(int64(9), int64(101), "A.1", "A.1", "a1.example.com", int64(10), int64(30), sqlmock.AnyArg(), int64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(201)))
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
-		WithArgs(int64(9), int64(101), "A.2", "A.2", "a2.example.com", int64(20), int64(40), sqlmock.AnyArg()).
+		WithArgs(int64(9), int64(101), "A.2", "A.2", "a2.example.com", int64(20), int64(40), sqlmock.AnyArg(), int64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(202)))
 	mock.ExpectExec(`(?s)WITH ranked AS .*UPDATE v2_client_entry_user_policy_split_assignment assignment.*SET group_id = CASE WHEN ranked.position <= \$3 THEN \$4::BIGINT ELSE \$5::BIGINT END`).
 		WithArgs(int64(9), int64(101), int64(3), int64(201), int64(202), sqlmock.AnyArg()).
@@ -356,7 +356,7 @@ func TestSplitClientEntryUserPolicyGroupAtomicallyClaimsBackupIPs(t *testing.T) 
 	expectClientEntryVisibleOrderLock(mock)
 	mock.ExpectQuery(`(?s)SELECT split_group.name, split_group.path, split_group.global_sort.*policy.mode = 'split'.*NOT EXISTS.*FOR UPDATE OF split_group`).
 		WithArgs(int64(101), int64(9)).
-		WillReturnRows(sqlmock.NewRows([]string{"name", "path", "global_sort"}).AddRow("A", "A", int64(30)))
+		WillReturnRows(sqlmock.NewRows([]string{"name", "path", "global_sort", "resolve_entry_host"}).AddRow("A", "A", int64(30), int64(1)))
 	mock.ExpectQuery(`SELECT user_id\s+FROM v2_client_entry_user_policy_split_assignment.*FOR UPDATE`).
 		WithArgs(int64(9), int64(101)).
 		WillReturnRows(sqlmock.NewRows([]string{"user_id"}).AddRow(int64(1)).AddRow(int64(2)))
@@ -367,10 +367,10 @@ func TestSplitClientEntryUserPolicyGroupAtomicallyClaimsBackupIPs(t *testing.T) 
 			AddRow(502, "备用 B", "192.0.2.52", 443, 1, 30, 3000, 1, 20, 0, 10, 10))
 	expectShiftClientEntryVisibleSortsAfter(mock, 30, 10)
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
-		WithArgs(int64(9), int64(101), "A.1", "A.1", "192.0.2.51", int64(10), int64(30), sqlmock.AnyArg()).
+		WithArgs(int64(9), int64(101), "A.1", "A.1", "192.0.2.51", int64(10), int64(30), sqlmock.AnyArg(), int64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(201)))
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
-		WithArgs(int64(9), int64(101), "A.2", "A.2", "192.0.2.52", int64(20), int64(40), sqlmock.AnyArg()).
+		WithArgs(int64(9), int64(101), "A.2", "A.2", "192.0.2.52", int64(20), int64(40), sqlmock.AnyArg(), int64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(202)))
 	mock.ExpectExec(`(?s)WITH ranked AS .*UPDATE v2_client_entry_user_policy_split_assignment assignment.*SET group_id = CASE WHEN ranked.position <= \$3 THEN \$4::BIGINT ELSE \$5::BIGINT END`).
 		WithArgs(int64(9), int64(101), int64(1), int64(201), int64(202), sqlmock.AnyArg()).
@@ -523,9 +523,9 @@ func TestListClientEntryUserPoliciesIncludesSplitTreeAndSnapshotCount(t *testing
 	mock.ExpectQuery(`SELECT policy_id, server_type, server_id, sort\s+FROM v2_client_entry_user_policy_member`).
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"policy_id", "server_type", "server_id", "sort"}).AddRow(int64(9), "vmess", int64(11), int64(10)))
-	groupRows := sqlmock.NewRows([]string{"id", "policy_id", "parent_id", "name", "path", "entry_host", "sort", "global_sort", "user_count", "is_leaf", "created_at", "updated_at"}).
-		AddRow(int64(101), int64(9), nil, "A", "A", "a.example.com", int64(10), int64(10), int64(3), true, int64(100), int64(200)).
-		AddRow(int64(102), int64(9), nil, "B", "B", "b.example.com", int64(20), int64(20), int64(2), true, int64(100), int64(200))
+	groupRows := sqlmock.NewRows([]string{"id", "policy_id", "parent_id", "name", "path", "entry_host", "sort", "global_sort", "user_count", "is_leaf", "created_at", "updated_at", "resolve_entry_host"}).
+		AddRow(int64(101), int64(9), nil, "A", "A", "a.example.com", int64(10), int64(10), int64(3), true, int64(100), int64(200), nil).
+		AddRow(int64(102), int64(9), nil, "B", "B", "b.example.com", int64(20), int64(20), int64(2), true, int64(100), int64(200), nil)
 	mock.ExpectQuery(`(?s)SELECT split_group.id, split_group.policy_id.*FROM v2_client_entry_user_policy_split_group split_group.*WHERE split_group.policy_id IN \(\$1\)`).
 		WithArgs(int64(9)).WillReturnRows(groupRows)
 
@@ -559,10 +559,10 @@ func TestResolveClientEntryMonitorPoliciesIncludesEverySplitLeaf(t *testing.T) {
 	mock.ExpectQuery(`SELECT policy_id, server_type, server_id, sort\s+FROM v2_client_entry_user_policy_member`).
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"policy_id", "server_type", "server_id", "sort"}).AddRow(int64(9), "vmess", int64(11), int64(10)))
-	groupRows := sqlmock.NewRows([]string{"id", "policy_id", "parent_id", "name", "path", "entry_host", "sort", "global_sort", "user_count", "is_leaf", "created_at", "updated_at"}).
-		AddRow(int64(101), int64(9), nil, "A", "A", "", int64(10), nil, int64(0), false, int64(100), int64(200)).
-		AddRow(int64(201), int64(9), int64(101), "内鬼入口一", "A.1", "a1.example.com", int64(10), int64(10), int64(3), true, int64(100), int64(200)).
-		AddRow(int64(202), int64(9), int64(101), "A.2", "A.2", "a2.example.com", int64(20), int64(20), int64(2), true, int64(100), int64(200))
+	groupRows := sqlmock.NewRows([]string{"id", "policy_id", "parent_id", "name", "path", "entry_host", "sort", "global_sort", "user_count", "is_leaf", "created_at", "updated_at", "resolve_entry_host"}).
+		AddRow(int64(101), int64(9), nil, "A", "A", "", int64(10), nil, int64(0), false, int64(100), int64(200), nil).
+		AddRow(int64(201), int64(9), int64(101), "内鬼入口一", "A.1", "a1.example.com", int64(10), int64(10), int64(3), true, int64(100), int64(200), nil).
+		AddRow(int64(202), int64(9), int64(101), "A.2", "A.2", "a2.example.com", int64(20), int64(20), int64(2), true, int64(100), int64(200), nil)
 	mock.ExpectQuery(`(?s)SELECT split_group.id, split_group.policy_id.*FROM v2_client_entry_user_policy_split_group split_group.*WHERE split_group.policy_id IN \(\$1\)`).
 		WithArgs(int64(9)).WillReturnRows(groupRows)
 
@@ -593,7 +593,7 @@ func TestUpdateClientEntryUserPolicySplitGroupDetailsOnlyUpdatesLeaf(t *testing.
 	mock.ExpectBegin()
 	expectClientEntryCollectionOrderLock(mock)
 	mock.ExpectExec(`(?s)UPDATE v2_client_entry_user_policy_split_group split_group.*SET name = \$3, entry_host = \$4, updated_at = \$5.*NOT EXISTS.*policy.mode = 'split'`).
-		WithArgs(int64(101), int64(9), "内鬼入口 B", "new.example.com", sqlmock.AnyArg()).
+		WithArgs(int64(101), int64(9), "内鬼入口 B", "new.example.com", sqlmock.AnyArg(), nil).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE v2_client_entry_user_policy SET updated_at = \$2 WHERE id = \$1 AND mode = 'split'`).
 		WithArgs(int64(9), sqlmock.AnyArg()).
@@ -645,10 +645,10 @@ func TestUpdateClientEntryUserPolicySplitGroupDetailsUpdatesSharedRuleSettings(t
 		WithArgs(int64(11)).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectExec(`(?s)UPDATE v2_client_entry_user_policy_split_group split_group.*SET name = \$3, entry_host = \$4, updated_at = \$5.*NOT EXISTS.*policy.mode = 'split'`).
-		WithArgs(int64(101), int64(9), "内鬼入口 B", "new.example.com", sqlmock.AnyArg()).
+		WithArgs(int64(101), int64(9), "内鬼入口 B", "new.example.com", sqlmock.AnyArg(), int64(1)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE v2_client_entry_user_policy\s+SET resolve_entry_host = \$2, enabled = \$3, remarks = \$4, updated_at = \$5\s+WHERE id = \$1 AND mode = 'split'`).
-		WithArgs(int64(9), int64(1), int64(0), "共享备注", sqlmock.AnyArg()).
+	mock.ExpectExec(`UPDATE v2_client_entry_user_policy\s+SET enabled = \$2, remarks = \$3, updated_at = \$4\s+WHERE id = \$1 AND mode = 'split'`).
+		WithArgs(int64(9), int64(0), "共享备注", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`DELETE FROM v2_client_entry_user_policy_member WHERE policy_id = \$1`).
 		WithArgs(int64(9)).

@@ -29,7 +29,7 @@ func (s *DBService) loadClientEntryUserPolicies(ctx context.Context, userID int6
 	}
 
 	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.mode, p.action, p.conditions, p.entry_host,
-p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position,
+COALESCE(split_group.resolve_entry_host, p.resolve_entry_host) AS resolve_entry_host, p.extra_nodes, p.extra_nodes_position,
 COALESCE(split_group.entry_host, '') AS assigned_entry_host,
 m.server_type, m.server_id, m.sort AS member_sort
 FROM v2_client_entry_user_policy p

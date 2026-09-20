@@ -49,6 +49,7 @@ func expectEnsureClientEntrySchema(mock sqlmock.Sqlmock) {
 		{"v2_client_entry_user_policy", "snapshot_from"},
 		{"v2_client_entry_user_policy", "snapshot_to"},
 		{"v2_client_entry_user_policy_split_group", "global_sort"},
+		{"v2_client_entry_user_policy_split_group", "resolve_entry_host"},
 		{"v2_server_shadowsocks", "client_entry_only"},
 		{"v2_server_vmess", "client_entry_only"},
 		{"v2_server_vless", "client_entry_only"},
@@ -98,7 +99,7 @@ func expectEnsureClientEntrySchema(mock sqlmock.Sqlmock) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_client_entry_user_policy_split_assignment_user ON v2_client_entry_user_policy_split_assignment\(user_id, policy_id\)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	for _, stmt := range []string{`CREATE TABLE IF NOT EXISTS v2_client_entry_collection`, `CREATE TABLE IF NOT EXISTS v2_client_entry_collection_member`, `CREATE INDEX IF NOT EXISTS idx_v2_client_entry_collection_member_collection`} {
+	for _, stmt := range []string{`CREATE TABLE IF NOT EXISTS v2_client_entry_collection`, `ALTER TABLE v2_client_entry_collection ADD COLUMN IF NOT EXISTS resolve_entry_host`, `CREATE TABLE IF NOT EXISTS v2_client_entry_collection_member`, `CREATE INDEX IF NOT EXISTS idx_v2_client_entry_collection_member_collection`} {
 		mock.ExpectExec(stmt).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 

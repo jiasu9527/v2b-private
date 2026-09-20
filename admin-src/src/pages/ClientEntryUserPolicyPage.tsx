@@ -33,7 +33,7 @@ import {
 import { apiGet, apiPost, apiJsonPost, bytes } from '../lib/api';
 import { moveItem } from '../lib/drag';
 import EntryCollectionEditor from './EntryCollectionEditor';
-import { attachEntryCollections, parseEntryCollections, canJoinEntryCollection, entryCollectionMember, entryCollectionMemberKey, type EntryCollection, type EntryCollectionOption } from './clientEntryCollections';
+import { attachEntryCollections, effectiveEntryResolveHost, entryCollectionResolveLabel, parseEntryCollections, canJoinEntryCollection, entryCollectionMember, entryCollectionMemberKey, type EntryCollection, type EntryCollectionOption } from './clientEntryCollections';
 import { buildVisibleServerOptions, memberKey, splitMemberKey, type ClientEntryServerOption } from './clientEntryHelpers';
 
 type ConditionField = 'user_id' | 'email' | 'registration_days' | 'ua' | 'plan_id';
@@ -61,6 +61,7 @@ type SplitGroup = {
   entry_host: string;
   sort: number;
   global_sort?: number;
+  resolve_entry_host?: 0 | 1 | null;
   user_count: number;
   is_leaf: boolean;
 };
@@ -393,9 +394,7 @@ function normalizeExtraNodePosition(value: any): ExtraNodePosition {
 }
 
 function normalizeResolveEntryHost(value: any) {
-  if (value === true || value === 'true') return true;
-  const number = Number(value);
-  return Number.isFinite(number) && number !== 0;
+  return effectiveEntryResolveHost({ resolve_entry_host: value });
 }
 
 function policyPayload(row: any, overrides: Record<string, any> = {}) {
@@ -567,7 +566,7 @@ function PolicyEditor({
       id: row?.id,
       name: row?.name || '',
       entry_host: row?.__entry_collection?.entry_host || row?.entry_host || '',
-      resolve_entry_host: normalizeResolveEntryHost(row?.resolve_entry_host),
+      resolve_entry_host: effectiveEntryResolveHost(row),
       action: normalizePolicyAction(row?.action),
       conditions,
       members: normalizedMembers(row),
@@ -689,7 +688,7 @@ function PolicyEditor({
           description="可以在下方一次选择多个节点。节点需在编辑页开启“仅入口分配用户可见”，这样未命中本规则的用户不会收到这些节点。"
           style={{ marginBottom: 24 }}
         />}
-        {row?.__entry_collection && <Alert type="info" showIcon message={`入口由合集「${row.__entry_collection.name}」统一管理`} description="如需修改统一入口，请编辑合集；如需只改这条规则的入口或命中动作，请先将规则移出合集。其他条件和设置可以照常编辑。" style={{ marginBottom: 18 }} />}
+        {row?.__entry_collection && <Alert type="info" showIcon message={`入口由合集「${row.__entry_collection.name}」统一管理`} description="入口地址和“解析域名下发 IP”由合集统一设置。如需单独修改入口、解析设置或命中动作，请先将规则移出合集；其他条件和设置可以照常编辑。" style={{ marginBottom: 18 }} />}
         {action === 'override' && <>
           <Form.Item
             name="entry_host"
@@ -707,7 +706,7 @@ function PolicyEditor({
             valuePropName="checked"
             extra="勾选后，用户拉取订阅时由后端解析上方域名并下发 IP；上方填写 IP 时会原样下发。解析暂时失败时仍下发原域名，避免节点缺失。"
           >
-            <Checkbox>解析域名下发 IP</Checkbox>
+            <Checkbox disabled={Boolean(row?.__entry_collection)}>解析域名下发 IP</Checkbox>
           </Form.Item>
         </>}
         <Form.Item label="匹配条件" extra="同一条规则中的所有条件必须同时满足（AND）。不添加条件表示匹配全部用户。">
@@ -821,7 +820,7 @@ function EmailConditionSummary({ condition }: { condition: EntryCondition }) {
 
 function policyResultDescription(row: any) {
   if (isSplitPolicy(row)) {
-    const resolveDescription = normalizeResolveEntryHost(row?.resolve_entry_host) ? '（后端解析域名后下发 IP）' : '';
+    const resolveDescription = effectiveEntryResolveHost(row) ? '（后端解析域名后下发 IP）' : '';
     return `结果：该用户命中固定名单分组，下发独立入口 ${row?.entry_host || '-'}${resolveDescription}`;
   }
   const action = normalizePolicyAction(row?.action);
@@ -830,7 +829,7 @@ function policyResultDescription(row: any) {
   const extraDescription = extraNodeCount ? `；另下发 ${extraNodeCount} 个额外节点（${position}，保留 URI 原地址）` : '';
   if (action === 'hide') return `结果：不下发所选节点${extraDescription}`;
   if (action === 'original') return `结果：下发所选节点各自的原入口地址${extraDescription}`;
-  const resolveDescription = normalizeResolveEntryHost(row?.resolve_entry_host) ? '（后端解析域名后下发 IP）' : '';
+  const resolveDescription = effectiveEntryResolveHost(row) ? '（后端解析域名后下发 IP）' : '';
   return `结果：下发独立入口 ${row?.entry_host || '-'}${resolveDescription}${extraDescription}`;
 }
 
@@ -975,7 +974,7 @@ function SplitPolicyCreator({
             <Input placeholder="b.example.com 或 IP" />
           </Form.Item>
         </Space>
-        <Form.Item name="resolve_entry_host" valuePropName="checked" extra="两组及后续子组共同使用此设置；DNS 成功结果缓存 1 分钟，解析失败回退原域名。">
+        <Form.Item name="resolve_entry_host" valuePropName="checked" extra="新建的两组使用此设置，后续二分继承当前组设置；独立分组可单独调整。DNS 成功结果缓存 1 分钟，解析失败回退原域名。">
           <Checkbox>解析域名后下发 IP</Checkbox>
         </Form.Item>
         <Form.Item name="enabled" label="状态" valuePropName="checked">
@@ -1036,7 +1035,7 @@ function RangePolicySplitConverter({ row, onDone }: { row: any; onDone: () => vo
         type="info"
         showIcon
         message={`固定用户 ID #${range.min} ～ #${range.max} 范围内当前实际存在的用户`}
-        description={`转换后仍沿用原规则的名称、${Array.isArray(row?.members) ? row.members.length : 0} 个生效节点、规则顺序、启停状态和${normalizeResolveEntryHost(row?.resolve_entry_host) ? '已开启的' : '未开启的'}域名解析设置。用户名单会固定为静态快照；只要当前叶子组仍有至少 2 人，就可以继续逐层二分。这里只需填写 A、B 两组入口。`}
+        description={`转换后仍沿用原规则的名称、${Array.isArray(row?.members) ? row.members.length : 0} 个生效节点、规则顺序、启停状态和${effectiveEntryResolveHost(row) ? '已开启的' : '未开启的'}域名解析设置。用户名单会固定为静态快照；只要当前叶子组仍有至少 2 人，就可以继续逐层二分。这里只需填写 A、B 两组入口。`}
         style={{ marginBottom: 18 }}
       />
       {row?.__entry_collection && <Alert type="warning" showIcon message="二分后将自动退出当前入口合集" description="新的 A、B 组作为独立规则显示，分别使用下方填写的入口，不再由合集统一覆盖。" style={{ marginBottom: 18 }} />}
@@ -1358,7 +1357,7 @@ function SplitGroupRowActions({
     editForm.setFieldsValue({
       name: splitGroupDisplayName(group),
       entry_host: row.__entry_collection?.entry_host || group.entry_host,
-      resolve_entry_host: normalizeResolveEntryHost(row.resolve_entry_host),
+      resolve_entry_host: effectiveEntryResolveHost(row),
       members: normalizedMembers(row),
       enabled: Number(row.enabled) !== 0,
       remarks: row.remarks || '',
@@ -1508,10 +1507,10 @@ function SplitGroupRowActions({
         type="info"
         showIcon
         message={`当前规则固定 ${Number(group.user_count || 0)} 人`}
-        description="名称和入口地址只修改当前规则；固定用户名单不会变化。解析设置、生效节点、状态和备注由同一套固定规则共同使用。"
+        description="名称、入口地址和解析设置只修改当前规则，固定用户名单不会变化；生效节点、状态和备注仍由同一套固定规则共同使用。"
         style={{ marginBottom: 16 }}
       />
-      {row.__entry_collection && <Alert type="info" showIcon message={`入口由合集「${row.__entry_collection.name}」统一管理`} description="请编辑合集来统一换入口；如需单独修改，请先移出合集。名称、固定名单等功能不受影响。" style={{ marginBottom: 16 }} />}
+      {row.__entry_collection && <Alert type="info" showIcon message={`入口由合集「${row.__entry_collection.name}」统一管理`} description="入口地址和“解析域名下发 IP”请在合集统一修改；如需单独修改，请先移出合集。名称、固定名单等功能不受影响。" style={{ marginBottom: 16 }} />}
       <Form form={editForm} layout="vertical">
         <Form.Item name="name" label="规则名称" rules={[{ required: true, whitespace: true, message: '请输入规则名称' }]}>
           <Input placeholder="例如：内鬼入口 B" maxLength={255} showCount />
@@ -1529,9 +1528,9 @@ function SplitGroupRowActions({
         <Form.Item
           name="resolve_entry_host"
           valuePropName="checked"
-          extra="勾选后，用户拉取订阅时由后端解析域名并下发 IP；解析失败时仍下发原域名。"
+          extra="勾选后，用户拉取订阅时由后端解析域名并下发 IP；DNS 成功结果缓存 1 分钟，解析失败时仍下发原域名。"
         >
-          <Checkbox>解析域名下发 IP</Checkbox>
+          <Checkbox disabled={Boolean(row.__entry_collection)}>解析域名下发 IP</Checkbox>
         </Form.Item>
         <Form.Item label="匹配条件">
           <Space wrap>
@@ -1669,7 +1668,7 @@ export default function ClientEntryUserPolicyPage() {
       const normalizedPolicies = policies.map((row: any) => ({
         ...row,
         mode: isSplitPolicy(row) ? 'split' : 'standard',
-        resolve_entry_host: normalizeResolveEntryHost(row.resolve_entry_host),
+        resolve_entry_host: effectiveEntryResolveHost(row),
         split_groups: Array.isArray(row.split_groups) ? row.split_groups.map((group: any) => ({
           ...group,
           id: Number(group.id),
@@ -1707,7 +1706,7 @@ export default function ClientEntryUserPolicyPage() {
     const item = entryCollectionMember(row);
     const name = isSplitGroupDisplayRow(row) ? splitGroupDisplayName(row.__split_group) : row.name || `规则 #${row.id}`;
     const host = String((isSplitGroupDisplayRow(row) ? row.__split_group.entry_host : row.entry_host) || '');
-    return { value: entryCollectionMemberKey(item), label: `${name} · ${item.kind === 'split_group' ? '固定名单' : '规则'} #${item.id} · ${host}`, item, entry_host: host, collection_id: row.__entry_collection?.id };
+    return { value: entryCollectionMemberKey(item), label: `${name} · ${item.kind === 'split_group' ? '固定名单' : '规则'} #${item.id} · ${host}`, item, entry_host: host, resolve_entry_host: effectiveEntryResolveHost(row), collection_id: row.__entry_collection?.id };
   }), [rows]);
 
   const editCollection = (collection?: EntryCollection) => {
@@ -1717,7 +1716,7 @@ export default function ClientEntryUserPolicyPage() {
   const dissolveCollection = async (collection: EntryCollection) => {
     try {
       await apiJsonPost('/server/client-entry-user-policy/collection/drop', { id: collection.id, version: collection.version });
-      message.success('合集已解散，原规则及当前入口均已保留');
+      message.success('合集已解散，原规则、当前入口及解析设置均已保留');
       await load();
     } catch (error: any) {
       message.error(error?.message || '解散合集失败');
@@ -1727,7 +1726,7 @@ export default function ClientEntryUserPolicyPage() {
     const collection: EntryCollection = row.__entry_collection;
     try {
       await apiJsonPost('/server/client-entry-user-policy/collection/remove', { id: collection.id, version: collection.version, item: entryCollectionMember(row) });
-      message.success('规则已移出合集，当前入口保持不变');
+      message.success('规则已移出合集，当前入口和解析设置保持不变');
       await load();
     } catch (error: any) {
       message.error(error?.message || '移出合集失败');
@@ -1874,14 +1873,14 @@ export default function ClientEntryUserPolicyPage() {
       render: (_: any, row: any) => {
         if (isSplitGroupDisplayRow(row)) return <Space direction="vertical" size={4}>
           <Typography.Text code copyable={{ text: String(row.__split_group.entry_host || '') }}>{row.__split_group.entry_host || '-'}</Typography.Text>
-          {normalizeResolveEntryHost(row.resolve_entry_host) && <Tag color="cyan" style={{ width: 'fit-content', marginInlineEnd: 0 }}>解析为 IP</Tag>}
+          {(effectiveEntryResolveHost(row) || row.__entry_collection) && <Tag color={effectiveEntryResolveHost(row) ? 'cyan' : undefined} style={{ width: 'fit-content', marginInlineEnd: 0 }}>{effectiveEntryResolveHost(row) ? '解析为 IP' : '直接下发域名 / IP'}</Tag>}
         </Space>;
         const action = normalizePolicyAction(row.action);
         if (action === 'hide') return <Tag color="red">不下发节点</Tag>;
         if (action === 'original') return <Tag color="blue">下发原入口地址</Tag>;
         return <Space direction="vertical" size={4}>
           <Typography.Text code copyable={{ text: String(row.entry_host || '') }}>{row.entry_host || '-'}</Typography.Text>
-          {normalizeResolveEntryHost(row.resolve_entry_host) && <Tag color="cyan" style={{ width: 'fit-content', marginInlineEnd: 0 }}>解析为 IP</Tag>}
+          {(effectiveEntryResolveHost(row) || row.__entry_collection) && <Tag color={effectiveEntryResolveHost(row) ? 'cyan' : undefined} style={{ width: 'fit-content', marginInlineEnd: 0 }}>{effectiveEntryResolveHost(row) ? '解析为 IP' : '直接下发域名 / IP'}</Tag>}
         </Space>;
       },
     },
@@ -1914,7 +1913,7 @@ export default function ClientEntryUserPolicyPage() {
       render: (_: any, row: any) => {
         if (isSplitGroupDisplayRow(row)) return <Space className="client-entry-actions" size={10}>
           <SplitGroupRowActions row={row} group={row.__split_group} serverOptions={serverOptions} onDone={load} />
-          {row.__entry_collection && <Popconfirm title="移出合集？当前入口地址会保留，规则不会删除。" onConfirm={() => removeCollectionMember(row)}><a>移出合集</a></Popconfirm>}
+          {row.__entry_collection && <Popconfirm title="移出合集？当前入口和解析设置会保留，规则不会删除。" onConfirm={() => removeCollectionMember(row)}><a>移出合集</a></Popconfirm>}
           <Popconfirm title={`确认删除“${splitGroupDisplayName(row.__split_group)}”所属的整套固定规则及全部名单？`} onConfirm={() => drop(row)}><a>删除整组</a></Popconfirm>
         </Space>;
         const copyRow = { ...row, id: undefined, __entry_collection: undefined, name: `${row.name || `规则 #${row.id}`} - 副本` };
@@ -1922,7 +1921,7 @@ export default function ClientEntryUserPolicyPage() {
           <PolicyEditor row={row} onDone={load} serverOptions={serverOptions}><a>编辑</a></PolicyEditor>
           {canConvertRangeToSplit(row) && <RangePolicySplitConverter row={row} onDone={load} />}
           <PolicyEditor row={copyRow} onDone={load} serverOptions={serverOptions}><a><CopyOutlined /> 复制</a></PolicyEditor>
-          {row.__entry_collection && <Popconfirm title="移出合集？当前入口地址会保留，规则不会删除。" onConfirm={() => removeCollectionMember(row)}><a>移出合集</a></Popconfirm>}
+          {row.__entry_collection && <Popconfirm title="移出合集？当前入口和解析设置会保留，规则不会删除。" onConfirm={() => removeCollectionMember(row)}><a>移出合集</a></Popconfirm>}
           <Popconfirm title="确认删除这条入口规则？" onConfirm={() => drop(row)}><a>删除</a></Popconfirm>
         </Space>;
       },
@@ -1955,7 +1954,7 @@ export default function ClientEntryUserPolicyPage() {
         showIcon
         message={view === 'manage' ? '入口合集：多个规则共用一个入口，默认折叠' : '全局排序：从上到下依次匹配'}
         description={view === 'manage'
-          ? '勾选未归入合集的规则，点击“合并到合集”，只填写一个统一入口。合集只影响入口地址和页面收纳，不改变用户名单、生效节点及实际匹配优先级；当前管理视图不是匹配顺序，调整优先级请切换到“全局排序”。'
+          ? '勾选未归入合集的规则，点击“合并到合集”，只填写一个统一入口。合集统一管理入口地址、域名解析设置和页面收纳，不改变用户名单、生效节点及实际匹配优先级；当前管理视图不是匹配顺序，调整优先级请切换到“全局排序”。'
           : '所有普通规则和二分叶子组均在此完整平铺，页面顺序就是实际订阅匹配优先级；拖动任意行即可调整。所属合集只作为标签展示，不会让整个合集跳过其他规则优先匹配。'}
       />
       {loadError ? <Alert type="error" showIcon message="入口规则或合集加载失败" description={`${loadError}。为避免误把合集成员当作独立规则，已暂停展示与编辑。`} action={<Button onClick={load}>重新加载</Button>} /> : <>
@@ -2004,16 +2003,17 @@ export default function ClientEntryUserPolicyPage() {
                 label: <Space wrap size={10}>
                   <Typography.Text strong>{collection.name}</Typography.Text>
                   <Tag color="blue">{collection.items.length} 条规则</Tag>
+                  <Tag color={collection.resolve_entry_host === null ? 'orange' : collection.resolve_entry_host === 1 ? 'cyan' : undefined}>{entryCollectionResolveLabel(collection)}</Tag>
                   <Typography.Text type="secondary">统一入口：</Typography.Text>
                   <Typography.Text code style={{ overflowWrap: 'anywhere' }}>{collection.entry_host}</Typography.Text>
                 </Space>,
                 extra: <Space wrap onClick={(event) => event.stopPropagation()}>
                   <Button size="small" icon={<CopyOutlined />} onClick={async () => { try { await copyText(collection.entry_host); message.success('已复制合集入口'); } catch { message.error('复制失败'); } }}>复制入口</Button>
                   <Button size="small" onClick={() => editCollection(collection)}>编辑入口 / 成员</Button>
-                  <Popconfirm title="解散这个合集？" description="只解除统一入口管理；所有原规则、用户名单及当前入口地址都保留。" onConfirm={() => dissolveCollection(collection)}><Button size="small" danger>解散合集</Button></Popconfirm>
+                  <Popconfirm title="解散这个合集？" description="只解除统一管理；所有原规则、用户名单、当前入口及解析设置都保留。" onConfirm={() => dissolveCollection(collection)}><Button size="small" danger>解散合集</Button></Popconfirm>
                 </Space>,
                 children: <>
-                  <Typography.Paragraph type="secondary">以下是本合集成员；实际匹配仍按“全局排序”执行。可正常编辑名称、条件、固定名单等；单独修改入口须先移出合集。</Typography.Paragraph>
+                  <Typography.Paragraph type="secondary">以下是本合集成员；实际匹配仍按“全局排序”执行。可正常编辑名称、条件、固定名单等；入口和解析设置由合集统一管理，单独修改须先移出合集。</Typography.Paragraph>
                   {renderManagementTable(rows.filter((row) => row.__entry_collection?.id === collection.id))}
                 </>,
               }))}
