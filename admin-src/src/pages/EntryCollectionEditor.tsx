@@ -1,13 +1,63 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Checkbox, Form, Input, Modal, Select, Space, Typography, message } from 'antd';
+import { Alert, Button, Checkbox, Form, Input, Modal, Segmented, Space, Table, Typography, message } from 'antd';
 import { apiJsonPost } from '../lib/api';
-import { availableEntryCollectionOptions, collectionResolveDefaults, entryCollectionMemberKey, type EntryCollection, type EntryCollectionOption } from './clientEntryCollections';
+import { mergeEntryCollectionKeys } from './clientEntryLayout';
+import { availableEntryCollectionOptions, collectionResolveDefaults, type EntryCollection, type EntryCollectionOption } from './clientEntryCollections';
 
-export default function EntryCollectionEditor({ open, collection, options, initialKeys, onClose, onDone }: {
+function CollectionMemberPicker({ value = [], onChange, options, disabled }: {
+  value?: string[];
+  onChange?: (keys: string[]) => void;
+  options: EntryCollectionOption[];
+  disabled?: boolean;
+}) {
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState<'all' | 'selected'>('all');
+  const [page, setPage] = useState(1);
+  const selected = new Set(value);
+  const filtered = options.filter((option) => (view === 'all' || selected.has(option.value)) && option.label.toLowerCase().includes(query.trim().toLowerCase()));
+  useEffect(() => { setPage(1); }, [query, view]);
+  useEffect(() => { setPage((current) => Math.min(current, Math.max(1, Math.ceil(filtered.length / 8)))); }, [filtered.length]);
+  const visibleKeys = filtered.map((option) => option.value);
+  return <div style={{ border: '1px solid #e5e5e5', borderRadius: 6, overflow: 'hidden' }}>
+    <Space wrap style={{ padding: 12, width: '100%', justifyContent: 'space-between', background: '#fafafa' }}>
+      <Input.Search value={query} onChange={(event) => setQuery(event.target.value)} allowClear placeholder="搜索规则名称、编号或入口" style={{ width: 260, maxWidth: '100%' }} />
+      <Segmented value={view} options={[{ label: `全部可用 ${options.length}`, value: 'all' }, { label: `已选 ${value.length}`, value: 'selected' }]} onChange={(next) => setView(next as 'all' | 'selected')} />
+    </Space>
+    <Table
+      size="small"
+      rowKey="value"
+      tableLayout="fixed"
+      dataSource={filtered}
+      columns={[
+        { title: '规则', key: 'name', ellipsis: true, render: (_, option) => <span title={option.label}>{option.label.split(' · ').slice(0, -1).join(' · ') || option.label}</span> },
+        { title: '当前入口', dataIndex: 'entry_host', width: '36%', ellipsis: true },
+      ]}
+      rowSelection={{
+        selectedRowKeys: value,
+        preserveSelectedRowKeys: true,
+        onChange: (keys) => onChange?.(keys.map(String)),
+        getCheckboxProps: () => ({ disabled }),
+        columnWidth: 42,
+      }}
+      pagination={{ current: page, pageSize: 8, onChange: setPage, showSizeChanger: false, size: 'small', hideOnSinglePage: true }}
+      locale={{ emptyText: view === 'selected' ? '尚未选择匹配的规则' : '没有匹配的可用规则' }}
+    />
+    <Space wrap style={{ padding: '8px 12px', width: '100%', borderTop: '1px solid #eee', justifyContent: 'space-between' }}>
+      <Typography.Text type="secondary">已选 {value.length} 条 · 当前筛选 {filtered.length} 条</Typography.Text>
+      <Space size={8}>
+        <Button type="link" size="small" disabled={disabled || !visibleKeys.length} onClick={() => onChange?.([...new Set([...value, ...visibleKeys])])}>全选筛选结果（{filtered.length}）</Button>
+        <Button type="link" size="small" disabled={disabled || !visibleKeys.some((key) => selected.has(key))} onClick={() => onChange?.(value.filter((key) => !visibleKeys.includes(key)))}>取消筛选内选择</Button>
+      </Space>
+    </Space>
+  </div>;
+}
+
+export default function EntryCollectionEditor({ open, collection, options, initialKeys, additionalKeys = [], onClose, onDone }: {
   open: boolean;
   collection?: EntryCollection;
   options: EntryCollectionOption[];
   initialKeys: string[];
+  additionalKeys?: string[];
   onClose: () => void;
   onDone: () => void | Promise<void>;
 }) {
@@ -20,7 +70,7 @@ export default function EntryCollectionEditor({ open, collection, options, initi
 
   useEffect(() => {
     if (!open) return;
-    const keys = collection ? collection.items.map(entryCollectionMemberKey) : initialKeys;
+    const keys = collection ? mergeEntryCollectionKeys(collection.items, additionalKeys) : initialKeys;
     const hosts = [...new Set(available.filter((item) => keys.includes(item.value)).map((item) => item.entry_host).filter(Boolean))];
     resolveTouched.current = false;
     form.resetFields();
@@ -54,7 +104,7 @@ export default function EntryCollectionEditor({ open, collection, options, initi
     }
   };
 
-  return <Modal title={collection ? '编辑入口合集' : '合并到入口合集'} open={open} onCancel={onClose} onOk={save} confirmLoading={saving} okText="保存合集" cancelText="取消" width={760} destroyOnHidden>
+  return <Modal className="entry-collection-editor" title={collection ? '编辑入口合集' : '合并到入口合集'} open={open} onCancel={onClose} onOk={save} confirmLoading={saving} okText="保存合集" cancelText="取消" width={860} destroyOnHidden styles={{ body: { maxHeight: '72vh', overflowY: 'auto' } }}>
     <Alert showIcon type="info" message="只填一个入口，成员规则统一使用" description="统一管理入口地址和域名解析设置；原规则名称、用户条件、固定名单、生效节点及全局匹配优先级不变。移出成员或解散合集时保留当前入口和解析设置，不删除规则。" style={{ marginBottom: 20 }} />
     <Form form={form} layout="vertical" onValuesChange={(changed) => {
       if ('resolve_entry_host' in changed) resolveTouched.current = true;
@@ -62,6 +112,7 @@ export default function EntryCollectionEditor({ open, collection, options, initi
         form.setFieldValue('resolve_entry_host', collectionResolveDefaults(available, changed.member_keys || [], collection).enabled);
       }
     }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0 20px' }}>
       <Form.Item name="name" label="合集名称" rules={[{ required: true, whitespace: true, message: '请输入合集名称' }]}>
         <Input maxLength={255} showCount placeholder="例如：常用入口" />
       </Form.Item>
@@ -71,6 +122,7 @@ export default function EntryCollectionEditor({ open, collection, options, initi
       ]} extra="保存后，合集内全部规则统一使用这个入口地址和下方的域名解析设置。">
         <Input placeholder="entry.example.com 或 1.2.3.4" />
       </Form.Item>
+      </div>
       <Form.Item name="resolve_entry_host" valuePropName="checked" extra="统一应用于合集内全部规则。勾选后由后端解析域名并下发 IP；DNS 成功结果缓存 1 分钟，解析失败回退原域名，填写 IP 时原样下发。">
         <Checkbox>解析域名下发 IP</Checkbox>
       </Form.Item>
@@ -82,18 +134,8 @@ export default function EntryCollectionEditor({ open, collection, options, initi
         style={{ marginBottom: 20 }}
       />}
       <Form.Item name="member_keys" label="合集成员" rules={[{ required: true, type: 'array', min: collection ? 1 : 2, message: collection ? '请至少选择一条规则；如不再需要合集请使用解散' : '新建合集请至少选择两条规则' }]} extra="可选择尚未加入合集的覆盖入口规则、二分叶子组，以及本合集现有成员；其他合集成员须先移出。">
-        <Select mode="multiple" showSearch allowClear options={available} optionFilterProp="label" maxTagCount={4} maxTagPlaceholder={(omitted) => `另 ${omitted.length} 条规则`} placeholder="搜索名称、规则编号或入口地址" />
+        <CollectionMemberPicker options={available} disabled={saving} />
       </Form.Item>
-      <Space wrap>
-        <Typography.Text type="secondary">已选择 {memberKeys.length} 条规则，可批量选择，不需要重复填写入口。</Typography.Text>
-        <Button size="small" onClick={() => {
-          const keys = available.map((option) => option.value);
-          form.setFieldValue('member_keys', keys);
-          if (!resolveTouched.current && collection?.resolve_entry_host == null) {
-            form.setFieldValue('resolve_entry_host', collectionResolveDefaults(available, keys, collection).enabled);
-          }
-        }}>选择全部可用规则</Button>
-      </Space>
     </Form>
   </Modal>;
 }

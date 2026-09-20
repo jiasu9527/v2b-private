@@ -179,3 +179,96 @@ html,body,#root{height:100%;margin:0}body{background:#f0f3f8;font-family:Inter,-
   .entry-collections .ant-collapse-extra{flex-basis:100%;margin-left:24px}
   .entry-collections .ant-collapse-content-box{padding:0 12px 14px!important}
 }
+
+/* Entry assignment workspace: compact lists, clear collection hierarchy, durable bulk actions. */
+.entry-workspace{overflow:hidden}
+.entry-toolbar{padding:18px 20px 14px;border-bottom:1px solid var(--forest-line,#e5e5e5);background:#fff}
+.entry-toolbar-top,.entry-view-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.entry-view-row{margin-top:18px;justify-content:flex-start;gap:18px}
+.entry-filter-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:16px}
+.entry-filter-row .entry-search{flex:1 1 260px;min-width:220px;max-width:460px}
+.entry-filter-row>.ant-select{min-width:130px}
+.entry-view-help{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:12px;line-height:1.7}
+.entry-section-heading{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:16px 20px;border-top:1px solid var(--forest-line,#e5e5e5);background:#fafbfc}
+.entry-section-heading>.ant-typography-secondary{font-size:12px}
+.entry-count{display:inline-block;margin-left:8px;padding:0 7px;min-width:24px;border-radius:10px;background:#edf0f4;color:#687386;text-align:center;font-size:12px;font-weight:400}
+.client-entry-page .entry-compact-table .ant-table{font-family:inherit!important;font-size:13px}
+.client-entry-page .entry-compact-table .ant-table-thead>tr>th{background:#fafbfc;padding-top:11px;padding-bottom:11px;color:#626c7b;font-size:12px}
+.client-entry-page .entry-compact-table .ant-table-tbody>tr>td{padding-top:12px;padding-bottom:12px}
+.entry-name-cell,.entry-host-cell,.entry-condition-summary{min-width:0;width:100%;display:flex;flex-direction:column;gap:4px}
+.entry-name-cell>.ant-typography,.entry-host-cell>.ant-typography,.entry-condition-summary>.ant-typography{max-width:100%;display:block}
+.entry-name-cell>.ant-typography:first-child{font-weight:600}
+.entry-priority,.entry-host-mode,.entry-scope-label{font-size:11px!important;line-height:1.5}
+.entry-status-cell,.entry-node-count{display:flex;flex-direction:column;gap:4px}
+.entry-status-cell .ant-space{white-space:nowrap}
+.entry-node-count .ant-typography-secondary{font-size:11px;white-space:nowrap}
+.entry-condition-summary>.ant-space:empty{display:none}
+.entry-condition-summary .ant-tag{font-size:11px;margin-inline-end:0}
+.entry-collection-heading{min-width:0;display:flex;flex-direction:column;gap:6px}
+.entry-collection-title,.entry-collection-subtitle{display:flex;align-items:center;gap:10px;min-width:0;flex-wrap:wrap}
+.entry-collection-title>.ant-typography:first-child{max-width:420px;font-size:15px}
+.entry-collection-title>.ant-typography-secondary{font-size:12px;white-space:nowrap}
+.entry-collection-title .ant-tag,.entry-collection-subtitle .ant-tag{margin-inline-end:0}
+.entry-collection-host{max-width:500px;color:#596577;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.entry-collection-subtitle .ant-tag{font-size:11px}
+.entry-collections>.ant-collapse-item>.ant-collapse-header{background:#fff;padding:16px 20px}
+.entry-collections>.ant-collapse-item-active>.ant-collapse-header{background:#f7f9fc}
+.entry-collections .ant-collapse-content-box{padding:0 16px 16px!important;background:#f7f9fc}
+.entry-collections .entry-compact-table{border:1px solid #e8ecf2;border-radius:4px;overflow:hidden}
+.entry-rule-details{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px 30px;padding:6px 12px 8px;font-size:13px}
+.entry-rule-details>div{min-width:0}
+.entry-detail-heading{margin-bottom:8px;font-weight:600;color:#445064}
+.entry-detail-heading .ant-typography-secondary{margin-left:6px;font-size:11px;font-weight:400}
+.entry-detail-node-list{max-height:170px;overflow:auto;display:flex;align-items:flex-start;gap:6px;flex-wrap:wrap}
+.entry-detail-node-list .ant-tag{white-space:normal;overflow-wrap:anywhere;margin:0}
+.entry-rule-details .client-entry-condition-tag{white-space:normal;overflow-wrap:anywhere;max-height:160px;overflow:auto}
+.entry-detail-remarks{white-space:pre-wrap;overflow-wrap:anywhere}
+.entry-editor-section-title{padding:10px 0;margin:4px 0 16px;font-size:14px;font-weight:600;border-bottom:1px solid #edf0f4;color:#34435b}
+.entry-editor-section-title>.ant-typography-secondary{font-size:12px;font-weight:400;margin-left:10px}
+.entry-editor-section-title--shared{margin-top:28px}
+.entry-sort-table .sortable-row{cursor:default}
+.entry-drag-handle{display:inline-flex;align-items:center;justify-content:center;width:25px;height:28px;flex-shrink:0;padding:0;border:0;border-radius:4px;background:transparent;color:#8993a3;cursor:grab}
+.entry-drag-handle:hover{background:#edf2fa;color:#3f7cff}
+.entry-drag-handle:active{cursor:grabbing}
+.entry-drag-handle:disabled{cursor:wait;opacity:.5}
+.entry-drag-handle:focus-visible{outline:2px solid #3f7cff;outline-offset:2px}
+.client-entry-page--selecting{padding-bottom:110px}
+.entry-batch-bar{position:fixed;z-index:100;left:262px;right:24px;bottom:18px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;padding:14px 18px;background:rgba(255,255,255,.98);border:1px solid #cbd9f0;border-radius:8px;box-shadow:0 6px 28px rgba(38,60,97,.18)}
+.entry-batch-bar>div>.ant-typography-secondary{font-size:12px;margin-left:4px}
+.admin-sider.ant-layout-sider-collapsed+.ant-layout .entry-batch-bar{left:24px}
+.entry-empty{padding:32px 16px}
+@media(max-width:1100px){.entry-collection-title>.ant-typography:first-child{max-width:300px}.entry-collection-host{max-width:350px}.entry-rule-details{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:768px){
+  .entry-toolbar{padding:14px 12px 12px}
+  .entry-toolbar-top{align-items:flex-start}
+  .entry-view-row{gap:10px;margin-top:14px}
+  .entry-view-row>.ant-typography-secondary{font-size:12px}
+  .entry-filter-row{gap:8px;margin-top:12px}
+  .entry-filter-row .entry-search{flex-basis:100%;max-width:none;min-width:0}
+  .entry-filter-row>.ant-select{flex:1 1 120px;min-width:0}
+  .entry-view-help{font-size:11px}
+  .entry-section-heading{padding:14px 12px;gap:6px}
+  .entry-collection-title{gap:6px}
+  .entry-collection-title>.ant-typography:first-child{max-width:240px;font-size:14px}
+  .entry-collection-host{max-width:min(300px,calc(100vw - 92px))}
+  .entry-collections .ant-collapse-content-box{padding:0 8px 10px!important}
+  .entry-collections .ant-collapse-extra{margin-left:24px}
+  .entry-batch-bar,.admin-sider.ant-layout-sider-collapsed+.ant-layout .entry-batch-bar{left:10px;right:10px;bottom:10px;padding:12px;gap:10px}
+  .entry-batch-bar>div>.ant-typography-secondary{display:block;margin-left:0;margin-top:2px}
+  .client-entry-page--selecting{padding-bottom:150px}
+  .entry-rule-details{padding:4px}
+}
+
+.entry-name-title{display:flex;align-items:center;gap:6px;min-width:0}.entry-name-title>.ant-typography{min-width:0;flex:1}.entry-name-title>.ant-tag{flex-shrink:0;margin:0;font-size:11px}
+
+/* Keep entry selection legible under the admin's monochrome primary-color theme. */
+.entry-collection-editor .ant-alert-info{background:#f2f7ff;border-color:#d6e4f6}
+.entry-collection-editor .ant-alert-info .ant-alert-message{color:#23416a}
+.entry-collection-editor .ant-alert-info .ant-alert-description{color:#52647c}
+.entry-collection-editor .ant-alert-info .ant-alert-icon{color:#396fba}
+.entry-collection-editor .ant-table .ant-table-tbody>tr.ant-table-row-selected>.ant-table-cell,
+.client-entry-page .entry-compact-table .ant-table .ant-table-tbody>tr.ant-table-row-selected>.ant-table-cell{background:#eef4fc;color:#263448}
+.entry-collection-editor .ant-table .ant-table-tbody>tr.ant-table-row-selected:hover>.ant-table-cell,
+.entry-collection-editor .ant-table .ant-table-tbody>tr.ant-table-row-selected>.ant-table-cell-row-hover,
+.client-entry-page .entry-compact-table .ant-table .ant-table-tbody>tr.ant-table-row-selected:hover>.ant-table-cell,
+.client-entry-page .entry-compact-table .ant-table .ant-table-tbody>tr.ant-table-row-selected>.ant-table-cell-row-hover{background:#e6effd}

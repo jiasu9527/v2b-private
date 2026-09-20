@@ -6,10 +6,11 @@ import {
   Checkbox,
   Collapse,
   Form,
+  Dropdown,
+  Empty,
   Input,
   InputNumber,
   Modal,
-  Popconfirm,
   Segmented,
   Select,
   Space,
@@ -18,6 +19,7 @@ import {
   Table,
   Tag,
   Typography,
+  Tooltip,
   message,
 } from 'antd';
 import {
@@ -26,13 +28,15 @@ import {
   DeleteOutlined,
   LoadingOutlined,
   MenuOutlined,
+  MoreOutlined,
+  SearchOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
 import { apiGet, apiPost, apiJsonPost, bytes } from '../lib/api';
-import { moveItem } from '../lib/drag';
 import EntryCollectionEditor from './EntryCollectionEditor';
+import { filterEntryRows, entryRuleName, entryRuleHost, moveEntryRow } from './clientEntryLayout';
 import { attachEntryCollections, effectiveEntryResolveHost, entryCollectionResolveLabel, parseEntryCollections, canJoinEntryCollection, entryCollectionMember, entryCollectionMemberKey, type EntryCollection, type EntryCollectionOption } from './clientEntryCollections';
 import { buildVisibleServerOptions, memberKey, splitMemberKey, type ClientEntryServerOption } from './clientEntryHelpers';
 
@@ -671,6 +675,7 @@ function PolicyEditor({
     >
       <Form form={form} layout="vertical">
         <Form.Item name="id" hidden><Input /></Form.Item>
+        <div className="entry-editor-section-title">规则与入口</div>
         <Form.Item name="name" label="规则名称" rules={[{ required: true, whitespace: true, message: '请输入规则名称' }]}>
           <Input placeholder="例如：新用户 Clash 独立入口" maxLength={100} showCount />
         </Form.Item>
@@ -709,6 +714,7 @@ function PolicyEditor({
             <Checkbox disabled={Boolean(row?.__entry_collection)}>解析域名下发 IP</Checkbox>
           </Form.Item>
         </>}
+        <div className="entry-editor-section-title">匹配与下发</div>
         <Form.Item label="匹配条件" extra="同一条规则中的所有条件必须同时满足（AND）。不添加条件表示匹配全部用户。">
           <Form.List name="conditions">
             {(fields, { add, remove }) => <Space direction="vertical" size={10} style={{ width: '100%' }}>
@@ -988,7 +994,7 @@ function SplitPolicyCreator({
   </>;
 }
 
-function RangePolicySplitConverter({ row, onDone }: { row: any; onDone: () => void }) {
+function RangePolicySplitConverter({ row, onDone, children }: { row: any; onDone: () => void; children?: React.ReactElement }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
@@ -1020,7 +1026,7 @@ function RangePolicySplitConverter({ row, onDone }: { row: any; onDone: () => vo
   };
 
   return <>
-    <a onClick={show}><BranchesOutlined /> 固定二分</a>
+    {children ? React.cloneElement(children, { onClick: show }) : <a onClick={show}><BranchesOutlined /> 固定二分</a>}
     <Modal
       title={`将“${String(row?.name || `规则 #${row?.id}`)}”转换为固定二分`}
       open={open}
@@ -1328,15 +1334,15 @@ function SplitGroupUsersModal({ row, group, open, onClose }: { row: any; group: 
 }
 
 function SplitGroupRowActions({
-  row,
-  group,
-  serverOptions,
-  onDone,
+  row, group, serverOptions, onDone, onRemove, onDelete, pending,
 }: {
   row: any;
   group: SplitGroup;
   serverOptions: ClientEntryServerOption[];
   onDone: () => void | Promise<void>;
+  onRemove?: () => void;
+  onDelete: () => void;
+  pending?: boolean;
 }) {
   const [splitOpen, setSplitOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -1448,12 +1454,22 @@ function SplitGroupRowActions({
   };
 
   return <>
-    <Space className="client-entry-actions" size={10}>
-      <a onClick={openEdit}>编辑</a>
-      <a onClick={() => setUsersOpen(true)}><TeamOutlined /> 固定名单</a>
-      {Number(group.user_count) >= 2
-        ? <a onClick={openSplit}><BranchesOutlined /> 继续二分</a>
-        : <Typography.Text type="secondary">不足 2 人</Typography.Text>}
+    <Space className="client-entry-actions" size={4}>
+      <Button type="link" size="small" onClick={openEdit} disabled={pending}>编辑</Button>
+      <Dropdown trigger={['click']} menu={{ items: [
+        { key: 'users', icon: <TeamOutlined />, label: '查看固定名单' },
+        { key: 'split', icon: <BranchesOutlined />, label: Number(group.user_count) >= 2 ? '继续二分' : '继续二分（不足 2 人）', disabled: Number(group.user_count) < 2 },
+        ...(onRemove ? [{ key: 'remove', label: '移出合集' }] : []),
+        { type: 'divider' as const },
+        { key: 'delete', icon: <DeleteOutlined />, label: '删除所属整套固定规则', danger: true },
+      ], onClick: ({ key }) => {
+        if (key === 'users') setUsersOpen(true);
+        if (key === 'split') openSplit();
+        if (key === 'remove') onRemove?.();
+        if (key === 'delete') onDelete();
+      } }}>
+        <Button type="text" size="small" icon={<MoreOutlined />} disabled={pending}>更多</Button>
+      </Dropdown>
     </Space>
     <Modal
       title={`继续二分“${splitGroupDisplayName(group)}”`}
@@ -1512,6 +1528,7 @@ function SplitGroupRowActions({
       />
       {row.__entry_collection && <Alert type="info" showIcon message={`入口由合集「${row.__entry_collection.name}」统一管理`} description="入口地址和“解析域名下发 IP”请在合集统一修改；如需单独修改，请先移出合集。名称、固定名单等功能不受影响。" style={{ marginBottom: 16 }} />}
       <Form form={editForm} layout="vertical">
+        <div className="entry-editor-section-title">当前规则设置 <Typography.Text type="secondary">仅影响当前固定名单</Typography.Text></div>
         <Form.Item name="name" label="规则名称" rules={[{ required: true, whitespace: true, message: '请输入规则名称' }]}>
           <Input placeholder="例如：内鬼入口 B" maxLength={255} showCount />
         </Form.Item>
@@ -1539,7 +1556,9 @@ function SplitGroupRowActions({
             <Button type="link" size="small" onClick={() => setUsersOpen(true)}>查看用户详情</Button>
           </Space>
         </Form.Item>
-        <Form.Item name="members" label="生效节点" rules={[{ required: true, message: '请选择生效节点' }]} tooltip="固定二分出来的规则共同使用同一批生效节点。">
+        <div className="entry-editor-section-title entry-editor-section-title--shared">整套共享设置 <Typography.Text type="secondary">影响同套 {sortSplitLeaves(row.split_groups || []).length} 个分组</Typography.Text></div>
+        <Alert type="warning" showIcon message="以下生效节点、状态和备注会同步影响同套的全部固定分组，包括其他合集中的分组。" style={{ marginBottom: 16 }} />
+        <Form.Item name="members" label="整套生效节点" rules={[{ required: true, message: '请选择生效节点' }]} tooltip="固定二分出来的规则共同使用同一批生效节点。">
           <Select mode="multiple" showSearch allowClear placeholder="选择多个生效节点" options={serverOptions} optionFilterProp="label" />
         </Form.Item>
         <Form.Item name="enabled" label="状态" valuePropName="checked">
@@ -1641,6 +1660,34 @@ function SimulationModal({
   </Modal>;
 }
 
+function StandardRuleActions({ row, serverOptions, onDone, onRemove, onDelete, pending }: {
+  row: any; serverOptions: ClientEntryServerOption[]; onDone: () => void;
+  onRemove?: () => void; onDelete: () => void; pending?: boolean;
+}) {
+  const copyTrigger = useRef<HTMLButtonElement>(null);
+  const splitTrigger = useRef<HTMLButtonElement>(null);
+  const copyRow = { ...row, id: undefined, __entry_collection: undefined, name: `${row.name || `规则 #${row.id}`} - 副本` };
+  return <>
+    <Space className="client-entry-actions" size={4}>
+      <PolicyEditor row={row} onDone={onDone} serverOptions={serverOptions}><Button type="link" size="small" disabled={pending}>编辑</Button></PolicyEditor>
+      <Dropdown trigger={['click']} menu={{ items: [
+        { key: 'copy', icon: <CopyOutlined />, label: '复制规则' },
+        ...(canConvertRangeToSplit(row) ? [{ key: 'split', icon: <BranchesOutlined />, label: '转换为固定二分' }] : []),
+        ...(onRemove ? [{ key: 'remove', label: '移出合集' }] : []),
+        { type: 'divider' as const },
+        { key: 'delete', icon: <DeleteOutlined />, label: '删除规则', danger: true },
+      ], onClick: ({ key }) => {
+        if (key === 'copy') copyTrigger.current?.click();
+        if (key === 'split') splitTrigger.current?.click();
+        if (key === 'remove') onRemove?.();
+        if (key === 'delete') onDelete();
+      } }}><Button type="text" size="small" icon={<MoreOutlined />} disabled={pending}>更多</Button></Dropdown>
+    </Space>
+    <PolicyEditor row={copyRow} onDone={onDone} serverOptions={serverOptions}><button type="button" ref={copyTrigger} hidden /></PolicyEditor>
+    {canConvertRangeToSplit(row) && <RangePolicySplitConverter row={row} onDone={onDone}><button type="button" ref={splitTrigger} hidden /></RangePolicySplitConverter>}
+  </>;
+}
+
 export default function ClientEntryUserPolicyPage() {
   const [rows, setRows] = useState<any[]>([]);
   const [serverOptions, setServerOptions] = useState<ClientEntryServerOption[]>([]);
@@ -1653,9 +1700,25 @@ export default function ClientEntryUserPolicyPage() {
   const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([]);
   const [collectionEditorOpen, setCollectionEditorOpen] = useState(false);
   const [editingCollection, setEditingCollection] = useState<EntryCollection | undefined>();
+  const [additionalCollectionKeys, setAdditionalCollectionKeys] = useState<string[]>([]);
   const [expandedCollections, setExpandedCollections] = useState<string[]>([]);
+  const [filteredExpandedCollections, setFilteredExpandedCollections] = useState<string[]>([]);
+  const [expandedRows, setExpandedRows] = useState<React.Key[]>([]);
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'enabled' | 'disabled'>('all');
+  const [kindFilter, setKindFilter] = useState<'all' | 'standard' | 'split' | 'email' | 'user_id' | 'ua'>('all');
+  const [membershipFilter, setMembershipFilter] = useState<'all' | 'grouped' | 'ungrouped'>('all');
+  const [pendingIDs, setPendingIDs] = useState<number[]>([]);
+  const pendingRef = useRef(new Set<number>());
+  const [sortSaving, setSortSaving] = useState(false);
+  const sortSavingRef = useRef(false);
+  const [movingRow, setMovingRow] = useState<any>();
+  const [movePosition, setMovePosition] = useState<number | null>(1);
+  const [joinOpen, setJoinOpen] = useState(false);
+  const [joinCollectionID, setJoinCollectionID] = useState<number>();
 
   const load = async () => {
+    if (sortSavingRef.current) return;
     setLoading(true);
     try {
       const [policyRes, nodeRes, collectionRes] = await Promise.all([
@@ -1697,336 +1760,299 @@ export default function ClientEntryUserPolicyPage() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, []);
 
   const serverOptionMap = useMemo(() => Object.fromEntries(serverOptions.map((item) => [item.value, item.label])), [serverOptions]);
   const entryHosts = useMemo(() => collectEntryHosts(rows), [rows]);
   const ungroupedRows = useMemo(() => rows.filter((row) => !row.__entry_collection), [rows]);
+  const priorityMap = useMemo(() => new Map(rows.map((row, index) => [displayRowKey(row), index + 1])), [rows]);
+  const filteredRows = useMemo(() => filterEntryRows(rows, { query, status: statusFilter, kind: kindFilter, membership: membershipFilter }), [rows, query, statusFilter, kindFilter, membershipFilter]);
+  const filteredUngrouped = useMemo(() => filteredRows.filter((row) => !row.__entry_collection), [filteredRows]);
+  const filteredCollections = useMemo(() => collections.filter((collection) => filteredRows.some((row) => row.__entry_collection?.id === collection.id)), [collections, filteredRows]);
+  const hasFilters = Boolean(query.trim() || statusFilter !== 'all' || kindFilter !== 'all' || membershipFilter !== 'all');
+  // Filtering has its own expansion state: reveal matches once per filter change,
+  // then allow manual collapse without overwriting the unfiltered layout.
+  useEffect(() => {
+    if (hasFilters) setFilteredExpandedCollections(filteredCollections.map((collection) => String(collection.id)));
+  }, [query, statusFilter, kindFilter, membershipFilter]);
+  const activeCollectionKeys = hasFilters ? filteredExpandedCollections : expandedCollections;
+  const hiddenSelectedCount = selectedKeys.filter((key) => !filteredRows.some((row) => displayRowKey(row) === key)).length;
   const collectionOptions: EntryCollectionOption[] = useMemo(() => rows.filter(canJoinEntryCollection).map((row) => {
     const item = entryCollectionMember(row);
-    const name = isSplitGroupDisplayRow(row) ? splitGroupDisplayName(row.__split_group) : row.name || `规则 #${row.id}`;
-    const host = String((isSplitGroupDisplayRow(row) ? row.__split_group.entry_host : row.entry_host) || '');
-    return { value: entryCollectionMemberKey(item), label: `${name} · ${item.kind === 'split_group' ? '固定名单' : '规则'} #${item.id} · ${host}`, item, entry_host: host, resolve_entry_host: effectiveEntryResolveHost(row), collection_id: row.__entry_collection?.id };
+    const host = entryRuleHost(row);
+    return { value: entryCollectionMemberKey(item), label: `${entryRuleName(row)} · ${item.kind === 'split_group' ? '固定名单' : '规则'} #${item.id} · ${host}`, item, entry_host: host, resolve_entry_host: effectiveEntryResolveHost(row), collection_id: row.__entry_collection?.id };
   }), [rows]);
 
-  const editCollection = (collection?: EntryCollection) => {
+  const editCollection = (collection?: EntryCollection, additionalKeys: string[] = []) => {
     setEditingCollection(collection);
+    setAdditionalCollectionKeys(additionalKeys);
     setCollectionEditorOpen(true);
   };
-  const dissolveCollection = async (collection: EntryCollection) => {
-    try {
-      await apiJsonPost('/server/client-entry-user-policy/collection/drop', { id: collection.id, version: collection.version });
-      message.success('合集已解散，原规则、当前入口及解析设置均已保留');
-      await load();
-    } catch (error: any) {
-      message.error(error?.message || '解散合集失败');
-    }
-  };
-  const removeCollectionMember = async (row: any) => {
-    const collection: EntryCollection = row.__entry_collection;
-    try {
-      await apiJsonPost('/server/client-entry-user-policy/collection/remove', { id: collection.id, version: collection.version, item: entryCollectionMember(row) });
-      message.success('规则已移出合集，当前入口和解析设置保持不变');
-      await load();
-    } catch (error: any) {
-      message.error(error?.message || '移出合集失败');
-    }
-  };
-
+  const dissolveCollection = (collection: EntryCollection) => Modal.confirm({
+    title: `解散合集「${collection.name}」？`,
+    content: `只解除 ${collection.items.length} 条规则的统一管理。原规则、用户名单、当前入口及解析设置都会保留。`,
+    okText: '解散合集', cancelText: '取消', okButtonProps: { danger: true },
+    onOk: async () => {
+      try {
+        await apiJsonPost('/server/client-entry-user-policy/collection/drop', { id: collection.id, version: collection.version });
+        message.success('合集已解散，原规则和当前入口均已保留');
+        await load();
+      } catch (error: any) { message.error(error?.message || '解散合集失败'); throw error; }
+    },
+  });
+  const removeCollectionMember = (row: any) => Modal.confirm({
+    title: `将「${entryRuleName(row)}」移出合集？`,
+    content: '当前入口和解析设置保持不变，规则和用户名单不会删除。',
+    okText: '移出合集', cancelText: '取消',
+    onOk: async () => {
+      const collection: EntryCollection = row.__entry_collection;
+      try {
+        await apiJsonPost('/server/client-entry-user-policy/collection/remove', { id: collection.id, version: collection.version, item: entryCollectionMember(row) });
+        message.success('已移出合集，当前入口和解析设置已保留');
+        await load();
+      } catch (error: any) { message.error(error?.message || '移出合集失败'); throw error; }
+    },
+  });
   const copyAllEntryHosts = async () => {
-    if (!entryHosts.length) {
-      message.warning('当前没有可复制的入口地址');
-      return;
-    }
     try {
       await copyText(entryHosts.join('\n'));
       message.success(`已复制 ${entryHosts.length} 个入口地址，一行一个`);
-    } catch {
-      message.error('复制失败，请检查浏览器剪贴板权限');
-    }
+    } catch { message.error('复制失败，请检查浏览器剪贴板权限'); }
   };
-
-  const drop = async (row: any) => {
-    try {
-      await apiPost('/server/client-entry-user-policy/drop', { id: row.id }, { form: true });
-      message.success('已删除');
-      load();
-    } catch (error: any) {
-      message.error(error?.message || '删除失败');
-    }
+  const beginPending = (id: number) => {
+    if (pendingRef.current.has(id)) return false;
+    pendingRef.current.add(id);
+    setPendingIDs([...pendingRef.current]);
+    return true;
   };
-
+  const finishPending = (id: number) => {
+    pendingRef.current.delete(id);
+    setPendingIDs([...pendingRef.current]);
+  };
+  const splitScope = (row: any) => {
+    const leaves = rows.filter((item) => isSplitGroupDisplayRow(item) && Number(item.id) === Number(row.id));
+    return `${leaves.length} 个分组、${leaves.reduce((count, item) => count + Number(item.__split_group.user_count || 0), 0)} 人`;
+  };
+  const drop = (row: any) => Modal.confirm({
+    title: isSplitPolicy(row) ? '删除所属整套固定规则？' : `删除规则「${entryRuleName(row)}」？`,
+    content: isSplitPolicy(row)
+      ? `将删除「${row.name || `固定规则 #${row.id}`}」整套的 ${splitScope(row)} 固定分配记录，包括其他合集中的同套分组。用户账号不会删除，但这些用户将不再按本套规则分配入口。`
+      : '删除后，该规则将不再参与入口匹配。用户账号和节点不会删除。',
+    okText: isSplitPolicy(row) ? '删除整套规则' : '删除规则', cancelText: '取消', okButtonProps: { danger: true },
+    onOk: async () => {
+      if (!beginPending(Number(row.id))) return;
+      try {
+        await apiPost('/server/client-entry-user-policy/drop', { id: row.id }, { form: true });
+        message.success('规则已删除');
+        await load();
+      } catch (error: any) { message.error(error?.message || '删除失败'); throw error; }
+      finally { finishPending(Number(row.id)); }
+    },
+  });
   const toggle = async (row: any, enabled: boolean) => {
+    if (!beginPending(Number(row.id))) return;
     try {
-      if (isSplitPolicy(row)) {
-        await apiPost('/server/client-entry-user-policy/enabled', { id: row.id, enabled: enabled ? 1 : 0 });
-      } else {
-        await apiPost('/server/client-entry-user-policy/save', policyPayload(row, { enabled }));
-      }
+      if (isSplitPolicy(row)) await apiPost('/server/client-entry-user-policy/enabled', { id: row.id, enabled: enabled ? 1 : 0 });
+      else await apiPost('/server/client-entry-user-policy/save', policyPayload(row, { enabled }));
       message.success(enabled ? '规则已启用' : '规则已禁用');
-      load();
-    } catch (error: any) {
-      message.error(error?.message || '状态更新失败');
-    }
+      await load();
+    } catch (error: any) { message.error(error?.message || '状态更新失败'); }
+    finally { finishPending(Number(row.id)); }
   };
-
-  const saveSort = async (nextRows: any[]) => {
-    await apiPost('/server/client-entry-user-policy/sort', {
-      items: nextRows.map(entryCollectionMember),
+  const confirmToggle = (row: any, enabled: boolean) => {
+    if (!isSplitPolicy(row)) { void toggle(row, enabled); return; }
+    Modal.confirm({
+      title: `${enabled ? '启用' : '禁用'}整套固定规则？`,
+      content: `此操作同时影响「${row.name || `固定规则 #${row.id}`}」的 ${splitScope(row)}，包括其他合集中的同套分组。`,
+      okText: `${enabled ? '启用' : '禁用'}整套`, cancelText: '取消',
+      onOk: () => toggle(row, enabled),
     });
   };
-
-  const handleDrop = async (targetRow: any) => {
-    if (view !== 'sort' || !draggingKey) return;
-    const targetKey = displayRowKey(targetRow);
-    if (draggingKey === targetKey) {
-      setDraggingKey(null);
-      return;
-    }
-    const fromIndex = rows.findIndex((row) => displayRowKey(row) === draggingKey);
-    const toIndex = rows.findIndex((row) => displayRowKey(row) === targetKey);
-    if (fromIndex < 0 || toIndex < 0) {
-      setDraggingKey(null);
-      return;
-    }
+  const applySort = async (key: string, position: number) => {
+    if (sortSavingRef.current || loading) return;
+    const nextRows = moveEntryRow(rows, key, position);
+    if (nextRows.every((row, index) => displayRowKey(row) === displayRowKey(rows[index]))) { setMovingRow(undefined); return; }
     const previousRows = rows;
-    const nextRows = moveItem(rows, fromIndex, toIndex);
-    setRows(nextRows);
+    sortSavingRef.current = true;
+    setSortSaving(true);
     setDraggingKey(null);
+    setRows(nextRows);
     try {
-      await saveSort(nextRows);
-      message.success('规则顺序已保存');
+      // Always submit the complete ordering; search only affects the management view.
+      await apiPost('/server/client-entry-user-policy/sort', { items: nextRows.map(entryCollectionMember) });
+      message.success('全局匹配顺序已保存');
+      setMovingRow(undefined);
     } catch (error: any) {
       setRows(previousRows);
       message.error(error?.message || '排序保存失败');
+    } finally {
+      sortSavingRef.current = false;
+      setSortSaving(false);
     }
   };
+  const handleDrop = (targetRow: any) => {
+    if (view !== 'sort' || !draggingKey || sortSavingRef.current) return;
+    void applySort(draggingKey, priorityMap.get(displayRowKey(targetRow)) || 1);
+    setDraggingKey(null);
+  };
 
-  const columns: any[] = [
-    {
-      title: '顺序',
-      key: 'sequence',
-      width: 90,
-      render: (_: any, __: any, index: number) => <Space><MenuOutlined className="drag-handle" title="拖动调整匹配顺序" /><span>{index + 1}</span></Space>,
-    },
-    {
-      title: '启用状态',
-      dataIndex: 'enabled',
-      width: 130,
-      render: (value: any, row: any) => {
-        const enabled = Number(value) !== 0;
-        const title = isSplitGroupDisplayRow(row) ? '切换整套固定二分规则的启用状态' : '切换这条入口规则的启用状态';
-        return <Space size={6} title={title}>
-          <Switch size="small" checked={enabled} onChange={(checked) => toggle(row, checked)} />
-          <Typography.Text type={enabled ? undefined : 'secondary'}>{enabled ? '已启用' : '已禁用'}</Typography.Text>
-        </Space>;
-      },
-    },
-    {
-      title: '规则名称',
-      dataIndex: 'name',
-      width: 210,
-      render: (value: any, row: any) => {
-        if (isSplitGroupDisplayRow(row)) {
-          const group = row.__split_group as SplitGroup;
-          const text = splitGroupDisplayName(group);
-          return <Space direction="vertical" size={4}><span className="client-entry-rule-name" title={text}>{text}</span>{view === 'sort' && row.__entry_collection && <Tag color="blue">合集：{row.__entry_collection.name}</Tag>}</Space>;
-        }
-        const text = String(value || `规则 #${row.id}`);
-        return <Space direction="vertical" size={4}><span className="client-entry-rule-name" title={text}>{text}</span>{view === 'sort' && row.__entry_collection && <Tag color="blue">合集：{row.__entry_collection.name}</Tag>}</Space>;
-      },
-    },
-    {
-      title: '匹配条件（全部 AND）',
-      dataIndex: 'conditions',
-      width: 620,
-      render: (value: any, row: any) => {
-        if (isSplitGroupDisplayRow(row)) {
-          const group = row.__split_group as SplitGroup;
-          return <Space wrap>
-            <Tag icon={<TeamOutlined />}>固定名单</Tag>
-            <Tag color="cyan">{Number(group.user_count || 0)} 人</Tag>
-          </Space>;
-        }
-        const conditions = parseConditions(value);
-        if (!conditions.length) return <Tag>全部用户</Tag>;
-        const hasEmailList = conditions.some((condition) => condition.field === 'email' && condition.operator === 'in' && (condition.values || []).length > 1);
-        const hasIDRange = conditions.some((condition) => condition.field === 'user_id' && condition.operator === 'between');
-        const idRangeUserCount = finiteNumber(row?.id_range_user_count);
-        return <div className={`client-entry-condition-list${hasEmailList ? ' client-entry-condition-list--expandable' : ''}`}>
-          {conditions.map((condition, index) => {
-            const text = conditionSummary(condition);
-            if (condition.field === 'email' && condition.operator === 'in') return <EmailConditionSummary condition={condition} key={`${condition.field}-${condition.operator}-${index}`} />;
-            return <Tag className="client-entry-condition-tag" title={text} key={`${condition.field}-${condition.operator}-${index}`}>{text}</Tag>;
-          })}
-          {hasIDRange && idRangeUserCount !== undefined && <Tag
-            color="cyan"
-            title="按当前数据库中实际存在的用户统计；已删除的用户 ID 不计入"
-          >ID 范围内实际 {idRangeUserCount} 人</Tag>}
-        </div>;
-      },
-    },
-    {
-      title: '命中结果',
-      key: 'result',
-      width: 410,
-      render: (_: any, row: any) => {
-        if (isSplitGroupDisplayRow(row)) return <Space direction="vertical" size={4}>
-          <Typography.Text code copyable={{ text: String(row.__split_group.entry_host || '') }}>{row.__split_group.entry_host || '-'}</Typography.Text>
-          {(effectiveEntryResolveHost(row) || row.__entry_collection) && <Tag color={effectiveEntryResolveHost(row) ? 'cyan' : undefined} style={{ width: 'fit-content', marginInlineEnd: 0 }}>{effectiveEntryResolveHost(row) ? '解析为 IP' : '直接下发域名 / IP'}</Tag>}
-        </Space>;
-        const action = normalizePolicyAction(row.action);
-        if (action === 'hide') return <Tag color="red">不下发节点</Tag>;
-        if (action === 'original') return <Tag color="blue">下发原入口地址</Tag>;
-        return <Space direction="vertical" size={4}>
-          <Typography.Text code copyable={{ text: String(row.entry_host || '') }}>{row.entry_host || '-'}</Typography.Text>
-          {(effectiveEntryResolveHost(row) || row.__entry_collection) && <Tag color={effectiveEntryResolveHost(row) ? 'cyan' : undefined} style={{ width: 'fit-content', marginInlineEnd: 0 }}>{effectiveEntryResolveHost(row) ? '解析为 IP' : '直接下发域名 / IP'}</Tag>}
-        </Space>;
-      },
-    },
-    {
-      title: '生效节点',
-      dataIndex: 'members',
-      width: 250,
-      render: (value: any) => {
-        const members = Array.isArray(value) ? value : [];
-        if (!members.length) return '-';
-        return <details className="client-entry-members"><summary>已选择 {members.length} 个节点</summary><div className="client-entry-member-list">{members.map((member: any) => {
-          const key = memberKey(member);
-          return <div key={key}>{serverOptionMap[key] || key}</div>;
-        })}</div></details>;
-      },
-    },
-    {
-      title: '额外节点',
-      dataIndex: 'extra_nodes',
-      width: 190,
-      render: (value: any, row: any) => isSplitPolicy(row) ? <Typography.Text type="secondary">二分组不使用</Typography.Text> : <ExtraNodesSummary value={value} position={row.extra_nodes_position} />,
-    },
-    { title: '备注', dataIndex: 'remarks', width: 180, ellipsis: true, render: (value: any) => value || '-' },
-    {
-      title: '操作',
-      key: 'action',
-      fixed: 'right',
-      align: 'right',
-      width: 410,
-      render: (_: any, row: any) => {
-        if (isSplitGroupDisplayRow(row)) return <Space className="client-entry-actions" size={10}>
-          <SplitGroupRowActions row={row} group={row.__split_group} serverOptions={serverOptions} onDone={load} />
-          {row.__entry_collection && <Popconfirm title="移出合集？当前入口和解析设置会保留，规则不会删除。" onConfirm={() => removeCollectionMember(row)}><a>移出合集</a></Popconfirm>}
-          <Popconfirm title={`确认删除“${splitGroupDisplayName(row.__split_group)}”所属的整套固定规则及全部名单？`} onConfirm={() => drop(row)}><a>删除整组</a></Popconfirm>
-        </Space>;
-        const copyRow = { ...row, id: undefined, __entry_collection: undefined, name: `${row.name || `规则 #${row.id}`} - 副本` };
-        return <Space className="client-entry-actions" size={10}>
-          <PolicyEditor row={row} onDone={load} serverOptions={serverOptions}><a>编辑</a></PolicyEditor>
-          {canConvertRangeToSplit(row) && <RangePolicySplitConverter row={row} onDone={load} />}
-          <PolicyEditor row={copyRow} onDone={load} serverOptions={serverOptions}><a><CopyOutlined /> 复制</a></PolicyEditor>
-          {row.__entry_collection && <Popconfirm title="移出合集？当前入口和解析设置会保留，规则不会删除。" onConfirm={() => removeCollectionMember(row)}><a>移出合集</a></Popconfirm>}
-          <Popconfirm title="确认删除这条入口规则？" onConfirm={() => drop(row)}><a>删除</a></Popconfirm>
-        </Space>;
-      },
-    },
+  const renderConditions = (row: any, detailed = false) => {
+    if (isSplitGroupDisplayRow(row)) return <Space size={4} wrap><Tag icon={<TeamOutlined />}>固定名单</Tag><Tag color="cyan">{Number(row.__split_group.user_count || 0)} 人</Tag></Space>;
+    const conditions = parseConditions(row.conditions);
+    if (!conditions.length) return <Tag>全部用户</Tag>;
+    const hasIDRange = conditions.some((condition) => condition.field === 'user_id' && condition.operator === 'between');
+    const count = finiteNumber(row?.id_range_user_count);
+    const compactText = conditions.map((condition) => condition.field === 'user_id' && condition.operator === 'in'
+      ? `指定用户：${condition.values?.length || 0} 人` : conditionSummary(condition));
+    if (!detailed) return <div className="entry-condition-summary">
+      <Typography.Text ellipsis={{ tooltip: compactText.join('；') }}>{compactText.slice(0, 2).join(' · ')}</Typography.Text>
+      <Space size={4} wrap>{conditions.length > 2 && <Tag>共 {conditions.length} 项条件</Tag>}{hasIDRange && count !== undefined && <Typography.Text type="secondary">范围内 {count} 人</Typography.Text>}</Space>
+    </div>;
+    return <div className="client-entry-condition-list client-entry-condition-list--expandable">
+      {conditions.map((condition, index) => condition.field === 'email' && condition.operator === 'in'
+        ? <EmailConditionSummary key={index} condition={condition} />
+        : <Tag key={index} className="client-entry-condition-tag">{conditionSummary(condition)}</Tag>)}
+      {hasIDRange && count !== undefined && <Tag color="cyan">ID 范围内实际 {count} 人</Tag>}
+    </div>;
+  };
+  const renderHost = (row: any) => {
+    const action = normalizePolicyAction(row.action);
+    if (!isSplitPolicy(row) && action === 'hide') return <Tag color="red">不下发节点</Tag>;
+    if (!isSplitPolicy(row) && action === 'original') return <Tag color="blue">下发原入口地址</Tag>;
+    const host = entryRuleHost(row);
+    return <div className="entry-host-cell"><Typography.Text ellipsis={{ tooltip: host }} copyable={host ? { text: host } : false}>{host || '-'}</Typography.Text>{effectiveEntryResolveHost(row) && <Typography.Text className="entry-host-mode" type="secondary">解析域名下发 IP</Typography.Text>}</div>;
+  };
+  const renderDetails = (row: any) => <div className="entry-rule-details">
+    <div><div className="entry-detail-heading">匹配条件 <Typography.Text type="secondary">全部满足（AND）</Typography.Text></div>{renderConditions(row, true)}</div>
+    <div><div className="entry-detail-heading">生效节点（{normalizedMembers(row).length}）</div><div className="entry-detail-node-list">{normalizedMembers(row).map((key: string) => <Tag key={key}>{serverOptionMap[key] || key}</Tag>)}</div></div>
+    {!isSplitPolicy(row) && <div><div className="entry-detail-heading">额外下发节点</div><ExtraNodesSummary value={row.extra_nodes} position={row.extra_nodes_position} /></div>}
+    <div><div className="entry-detail-heading">备注{isSplitPolicy(row) ? '（整套共享）' : ''}</div><Typography.Text className="entry-detail-remarks">{row.remarks || '暂无备注'}</Typography.Text></div>
+  </div>;
+  const nameColumn: any = { title: '规则名称', key: 'name', width: 210, render: (_: any, row: any) => <div className="entry-name-cell">
+    <div className="entry-name-title"><Typography.Text strong ellipsis={{ tooltip: entryRuleName(row) }}>{entryRuleName(row)}</Typography.Text>{view === 'sort' && Number(row.enabled) === 0 && <Tag>已禁用</Tag>}</div>
+    <Typography.Text type="secondary" className="entry-priority">匹配顺序 #{priorityMap.get(displayRowKey(row))}{view === 'sort' && row.__entry_collection ? ` · ${row.__entry_collection.name}` : ''}</Typography.Text>
+  </div> };
+  const managementColumns: any[] = [
+    nameColumn,
+    { title: '启用状态', key: 'enabled', width: 115, render: (_: any, row: any) => <div className="entry-status-cell">
+      <Space size={5}><Switch size="small" checked={Number(row.enabled) !== 0} loading={pendingIDs.includes(Number(row.id))} onChange={(checked) => confirmToggle(row, checked)} /><Typography.Text type={Number(row.enabled) !== 0 ? undefined : 'secondary'}>{Number(row.enabled) !== 0 ? '启用' : '禁用'}</Typography.Text></Space>
+      {isSplitPolicy(row) && <Tooltip title={`开关同时影响同套 ${splitScope(row)}`}><Typography.Text type="secondary" className="entry-scope-label">整套共享</Typography.Text></Tooltip>}
+    </div> },
+    { title: '匹配条件', key: 'conditions', width: 245, render: (_: any, row: any) => renderConditions(row) },
+    { title: '入口 / 命中结果', key: 'entry', width: 235, render: (_: any, row: any) => renderHost(row) },
+    { title: '节点', key: 'members', width: 85, render: (_: any, row: any) => <div className="entry-node-count"><span>{normalizedMembers(row).length} 个</span>{parseExtraNodes(row.extra_nodes).length > 0 && !isSplitPolicy(row) && <Typography.Text type="secondary">+{parseExtraNodes(row.extra_nodes).length} 额外</Typography.Text>}</div> },
+    { title: '操作', key: 'action', width: 130, fixed: 'right', align: 'right', render: (_: any, row: any) => isSplitGroupDisplayRow(row)
+      ? <SplitGroupRowActions row={row} group={row.__split_group} serverOptions={serverOptions} onDone={load} pending={pendingIDs.includes(Number(row.id))} onRemove={row.__entry_collection ? () => removeCollectionMember(row) : undefined} onDelete={() => drop(row)} />
+      : <StandardRuleActions row={row} serverOptions={serverOptions} onDone={load} pending={pendingIDs.includes(Number(row.id))} onRemove={row.__entry_collection ? () => removeCollectionMember(row) : undefined} onDelete={() => drop(row)} /> },
   ];
-
-  const managementColumns = columns.filter((column) => column.key !== 'sequence');
-  const renderManagementTable = (data: any[], selectable = false) => <Table
-    className="forest-table"
-    rowKey={displayRowKey}
-    tableLayout="fixed"
-    columns={managementColumns}
-    dataSource={data}
-    pagination={false}
-    scroll={{ x: 2445 }}
-    rowSelection={selectable ? {
-      selectedRowKeys: selectedKeys,
-      onChange: setSelectedKeys,
-      getCheckboxProps: (row) => ({ disabled: !canJoinEntryCollection(row) }),
-      columnWidth: 48,
-    } : undefined}
+  const sortColumns: any[] = [
+    { title: '顺序', key: 'sequence', width: 90, render: (_: any, row: any) => <Space size={10}>
+      <button type="button" className="entry-drag-handle" draggable={!sortSaving} disabled={sortSaving} title="按住手柄拖动；也可用右侧移动按钮" aria-label={`拖动 ${entryRuleName(row)}`} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', displayRowKey(row)); setDraggingKey(displayRowKey(row)); }} onDragEnd={() => setDraggingKey(null)}><MenuOutlined /></button>
+      <span>{priorityMap.get(displayRowKey(row))}</span>
+    </Space> },
+    { ...nameColumn, width: 240 },
+    { title: '入口 / 命中结果', key: 'entry', width: 250, render: (_: any, row: any) => renderHost(row) },
+    { title: '条件摘要', key: 'conditions', width: 260, render: (_: any, row: any) => renderConditions(row) },
+    { title: '调整顺序', key: 'move', width: 160, fixed: 'right', render: (_: any, row: any) => <Space size={2}>
+      <Button size="small" type="link" disabled={sortSaving} onClick={() => { setMovingRow(row); setMovePosition(priorityMap.get(displayRowKey(row)) || 1); }}>移动到…</Button>
+      <Dropdown trigger={['click']} menu={{ items: [
+        { key: 'top', label: '置顶', disabled: priorityMap.get(displayRowKey(row)) === 1 },
+        { key: 'bottom', label: '置底', disabled: priorityMap.get(displayRowKey(row)) === rows.length },
+      ], onClick: ({ key }) => { void applySort(displayRowKey(row), key === 'top' ? 1 : rows.length); } }}><Button type="text" size="small" icon={<MoreOutlined />} disabled={sortSaving} /></Dropdown>
+    </Space> },
+  ];
+  const renderManagementTable = (data: any[], grouped = false) => <Table
+    className="forest-table entry-compact-table"
+    rowKey={displayRowKey} tableLayout="fixed" size="middle"
+    columns={grouped ? managementColumns.filter((column) => column.key !== 'entry') : managementColumns}
+    dataSource={data} pagination={false} scroll={{ x: grouped ? 900 : 1100 }}
+    expandable={{ expandedRowRender: renderDetails, expandedRowKeys: expandedRows, onExpandedRowsChange: (keys) => setExpandedRows([...keys]), columnWidth: 36 }}
+    rowSelection={!grouped ? { selectedRowKeys: selectedKeys, preserveSelectedRowKeys: true, onChange: setSelectedKeys, getCheckboxProps: (row) => ({ disabled: !canJoinEntryCollection(row) || Boolean(row.__entry_collection) }), columnWidth: 40 } : undefined}
+    locale={{ emptyText: hasFilters ? '没有符合筛选条件的规则' : '暂无独立规则' }}
   />;
+  const resetFilters = () => { setQuery(''); setStatusFilter('all'); setKindFilter('all'); setMembershipFilter('all'); };
 
-  return <div className="legacy-page client-entry-page">
+  return <div className={`legacy-page client-entry-page${selectedKeys.length && view === 'manage' ? ' client-entry-page--selecting' : ''}`}>
     <div className="content-heading">用户入口分配</div>
     <Spin spinning={loading}>
-      <Alert
-        className="client-entry-help"
-        type="info"
-        showIcon
-        message={view === 'manage' ? '入口合集：多个规则共用一个入口，默认折叠' : '全局排序：从上到下依次匹配'}
-        description={view === 'manage'
-          ? '勾选未归入合集的规则，点击“合并到合集”，只填写一个统一入口。合集统一管理入口地址、域名解析设置和页面收纳，不改变用户名单、生效节点及实际匹配优先级；当前管理视图不是匹配顺序，调整优先级请切换到“全局排序”。'
-          : '所有普通规则和二分叶子组均在此完整平铺，页面顺序就是实际订阅匹配优先级；拖动任意行即可调整。所属合集只作为标签展示，不会让整个合集跳过其他规则优先匹配。'}
-      />
-      {loadError ? <Alert type="error" showIcon message="入口规则或合集加载失败" description={`${loadError}。为避免误把合集成员当作独立规则，已暂停展示与编辑。`} action={<Button onClick={load}>重新加载</Button>} /> : <>
-        <Card className="block-card" styles={{ body: { padding: 0 } }}>
-          <div className="forest-table-action">
-            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      {loadError ? <Alert type="error" showIcon message="入口规则或合集加载失败" description={`${loadError}。已暂停展示与编辑，请重新加载。`} action={<Button onClick={load}>重新加载</Button>} /> : <>
+        <Card className="block-card entry-workspace" styles={{ body: { padding: 0 } }}>
+          <div className="entry-toolbar">
+            <div className="entry-toolbar-top">
               <Space wrap>
-                <PolicyEditor onDone={load} serverOptions={serverOptions}><Button type="primary" icon={<PlusOutlined />}>新增入口规则</Button></PolicyEditor>
-                <SplitPolicyCreator onDone={load} serverOptions={serverOptions}><Button icon={<BranchesOutlined />}>近期用户固定二分</Button></SplitPolicyCreator>
-                <Button icon={<PlayCircleOutlined />} onClick={() => setSimulatorOpen(true)}>模拟匹配</Button>
-                <Button icon={<CopyOutlined />} disabled={!entryHosts.length} onClick={copyAllEntryHosts}>复制所有入口</Button>
-                <Button onClick={load}>刷新</Button>
+                <PolicyEditor onDone={load} serverOptions={serverOptions}><Button type="primary" icon={<PlusOutlined />} disabled={sortSaving}>新增规则</Button></PolicyEditor>
+                <Button icon={<PlusOutlined />} disabled={sortSaving} onClick={() => editCollection()}>新建合集</Button>
+                <SplitPolicyCreator onDone={load} serverOptions={serverOptions}><Button icon={<BranchesOutlined />} disabled={sortSaving}>近期用户固定二分</Button></SplitPolicyCreator>
               </Space>
               <Space wrap>
-                <Segmented value={view} options={[{ value: 'manage', label: '合集管理' }, { value: 'sort', label: '全局排序' }]} onChange={(value) => { setView(value as 'manage' | 'sort'); setDraggingKey(null); }} />
-                <Typography.Text type="secondary">共 {rows.length} 条规则 · {collections.length} 个合集 · {ungroupedRows.length} 条未归入合集</Typography.Text>
-                {view === 'manage' && <Button icon={<PlusOutlined />} onClick={() => editCollection()}>{selectedKeys.length ? `合并已选 ${selectedKeys.length} 条到合集` : '新建入口合集'}</Button>}
-                {view === 'manage' && selectedKeys.length > 0 && <Button type="link" onClick={() => setSelectedKeys([])}>取消选择</Button>}
+                <Button icon={<PlayCircleOutlined />} disabled={sortSaving} onClick={() => setSimulatorOpen(true)}>模拟匹配</Button>
+                <Button icon={<CopyOutlined />} disabled={!entryHosts.length || sortSaving} onClick={copyAllEntryHosts}>复制所有入口</Button>
+                <Button disabled={sortSaving} onClick={load}>刷新</Button>
               </Space>
-            </Space>
+            </div>
+            <div className="entry-view-row">
+              <Segmented value={view} disabled={sortSaving} options={[{ value: 'manage', label: '合集管理' }, { value: 'sort', label: '全局排序' }]} onChange={(value) => { setView(value as 'manage' | 'sort'); setDraggingKey(null); }} />
+              <Typography.Text type="secondary">{rows.length} 条规则 · {collections.length} 个合集 · {ungroupedRows.length} 条独立规则</Typography.Text>
+            </div>
+            {view === 'manage' ? <>
+              <div className="entry-filter-row">
+                <Input allowClear prefix={<SearchOutlined />} placeholder="搜索规则名、合集名、域名或 IP" value={query} onChange={(event) => setQuery(event.target.value)} className="entry-search" />
+                <Select aria-label="启用状态筛选" value={statusFilter} onChange={setStatusFilter} options={[{ value: 'all', label: '全部状态' }, { value: 'enabled', label: '已启用' }, { value: 'disabled', label: '已禁用' }]} />
+                <Select aria-label="匹配方式筛选" value={kindFilter} onChange={setKindFilter} options={[{ value: 'all', label: '全部匹配方式' }, { value: 'standard', label: '普通规则' }, { value: 'split', label: '固定名单' }, { value: 'email', label: '用户邮箱' }, { value: 'user_id', label: '用户 ID' }, { value: 'ua', label: 'User-Agent' }]} />
+                <Select aria-label="合集归属筛选" value={membershipFilter} onChange={setMembershipFilter} options={[{ value: 'all', label: '全部归属' }, { value: 'grouped', label: '已归入合集' }, { value: 'ungrouped', label: '未归入合集' }]} />
+                {hasFilters && <Button type="link" onClick={resetFilters}>重置</Button>}
+              </div>
+              <div className="entry-view-help"><Typography.Text type="secondary">{hasFilters ? `找到 ${filteredRows.length} 条规则；符合条件的合集已展开。` : '合集统一管理入口与解析设置；展开行可查看完整条件、节点和备注。'} 匹配先后请在「全局排序」调整。</Typography.Text></div>
+            </> : <div className="entry-view-help"><Typography.Text type="secondary">完整显示全部 {rows.length} 条规则，按顺序从上到下匹配。拖动左侧手柄，或使用「移动到…」调整位置。</Typography.Text>{sortSaving && <Tag color="processing">正在保存，请稍候</Tag>}</div>}
           </div>
           {view === 'sort' ? <Table
-            className="forest-table"
-            rowKey={displayRowKey}
-            tableLayout="fixed"
-            columns={columns}
-            dataSource={rows}
-            pagination={false}
-            scroll={{ x: 2535 }}
+            className="forest-table entry-compact-table entry-sort-table" rowKey={displayRowKey} tableLayout="fixed" size="middle"
+            columns={sortColumns} dataSource={rows} pagination={false} scroll={{ x: 1000 }}
             rowClassName={(row) => `sortable-row ${draggingKey === displayRowKey(row) ? 'dragging-row' : ''}`}
-            onRow={(row) => ({
-              draggable: true,
-              onDragStart: () => setDraggingKey(displayRowKey(row)),
-              onDragOver: (event) => event.preventDefault(),
-              onDrop: () => handleDrop(row),
-              onDragEnd: () => setDraggingKey(null),
-            })}
+            onRow={(row) => ({ onDragOver: (event) => { if (draggingKey && !sortSaving) event.preventDefault(); }, onDrop: (event) => { event.preventDefault(); handleDrop(row); } })}
           /> : <>
-            {collections.length > 0 && <Collapse
-              className="entry-collections"
-              ghost
-              activeKey={expandedCollections}
-              onChange={(keys) => setExpandedCollections(Array.isArray(keys) ? keys : [keys])}
-              items={collections.map((collection) => ({
+            {filteredCollections.length > 0 && <Collapse className="entry-collections" ghost activeKey={activeCollectionKeys} onChange={(keys) => { const next = Array.isArray(keys) ? keys : [keys]; if (hasFilters) setFilteredExpandedCollections(next); else setExpandedCollections(next); }} items={filteredCollections.map((collection) => {
+              const allMembers = rows.filter((row) => row.__entry_collection?.id === collection.id);
+              const visibleMembers = filteredRows.filter((row) => row.__entry_collection?.id === collection.id);
+              const enabledCount = allMembers.filter((row) => Number(row.enabled) !== 0).length;
+              return {
                 key: String(collection.id),
-                label: <Space wrap size={10}>
-                  <Typography.Text strong>{collection.name}</Typography.Text>
-                  <Tag color="blue">{collection.items.length} 条规则</Tag>
-                  <Tag color={collection.resolve_entry_host === null ? 'orange' : collection.resolve_entry_host === 1 ? 'cyan' : undefined}>{entryCollectionResolveLabel(collection)}</Tag>
-                  <Typography.Text type="secondary">统一入口：</Typography.Text>
-                  <Typography.Text code style={{ overflowWrap: 'anywhere' }}>{collection.entry_host}</Typography.Text>
+                label: <div className="entry-collection-heading">
+                  <div className="entry-collection-title"><Typography.Text strong ellipsis={{ tooltip: collection.name }}>{collection.name}</Typography.Text><Tag color="blue">{allMembers.length} 条规则</Tag><Typography.Text type="secondary">{enabledCount} 条启用</Typography.Text>{hasFilters && visibleMembers.length < allMembers.length && <Tag>显示 {visibleMembers.length} 条</Tag>}</div>
+                  <div className="entry-collection-subtitle"><Typography.Text className="entry-collection-host" ellipsis={{ tooltip: collection.entry_host }}>{collection.entry_host}</Typography.Text><Tag color={collection.resolve_entry_host === null ? 'orange' : collection.resolve_entry_host === 1 ? 'cyan' : undefined}>{entryCollectionResolveLabel(collection)}</Tag></div>
+                </div>,
+                extra: <Space size={4} onClick={(event) => event.stopPropagation()}>
+                  <Button size="small" onClick={() => editCollection(collection)}>编辑合集</Button>
+                  <Dropdown trigger={['click']} menu={{ items: [
+                    { key: 'copy', icon: <CopyOutlined />, label: '复制入口' },
+                    { key: 'dissolve', label: '解散合集', danger: true },
+                  ], onClick: async ({ key, domEvent }) => { domEvent.stopPropagation(); if (key === 'dissolve') dissolveCollection(collection); else { try { await copyText(collection.entry_host); message.success('已复制合集入口'); } catch { message.error('复制失败'); } } } }}><Button size="small" type="text" icon={<MoreOutlined />} aria-label={`合集 ${collection.name} 更多操作`} /></Dropdown>
                 </Space>,
-                extra: <Space wrap onClick={(event) => event.stopPropagation()}>
-                  <Button size="small" icon={<CopyOutlined />} onClick={async () => { try { await copyText(collection.entry_host); message.success('已复制合集入口'); } catch { message.error('复制失败'); } }}>复制入口</Button>
-                  <Button size="small" onClick={() => editCollection(collection)}>编辑入口 / 成员</Button>
-                  <Popconfirm title="解散这个合集？" description="只解除统一管理；所有原规则、用户名单、当前入口及解析设置都保留。" onConfirm={() => dissolveCollection(collection)}><Button size="small" danger>解散合集</Button></Popconfirm>
-                </Space>,
-                children: <>
-                  <Typography.Paragraph type="secondary">以下是本合集成员；实际匹配仍按“全局排序”执行。可正常编辑名称、条件、固定名单等；入口和解析设置由合集统一管理，单独修改须先移出合集。</Typography.Paragraph>
-                  {renderManagementTable(rows.filter((row) => row.__entry_collection?.id === collection.id))}
-                </>,
-              }))}
-            />}
-            <div style={{ padding: '16px 20px', borderTop: collections.length ? '1px solid #f0f0f0' : undefined }}>
-              <Space wrap><Typography.Text strong>未归入合集的规则（{ungroupedRows.length}）</Typography.Text><Typography.Text type="secondary">勾选多条可合并到一个合集；下发原入口 / 隐藏节点规则不参与合并。</Typography.Text></Space>
-            </div>
-            {renderManagementTable(ungroupedRows, true)}
+                children: renderManagementTable(visibleMembers, true),
+              };
+            })} />}
+            {membershipFilter !== 'grouped' && <>
+              <div className="entry-section-heading"><Typography.Text strong>独立规则 <span className="entry-count">{filteredUngrouped.length}</span></Typography.Text><Typography.Text type="secondary">勾选多条可加入合集统一管理入口</Typography.Text></div>
+              {renderManagementTable(filteredUngrouped)}
+            </>}
+            {membershipFilter === 'grouped' && !filteredCollections.length && <Empty className="entry-empty" description="没有符合筛选条件的合集规则" />}
           </>}
         </Card>
       </>}
     </Spin>
-    <EntryCollectionEditor open={collectionEditorOpen} collection={editingCollection} options={collectionOptions} initialKeys={selectedKeys.map(String)} onClose={() => setCollectionEditorOpen(false)} onDone={load} />
+    {view === 'manage' && selectedKeys.length > 0 && !loadError && <div className="entry-batch-bar" role="region" aria-label="已选规则批量操作">
+      <div><Typography.Text strong>已选 {selectedKeys.length} 条规则</Typography.Text>{hiddenSelectedCount > 0 && <Typography.Text type="secondary">（其中 {hiddenSelectedCount} 条被筛选隐藏）</Typography.Text>}</div>
+      <Space wrap><Button type="primary" icon={<PlusOutlined />} disabled={selectedKeys.length < 2 || loading} onClick={() => editCollection()}>新建合集</Button><Button disabled={!collections.length || loading} onClick={() => { setJoinCollectionID(undefined); setJoinOpen(true); }}>加入已有合集</Button><Button type="text" onClick={() => setSelectedKeys([])}>取消选择</Button></Space>
+    </div>}
+    <Modal title="将已选规则加入合集" open={joinOpen} onCancel={() => setJoinOpen(false)} okText="继续编辑合集" cancelText="取消" okButtonProps={{ disabled: !joinCollectionID }} onOk={() => { const collection = collections.find((item) => item.id === joinCollectionID); if (collection) { setJoinOpen(false); editCollection(collection, selectedKeys.map(String)); } }}>
+      <Typography.Paragraph type="secondary">已选 {selectedKeys.length} 条规则将使用目标合集的入口地址和解析设置。下一步可确认完整成员名单后再保存。</Typography.Paragraph>
+      <Select style={{ width: '100%' }} showSearch optionFilterProp="label" placeholder="搜索并选择目标合集" value={joinCollectionID} onChange={setJoinCollectionID} options={collections.map((collection) => ({ value: collection.id, label: `${collection.name} · ${collection.items.length} 条 · ${collection.entry_host}` }))} />
+    </Modal>
+    <Modal title="移动规则顺序" open={Boolean(movingRow)} onCancel={() => { if (!sortSaving) setMovingRow(undefined); }} confirmLoading={sortSaving} okButtonProps={{ disabled: !movePosition }} okText="移动并保存" cancelText="取消" onOk={() => { if (movingRow && movePosition) void applySort(displayRowKey(movingRow), movePosition); }}>
+      <Typography.Paragraph>将「{movingRow ? entryRuleName(movingRow) : ''}」移动到第几位？当前为第 {movingRow ? priorityMap.get(displayRowKey(movingRow)) : '-'} 位。</Typography.Paragraph>
+      <InputNumber aria-label="目标匹配顺序" min={1} max={rows.length} precision={0} value={movePosition} onChange={(value) => setMovePosition(value === null ? null : Number(value))} style={{ width: '100%' }} addonAfter={`/ ${rows.length}`} />
+    </Modal>
+    <EntryCollectionEditor open={collectionEditorOpen} collection={editingCollection} options={collectionOptions} initialKeys={selectedKeys.map(String)} additionalKeys={additionalCollectionKeys} onClose={() => setCollectionEditorOpen(false)} onDone={load} />
     <SimulationModal open={simulatorOpen} onClose={() => setSimulatorOpen(false)} serverOptions={serverOptions} />
   </div>;
 }
