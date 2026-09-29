@@ -314,9 +314,16 @@ must implement. Do not use the subscription order status endpoint to poll
 Apple ID purchases.
 
 Install/update SQL includes the new tables. Run the normal database update
-before deploying the new server. This change supplies backend APIs; website
-and administrator screens must connect to these routes separately, and the
-existing App API contract is unchanged.
+before deploying the new server. The administrator interface includes an
+"独享 Apple ID" navigation item at `/<admin_path>/apple-id`, with product,
+inventory, and order tabs. Product prices are entered in yuan and submitted
+as integer cents. Inventory import accepts tab-separated account/password
+pairs or a JSON array, with a 500-account limit. Viewing credentials is an
+explicit audited action; closing the order dialog clears the displayed
+credentials. Replacement retires the previous account. Refund confirmation
+requires the administrator to confirm that the gateway refund has already
+completed. The customer website must connect to the user routes separately;
+the existing App API contract is unchanged.
 
 ## Important boundary
 

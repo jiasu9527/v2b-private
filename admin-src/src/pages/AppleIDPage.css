@@ -1,0 +1,21 @@
+.apple-id-content { margin: 0 24px; min-width: 0; }
+.apple-id-intro { margin-bottom: 8px; }
+.apple-id-content > .ant-tabs > .ant-tabs-nav { margin-bottom: 16px; }
+.apple-id-section { min-width: 0; }
+.apple-id-secondary { color: #8c8c8c; font-size: 12px; }
+.apple-id-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.apple-id-section .forest-table-action { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.apple-id-section .ant-table-wrapper { min-width: 0; }
+.apple-id-section .ant-alert { margin-bottom: 12px; }
+.apple-id-section .ant-table-pagination { padding: 0 12px; }
+.apple-id-detail .ant-descriptions-item-content { overflow-wrap: anywhere; }
+.apple-id-detail .ant-table { font-family: inherit !important; }
+.apple-id-credentials { padding: 16px; background: #fafafa; border: 1px solid #e5e5e5; border-radius: 4px; }
+.apple-id-credentials .ant-input-password { max-width: 100%; }
+@media (max-width: 768px) {
+  .apple-id-content { margin: 0 12px; }
+  .apple-id-toolbar { align-items: stretch; }
+  .apple-id-section .forest-table-action { overflow-x: visible; }
+  .apple-id-toolbar .ant-form-item { margin-bottom: 8px; }
+  .apple-id-detail .ant-descriptions-item-label { min-width: 84px; }
+}

@@ -11,6 +11,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import UserPage from './pages/UserPage';
 import OrderPage from './pages/OrderPage';
+import AppleIDPage from './pages/AppleIDPage';
 import ServerManage from './pages/ServerManage';
 import TicketPage, { TicketDetailPage } from './pages/TicketPage';
 import ConfigPage from './pages/ConfigPage';
@@ -56,6 +57,7 @@ const menu = [
   { type: 'heading', key: 'finance-heading', label: '财务' },
   { type: 'item', key: '/plan', icon: <AppstoreOutlined />, label: '订阅管理' },
   { type: 'item', key: '/order', icon: <ShoppingCartOutlined />, label: '订单管理' },
+  { type: 'item', key: '/apple-id', icon: <AppstoreOutlined />, label: '独享 Apple ID' },
   { type: 'item', key: '/coupon', icon: <GiftOutlined />, label: '优惠券管理' },
   { type: 'item', key: '/giftcard', icon: <GiftOutlined />, label: '礼品卡管理' },
   { type: 'item', key: '/invite-campaign', icon: <ShareAltOutlined />, label: '活动任务' },
@@ -86,6 +88,7 @@ function Page({ path }: { path: string }) {
   if (route === '/user') return <UserPage />;
   if (route === '/plan') return <PlanPage />;
   if (route === '/order') return <OrderPage />;
+  if (route === '/apple-id') return <AppleIDPage />;
   if (route === '/server/manage') return <ServerManage />;
   if (route === '/server/group') return <GenericResourcePage name="serverGroups" />;
   if (route === '/server/route') return <ServerRoutePage />;
