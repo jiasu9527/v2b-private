@@ -266,19 +266,22 @@ the order moves to status `4` for refund or manual resolution.
 Administrator routes use the configured `<admin_path>` and require an admin
 session. Product save accepts `name`, `region`, `owned_shadowrocket`, `price`,
 `after_sales`, and optional `enabled` (plus `id` when editing). Batch inventory
-import uses JSON:
+import uses JSON with one opaque credential record per item:
 
 ```json
 {
   "product_id": 1,
   "items": [
-    {"account": "buyer@example.com", "password": "secret"}
+    {"credential": "buyer@example.com----password----security answer"}
   ]
 }
 ```
 
-At most 500 inventory rows may be imported per request; duplicate accounts
-(case-insensitive, across all products) reject the whole batch. Credentials
+The credential string is stored as one complete line; it may contain any
+password, security-answer, or note fields without a required separator. The
+legacy `account` plus `password` item shape remains accepted for compatibility.
+At most 500 inventory rows may be imported per request; duplicate complete
+records (case-insensitive) reject the whole batch. Credentials
 are encrypted with a key derived from `APP_KEY`; keep `APP_KEY` stable or existing
 inventory cannot be decrypted. Normal inventory and order responses expose
 only masked accounts and never passwords. The explicit `order/credentials`
