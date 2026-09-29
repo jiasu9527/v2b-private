@@ -248,8 +248,8 @@ User routes require the normal `Authorization` token:
   `GET /api/v1/apple-id/orders/{trade_no}` only return the authenticated user's
   orders.
 - `GET /api/v1/apple-id/orders/{trade_no}/delivery` returns credentials only
-  after fulfillment. The response is marked `Cache-Control: no-store` and each
-  successful read is audited.
+  after fulfillment. The response is marked `Cache-Control: no-store`.
+  Viewing credentials does not write an audit entry.
 - `POST /api/v1/apple-id/orders/{trade_no}/cancel` cancels only an order still
   pending payment and releases its reserved inventory. Repeating cancellation
   of an already canceled order succeeds without another audit entry.
@@ -291,9 +291,12 @@ legacy `account` plus `password` item shape remains accepted for compatibility.
 At most 500 inventory rows may be imported per request; duplicate complete
 records (case-insensitive) reject the whole batch. Credentials
 are encrypted with a key derived from `APP_KEY`; keep `APP_KEY` stable or existing
-inventory cannot be decrypted. Normal inventory and order responses expose
-only masked accounts and never passwords. The explicit `order/credentials`
-and `order/replace` operations record the acting admin in the audit log.
+inventory cannot be decrypted. Administrator inventory and order responses
+return the complete, unmasked `account` value, including the whole imported
+line for opaque credential records. Legacy separately stored passwords remain
+available through `order/credentials`. Administrator and user credential views
+do not write audit entries. Order changes, including replacement, cancellation,
+and refund confirmation, retain their operation records.
 `order/refund` does not call a gateway: it confirms that an external refund has
 already completed, changes the business order to status `3`, and writes an
 audit entry. Sold or replaced credentials are never returned to sellable stock,
@@ -332,9 +335,9 @@ inventory, and order tabs. Product prices are entered in yuan and submitted
 as integer cents. Inventory import accepts one complete account record per line.
 The record may include the account, password, security questions, and other
 delivery data without a fixed separator. Empty lines are ignored and the batch
-is limited to 500 records. Viewing credentials is an
-explicit audited action; closing the order dialog clears the displayed
-credentials. Replacement retires the previous account. Refund confirmation
+is limited to 500 records. Administrators can directly read and copy account
+records without masking or view logging. Replacement retires the previous
+account. Refund confirmation
 requires the administrator to confirm that the gateway refund has already
 completed. Pending orders can be canceled from the order list or detail dialog;
 the administrator and reason are recorded as `admin_cancel`. Canceling does

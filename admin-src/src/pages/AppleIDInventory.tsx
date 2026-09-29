@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, message } from 'antd';
+import { Alert, Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography, message } from 'antd';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { apiGet, apiPost, unixTime } from '../lib/api';
 import { parseAppleIDImport } from './apple-id-import';
@@ -128,7 +128,7 @@ export default function AppleIDInventory() {
   const columns: any[] = [
     { title: '库存 ID', dataIndex: 'id', width: 100 },
     { title: '商品', dataIndex: 'product_name', width: 200 },
-    { title: '账号（脱敏）', dataIndex: 'account', width: 220 },
+    { title: '账号资料', dataIndex: 'account', width: 360, render: (value: string) => value ? <Typography.Paragraph className="apple-id-account-text" copyable>{value}</Typography.Paragraph> : '-' },
     { title: '状态', dataIndex: 'status', width: 100, render: (value: number) => <Tag color={states[value]?.color}>{states[value]?.label || '未知'}</Tag> },
     { title: '关联订单 ID', width: 135, render: (_: unknown, row: Inventory) => row.sold_order_id || row.reserved_order_id || '-' },
     { title: '预留到期', dataIndex: 'reserved_until', width: 185, render: unixTime },
@@ -146,13 +146,13 @@ export default function AppleIDInventory() {
         <Button type="primary" icon={<PlusOutlined />} onClick={openImport} disabled={busyID !== null || saving}>批量导入</Button>
         <Button icon={<ReloadOutlined />} loading={loading} onClick={() => { load(); loadProducts(); }}>刷新</Button>
       </Space></div>
-      <Table className="forest-table" rowKey="id" loading={loading} dataSource={rows} columns={columns} scroll={{ x: 1220 }} pagination={{ current: query.current, pageSize: query.page_size, total, showSizeChanger: true, pageSizeOptions: [20, 50, 100, 200], showTotal: (value) => `共 ${value} 个账号`, onChange: (current, pageSize) => setQuery((previous) => ({ ...previous, current: pageSize === previous.page_size ? current : 1, page_size: pageSize })) }} locale={{ emptyText: error ? '库存加载失败' : '暂无符合条件的库存' }} />
+      <Table className="forest-table" rowKey="id" loading={loading} dataSource={rows} columns={columns} scroll={{ x: 1360 }} pagination={{ current: query.current, pageSize: query.page_size, total, showSizeChanger: true, pageSizeOptions: [20, 50, 100, 200], showTotal: (value) => `共 ${value} 个账号`, onChange: (current, pageSize) => setQuery((previous) => ({ ...previous, current: pageSize === previous.page_size ? current : 1, page_size: pageSize })) }} locale={{ emptyText: error ? '库存加载失败' : '暂无符合条件的库存' }} />
     </Card>
     <Modal title="批量导入 Apple ID 库存" open={importOpen} onOk={save} onCancel={closeImport} confirmLoading={saving} cancelButtonProps={{ disabled: saving }} maskClosable={!saving} keyboard={!saving} closable={!saving} okText="确认导入" cancelText="取消" width={720}>
       <Form form={form} layout="vertical" disabled={saving} autoComplete="off">
         <Form.Item name="product_id" label="所属商品" rules={[{ required: true, message: '请选择所属商品' }]}><Select showSearch optionFilterProp="label" options={productOptions} loading={productsLoading} placeholder="请选择商品" notFoundContent={productsLoading ? '正在加载商品…' : productError ? '商品加载失败，请关闭后重试' : '暂无商品，请先在商品管理添加'} /></Form.Item>
         <Alert type="info" showIcon style={{ marginBottom: 16 }} message="单次最多 500 条；每行一整条账号资料" description="每行粘贴一条完整资料，账号、密码、密保等内容按原样保留，不要求固定分隔格式。空行忽略。" />
-        <Form.Item name="credentials" label="账号资料（每行一条）" rules={[{ required: true, message: '请输入待导入的账号资料' }, { validator: async (_, value) => { if (value) parseAppleIDImport(value); } }]} validateTrigger="onBlur" extra="导入成功或关闭窗口会清空输入；失败时保留供修正。列表仅显示脱敏内容。"><Input.TextArea rows={10} autoComplete="off" spellCheck={false} autoCorrect="off" autoCapitalize="none" placeholder={'example@icloud.com----密码----密保问题答案\nuser@example.com | password | security answer'} /></Form.Item>
+        <Form.Item name="credentials" label="账号资料（每行一条）" rules={[{ required: true, message: '请输入待导入的账号资料' }, { validator: async (_, value) => { if (value) parseAppleIDImport(value); } }]} validateTrigger="onBlur" extra="导入成功或关闭窗口会清空输入；失败时保留供修正。"><Input.TextArea rows={10} autoComplete="off" spellCheck={false} autoCorrect="off" autoCapitalize="none" placeholder={'example@icloud.com----密码----密保问题答案\nuser@example.com | password | security answer'} /></Form.Item>
       </Form>
     </Modal>
   </div>;

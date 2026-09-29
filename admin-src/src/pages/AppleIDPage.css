@@ -11,12 +11,17 @@
 .apple-id-section .ant-table-pagination { padding: 0 12px; }
 .apple-id-detail .ant-descriptions-item-content { overflow-wrap: anywhere; }
 .apple-id-detail .ant-table { font-family: inherit !important; }
+.apple-id-account-text.ant-typography { min-width: 0; max-width: 100%; margin-bottom: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .apple-id-credentials { padding: 16px; background: #fafafa; border: 1px solid #e5e5e5; border-radius: 4px; }
-.apple-id-credentials .ant-input-password { max-width: 100%; }
+.apple-id-copy-field { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.apple-id-copy-field textarea { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.apple-id-copy-field .ant-btn { flex-shrink: 0; }
 @media (max-width: 768px) {
   .apple-id-content { margin: 0 12px; }
   .apple-id-toolbar { align-items: stretch; }
   .apple-id-section .forest-table-action { overflow-x: visible; }
   .apple-id-toolbar .ant-form-item { margin-bottom: 8px; }
   .apple-id-detail .ant-descriptions-item-label { min-width: 84px; }
+  .apple-id-copy-field { flex-direction: column; }
+  .apple-id-copy-field textarea { flex: none; width: 100%; }
 }

@@ -43,37 +43,37 @@ func TestMaskAppleAccount(t *testing.T) {
 	}
 }
 
-func TestAdminListInventoryReturnsOnlyMaskedAccount(t *testing.T) {
+func TestAdminListInventoryReturnsOriginalAccounts(t *testing.T) {
 	service, mock := newAdminTestService(t)
-	accountCiphertext, err := service.encrypt("alice@example.com")
-	if err != nil {
-		t.Fatal(err)
+	accounts := []string{"alice@example.com", "  alice@example.com----Password123!----密保问题：城市？答案：上海  "}
+	rows := sqlmock.NewRows([]string{
+		"id", "product_id", "name", "account_ciphertext", "status", "reserved_order_id", "reserved_until", "sold_order_id", "created_at", "updated_at",
+	})
+	for i, account := range accounts {
+		ciphertext, err := service.encrypt(account)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows.AddRow(int64(i+7), int64(3), "US Shadowrocket", ciphertext, InventoryAvailable, nil, nil, nil, int64(100), int64(101))
 	}
 
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM v2_apple_inventory i`).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(len(accounts))))
 	mock.ExpectQuery(`SELECT i.id,i.product_id,p.name,i.account_ciphertext`).
 		WithArgs(int64(20), int64(0)).
-		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "product_id", "name", "account_ciphertext", "status", "reserved_order_id", "reserved_until", "sold_order_id", "created_at", "updated_at",
-		}).AddRow(int64(7), int64(3), "US Shadowrocket", accountCiphertext, InventoryAvailable, nil, nil, nil, int64(100), int64(101)))
+		WillReturnRows(rows)
 
 	result, err := service.AdminListInventory(context.Background(), AdminInventoryListRequest{})
 	if err != nil {
 		t.Fatalf("AdminListInventory: %v", err)
 	}
-	if result.Total != 1 || len(result.Data) != 1 {
+	if result.Total != int64(len(accounts)) || len(result.Data) != len(accounts) {
 		t.Fatalf("unexpected result: %+v", result)
 	}
-	if got := result.Data[0].Account; got != "a***e@example.com" {
-		t.Fatalf("masked account = %q", got)
-	}
-	raw, err := json.Marshal(result)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "alice@example.com") || strings.Contains(string(raw), accountCiphertext) || strings.Contains(string(raw), "password") {
-		t.Fatalf("inventory response leaked credential material: %s", raw)
+	for i, account := range accounts {
+		if result.Data[i].Account != account {
+			t.Errorf("account = %q, want original %q", result.Data[i].Account, account)
+		}
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -97,36 +97,54 @@ func TestAdminDisableInventoryRejectsSoldRow(t *testing.T) {
 	}
 }
 
-func TestAdminGetOrderCredentialsAuditsWithoutSecrets(t *testing.T) {
+func TestAdminGetOrderCredentialsDoesNotWriteAudit(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		account    string
+		password   string
+		credential string
+	}{
+		{name: "separate fields", account: "alice@example.com", password: "TopSecret-password-123"},
+		{name: "one-line record", account: " alice@example.com 密码：Secret 密保：上海 ", credential: " alice@example.com 密码：Secret 密保：上海 "},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			service, mock := newAdminTestService(t)
+			accountCiphertext, err := service.encrypt(tt.account)
+			if err != nil {
+				t.Fatal(err)
+			}
+			passwordCiphertext, err := service.encrypt(tt.password)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			mock.ExpectBegin()
+			mock.ExpectQuery(`SELECT o.id,o.trade_no,o.product_id,o.inventory_id,o.status,i.status,i.account_ciphertext,i.password_ciphertext[\s\S]*FOR SHARE OF o,i`).
+				WithArgs(int64(11)).
+				WillReturnRows(sqlmock.NewRows([]string{
+					"id", "trade_no", "product_id", "inventory_id", "order_status", "inventory_status", "account_ciphertext", "password_ciphertext",
+				}).AddRow(int64(11), "apple-trade", int64(3), int64(8), OrderPaid, InventorySold, accountCiphertext, passwordCiphertext))
+			// Any audit INSERT makes this strict transaction expectation fail.
+			mock.ExpectCommit()
+
+			detail, err := service.AdminGetOrderCredentials(context.Background(), 11, 77)
+			if err != nil {
+				t.Fatalf("AdminGetOrderCredentials: %v", err)
+			}
+			if detail.Account != tt.account || detail.Password != tt.password || detail.Credential != tt.credential {
+				t.Fatalf("unexpected credential detail: %+v", detail)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestAdminGetOrderCredentialsStillRequiresAdminActor(t *testing.T) {
 	service, mock := newAdminTestService(t)
-	account := "alice@example.com"
-	password := "TopSecret-password-123"
-	accountCiphertext, err := service.encrypt(account)
-	if err != nil {
-		t.Fatal(err)
-	}
-	passwordCiphertext, err := service.encrypt(password)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT o.id,o.trade_no,o.product_id,o.inventory_id,o.status,i.status,i.account_ciphertext,i.password_ciphertext`).
-		WithArgs(int64(11)).
-		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "trade_no", "product_id", "inventory_id", "order_status", "inventory_status", "account_ciphertext", "password_ciphertext",
-		}).AddRow(int64(11), "apple-trade", int64(3), int64(8), OrderPaid, InventorySold, accountCiphertext, passwordCiphertext))
-	mock.ExpectExec(`INSERT INTO v2_apple_order_audit`).
-		WithArgs(int64(11), int64(77), "credential_view", safeAuditJSONMatcher{forbidden: []string{account, password, passwordCiphertext}, required: []string{`"inventory_id":8`, `"account":"a***e@example.com"`}}, sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
-
-	detail, err := service.AdminGetOrderCredentials(context.Background(), 11, 77)
-	if err != nil {
-		t.Fatalf("AdminGetOrderCredentials: %v", err)
-	}
-	if detail.Account != account || detail.Password != password {
-		t.Fatalf("unexpected credential detail: %+v", detail)
+	if _, err := service.AdminGetOrderCredentials(context.Background(), 11, 0); !errors.Is(err, ErrAdminAuditRequired) {
+		t.Fatalf("error = %v, want ErrAdminAuditRequired", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -175,7 +193,7 @@ func TestAdminReplaceInventoryLocksAndAudits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AdminReplaceInventory: %v", err)
 	}
-	if result.PreviousInventoryID != 8 || result.NewInventoryID != 9 || result.NewAccount != "n***t@example.com" {
+	if result.PreviousInventoryID != 8 || result.NewInventoryID != 9 || result.PreviousAccount != "old-account@example.com" || result.NewAccount != "new-account@example.com" {
 		t.Fatalf("unexpected replacement: %+v", result)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -371,6 +389,57 @@ func TestAdminListOrdersRetainsOrdersForDeletedUsers(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAdminOrderReadsReturnOriginalAccounts(t *testing.T) {
+	for _, account := range []string{"alice@example.com", " alice@example.com----Secret----密保：上海 "} {
+		for _, endpoint := range []string{"list", "detail"} {
+			t.Run(endpoint+"/"+account, func(t *testing.T) {
+				service, mock := newAdminTestService(t)
+				ciphertext, err := service.encrypt(account)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rows := sqlmock.NewRows([]string{
+					"id", "user_id", "email", "trade_no", "product_id", "product_name", "region", "price", "handling_amount", "status", "payment_id", "callback_no", "inventory_id", "account_ciphertext", "reserved_until", "paid_at", "created_at", "updated_at",
+				}).AddRow(int64(31), int64(5), "buyer@example.com", "apple-trade", int64(3), "US ID", "US", int64(1200), int64(0), OrderPaid, nil, nil, int64(8), ciphertext, nil, int64(200), int64(100), int64(201))
+				var result AdminOrder
+				if endpoint == "list" {
+					mock.ExpectQuery(`SELECT COUNT\(\*\) FROM v2_apple_order o`).
+						WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+					mock.ExpectQuery(`SELECT o.id,o.user_id,COALESCE\(u.email,''\),o.trade_no,o.product_id`).
+						WithArgs(int64(20), int64(0)).WillReturnRows(rows)
+					list, err := service.AdminListOrders(context.Background(), AdminOrderListRequest{})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(list.Data) != 1 {
+						t.Fatalf("unexpected order list: %+v", list)
+					}
+					result = list.Data[0]
+				} else {
+					mock.ExpectQuery(`SELECT o.id,o.user_id,COALESCE\(u.email,''\),o.trade_no,o.product_id`).
+						WithArgs(int64(31)).WillReturnRows(rows)
+					mock.ExpectQuery(`SELECT COUNT\(\*\) FROM v2_apple_order_audit`).
+						WithArgs(int64(31)).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(0)))
+					mock.ExpectQuery(`SELECT id,order_id,actor_user_id,action,detail,created_at`).
+						WithArgs(int64(31), adminMaxPageSize, int64(0)).
+						WillReturnRows(sqlmock.NewRows([]string{"id", "order_id", "actor_user_id", "action", "detail", "created_at"}))
+					detail, err := service.AdminGetOrderDetail(context.Background(), 31)
+					if err != nil {
+						t.Fatal(err)
+					}
+					result = detail.Order
+				}
+				if result.Account != account {
+					t.Errorf("account = %q, want original %q", result.Account, account)
+				}
+				if err := mock.ExpectationsWereMet(); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
 	}
 }
 

@@ -77,7 +77,8 @@ type AdminAddInventoryResult struct {
 	Count int     `json:"count"`
 }
 
-// AdminInventory never contains a password. Account is always masked.
+// AdminInventory returns the original account value to administrators. For
+// one-line imports, Account contains the complete delivery record.
 type AdminInventory struct {
 	ID              int64  `json:"id"`
 	ProductID       int64  `json:"product_id"`
@@ -108,8 +109,8 @@ type AdminDisableInventoryRequest struct {
 	AdminID     int64 `json:"-"`
 }
 
-// AdminOrder is safe for ordinary list/detail responses. Account is masked and
-// Password is deliberately absent from the type.
+// AdminOrder includes the original account value for administrator list/detail
+// responses. A separate Password field is deliberately absent from the type.
 type AdminOrder struct {
 	ID                int64   `json:"id"`
 	BusinessType      string  `json:"business_type"`
@@ -152,8 +153,8 @@ type AdminOrderDetail struct {
 	Audits []AdminAuditEntry `json:"audits"`
 }
 
-// AdminCredentialDetail is returned only by AdminGetOrderCredentials. Calling
-// that method requires an admin actor and records a credential_view audit row.
+// AdminCredentialDetail is returned only by AdminGetOrderCredentials. Reading
+// credentials requires an admin actor and does not write an audit row.
 type AdminCredentialDetail struct {
 	OrderID     int64  `json:"order_id"`
 	TradeNo     string `json:"trade_no"`
@@ -644,10 +645,6 @@ FOR SHARE OF o,i`, orderID).Scan(&result.OrderID, &result.TradeNo, &result.Produ
 	if result.Password == "" {
 		result.Credential = result.Account
 	}
-	detail := AdminAuditDetail{InventoryID: &result.InventoryID, Account: maskAppleAccount(result.Account)}
-	if err := insertAdminAudit(ctx, tx, AdminAuditWriteRequest{OrderID: orderID, AdminID: adminID, Action: "credential_view", Detail: detail}); err != nil {
-		return AdminCredentialDetail{}, err
-	}
 	if err := tx.Commit(); err != nil {
 		return AdminCredentialDetail{}, err
 	}
@@ -741,7 +738,7 @@ func (s *DBService) AdminReplaceInventory(ctx context.Context, req AdminReplaceI
 	}
 	return AdminReplaceInventoryResult{
 		OrderID: req.OrderID, PreviousInventoryID: oldInventoryID, NewInventoryID: newInventoryID,
-		PreviousAccount: maskAppleAccount(oldAccount), NewAccount: maskAppleAccount(newAccount),
+		PreviousAccount: oldAccount, NewAccount: newAccount,
 	}, nil
 }
 
@@ -935,7 +932,7 @@ func (s *DBService) scanAdminInventory(scanner adminScanner) (AdminInventory, er
 	if err != nil {
 		return AdminInventory{}, err
 	}
-	item.Account = maskAppleAccount(account)
+	item.Account = account
 	item.ReservedOrderID = nullInt64Pointer(reservedOrder)
 	item.ReservedUntil = nullInt64Pointer(reservedUntil)
 	item.SoldOrderID = nullInt64Pointer(soldOrder)
@@ -965,7 +962,7 @@ func (s *DBService) scanAdminOrder(scanner adminScanner) (AdminOrder, error) {
 		if err != nil {
 			return AdminOrder{}, err
 		}
-		item.Account = maskAppleAccount(account)
+		item.Account = account
 	}
 	return item, nil
 }

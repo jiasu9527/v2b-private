@@ -254,7 +254,7 @@ func TestDeliveryEnforcesOwnershipAndPaidInventory(t *testing.T) {
 	}
 }
 
-func TestDeliveryDecryptsOnlyAfterAuditCommits(t *testing.T) {
+func TestDeliveryReturnsCredentialsWithoutWritingViewAudit(t *testing.T) {
 	s, mock := newAdminTestService(t)
 	account, _ := s.encrypt("buyer@example.com")
 	password, _ := s.encrypt("private-password")
@@ -263,7 +263,6 @@ func TestDeliveryDecryptsOnlyAfterAuditCommits(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "trade_no", "product_id", "inventory_id", "status"}).AddRow(int64(41), "apple-test", int64(3), int64(12), OrderPaid))
 	mock.ExpectQuery(`SELECT account_ciphertext,password_ciphertext FROM v2_apple_inventory WHERE id=\$1 AND status=2 AND sold_order_id=\$2`).WithArgs(int64(12), int64(41)).
 		WillReturnRows(sqlmock.NewRows([]string{"account_ciphertext", "password_ciphertext"}).AddRow(account, password))
-	mock.ExpectExec(`INSERT INTO v2_apple_order_audit`).WithArgs(int64(41), int64(7), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	delivery, err := s.Delivery(context.Background(), 7, "apple-test")
 	if err != nil {

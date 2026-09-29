@@ -740,9 +740,6 @@ func (s *DBService) Delivery(ctx context.Context, userID int64, tradeNo string) 
 	if err != nil {
 		return Delivery{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_apple_order_audit(order_id,actor_user_id,action,detail,created_at) VALUES($1,$2,'delivery_view','',$3)`, orderID, userID, time.Now().Unix()); err != nil {
-		return Delivery{}, fmt.Errorf("audit apple id delivery view: %w", err)
-	}
 	if err := tx.Commit(); err != nil {
 		return Delivery{}, fmt.Errorf("commit apple id delivery view: %w", err)
 	}

@@ -51,7 +51,6 @@ export default function AppleIDOrderDetail({ id, onClose, onChanged }: { id: num
   const [detailError, setDetailError] = useState('');
   const [credentials, setCredentials] = useState<Credentials | null>(null);
   const [credentialsLoading, setCredentialsLoading] = useState(false);
-  const [passwordVisible, setPasswordVisible] = useState(false);
   const [audits, setAudits] = useState<Audit[]>([]);
   const [auditTotal, setAuditTotal] = useState(0);
   const [auditLoading, setAuditLoading] = useState(false);
@@ -79,7 +78,6 @@ export default function AppleIDOrderDetail({ id, onClose, onChanged }: { id: num
   const clearCredentials = () => {
     credentialRequest.current += 1;
     setCredentials(null);
-    setPasswordVisible(false);
     setCredentialsLoading(false);
   };
   const loadDetail = async () => {
@@ -112,7 +110,7 @@ export default function AppleIDOrderDetail({ id, onClose, onChanged }: { id: num
       if (!alive.current || token !== auditRequest.current) return;
       setAudits([]);
       setAuditTotal(0);
-      setAuditError(e.message || '审计记录加载失败');
+      setAuditError(e.message || '操作记录加载失败');
     } finally {
       if (alive.current && token === auditRequest.current) setAuditLoading(false);
     }
@@ -159,12 +157,10 @@ export default function AppleIDOrderDetail({ id, onClose, onChanged }: { id: num
     try {
       const res = await apiPost('/apple-id/order/credentials', { id });
       if (!alive.current || token !== credentialRequest.current) return;
-      if (res.data?.order_id !== id) throw new Error('凭据与当前订单不匹配');
+      if (res.data?.order_id !== id) throw new Error('交付资料与当前订单不匹配');
       setCredentials(res.data);
-      setPasswordVisible(false);
-      loadAudits({ ...auditPage, current: 1 });
     } catch (e: any) {
-      if (alive.current && token === credentialRequest.current) message.error(e.message || '查看凭据失败');
+      if (alive.current && token === credentialRequest.current) message.error(e.message || '查看交付资料失败');
     } finally {
       if (alive.current && token === credentialRequest.current) setCredentialsLoading(false);
     }
@@ -268,28 +264,27 @@ export default function AppleIDOrderDetail({ id, onClose, onChanged }: { id: num
             <Descriptions.Item label="商品金额">{money(order.price)}</Descriptions.Item><Descriptions.Item label="支付手续费">{money(order.handling_amount)}</Descriptions.Item>
             <Descriptions.Item label="应付金额">{money(order.total_amount)}</Descriptions.Item><Descriptions.Item label="支付方式 ID">{order.payment_id || '-'}</Descriptions.Item>
             <Descriptions.Item label="支付流水" span={2}><span style={{ overflowWrap: 'anywhere' }}>{order.callback_no || '-'}</span></Descriptions.Item>
-            <Descriptions.Item label="库存 ID">{order.inventory_id || '-'}</Descriptions.Item><Descriptions.Item label="账号（脱敏）">{order.account || '-'}</Descriptions.Item>
+            <Descriptions.Item label="库存 ID" span={2}>{order.inventory_id || '-'}</Descriptions.Item>
+            <Descriptions.Item label="账号资料" span={2}>{order.account ? <Typography.Paragraph className="apple-id-account-text" copyable>{order.account}</Typography.Paragraph> : '-'}</Descriptions.Item>
             <Descriptions.Item label="创建时间">{unixTime(order.created_at)}</Descriptions.Item><Descriptions.Item label="预留到期时间">{unixTime(order.reserved_until)}</Descriptions.Item>
             <Descriptions.Item label="付款时间">{unixTime(order.paid_at)}</Descriptions.Item><Descriptions.Item label="更新时间">{unixTime(order.updated_at)}</Descriptions.Item>
           </Descriptions>
           <Space wrap>
-            <Button icon={<EyeOutlined />} onClick={viewCredentials} loading={credentialsLoading} disabled={!canView || busy || detailLoading || !!credentials}>查看账号凭据</Button>
-            {credentials && <Button onClick={clearCredentials}>清除明文</Button>}
+            <Button icon={<EyeOutlined />} onClick={viewCredentials} loading={credentialsLoading} disabled={!canView || busy || detailLoading || !!credentials}>查看交付资料</Button>
             {order.status === 0 && <AppleIDCancelOrderButton id={id} tradeNo={order.trade_no} disabled={locked} onStart={clearCredentials} onBusyChange={setBusy} onChanged={() => { onChanged(); refresh(); }} />}
             <Button disabled={locked || order.status !== 1} onClick={openReplacement}>售后换号</Button>
             <Button danger disabled={locked || ![1, 4].includes(order.status)} onClick={openRefund}>确认外部退款</Button>
           </Space>
-          <Typography.Text type="secondary">查看账号凭据会留下审计记录。关闭详情、刷新或进行售后操作时会清除当前页面的明文。</Typography.Text>
           {credentials && <div className="apple-id-credentials">
             <Form layout="vertical" autoComplete="off">
-              {credentials.credential ? <Form.Item label="交付资料" style={{ marginBottom: 0 }}><Space.Compact style={{ width: '100%', alignItems: 'stretch' }}><Input.TextArea readOnly value={credentials.credential} autoComplete="off" aria-label="交付资料" autoSize={{ minRows: 3, maxRows: 12 }} /><Button icon={<CopyOutlined />} onClick={() => copy(credentials.credential || '')}>复制资料</Button></Space.Compact></Form.Item> : <>
-                <Form.Item label="交付账号"><Space.Compact style={{ width: '100%' }}><Input readOnly value={credentials.account} autoComplete="off" aria-label="交付账号" /><Button icon={<CopyOutlined />} onClick={() => copy(credentials.account)}>复制账号</Button></Space.Compact></Form.Item>
-                <Form.Item label="账号密码" style={{ marginBottom: 0 }}><Space.Compact style={{ width: '100%' }}><Input.Password readOnly value={credentials.password} autoComplete="new-password" aria-label="账号密码" visibilityToggle={{ visible: passwordVisible, onVisibleChange: setPasswordVisible }} /><Button icon={<CopyOutlined />} onClick={() => copy(credentials.password)}>复制密码</Button></Space.Compact></Form.Item>
+              {credentials.credential ? <Form.Item label="交付资料" style={{ marginBottom: 0 }}><div className="apple-id-copy-field"><Input.TextArea readOnly value={credentials.credential} autoComplete="off" aria-label="交付资料" autoSize={{ minRows: 3, maxRows: 12 }} /><Button icon={<CopyOutlined />} onClick={() => copy(credentials.credential || '')}>复制资料</Button></div></Form.Item> : <>
+                <Form.Item label="交付账号"><div className="apple-id-copy-field"><Input.TextArea readOnly value={credentials.account} autoComplete="off" aria-label="交付账号" autoSize={{ minRows: 1, maxRows: 6 }} /><Button icon={<CopyOutlined />} onClick={() => copy(credentials.account)}>复制账号</Button></div></Form.Item>
+                <Form.Item label="账号密码" style={{ marginBottom: 0 }}><div className="apple-id-copy-field"><Input.TextArea readOnly value={credentials.password} autoComplete="off" aria-label="账号密码" autoSize={{ minRows: 1, maxRows: 6 }} /><Button icon={<CopyOutlined />} onClick={() => copy(credentials.password)}>复制密码</Button></div></Form.Item>
               </>}
             </Form>
           </div>}
         </>}
-        <Divider orientation="left" style={{ margin: '8px 0' }}>操作审计</Divider>
+        <Divider orientation="left" style={{ margin: '8px 0' }}>订单操作记录</Divider>
         {auditError && <Alert showIcon type="error" message={auditError} action={<Button size="small" onClick={() => loadAudits()}>重试</Button>} />}
         <Table<Audit> className="forest-table" size="small" rowKey="id" dataSource={audits} columns={auditColumns} loading={auditLoading} scroll={{ x: 760 }}
           pagination={{ ...auditPage, total: auditTotal, showSizeChanger: true, pageSizeOptions: [20, 50, 100, 200], size: 'small', showTotal: (count) => `共 ${count} 条记录` }}
@@ -303,8 +298,8 @@ export default function AppleIDOrderDetail({ id, onClose, onChanged }: { id: num
         {allocation === 'manual' && <Form.Item label={`选择库存${inventoryID ? `（已选择 #${inventoryID}）` : ''}`}>
           {inventoryError && <Alert type="error" showIcon message={inventoryError} />}
           <Button size="small" icon={<ReloadOutlined />} onClick={() => { setInventoryID(undefined); loadInventory(inventoryPage); }} disabled={busy} style={{ marginBottom: 8 }}>刷新可售库存</Button>
-          <Table<Inventory> className="forest-table" size="small" rowKey="id" dataSource={inventory} loading={inventoryLoading}
-            columns={[{ title: '库存 ID', dataIndex: 'id', width: 100 }, { title: '账号（脱敏）', dataIndex: 'account' }, { title: '入库时间', dataIndex: 'created_at', render: (value) => unixTime(value) }]}
+          <Table<Inventory> className="forest-table" size="small" rowKey="id" dataSource={inventory} loading={inventoryLoading} scroll={{ x: 620 }}
+            columns={[{ title: '库存 ID', dataIndex: 'id', width: 90 }, { title: '账号资料', dataIndex: 'account', width: 310, render: (value) => value ? <Typography.Paragraph className="apple-id-account-text" copyable>{value}</Typography.Paragraph> : '-' }, { title: '入库时间', dataIndex: 'created_at', width: 180, render: (value) => unixTime(value) }]}
             rowSelection={{ type: 'radio', selectedRowKeys: inventoryID ? [inventoryID] : [], preserveSelectedRowKeys: true, onChange: (keys) => setInventoryID(Number(keys[0])), getCheckboxProps: () => ({ disabled: busy }) }}
             pagination={{ ...inventoryPage, total: inventoryTotal, showSizeChanger: false, size: 'small', showTotal: (count) => `共 ${count} 个可售账号` }}
             onChange={(next) => loadInventory({ current: next.current || 1, pageSize: next.pageSize || 20 })} />
