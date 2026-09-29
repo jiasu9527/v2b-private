@@ -10,7 +10,7 @@ export type AppleIDOrder = {
   total_amount: number; status: number; payment_id?: number; callback_no?: string; inventory_id?: number;
   account?: string; reserved_until?: number; paid_at?: number; created_at: number; updated_at: number;
 };
-type Credentials = { order_id: number; trade_no: string; inventory_id: number; product_id: number; account: string; password: string };
+type Credentials = { order_id: number; trade_no: string; inventory_id: number; product_id: number; account: string; password: string; credential?: string };
 type Audit = { id: number; actor_admin_id?: number; action: string; detail: { reason?: string; inventory_id?: number; previous_inventory_id?: number; new_inventory_id?: number; status?: number; account?: string }; created_at: number };
 type Inventory = { id: number; account: string; created_at: number };
 type Page = { current: number; pageSize: number };
@@ -279,8 +279,10 @@ export default function AppleIDOrderDetail({ id, onClose, onChanged }: { id: num
           <Typography.Text type="secondary">查看账号凭据会留下审计记录。关闭详情、刷新或进行售后操作时会清除当前页面的明文。</Typography.Text>
           {credentials && <div className="apple-id-credentials">
             <Form layout="vertical" autoComplete="off">
-              <Form.Item label="交付账号"><Space.Compact style={{ width: '100%' }}><Input readOnly value={credentials.account} autoComplete="off" aria-label="交付账号" /><Button icon={<CopyOutlined />} onClick={() => copy(credentials.account)}>复制账号</Button></Space.Compact></Form.Item>
-              <Form.Item label="账号密码" style={{ marginBottom: 0 }}><Space.Compact style={{ width: '100%' }}><Input.Password readOnly value={credentials.password} autoComplete="new-password" aria-label="账号密码" visibilityToggle={{ visible: passwordVisible, onVisibleChange: setPasswordVisible }} /><Button icon={<CopyOutlined />} onClick={() => copy(credentials.password)}>复制密码</Button></Space.Compact></Form.Item>
+              {credentials.credential ? <Form.Item label="交付资料" style={{ marginBottom: 0 }}><Space.Compact style={{ width: '100%', alignItems: 'stretch' }}><Input.TextArea readOnly value={credentials.credential} autoComplete="off" aria-label="交付资料" autoSize={{ minRows: 3, maxRows: 12 }} /><Button icon={<CopyOutlined />} onClick={() => copy(credentials.credential || '')}>复制资料</Button></Space.Compact></Form.Item> : <>
+                <Form.Item label="交付账号"><Space.Compact style={{ width: '100%' }}><Input readOnly value={credentials.account} autoComplete="off" aria-label="交付账号" /><Button icon={<CopyOutlined />} onClick={() => copy(credentials.account)}>复制账号</Button></Space.Compact></Form.Item>
+                <Form.Item label="账号密码" style={{ marginBottom: 0 }}><Space.Compact style={{ width: '100%' }}><Input.Password readOnly value={credentials.password} autoComplete="new-password" aria-label="账号密码" visibilityToggle={{ visible: passwordVisible, onVisibleChange: setPasswordVisible }} /><Button icon={<CopyOutlined />} onClick={() => copy(credentials.password)}>复制密码</Button></Space.Compact></Form.Item>
+              </>}
             </Form>
           </div>}
         </>}

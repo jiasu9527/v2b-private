@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, message } from 'antd';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { apiGet, apiPost, unixTime } from '../lib/api';
-import { AppleIDImportFormat, parseAppleIDImport } from './apple-id-import';
+import { parseAppleIDImport } from './apple-id-import';
 
 type ProductOption = { id: number; name: string; region: string; enabled: boolean };
 type Inventory = {
@@ -30,7 +30,6 @@ export default function AppleIDInventory() {
   const [saving, setSaving] = useState(false);
   const [busyID, setBusyID] = useState<number | null>(null);
   const [form] = Form.useForm();
-  const format: AppleIDImportFormat = Form.useWatch('format', form) || 'lines';
   const request = useRef(0);
   const productRequest = useRef(0);
   const mutation = useRef(false);
@@ -76,7 +75,7 @@ export default function AppleIDInventory() {
 
   const openImport = () => {
     form.resetFields();
-    form.setFieldsValue({ format: 'lines', product_id: query.product_id, credentials: '' });
+    form.setFieldsValue({ product_id: query.product_id, credentials: '' });
     setImportOpen(true);
     loadProducts();
   };
@@ -91,10 +90,10 @@ export default function AppleIDInventory() {
     setSaving(true);
     try {
       const values = await form.validateFields();
-      const items = parseAppleIDImport(values.credentials, values.format);
+      const items = parseAppleIDImport(values.credentials);
       const response = await apiPost('/apple-id/inventory/import', { product_id: values.product_id, items });
       if (!mounted.current) return;
-      message.success(`已导入 ${Number(response.data?.count ?? items.length)} 个账号`);
+      message.success(`已导入 ${Number(response.data?.count ?? items.length)} 条账号资料`);
       form.resetFields();
       setImportOpen(false);
       setQuery((previous) => ({ ...previous, current: 1, product_id: values.product_id, status: 0 }));
@@ -152,9 +151,8 @@ export default function AppleIDInventory() {
     <Modal title="批量导入 Apple ID 库存" open={importOpen} onOk={save} onCancel={closeImport} confirmLoading={saving} cancelButtonProps={{ disabled: saving }} maskClosable={!saving} keyboard={!saving} closable={!saving} okText="确认导入" cancelText="取消" width={720}>
       <Form form={form} layout="vertical" disabled={saving} autoComplete="off">
         <Form.Item name="product_id" label="所属商品" rules={[{ required: true, message: '请选择所属商品' }]}><Select showSearch optionFilterProp="label" options={productOptions} loading={productsLoading} placeholder="请选择商品" notFoundContent={productsLoading ? '正在加载商品…' : productError ? '商品加载失败，请关闭后重试' : '暂无商品，请先在商品管理添加'} /></Form.Item>
-        <Form.Item name="format" label="输入格式"><Select options={[{ label: '每行账号 + TAB + 密码', value: 'lines' }, { label: 'JSON 数组', value: 'json' }]} onChange={() => form.setFields([{ name: 'credentials', errors: [] }])} /></Form.Item>
-        <Alert type="info" showIcon style={{ marginBottom: 16 }} message="单次最多 500 个账号；整批成功后才会入库" description={format === 'lines' ? '从表格复制“账号、密码”两列粘贴到下方，每行一个账号，中间使用 TAB 分隔。密码中的空格会原样保留；空行忽略。如密码包含换行，请使用 JSON。' : '输入对象数组，每项包含字符串 account 和 password，例如 [{"account":"example@icloud.com","password":"示例密码"}]。密码中的空格与转义字符会原样保留。'} />
-        <Form.Item name="credentials" label="账号与密码" rules={[{ required: true, message: '请输入待导入的账号与密码' }, { validator: async (_, value) => { if (value) parseAppleIDImport(value, form.getFieldValue('format')); } }]} validateTrigger="onBlur" extra="导入成功或关闭窗口会清空输入；失败时保留供修正。列表仅显示脱敏账号。"><Input.TextArea rows={10} autoComplete="off" spellCheck={false} autoCorrect="off" autoCapitalize="none" placeholder={format === 'lines' ? '将账号和密码两列用 TAB 分隔后粘贴到这里' : '[{"account":"example@icloud.com","password":"示例密码"}]'} /></Form.Item>
+        <Alert type="info" showIcon style={{ marginBottom: 16 }} message="单次最多 500 条；每行一整条账号资料" description="每行粘贴一条完整资料，账号、密码、密保等内容按原样保留，不要求固定分隔格式。空行忽略。" />
+        <Form.Item name="credentials" label="账号资料（每行一条）" rules={[{ required: true, message: '请输入待导入的账号资料' }, { validator: async (_, value) => { if (value) parseAppleIDImport(value); } }]} validateTrigger="onBlur" extra="导入成功或关闭窗口会清空输入；失败时保留供修正。列表仅显示脱敏内容。"><Input.TextArea rows={10} autoComplete="off" spellCheck={false} autoCorrect="off" autoCapitalize="none" placeholder={'example@icloud.com----密码----密保问题答案\nuser@example.com | password | security answer'} /></Form.Item>
       </Form>
     </Modal>
   </div>;

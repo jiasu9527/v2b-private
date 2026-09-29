@@ -317,8 +317,10 @@ Install/update SQL includes the new tables. Run the normal database update
 before deploying the new server. The administrator interface includes an
 "独享 Apple ID" navigation item at `/<admin_path>/apple-id`, with product,
 inventory, and order tabs. Product prices are entered in yuan and submitted
-as integer cents. Inventory import accepts tab-separated account/password
-pairs or a JSON array, with a 500-account limit. Viewing credentials is an
+as integer cents. Inventory import accepts one complete account record per line.
+The record may include the account, password, security questions, and other
+delivery data without a fixed separator. Empty lines are ignored and the batch
+is limited to 500 records. Viewing credentials is an
 explicit audited action; closing the order dialog clears the displayed
 credentials. Replacement retires the previous account. Refund confirmation
 requires the administrator to confirm that the gateway refund has already

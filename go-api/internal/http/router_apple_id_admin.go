@@ -136,8 +136,9 @@ func handleAdminAppleID(w http.ResponseWriter, r *http.Request, sessions session
 		var payload struct {
 			ProductID int64 `json:"product_id"`
 			Items     []struct {
-				Account  string `json:"account"`
-				Password string `json:"password"`
+				Credential string `json:"credential"`
+				Account    string `json:"account"`
+				Password   string `json:"password"`
 			} `json:"items"`
 		}
 		if err := readJSONBody(r, &payload); err != nil {
@@ -145,7 +146,7 @@ func handleAdminAppleID(w http.ResponseWriter, r *http.Request, sessions session
 		}
 		items := make([]appleid.AdminInventoryCredential, 0, len(payload.Items))
 		for _, item := range payload.Items {
-			items = append(items, appleid.AdminInventoryCredential{Account: item.Account, Password: item.Password})
+			items = append(items, appleid.AdminInventoryCredential{Credential: item.Credential, Account: item.Account, Password: item.Password})
 		}
 		result, err := service.AdminAddInventoryBatch(r.Context(), appleid.AdminAddInventoryRequest{ProductID: payload.ProductID, Items: items})
 		if err != nil {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -59,8 +60,11 @@ type AdminSetProductEnabledRequest struct {
 }
 
 type AdminInventoryCredential struct {
-	Account  string `json:"account"`
-	Password string `json:"password"`
+	// Credential is a complete one-line delivery record. Account and Password
+	// remain accepted for compatibility with older API clients.
+	Credential string `json:"credential,omitempty"`
+	Account    string `json:"account"`
+	Password   string `json:"password"`
 }
 
 type AdminAddInventoryRequest struct {
@@ -157,6 +161,7 @@ type AdminCredentialDetail struct {
 	ProductID   int64  `json:"product_id"`
 	Account     string `json:"account"`
 	Password    string `json:"password"`
+	Credential  string `json:"credential,omitempty"`
 }
 
 type AdminReplaceInventoryRequest struct {
@@ -390,11 +395,16 @@ func (s *DBService) AdminAddInventoryBatch(ctx context.Context, req AdminAddInve
 	items := make([]encryptedItem, 0, len(req.Items))
 	seen := make(map[string]struct{}, len(req.Items))
 	for _, raw := range req.Items {
-		account := strings.TrimSpace(raw.Account)
-		if account == "" || raw.Password == "" {
+		account := raw.Account
+		password := raw.Password
+		if raw.Credential != "" {
+			account = raw.Credential
+			password = ""
+		}
+		if strings.TrimSpace(account) == "" || (raw.Credential == "" && password == "") {
 			return AdminAddInventoryResult{}, ErrInvalidParameter
 		}
-		key := strings.ToLower(account)
+		key := strings.ToLower(strings.TrimSpace(account))
 		if _, exists := seen[key]; exists {
 			return AdminAddInventoryResult{}, ErrDuplicateInventory
 		}
@@ -403,7 +413,7 @@ func (s *DBService) AdminAddInventoryBatch(ctx context.Context, req AdminAddInve
 		if err != nil {
 			return AdminAddInventoryResult{}, err
 		}
-		p, err := s.encrypt(raw.Password)
+		p, err := s.encrypt(password)
 		if err != nil {
 			return AdminAddInventoryResult{}, err
 		}
@@ -621,6 +631,9 @@ FOR SHARE OF o,i`, orderID).Scan(&result.OrderID, &result.TradeNo, &result.Produ
 	result.Password, err = s.decrypt(passwordCiphertext)
 	if err != nil {
 		return AdminCredentialDetail{}, err
+	}
+	if result.Password == "" {
+		result.Credential = result.Account
 	}
 	detail := AdminAuditDetail{InventoryID: &result.InventoryID, Account: maskAppleAccount(result.Account)}
 	if err := insertAdminAudit(ctx, tx, AdminAuditWriteRequest{OrderID: orderID, AdminID: adminID, Action: "credential_view", Detail: detail}); err != nil {
@@ -981,6 +994,21 @@ func maskAppleAccount(account string) string {
 	if account == "" {
 		return ""
 	}
+	if strings.Contains(account, "*") {
+		return account
+	}
+	// New inventory records are complete one-line credential records and may
+	// contain passwords or security answers. Only expose the familiar masked
+	// email form for a plain account-looking value; never leak the tail of an
+	// opaque record as a domain.
+	if strings.Contains(account, "----") {
+		return maskOpaqueAppleCredential(account)
+	}
+	for _, r := range account {
+		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("._%+-@", r)) {
+			return maskOpaqueAppleCredential(account)
+		}
+	}
 	if at := strings.LastIndex(account, "@"); at > 0 && at < len(account)-1 {
 		local := []rune(account[:at])
 		domain := account[at+1:]
@@ -1001,6 +1029,14 @@ func maskAppleAccount(account string) string {
 		return string(runes[0]) + "***" + string(runes[len(runes)-1])
 	}
 	return string(runes[:2]) + "***" + string(runes[len(runes)-2:])
+}
+
+func maskOpaqueAppleCredential(value string) string {
+	runes := []rune(value)
+	if len(runes) <= 2 {
+		return strings.Repeat("*", len(runes))
+	}
+	return string(runes[:2]) + "***"
 }
 
 func cleanAuditReason(reason string) string {

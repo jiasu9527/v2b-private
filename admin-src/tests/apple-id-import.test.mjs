@@ -7,45 +7,32 @@ const source = readFileSync(new URL('../src/pages/apple-id-import.ts', import.me
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 } }).outputText;
 const { parseAppleIDImport, appleIDPriceToCents } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
 
-test('TAB import normalizes accounts while preserving password whitespace and separators', () => {
-  assert.deepEqual(parseAppleIDImport(' User@icloud.com \t  secret \tvalue  \r\n\nsecond@icloud.com\t ', 'lines'), [
-    { account: 'User@icloud.com', password: '  secret \tvalue  ' },
-    { account: 'second@icloud.com', password: ' ' },
+test('每行保留完整账号资料、分隔符、密保和首尾空格', () => {
+  assert.deepEqual(parseAppleIDImport('  User@icloud.com----secret----密保答案  \nsecond@example.com | pass | answer'), [
+    { credential: '  User@icloud.com----secret----密保答案  ' },
+    { credential: 'second@example.com | pass | answer' },
   ]);
 });
 
-test('JSON import retains escaped characters, whitespace and string values', () => {
-  const input = [{ account: ' user@icloud.com ', password: ' \n\t secret  ' }];
-  assert.deepEqual(parseAppleIDImport(JSON.stringify(input), 'json'), [{ account: 'user@icloud.com', password: ' \n\t secret  ' }]);
-});
-
-test('duplicate accounts are rejected without exposing account or password', () => {
-  assert.throws(() => parseAppleIDImport('User@icloud.com\tTOP-SECRET\nuser@icloud.com\tOTHER-SECRET', 'lines'), (error) => {
-    assert.match(error.message, /第 2 条账号重复/);
-    assert.doesNotMatch(error.message, /icloud|SECRET/);
+test('空行忽略，重复完整资料拒绝且错误不暴露内容', () => {
+  assert.throws(() => parseAppleIDImport('secret-account----secret-password\n\nSECRET-ACCOUNT----SECRET-PASSWORD'), (error) => {
+    assert.match(error.message, /第 2 条账号资料重复/);
+    assert.doesNotMatch(error.message, /secret|account|password/i);
     return true;
   });
 });
 
-test('malformed JSON errors never include fragments of the secret input', () => {
-  assert.throws(() => parseAppleIDImport('[{"password":"DO-NOT-EXPOSE"', 'json'), (error) => {
-    assert.doesNotMatch(error.message, /DO-NOT-EXPOSE|password/);
-    return true;
-  });
+test('空输入和超过 500 条拒绝', () => {
+  assert.throws(() => parseAppleIDImport('\n  \n'), /至少/);
+  const rows = Array.from({ length: 501 }, (_, i) => `user-${i} | password | answer`);
+  assert.throws(() => parseAppleIDImport(rows.join('\n')), /500/);
 });
 
-test('invalid fields and missing delimiters are rejected', () => {
-  for (const value of ['{"account":"user"}', '[{"account":"user","password":123}]', '[{"account":" ","password":"valid"}]', '[{"account":"user","password":""}]']) {
-    assert.throws(() => parseAppleIDImport(value, 'json'));
-  }
-  assert.throws(() => parseAppleIDImport('user@icloud.com password', 'lines'), /TAB/);
-  assert.throws(() => parseAppleIDImport('\n \n', 'lines'), /至少/);
-});
-
-test('at most 500 accounts can be imported in one batch', () => {
-  const rows = Array.from({ length: 501 }, (_, i) => ({ account: `user${i}@icloud.com`, password: 'p' }));
-  assert.equal(parseAppleIDImport(JSON.stringify(rows.slice(0, 500)), 'json').length, 500);
-  assert.throws(() => parseAppleIDImport(JSON.stringify(rows), 'json'), /500/);
+test('账号资料内容不要求固定格式', () => {
+  assert.deepEqual(parseAppleIDImport('only-one-line\naccount password security-question answer'), [
+    { credential: 'only-one-line' },
+    { credential: 'account password security-question answer' },
+  ]);
 });
 
 test('product prices convert decimal yuan to integer cents precisely', () => {

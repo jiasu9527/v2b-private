@@ -88,11 +88,12 @@ type Order struct {
 }
 
 type Delivery struct {
-	OrderID   int64  `json:"order_id"`
-	TradeNo   string `json:"trade_no"`
-	Account   string `json:"account"`
-	Password  string `json:"password"`
-	ProductID int64  `json:"product_id"`
+	OrderID    int64  `json:"order_id"`
+	TradeNo    string `json:"trade_no"`
+	Account    string `json:"account"`
+	Password   string `json:"password"`
+	Credential string `json:"credential,omitempty"`
+	ProductID  int64  `json:"product_id"`
 }
 
 type CreateOrderRequest struct {
@@ -745,7 +746,11 @@ func (s *DBService) Delivery(ctx context.Context, userID int64, tradeNo string) 
 	if err := tx.Commit(); err != nil {
 		return Delivery{}, fmt.Errorf("commit apple id delivery view: %w", err)
 	}
-	return Delivery{OrderID: orderID, TradeNo: trade, Account: account, Password: password, ProductID: productID}, nil
+	delivery := Delivery{OrderID: orderID, TradeNo: trade, Account: account, Password: password, ProductID: productID}
+	if password == "" {
+		delivery.Credential = account
+	}
+	return delivery, nil
 }
 
 func (s *DBService) CancelOrder(ctx context.Context, userID int64, tradeNo string) error {
