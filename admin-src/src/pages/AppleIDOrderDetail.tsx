@@ -3,6 +3,7 @@ import { Alert, Button, Checkbox, Descriptions, Divider, Form, Input, Modal, Rad
 import type { ColumnsType } from 'antd/es/table';
 import { CopyOutlined, EyeOutlined, ReloadOutlined } from '@ant-design/icons';
 import { apiGet, apiPost, money, unixTime } from '../lib/api';
+import AppleIDCancelOrderButton from './AppleIDCancelOrderButton';
 
 export type AppleIDOrder = {
   id: number; business_type: string; user_id: number; user_email: string; trade_no: string;
@@ -26,7 +27,7 @@ export function AppleIDOrderStatus({ status }: { status: number }) {
 const auditActions: Record<string, string> = {
   created: '创建订单', paid: '支付并发货', manual_paid: '人工确认支付', late_payment: '迟到付款待处理',
   delivery_view: '用户查看交付', credential_view: '管理员查看凭据', inventory_replace: '售后换号',
-  refund_confirmed: '确认外部退款', cancel: '用户取消订单', reservation_expired: '预留超时释放',
+  refund_confirmed: '确认外部退款', cancel: '用户取消订单', admin_cancel: '管理员取消订单', reservation_expired: '预留超时释放',
 };
 function auditActor(row: Audit) {
   if (!row.actor_admin_id) return '系统';
@@ -257,6 +258,7 @@ export default function AppleIDOrderDetail({ id, onClose, onChanged }: { id: num
         {detailError && <Alert showIcon type="error" message={detailError} action={<Button size="small" onClick={refresh}>重试</Button>} />}
         {detailLoading && !order && <Skeleton active paragraph={{ rows: 7 }} />}
         {order && <>
+          {order.status === 0 && <Alert type="info" showIcon message="待支付：下单后预留账号 15 分钟" description="到期未付款自动取消并释放库存，后台每分钟检查一次。也可点击下方按钮立即取消。" />}
           {order.status === 4 && <Alert type="warning" showIcon message="已收到付款，尚未发货" description="此订单需要人工跟进。请核实支付流水与交付情况；如已在支付渠道退款，可在此确认退款结果。" />}
           <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
             <Descriptions.Item label="订单号" span={2}><Typography.Text copyable>{order.trade_no}</Typography.Text></Descriptions.Item>
@@ -273,6 +275,7 @@ export default function AppleIDOrderDetail({ id, onClose, onChanged }: { id: num
           <Space wrap>
             <Button icon={<EyeOutlined />} onClick={viewCredentials} loading={credentialsLoading} disabled={!canView || busy || detailLoading || !!credentials}>查看账号凭据</Button>
             {credentials && <Button onClick={clearCredentials}>清除明文</Button>}
+            {order.status === 0 && <AppleIDCancelOrderButton id={id} tradeNo={order.trade_no} disabled={locked} onStart={clearCredentials} onBusyChange={setBusy} onChanged={() => { onChanged(); refresh(); }} />}
             <Button disabled={locked || order.status !== 1} onClick={openReplacement}>售后换号</Button>
             <Button danger disabled={locked || ![1, 4].includes(order.status)} onClick={openRefund}>确认外部退款</Button>
           </Space>

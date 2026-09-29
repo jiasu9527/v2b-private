@@ -7,6 +7,7 @@
 .apple-id-section .forest-table-action { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .apple-id-section .ant-table-wrapper { min-width: 0; }
 .apple-id-section .ant-alert { margin-bottom: 12px; }
+.apple-id-order-intro.ant-alert-info, .apple-id-detail .ant-alert-info { background: #fafafa; border-color: #e5e5e5; }
 .apple-id-section .ant-table-pagination { padding: 0 12px; }
 .apple-id-detail .ant-descriptions-item-content { overflow-wrap: anywhere; }
 .apple-id-detail .ant-table { font-family: inherit !important; }

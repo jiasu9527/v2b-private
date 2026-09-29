@@ -222,6 +222,7 @@ NODE_TYPE=vmess \
 - `POST /api/v1/<admin_path>/apple-id/order/credentials`
 - `POST /api/v1/<admin_path>/apple-id/order/replace`
 - `POST /api/v1/<admin_path>/apple-id/order/refund`
+- `POST /api/v1/<admin_path>/apple-id/order/cancel`
 - `GET /api/v1/<admin_path>/apple-id/order/audits`
 
 ## Apple ID commerce API
@@ -250,7 +251,14 @@ User routes require the normal `Authorization` token:
   after fulfillment. The response is marked `Cache-Control: no-store` and each
   successful read is audited.
 - `POST /api/v1/apple-id/orders/{trade_no}/cancel` cancels only an order still
-  pending payment and releases its reserved inventory.
+  pending payment and releases its reserved inventory. Repeating cancellation
+  of an already canceled order succeeds without another audit entry.
+
+Unpaid reservations expire 15 minutes after creation (`reserved_until`, Unix
+seconds). The background scheduler checks every minute; a busy job queue can
+delay cleanup. User product/order queries, checkout lookups, and order creation
+also trigger cleanup. Expiration sets the order to status `2`, releases the
+inventory, removes its order association, and records `reservation_expired`.
 
 Order status values are `0` pending payment, `1` paid and delivered, `2`
 canceled or reservation expired, `3` refund confirmed, and `4` paid but
@@ -305,6 +313,7 @@ Admin query/action parameters:
 | `order/detail`, `order/credentials` | `id` (Apple ID order ID) |
 | `order/replace` | `id`, optional `inventory_id` from the same product, optional `reason`; only delivered orders |
 | `order/refund` | `id`, optional `reason` describing the completed external refund |
+| `order/cancel` | `id`, optional `reason`; cancels a pending order and immediately releases its reservation; repeating a canceled order is idempotent |
 | `order/audits` | `id`, optional `current`, `page_size` |
 
 Admin lists return `{ "data": [...], "total": 123 }`; pages default to 20
@@ -327,7 +336,11 @@ is limited to 500 records. Viewing credentials is an
 explicit audited action; closing the order dialog clears the displayed
 credentials. Replacement retires the previous account. Refund confirmation
 requires the administrator to confirm that the gateway refund has already
-completed. The customer website must connect to the user routes separately;
+completed. Pending orders can be canceled from the order list or detail dialog;
+the administrator and reason are recorded as `admin_cancel`. Canceling does
+not revoke an existing payment link: confirmed late payments still allocate
+available inventory or enter status `4` if none is available.
+The customer website must connect to the user routes separately;
 the existing App API contract is unchanged.
 
 ## Important boundary

@@ -33,6 +33,7 @@ type fakeAppleIDService struct {
 	lastAdminOrderID  int64
 	lastDisable       appleid.AdminDisableInventoryRequest
 	lastReplace       appleid.AdminReplaceInventoryRequest
+	lastCancel        appleid.AdminCancelOrderRequest
 	lastRefund        appleid.AdminMarkRefundedRequest
 	auditCalls        int
 	lastAudit         appleid.AdminAuditListRequest
@@ -137,6 +138,11 @@ func (f *fakeAppleIDService) AdminGetOrderCredentials(_ context.Context, orderID
 func (f *fakeAppleIDService) AdminReplaceInventory(_ context.Context, req appleid.AdminReplaceInventoryRequest) (appleid.AdminReplaceInventoryResult, error) {
 	f.lastReplace = req
 	return appleid.AdminReplaceInventoryResult{}, f.adminErr
+}
+
+func (f *fakeAppleIDService) AdminCancelOrder(_ context.Context, req appleid.AdminCancelOrderRequest) error {
+	f.lastCancel = req
+	return f.adminErr
 }
 
 func (f *fakeAppleIDService) AdminMarkOrderRefunded(_ context.Context, req appleid.AdminMarkRefundedRequest) error {
@@ -468,6 +474,16 @@ func TestAdminAppleIDMutationRoutesCarryAuditActor(t *testing.T) {
 			assert: func(t *testing.T, service *fakeAppleIDService) {
 				if service.lastRefund.OrderID != 11 || service.lastRefund.AdminID != 77 {
 					t.Fatalf("unexpected refund request: %+v", service.lastRefund)
+				}
+			},
+		},
+		{
+			name: "cancel unpaid order",
+			path: "/api/v1/localadmin/apple-id/order/cancel?auth_data=admin-token",
+			body: "id=11&reason=customer+request",
+			assert: func(t *testing.T, service *fakeAppleIDService) {
+				if service.lastCancel.OrderID != 11 || service.lastCancel.AdminID != 77 || service.lastCancel.Reason != "customer request" {
+					t.Fatalf("unexpected cancel request: %+v", service.lastCancel)
 				}
 			},
 		},

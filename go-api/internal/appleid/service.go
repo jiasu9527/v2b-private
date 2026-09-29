@@ -304,7 +304,7 @@ func (s *DBService) ReleaseExpiredReservations(ctx context.Context) error {
 func releaseExpiredReservationsTx(ctx context.Context, tx *sql.Tx, now int64) error {
 	if _, err := tx.ExecContext(ctx, `WITH expired AS (
 UPDATE v2_apple_order
-SET status=$1,updated_at=$2
+SET status=$1,inventory_id=NULL,updated_at=$2
 WHERE status=$3 AND reserved_until IS NOT NULL AND reserved_until < $2
 RETURNING id
 )
@@ -765,22 +765,28 @@ func (s *DBService) CancelOrder(ctx context.Context, userID int64, tradeNo strin
 		return err
 	}
 	defer tx.Rollback()
-	var oid, invID, status int64
+	var oid, status int64
+	var invID sql.NullInt64
 	if err := tx.QueryRowContext(ctx, `SELECT id,inventory_id,status FROM v2_apple_order WHERE user_id=$1 AND trade_no=$2 FOR UPDATE`, userID, strings.TrimSpace(tradeNo)).Scan(&oid, &invID, &status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrOrderNotFound
 		}
 		return err
 	}
+	if status == OrderCanceled {
+		return tx.Commit()
+	}
 	if status != OrderPending {
 		return ErrOrderPaid
 	}
 	now := time.Now().Unix()
-	if _, err := tx.ExecContext(ctx, `UPDATE v2_apple_order SET status=2,updated_at=$2 WHERE id=$1`, oid, now); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE v2_apple_order SET status=2,inventory_id=NULL,reserved_until=NULL,updated_at=$2 WHERE id=$1`, oid, now); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE v2_apple_inventory SET status=$1,reserved_order_id=NULL,reserved_until=NULL,updated_at=$2 WHERE id=$3 AND status=$4 AND reserved_order_id=$5`, InventoryAvailable, now, invID, InventoryReserved, oid); err != nil {
-		return err
+	if invID.Valid {
+		if _, err := tx.ExecContext(ctx, `UPDATE v2_apple_inventory SET status=$1,reserved_order_id=NULL,reserved_until=NULL,updated_at=$2 WHERE id=$3 AND status=$4 AND reserved_order_id=$5`, InventoryAvailable, now, invID.Int64, InventoryReserved, oid); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_apple_order_audit(order_id,actor_user_id,action,detail,created_at) VALUES($1,$2,'cancel','',$3)`, oid, userID, now); err != nil {
 		return fmt.Errorf("audit apple id order cancellation: %w", err)

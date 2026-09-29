@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -199,6 +200,132 @@ func TestAdminMarkOrderRefundedIsTransactionalAndAudited(t *testing.T) {
 	err := service.AdminMarkOrderRefunded(context.Background(), AdminMarkRefundedRequest{OrderID: 22, AdminID: 77, Reason: "gateway refund rf-1"})
 	if err != nil {
 		t.Fatalf("AdminMarkOrderRefunded: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdminCancelOrderReleasesReservationAndAudits(t *testing.T) {
+	service, mock := newAdminTestService(t)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT status,inventory_id FROM v2_apple_order WHERE id=\$1 FOR UPDATE`).
+		WithArgs(int64(22)).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "inventory_id"}).AddRow(OrderPending, int64(8)))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE v2_apple_inventory SET status=$1,reserved_order_id=NULL,reserved_until=NULL,updated_at=$2 WHERE id=$3 AND status=$4 AND reserved_order_id=$5`)).
+		WithArgs(InventoryAvailable, sqlmock.AnyArg(), int64(8), InventoryReserved, int64(22)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE v2_apple_order SET status=\$1,inventory_id=NULL,reserved_until=NULL,updated_at=\$2 WHERE id=\$3`).
+		WithArgs(OrderCanceled, sqlmock.AnyArg(), int64(22)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO v2_apple_order_audit`).
+		WithArgs(int64(22), int64(77), "admin_cancel", safeAuditJSONMatcher{required: []string{`"reason":"customer request"`, `"status":2`}}, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	err := service.AdminCancelOrder(context.Background(), AdminCancelOrderRequest{OrderID: 22, AdminID: 77, Reason: "customer request"})
+	if err != nil {
+		t.Fatalf("AdminCancelOrder: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdminCancelOrderRejectsSettledOrders(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		status int64
+	}{
+		{name: "paid", status: OrderPaid},
+		{name: "paid awaiting manual handling", status: OrderManual},
+		{name: "refunded", status: OrderRefunded},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			service, mock := newAdminTestService(t)
+			mock.ExpectBegin()
+			mock.ExpectQuery(`SELECT status,inventory_id FROM v2_apple_order WHERE id=\$1 FOR UPDATE`).
+				WithArgs(int64(22)).
+				WillReturnRows(sqlmock.NewRows([]string{"status", "inventory_id"}).AddRow(tt.status, nil))
+			mock.ExpectRollback()
+
+			err := service.AdminCancelOrder(context.Background(), AdminCancelOrderRequest{OrderID: 22, AdminID: 77})
+			if !errors.Is(err, ErrOrderStatus) {
+				t.Fatalf("error = %v, want ErrOrderStatus", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestAdminCancelOrderCanceledIsIdempotentWithoutInventory(t *testing.T) {
+	service, mock := newAdminTestService(t)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT status,inventory_id FROM v2_apple_order WHERE id=\$1 FOR UPDATE`).
+		WithArgs(int64(22)).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "inventory_id"}).AddRow(OrderCanceled, nil))
+	mock.ExpectCommit()
+	if err := service.AdminCancelOrder(context.Background(), AdminCancelOrderRequest{OrderID: 22, AdminID: 77}); err != nil {
+		t.Fatalf("repeat cancellation: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdminCancelOrderHandlesMissingAndReassignedInventory(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		inventoryID any
+	}{
+		{name: "missing inventory", inventoryID: nil},
+		{name: "inventory already reassigned", inventoryID: int64(8)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			service, mock := newAdminTestService(t)
+			mock.ExpectBegin()
+			mock.ExpectQuery(`SELECT status,inventory_id FROM v2_apple_order WHERE id=\$1 FOR UPDATE`).
+				WithArgs(int64(22)).
+				WillReturnRows(sqlmock.NewRows([]string{"status", "inventory_id"}).AddRow(OrderPending, tt.inventoryID))
+			if tt.inventoryID != nil {
+				mock.ExpectExec(regexp.QuoteMeta(`UPDATE v2_apple_inventory SET status=$1,reserved_order_id=NULL,reserved_until=NULL,updated_at=$2 WHERE id=$3 AND status=$4 AND reserved_order_id=$5`)).
+					WithArgs(InventoryAvailable, sqlmock.AnyArg(), int64(8), InventoryReserved, int64(22)).
+					WillReturnResult(sqlmock.NewResult(0, 0))
+			}
+			mock.ExpectExec(regexp.QuoteMeta(`UPDATE v2_apple_order SET status=$1,inventory_id=NULL,reserved_until=NULL,updated_at=$2 WHERE id=$3`)).
+				WithArgs(OrderCanceled, sqlmock.AnyArg(), int64(22)).WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec(`INSERT INTO v2_apple_order_audit`).
+				WithArgs(int64(22), int64(77), "admin_cancel", safeAuditJSONMatcher{required: []string{`"status":2`}}, sqlmock.AnyArg()).
+				WillReturnResult(sqlmock.NewResult(1, 1))
+			mock.ExpectCommit()
+			if err := service.AdminCancelOrder(context.Background(), AdminCancelOrderRequest{OrderID: 22, AdminID: 77}); err != nil {
+				t.Fatalf("AdminCancelOrder: %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestAdminCancelOrderAuditFailureRollsBackReservationRelease(t *testing.T) {
+	service, mock := newAdminTestService(t)
+	auditErr := errors.New("audit write failed")
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT status,inventory_id FROM v2_apple_order WHERE id=\$1 FOR UPDATE`).
+		WithArgs(int64(22)).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "inventory_id"}).AddRow(OrderPending, int64(8)))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE v2_apple_inventory SET status=$1,reserved_order_id=NULL,reserved_until=NULL,updated_at=$2 WHERE id=$3 AND status=$4 AND reserved_order_id=$5`)).
+		WithArgs(InventoryAvailable, sqlmock.AnyArg(), int64(8), InventoryReserved, int64(22)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE v2_apple_order SET status=$1,inventory_id=NULL,reserved_until=NULL,updated_at=$2 WHERE id=$3`)).
+		WithArgs(OrderCanceled, sqlmock.AnyArg(), int64(22)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO v2_apple_order_audit`).
+		WithArgs(int64(22), int64(77), "admin_cancel", safeAuditJSONMatcher{required: []string{`"status":2`}}, sqlmock.AnyArg()).WillReturnError(auditErr)
+	mock.ExpectRollback()
+	if err := service.AdminCancelOrder(context.Background(), AdminCancelOrderRequest{OrderID: 22, AdminID: 77}); !errors.Is(err, auditErr) {
+		t.Fatalf("error = %v, want audit failure", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

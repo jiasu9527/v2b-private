@@ -23,6 +23,7 @@ type appleIDAdminService interface {
 	AdminGetOrderDetail(context.Context, int64) (appleid.AdminOrderDetail, error)
 	AdminGetOrderCredentials(context.Context, int64, int64) (appleid.AdminCredentialDetail, error)
 	AdminReplaceInventory(context.Context, appleid.AdminReplaceInventoryRequest) (appleid.AdminReplaceInventoryResult, error)
+	AdminCancelOrder(context.Context, appleid.AdminCancelOrderRequest) error
 	AdminMarkOrderRefunded(context.Context, appleid.AdminMarkRefundedRequest) error
 	AdminListAudits(context.Context, appleid.AdminAuditListRequest) (appleid.AdminAuditListResult, error)
 }
@@ -278,6 +279,25 @@ func handleAdminAppleID(w http.ResponseWriter, r *http.Request, sessions session
 			return writeAdminAppleIDBadRequest(w, err)
 		}
 		if err := service.AdminMarkOrderRefunded(r.Context(), appleid.AdminMarkRefundedRequest{OrderID: orderID, AdminID: identity.ID, Reason: inputs["reason"]}); err != nil {
+			return handleAdminAppleIDError(w, err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": true})
+		return true
+	case "order/cancel":
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"message": "Method not allowed"})
+			return true
+		}
+		inputs, err := readInputs(r)
+		if err != nil {
+			return writeAdminAppleIDBadRequest(w, err)
+		}
+		orderID, err := requiredAppleIDInt64(inputs, "id")
+		if err != nil {
+			return writeAdminAppleIDBadRequest(w, err)
+		}
+		if err := service.AdminCancelOrder(r.Context(), appleid.AdminCancelOrderRequest{OrderID: orderID, AdminID: identity.ID, Reason: inputs["reason"]}); err != nil {
 			return handleAdminAppleIDError(w, err)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"data": true})

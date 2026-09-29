@@ -4,6 +4,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { apiGet, money, unixTime } from '../lib/api';
 import AppleIDOrderDetail, { AppleIDOrder, AppleIDOrderStatus, appleIDOrderStatuses } from './AppleIDOrderDetail';
+import AppleIDCancelOrderButton from './AppleIDCancelOrderButton';
 
 type Filters = { email?: string; trade_no?: string; product_id?: number; status?: number };
 type Page = { current: number; pageSize: number };
@@ -63,11 +64,15 @@ export default function AppleIDOrders() {
     { title: '订单状态', dataIndex: 'status', width: 165, render: (value) => <AppleIDOrderStatus status={value} /> },
     { title: '交付账号（脱敏）', dataIndex: 'account', width: 190, render: (value) => value || '-' },
     { title: '创建时间', dataIndex: 'created_at', width: 180, render: (value) => unixTime(value) },
-    { title: '操作', key: 'actions', width: 100, fixed: 'right', render: (_, row) => <Button type="link" onClick={() => setSelectedID(row.id)}>详情</Button> },
+    { title: '预留到期时间', dataIndex: 'reserved_until', width: 180, render: (value, row) => row.status === 0 ? unixTime(value) : '-' },
+    { title: '操作', key: 'actions', width: 200, fixed: 'right', render: (_, row) => <Space size={0}>
+      <Button type="link" onClick={() => setSelectedID(row.id)}>详情</Button>
+      {row.status === 0 && <AppleIDCancelOrderButton compact id={row.id} tradeNo={row.trade_no} disabled={loading} onChanged={() => load()} />}
+    </Space> },
   ];
 
   return <div className="apple-id-section apple-id-orders-page">
-    <Alert className="apple-id-order-intro" style={{ marginBottom: 16 }} type="info" showIcon message="独享 Apple ID 订单独立管理，支付与售后不会修改用户套餐、流量或有效期。" />
+    <Alert className="apple-id-order-intro" style={{ marginBottom: 16 }} type="info" showIcon message="待支付订单预留账号 15 分钟，到期自动取消并释放库存；也可手动取消。" description="后台每分钟检查过期订单。Apple ID 订单的支付与售后不会修改用户套餐、流量或有效期。" />
     <Card className="block-card">
       <div className="forest-table-action">
         <Form className="apple-id-toolbar" form={form} layout="inline" onFinish={(values) => load({ ...page, current: 1 }, { ...values, email: values.email?.trim(), trade_no: values.trade_no?.trim() })} style={{ rowGap: 12 }}>
@@ -83,7 +88,7 @@ export default function AppleIDOrders() {
         </Form>
       </div>
       {error && <Alert type="error" showIcon message={error} action={<Button size="small" onClick={() => load()}>重试</Button>} />}
-      <Table<AppleIDOrder> className="forest-table" rowKey="id" columns={columns} dataSource={rows} loading={loading} scroll={{ x: 1450 }}
+      <Table<AppleIDOrder> className="forest-table" rowKey="id" columns={columns} dataSource={rows} loading={loading} scroll={{ x: 1730 }}
         pagination={{ ...page, total, showSizeChanger: true, pageSizeOptions: [20, 50, 100, 200], showTotal: (count) => `共 ${count} 笔订单`, size: 'small' }}
         onChange={(next) => load({ current: next.current || 1, pageSize: next.pageSize || 20 })} />
     </Card>

@@ -185,6 +185,15 @@ type AdminMarkRefundedRequest struct {
 	Reason  string `json:"reason,omitempty"`
 }
 
+// AdminCancelOrderRequest cancels an unpaid order and releases the inventory
+// reservation held by that order. Cancellation is deliberately restricted to
+// pending orders; paid/manual orders must go through the refund workflow.
+type AdminCancelOrderRequest struct {
+	OrderID int64  `json:"order_id"`
+	AdminID int64  `json:"-"`
+	Reason  string `json:"reason,omitempty"`
+}
+
 // AdminAuditDetail is intentionally structured: there is no credential or
 // password field, preventing callers from accidentally persisting secrets.
 type AdminAuditDetail struct {
@@ -773,6 +782,67 @@ func (s *DBService) AdminMarkOrderRefunded(ctx context.Context, req AdminMarkRef
 		AdminID: req.AdminID,
 		Action:  "refund_confirmed",
 		Detail:  AdminAuditDetail{Reason: cleanAuditReason(req.Reason), Status: &newStatus},
+	}); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// AdminCancelOrder cancels an unpaid order, returns its reserved inventory to
+// the available pool, and records the administrator action. The order and
+// inventory rows are locked in one transaction so a concurrent payment
+// callback either wins before cancellation or observes the canceled order
+// afterward; the reservation can never be double released.
+func (s *DBService) AdminCancelOrder(ctx context.Context, req AdminCancelOrderRequest) error {
+	if err := s.ensureSchema(ctx); err != nil {
+		return err
+	}
+	if req.OrderID <= 0 || req.AdminID <= 0 {
+		return ErrInvalidParameter
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var status int64
+	var inventoryID sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT status,inventory_id FROM v2_apple_order WHERE id=$1 FOR UPDATE`, req.OrderID).Scan(&status, &inventoryID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrOrderNotFound
+		}
+		return err
+	}
+	if status == OrderCanceled {
+		// Repeated cancellation is idempotent. The first request already
+		// released the reservation and wrote its audit record.
+		return tx.Commit()
+	}
+	if status != OrderPending {
+		return ErrOrderStatus
+	}
+
+	now := time.Now().Unix()
+	if inventoryID.Valid {
+		if _, err := tx.ExecContext(ctx, `UPDATE v2_apple_inventory
+SET status=$1,reserved_order_id=NULL,reserved_until=NULL,updated_at=$2
+WHERE id=$3 AND status=$4 AND reserved_order_id=$5`, InventoryAvailable, now, inventoryID.Int64, InventoryReserved, req.OrderID); err != nil {
+			return fmt.Errorf("release apple id inventory on admin cancellation: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE v2_apple_order SET status=$1,inventory_id=NULL,reserved_until=NULL,updated_at=$2 WHERE id=$3`, OrderCanceled, now, req.OrderID); err != nil {
+		return fmt.Errorf("cancel apple id order: %w", err)
+	}
+	newStatus := OrderCanceled
+	if err := insertAdminAudit(ctx, tx, AdminAuditWriteRequest{
+		OrderID: req.OrderID,
+		AdminID: req.AdminID,
+		Action:  "admin_cancel",
+		Detail: AdminAuditDetail{
+			Reason: cleanAuditReason(req.Reason),
+			Status: &newStatus,
+		},
 	}); err != nil {
 		return err
 	}
