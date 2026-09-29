@@ -147,13 +147,13 @@ func TestMarkExternalPaidConsumesReservationOnce(t *testing.T) {
 	mock.ExpectExec(`UPDATE v2_apple_order SET status=\$1,inventory_id=\$2`).WithArgs(OrderPaid, int64(12), "gw-1", sqlmock.AnyArg(), int64(41)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO v2_apple_order_audit`).WithArgs(int64(41), "paid", "gw-1", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	if err := s.MarkExternalPaid(context.Background(), "apple-test", "gw-1", false, nil, nil); err != nil {
+	if err := s.MarkExternalPaid(context.Background(), "apple-test", "gw-1", false, int64Pointer(9), int64Pointer(1050)); err != nil {
 		t.Fatal(err)
 	}
 	mock.ExpectBegin()
 	expectPaidOrderLock(mock, OrderPaid, until)
 	mock.ExpectRollback()
-	if err := s.MarkExternalPaid(context.Background(), "apple-test", "gw-1", false, nil, nil); err != nil {
+	if err := s.MarkExternalPaid(context.Background(), "apple-test", "gw-1", false, int64Pointer(9), int64Pointer(1050)); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -170,7 +170,7 @@ func TestMarkExternalPaidLateOutOfStockNeedsManualHandling(t *testing.T) {
 	mock.ExpectExec(`UPDATE v2_apple_order SET status=\$1,inventory_id=NULL,callback_no=\$2`).WithArgs(OrderManual, "gw-1", sqlmock.AnyArg(), int64(41)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO v2_apple_order_audit`).WithArgs(int64(41), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	if err := s.MarkExternalPaid(context.Background(), "apple-test", "gw-1", false, nil, nil); err != nil {
+	if err := s.MarkExternalPaid(context.Background(), "apple-test", "gw-1", false, int64Pointer(9), int64Pointer(1050)); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -191,7 +191,7 @@ func TestMarkExternalPaidReleasesExpiredReservationBeforeAllocation(t *testing.T
 	mock.ExpectExec(`UPDATE v2_apple_order SET status=\$1,inventory_id=\$2`).WithArgs(OrderPaid, int64(15), "gw-1", sqlmock.AnyArg(), int64(41)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO v2_apple_order_audit`).WithArgs(int64(41), "paid", "gw-1", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	if err := s.MarkExternalPaid(context.Background(), "apple-test", "gw-1", false, nil, nil); err != nil {
+	if err := s.MarkExternalPaid(context.Background(), "apple-test", "gw-1", false, int64Pointer(9), int64Pointer(1050)); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -211,7 +211,7 @@ func TestMarkExternalPaidDoesNotTouchReassignedInventory(t *testing.T) {
 	mock.ExpectExec(`UPDATE v2_apple_order SET status=\$1,inventory_id=NULL,callback_no=\$2`).WithArgs(OrderManual, "gw-1", sqlmock.AnyArg(), int64(41)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO v2_apple_order_audit`).WithArgs(int64(41), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	if err := s.MarkExternalPaid(context.Background(), "apple-test", "gw-1", false, nil, nil); err != nil {
+	if err := s.MarkExternalPaid(context.Background(), "apple-test", "gw-1", false, int64Pointer(9), int64Pointer(1050)); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -321,5 +321,35 @@ func TestCredentialEncryptionAndFingerprint(t *testing.T) {
 	}
 	if _, err := NewDBService(config.Config{}, nil).encrypt("secret"); err == nil {
 		t.Fatal("empty application key was accepted")
+	}
+}
+
+func TestMarkExternalPaidRejectsInvalidConfirmationBeforeInventory(t *testing.T) {
+	tests := []struct {
+		name              string
+		paymentID, amount *int64
+	}{
+		{name: "missing both"},
+		{name: "missing payment", amount: int64Pointer(1050)},
+		{name: "missing amount", paymentID: int64Pointer(9)},
+		{name: "wrong method", paymentID: int64Pointer(8), amount: int64Pointer(1050)},
+		{name: "underpayment", paymentID: int64Pointer(9), amount: int64Pointer(1000)},
+		{name: "overpayment", paymentID: int64Pointer(9), amount: int64Pointer(1100)},
+		{name: "zero amount", paymentID: int64Pointer(9), amount: int64Pointer(0)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, mock := newAdminTestService(t)
+			mock.ExpectBegin()
+			expectPaidOrderLock(mock, OrderPending, time.Now().Add(time.Hour).Unix())
+			mock.ExpectRollback()
+			err := s.MarkExternalPaid(context.Background(), "apple-test", "gw-1", false, tt.paymentID, tt.amount)
+			if !errors.Is(err, ErrInvalidParameter) {
+				t.Fatalf("expected invalid confirmation, got %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

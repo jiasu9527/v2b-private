@@ -576,10 +576,16 @@ func (s *DBService) MarkExternalPaid(ctx context.Context, tradeNo, callbackNo st
 	if status == OrderPaid || status == OrderManual || status == OrderRefunded {
 		return nil
 	}
+	if !price.Valid || !handlingAmount.Valid || price.Int64 < 0 || handlingAmount.Int64 < 0 || price.Int64 > math.MaxInt64-handlingAmount.Int64 {
+		return ErrInvalidParameter
+	}
 	if paymentID == nil && amount == nil {
-		// Internal zero-price fulfillment has no gateway evidence.
-	} else if paymentID == nil || amount == nil {
-		if !storedPaymentID.Valid || *paymentID != storedPaymentID.Int64 || *amount <= 0 || !price.Valid || !handlingAmount.Valid || price.Int64 > math.MaxInt64-handlingAmount.Int64 || *amount != price.Int64+handlingAmount.Int64 {
+		// Only an actually free order may be fulfilled without gateway evidence.
+		if price.Int64 != 0 || handlingAmount.Int64 != 0 {
+			return ErrInvalidParameter
+		}
+	} else {
+		if paymentID == nil || amount == nil || *paymentID <= 0 || !storedPaymentID.Valid || *paymentID != storedPaymentID.Int64 || *amount <= 0 || *amount != price.Int64+handlingAmount.Int64 {
 			return ErrInvalidParameter
 		}
 	}
