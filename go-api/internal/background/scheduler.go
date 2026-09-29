@@ -29,17 +29,22 @@ type CleanupProcessor interface {
 	CleanupRetention(ctx context.Context) error
 }
 
-type Runner struct {
-	jobs      queue.Enqueuer
-	heartbeat Heartbeater
-	orders    OrderProcessor
-	stats     StatProcessor
-	cleanup   CleanupProcessor
-	interval  time.Duration
+type ReservationProcessor interface {
+	ReleaseExpiredReservations(ctx context.Context) error
 }
 
-func NewRunner(jobs queue.Enqueuer, heartbeat Heartbeater, orders OrderProcessor, stats StatProcessor, cleanup CleanupProcessor) *Runner {
-	return &Runner{
+type Runner struct {
+	jobs         queue.Enqueuer
+	heartbeat    Heartbeater
+	orders       OrderProcessor
+	stats        StatProcessor
+	cleanup      CleanupProcessor
+	reservations ReservationProcessor
+	interval     time.Duration
+}
+
+func NewRunner(jobs queue.Enqueuer, heartbeat Heartbeater, orders OrderProcessor, stats StatProcessor, cleanup CleanupProcessor, reservations ...ReservationProcessor) *Runner {
+	runner := &Runner{
 		jobs:      jobs,
 		heartbeat: heartbeat,
 		orders:    orders,
@@ -47,6 +52,10 @@ func NewRunner(jobs queue.Enqueuer, heartbeat Heartbeater, orders OrderProcessor
 		cleanup:   cleanup,
 		interval:  defaultInterval,
 	}
+	if len(reservations) > 0 {
+		runner.reservations = reservations[0]
+	}
+	return runner
 }
 
 func (r *Runner) Start(ctx context.Context) {
@@ -83,9 +92,16 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		}
 	}
 
-	if r.orders != nil && !r.queueBusy("order_handle") {
+	if (r.orders != nil || r.reservations != nil) && !r.queueBusy("order_handle") {
 		if err := r.jobs.Enqueue("order_handle", "order-handle:sweep", func(jobCtx context.Context) error {
-			return r.orders.HandlePendingOrders(jobCtx)
+			var orderErr, reservationErr error
+			if r.orders != nil {
+				orderErr = r.orders.HandlePendingOrders(jobCtx)
+			}
+			if r.reservations != nil {
+				reservationErr = r.reservations.ReleaseExpiredReservations(jobCtx)
+			}
+			return errors.Join(orderErr, reservationErr)
 		}); err != nil {
 			errs = append(errs, err)
 		}

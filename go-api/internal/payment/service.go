@@ -70,13 +70,33 @@ type orderManager interface {
 	MarkOrderPaid(ctx context.Context, tradeNo string, confirmation usersvc.OrderPaymentConfirmation) error
 }
 
+// ExternalOrderManager lets an independent business reuse the payment gateways
+// while keeping fulfillment outside v2_order and subscription state.
+type ExternalOrder struct {
+	TradeNo        string
+	TotalAmount    int64
+	HandlingAmount int64
+	Status         int64
+	PaymentID      int64
+	UserEmail      string
+	ReturnPath     string
+}
+
+type ExternalOrderManager interface {
+	OwnsExternalTradeNo(string) bool
+	LookupExternalOrder(context.Context, int64, string) (ExternalOrder, error)
+	SetExternalPayment(context.Context, int64, string, int64, int64) error
+	MarkExternalPaid(context.Context, string, string, bool, *int64, *int64) error
+}
+
 type DBService struct {
-	cfg     config.Config
-	runtime *config.RuntimeState
-	db      *sql.DB
-	client  *http.Client
-	orders  orderManager
-	claimFn func() (string, error)
+	cfg      config.Config
+	runtime  *config.RuntimeState
+	db       *sql.DB
+	client   *http.Client
+	orders   orderManager
+	external ExternalOrderManager
+	claimFn  func() (string, error)
 }
 
 type paymentRecord struct {
@@ -145,6 +165,11 @@ func NewDBService(cfg config.Config, db *sql.DB, orders orderManager) *DBService
 	}
 }
 
+func (s *DBService) WithExternalOrderManager(manager ExternalOrderManager) *DBService {
+	s.external = manager
+	return s
+}
+
 func (s *DBService) WithRuntimeConfig(runtime *config.RuntimeState) *DBService {
 	s.runtime = runtime
 	return s
@@ -168,6 +193,16 @@ func (s *DBService) Checkout(ctx context.Context, userID int64, req CheckoutRequ
 	req.TradeNo = strings.TrimSpace(req.TradeNo)
 	if req.TradeNo == "" {
 		return CheckoutResult{}, ErrInvalidParameter
+	}
+	if s.external != nil && s.external.OwnsExternalTradeNo(req.TradeNo) {
+		externalOrder, err := s.external.LookupExternalOrder(ctx, userID, req.TradeNo)
+		if err != nil {
+			return CheckoutResult{}, err
+		}
+		if externalOrder.Status != 0 {
+			return CheckoutResult{}, ErrOrderPaidOrMissing
+		}
+		return s.checkoutExternal(ctx, userID, req, externalOrder)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -345,6 +380,59 @@ WHERE id = $1`,
 		return CheckoutResult{}, fmt.Errorf("commit checkout creation claim: %w", err)
 	}
 	return s.createCheckoutOnce(ctx, userID, req, paymentMethod, total, handlingAmount, claim, fingerprint, notifyURL, returnURL)
+}
+
+func (s *DBService) checkoutExternal(ctx context.Context, userID int64, req CheckoutRequest, order ExternalOrder) (CheckoutResult, error) {
+	if s.external == nil {
+		return CheckoutResult{}, ErrOrderPaidOrMissing
+	}
+	if order.TotalAmount < 0 || order.HandlingAmount < 0 || order.TotalAmount > math.MaxInt64-order.HandlingAmount {
+		return CheckoutResult{}, ErrInvalidParameter
+	}
+	if order.TotalAmount == 0 {
+		if err := s.external.MarkExternalPaid(ctx, order.TradeNo, order.TradeNo, false, nil, nil); err != nil {
+			return CheckoutResult{}, err
+		}
+		return CheckoutResult{Type: -1, Data: true}, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return CheckoutResult{}, fmt.Errorf("begin external checkout transaction: %w", err)
+	}
+	method, ok, err := s.loadPaymentMethodTx(ctx, tx, req.MethodID)
+	if err != nil {
+		_ = tx.Rollback()
+		return CheckoutResult{}, err
+	}
+	if !ok || method.Enable != 1 {
+		_ = tx.Rollback()
+		return CheckoutResult{}, ErrPaymentMethodUnavailable
+	}
+	if err := tx.Commit(); err != nil {
+		return CheckoutResult{}, fmt.Errorf("commit external checkout lookup: %w", err)
+	}
+	handling := int64(0)
+	if method.HandlingFeeFixed.Valid || method.HandlingFeePercent.Valid {
+		handling = int64(float64(order.TotalAmount)*(method.HandlingFeePercent.Float64/100) + float64(method.HandlingFeeFixed.Int64) + 0.5)
+	}
+	if handling < 0 || order.TotalAmount > math.MaxInt64-handling {
+		return CheckoutResult{}, ErrInvalidParameter
+	}
+	if err := s.external.SetExternalPayment(ctx, userID, order.TradeNo, method.ID, handling); err != nil {
+		return CheckoutResult{}, err
+	}
+	gatewayConfig, err := parseGatewayConfig(method.Config)
+	if err != nil {
+		return CheckoutResult{}, err
+	}
+	email := order.UserEmail
+	if email == "" && needsUserEmail(method.Payment) {
+		email, err = s.findUserEmail(ctx, userID)
+		if err != nil {
+			return CheckoutResult{}, err
+		}
+	}
+	return buildGatewayCheckout(ctx, s.client, method.Payment, gatewayConfig, gatewayOrder{UserID: userID, UserEmail: email, TradeNo: order.TradeNo, Total: order.TotalAmount + handling, NotifyURL: s.notifyURL(method), ReturnURL: s.returnURLForPath(req.RequestBaseURL, order.ReturnPath), Token: strings.TrimSpace(req.Token)})
 }
 
 func archiveCurrentPaymentAttemptTx(ctx context.Context, tx *sql.Tx, order orderRecord) error {
@@ -738,10 +826,21 @@ func (s *DBService) Notify(ctx context.Context, method, uuid string, req NotifyR
 	if result.Amount == nil {
 		return "", fmt.Errorf("verify payment callback payment_id=%d gateway=%q: missing trusted amount: %w", paymentMethod.ID, paymentMethod.Payment, ErrVerifyFailed)
 	}
+	paymentID := paymentMethod.ID
+	if s.external != nil && s.external.OwnsExternalTradeNo(result.TradeNo) {
+		settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), paymentCallbackSettlementTimeout)
+		defer cancel()
+		if err := s.external.MarkExternalPaid(settleCtx, result.TradeNo, result.CallbackNo, false, &paymentID, result.Amount); err != nil {
+			return "", fmt.Errorf("settle external payment callback trade_no=%q callback_no=%q payment_id=%d: %w", result.TradeNo, result.CallbackNo, paymentID, err)
+		}
+		if result.CustomResult != "" {
+			return result.CustomResult, nil
+		}
+		return "success", nil
+	}
 	if s.orders == nil {
 		return "", fmt.Errorf("settle payment callback trade_no=%q: %w", result.TradeNo, ErrUnavailable)
 	}
-	paymentID := paymentMethod.ID
 	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), paymentCallbackSettlementTimeout)
 	defer cancel()
 	if err := s.orders.MarkOrderPaid(settleCtx, result.TradeNo, usersvc.OrderPaymentConfirmation{
@@ -915,6 +1014,17 @@ func (s *DBService) notifyURL(paymentMethod paymentRecord) string {
 		base = "http://127.0.0.1"
 	}
 	return base + path
+}
+
+func (s *DBService) returnURLForPath(requestBaseURL, path string) string {
+	base := strings.TrimRight(normalizePublicBase(requestBaseURL), "/")
+	if base == "" {
+		base = strings.TrimRight(strings.TrimSpace(s.currentConfig().AppURL), "/")
+	}
+	if base == "" {
+		base = "http://127.0.0.1"
+	}
+	return base + "/" + strings.TrimLeft(strings.TrimSpace(path), "/")
 }
 
 func (s *DBService) returnURL(requestBaseURL, tradeNo string) string {

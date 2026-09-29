@@ -88,6 +88,13 @@ NODE_TYPE=vmess \
 - `POST /api/v1/user/order/save`
 - `POST /api/v1/user/order/checkout`
 - `POST /api/v1/user/order/cancel`
+- `GET /api/v1/apple-id/products`
+- `POST /api/v1/apple-id/orders`
+- `GET /api/v1/apple-id/orders`
+- `GET /api/v1/apple-id/orders/{trade_no}`
+- `POST /api/v1/apple-id/orders/{trade_no}/payment`
+- `GET /api/v1/apple-id/orders/{trade_no}/delivery`
+- `POST /api/v1/apple-id/orders/{trade_no}/cancel`
 - `GET /api/v1/staff/plan/fetch`
 - `GET /api/v1/staff/notice/fetch`
 - `POST /api/v1/staff/notice/save`
@@ -203,6 +210,113 @@ NODE_TYPE=vmess \
 - `POST /api/v1/<admin_path>/user/resetSecret`
 - `POST /api/v1/<admin_path>/user/delUser`
 - `POST /api/v1/<admin_path>/user/allDel`
+- `GET /api/v1/<admin_path>/apple-id/product/fetch`
+- `POST /api/v1/<admin_path>/apple-id/product/save`
+- `POST /api/v1/<admin_path>/apple-id/product/show`
+- `POST /api/v1/<admin_path>/apple-id/product/drop`
+- `GET /api/v1/<admin_path>/apple-id/inventory/fetch`
+- `POST /api/v1/<admin_path>/apple-id/inventory/import`
+- `POST /api/v1/<admin_path>/apple-id/inventory/disable`
+- `GET /api/v1/<admin_path>/apple-id/order/fetch`
+- `GET /api/v1/<admin_path>/apple-id/order/detail`
+- `POST /api/v1/<admin_path>/apple-id/order/credentials`
+- `POST /api/v1/<admin_path>/apple-id/order/replace`
+- `POST /api/v1/<admin_path>/apple-id/order/refund`
+- `GET /api/v1/<admin_path>/apple-id/order/audits`
+
+## Apple ID commerce API
+
+Apple ID purchases are an independent business type (`apple_id`). They reuse
+the existing login and payment gateway infrastructure, but never create or
+fulfill a `v2_order`; payment cannot change a user's plan, traffic, or expiry.
+All monetary fields (`price`, `handling_amount`, and `total_amount`) are integer
+cents. All timestamps are Unix seconds.
+
+User routes require the normal `Authorization` token:
+
+- `GET /api/v1/apple-id/products` returns enabled products and currently
+  available stock.
+- `POST /api/v1/apple-id/orders` accepts `product_id`. Send a stable
+  `Idempotency-Key` header (or `idempotency_key` field) when retrying a create
+  request. Reusing a key with a different `product_id` is rejected. The server
+  determines the price and reserves exactly one inventory item for 15 minutes.
+- `POST /api/v1/apple-id/orders/{trade_no}/payment` accepts the existing
+  checkout fields `method` and optional `token`, and returns the existing
+  payment result shape (`type` plus redirect URL or QR data).
+- `GET /api/v1/apple-id/orders` and
+  `GET /api/v1/apple-id/orders/{trade_no}` only return the authenticated user's
+  orders.
+- `GET /api/v1/apple-id/orders/{trade_no}/delivery` returns credentials only
+  after fulfillment. The response is marked `Cache-Control: no-store` and each
+  successful read is audited.
+- `POST /api/v1/apple-id/orders/{trade_no}/cancel` cancels only an order still
+  pending payment and releases its reserved inventory.
+
+Order status values are `0` pending payment, `1` paid and delivered, `2`
+canceled or reservation expired, `3` refund confirmed, and `4` paid but
+requiring manual handling. Inventory status values are `0` available, `1`
+reserved, `2` sold, and `3` disabled. Payment callbacks are idempotent. Shared
+payment verification requires EPay `TRADE_SUCCESS`, Coinbase
+`charge:confirmed`/`charge:resolved`, and a settled BTCPay invoice; signed
+pending/failed notifications from these gateways do not fulfill either kind
+of order. A late payment tries to atomically allocate another available item;
+if none exists,
+the order moves to status `4` for refund or manual resolution.
+
+Administrator routes use the configured `<admin_path>` and require an admin
+session. Product save accepts `name`, `region`, `owned_shadowrocket`, `price`,
+`after_sales`, and optional `enabled` (plus `id` when editing). Batch inventory
+import uses JSON:
+
+```json
+{
+  "product_id": 1,
+  "items": [
+    {"account": "buyer@example.com", "password": "secret"}
+  ]
+}
+```
+
+At most 500 inventory rows may be imported per request; duplicate accounts
+(case-insensitive, across all products) reject the whole batch. Credentials
+are encrypted with a key derived from `APP_KEY`; keep `APP_KEY` stable or existing
+inventory cannot be decrypted. Normal inventory and order responses expose
+only masked accounts and never passwords. The explicit `order/credentials`
+and `order/replace` operations record the acting admin in the audit log.
+`order/refund` does not call a gateway: it confirms that an external refund has
+already completed, changes the business order to status `3`, and writes an
+audit entry. Sold or replaced credentials are never returned to sellable stock,
+even after a refund. Apple ID orders remain visible to administrators if the
+purchasing website user is later deleted; their original `user_id` remains and
+`user_email` is empty.
+
+Admin query/action parameters:
+
+| Route suffix | Parameters |
+| --- | --- |
+| `product/show` | `id`, `enabled` (boolean) |
+| `product/drop` | `id`; products with inventory or orders cannot be deleted |
+| `inventory/fetch` | Optional `current`, `page_size`, `product_id`, `status` |
+| `inventory/disable` | `id`; only available inventory can be disabled |
+| `order/fetch` | Optional `current`, `page_size`, `product_id`, `status`, `email`, `trade_no` |
+| `order/detail`, `order/credentials` | `id` (Apple ID order ID) |
+| `order/replace` | `id`, optional `inventory_id` from the same product, optional `reason`; only delivered orders |
+| `order/refund` | `id`, optional `reason` describing the completed external refund |
+| `order/audits` | `id`, optional `current`, `page_size` |
+
+Admin lists return `{ "data": [...], "total": 123 }`; pages default to 20
+rows and are capped at 200. User lists return `{ "data": [...] }`, and
+create/detail/delivery return `{ "data": { ... } }`. The user URL uses
+`trade_no` from the create response, not the numeric `id`. Use
+`GET /api/v1/user/order/getPaymentMethod` for the existing payment method list.
+Checkout redirects return to `/#/apple-id/orders/{trade_no}`, which the website
+must implement. Do not use the subscription order status endpoint to poll
+Apple ID purchases.
+
+Install/update SQL includes the new tables. Run the normal database update
+before deploying the new server. This change supplies backend APIs; website
+and administrator screens must connect to these routes separately, and the
+existing App API contract is unchanged.
 
 ## Important boundary
 

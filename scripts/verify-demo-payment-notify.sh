@@ -150,6 +150,7 @@ def post_epay_notify(notify_path: str, config: dict) -> None:
     notify_params = {
         "out_trade_no": pending_trade_no,
         "trade_no": callback_no,
+        "trade_status": "TRADE_SUCCESS",
     }
     notify_params["sign"] = hashlib.md5((decoded_query(notify_params) + payment_key).encode("utf-8")).hexdigest()
     notify_params["sign_type"] = "MD5"

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"forest/go-api/internal/admin"
+	"forest/go-api/internal/appleid"
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/guest"
 	"forest/go-api/internal/nodeapi"
@@ -43,6 +44,8 @@ type routerState struct {
 	user              usersvc.Service
 	payment           payment.Service
 	admin             admin.Service
+	appleID           appleIDUserService
+	appleIDAdmin      appleIDAdminService
 	dnsProbe          admin.DNSProbeService
 	dnsProbeIP        probeRequestIPResolver
 	node              nodeapi.Service
@@ -110,6 +113,25 @@ func WithAdminService(service admin.Service) Option {
 		if probeService, ok := service.(admin.DNSProbeService); ok {
 			state.dnsProbe = probeService
 		}
+	}
+}
+
+func WithAppleIDService(service *appleid.DBService) Option {
+	return func(state *routerState) {
+		if service == nil {
+			state.appleID = nil
+			state.appleIDAdmin = nil
+			return
+		}
+		state.appleID = service
+		state.appleIDAdmin = service
+	}
+}
+
+func WithAppleIDServices(userService appleIDUserService, adminService appleIDAdminService) Option {
+	return func(state *routerState) {
+		state.appleID = userService
+		state.appleIDAdmin = adminService
 	}
 }
 
@@ -350,6 +372,22 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleServerV2Config(w, r, cfg, state.node) {
 				return
 			}
+		case r.URL.Path == "/api/v1/apple-id/products" && r.Method == http.MethodGet:
+			if handleAppleProducts(w, r, state.session, state.appleID) {
+				return
+			}
+		case r.URL.Path == "/api/v1/apple-id/orders" && r.Method == http.MethodPost:
+			if handleAppleCreateOrder(w, r, state.session, state.appleID) {
+				return
+			}
+		case r.URL.Path == "/api/v1/apple-id/orders" && r.Method == http.MethodGet:
+			if handleAppleListOrders(w, r, state.session, state.appleID) {
+				return
+			}
+		case strings.HasPrefix(r.URL.Path, "/api/v1/apple-id/orders/"):
+			if handleAppleOrderRoute(w, r, state.session, state.payment, state.appleID) {
+				return
+			}
 		case r.URL.Path == "/api/v1/user/checkLogin":
 			if handleUserCheckLogin(w, r, state.session) {
 				return
@@ -572,6 +610,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			}
 		case r.URL.Path == "/api/v1/staff/user/unban":
 			if handleStaffUserUnban(w, r, state.session, state.admin) {
+				return
+			}
+		case strings.HasPrefix(r.URL.Path, adminPrefix+"/apple-id/"):
+			if handleAdminAppleID(w, r, state.session, state.appleIDAdmin, strings.TrimPrefix(r.URL.Path, adminPrefix+"/apple-id/")) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/system/getSystemStatus":

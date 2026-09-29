@@ -147,7 +147,7 @@ class Handler(BaseHTTPRequestHandler):
             provided = params.get("sign", "")
             sign_params = {k: v for k, v in params.items() if k not in ("sign", "sign_type")}
             expected = hashlib.md5((decoded_query(sign_params) + "seed-demo-key").encode("utf-8")).hexdigest()
-            if provided != expected:
+            if provided != expected or params.get("trade_status") != "TRADE_SUCCESS":
                 self._write_text(500, "fail")
                 return
             ORDER_STATUS[params.get("out_trade_no", "")] = 3

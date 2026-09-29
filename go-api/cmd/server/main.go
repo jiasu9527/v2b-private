@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"forest/go-api/internal/admin"
+	"forest/go-api/internal/appleid"
 	"forest/go-api/internal/background"
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/guest"
@@ -81,6 +82,7 @@ func main() {
 	var sessionService session.Service
 	var userService usersvc.Service
 	var paymentService payment.Service
+	var appleIDService *appleid.DBService
 	var adminService admin.Service
 	var nodeService nodeapi.Service
 	var telegramService *telegram.Service
@@ -96,7 +98,8 @@ func main() {
 		passportService = passport.NewDBServiceWithConfig(cfg, db).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
 		sessionService = session.NewDBService(cfg, db).WithAuthCache(authCache)
 		userService = userDBService
-		paymentService = payment.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig)
+		appleIDService = appleid.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig)
+		paymentService = payment.NewDBService(cfg, db, userDBService).WithExternalOrderManager(appleIDService).WithRuntimeConfig(runtimeConfig)
 		adminDBService := admin.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
 		if err := initializeDNSFailoverBeforeServe(ctx, adminDBService); err != nil {
 			log.Fatalf("initialize DNS failover schema: %v", err)
@@ -115,7 +118,7 @@ func main() {
 			WithEntryMonitorController(adminDBService)
 		adminService = adminDBService
 		nodeService = nodeapi.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig)
-		backgroundRunner = background.NewRunner(jobQueue, adminDBService, userDBService, adminDBService, adminDBService)
+		backgroundRunner = background.NewRunner(jobQueue, adminDBService, userDBService, adminDBService, adminDBService, appleIDService)
 	}
 
 	server := &http.Server{
@@ -129,6 +132,7 @@ func main() {
 			httpapi.WithSessionService(sessionService),
 			httpapi.WithUserService(userService),
 			httpapi.WithPaymentService(paymentService),
+			httpapi.WithAppleIDService(appleIDService),
 			httpapi.WithAdminService(adminService),
 			httpapi.WithNodeService(nodeService),
 			httpapi.WithQueueRuntime(jobQueue),
