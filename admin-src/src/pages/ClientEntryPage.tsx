@@ -151,7 +151,7 @@ function ClientEntryEditor({ row, children, onDone, serverOptions }: { row?: any
   </>;
 }
 
-export default function ClientEntryPage() {
+export default function ClientEntryPage({ embedded = false }: { embedded?: boolean }) {
   const [rows, setRows] = useState<any[]>([]);
   const [serverOptions, setServerOptions] = useState<ClientEntryServerOption[]>([]);
   const [loading, setLoading] = useState(false);
@@ -246,8 +246,8 @@ export default function ClientEntryPage() {
     </div> },
   ];
 
-  return <div className="legacy-page client-entry-page">
-    <div className="content-heading">客户端入口组</div>
+  return <div className={`${embedded ? 'server-management-panel' : 'legacy-page'} client-entry-page`}>
+    {!embedded && <div className="content-heading">客户端入口组</div>}
     <Spin spinning={loading}>
       <Card className="block-card" styles={{ body: { padding: 0 } }}>
         <div className="forest-table-action">

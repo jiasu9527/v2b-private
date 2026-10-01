@@ -112,7 +112,7 @@ function nonEmpty(value: any) {
 function hasEntryRuleDSL(value: any) {
   const text = String(value || '').trim();
   // Node hosts are now plain addresses. User-Agent/user-id/registration-day
-  // rules belong in the dedicated "用户入口分配" menu instead of host syntax.
+  // rules belong in the dedicated "入口分配" tab instead of host syntax.
   return /[,，()]/.test(text);
 }
 
@@ -498,7 +498,7 @@ function ChildEditor({ type, form, tls, network }: { type: ChildEditorType; form
 }
 
 
-export default function ServerManage() {
+export default function ServerManage({ embedded = false }: { embedded?: boolean }) {
   const [rows, setRows] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
   const [routes, setRoutes] = useState<any[]>([]);
@@ -638,7 +638,7 @@ export default function ServerManage() {
     const newHost = bulkNewHost.trim();
     if (!oldHost) return message.error('原地址不能为空');
     if (!newHost) return message.error('新地址不能为空');
-    if (hasEntryRuleDSL(newHost)) return message.error('新地址只能填写普通域名或 IP；UA、用户ID、注册天数等规则请到“用户入口分配”维护');
+    if (hasEntryRuleDSL(newHost)) return message.error('新地址只能填写普通域名或 IP；UA、用户ID、注册天数等规则请到“入口分配”维护');
     if (oldHost === newHost) return message.error('新旧地址不能相同');
     const res = await apiPost('/server/manage/updateHost', { old_host: oldHost, new_host: newHost });
     const total = res.data?.updated_total || 0;
@@ -674,8 +674,8 @@ export default function ServerManage() {
     ] }}><a>操作 <DownOutlined /></a></Dropdown> },
   ];
 
-  return <div className="legacy-page server-manage-page">
-    <div className="content-heading">节点管理</div>
+  return <div className={`${embedded ? 'server-management-panel' : 'legacy-page'} server-manage-page`}>
+    {!embedded && <div className="content-heading">节点管理</div>}
     <Card className="block-card" styles={{ body: { padding: 0 } }}>
       <div className="forest-table-action">
         <span className="add-node-wrap">
@@ -738,10 +738,10 @@ export default function ServerManage() {
           <div className="form-col-12"><Form.Item
             name="host"
             label={currentType === 'v2node' ? '连接地址' : '节点地址'}
-            extra="这里只填普通域名或 IP；UA、用户ID、注册天数、套餐等入口规则请到“用户入口分配”菜单维护。"
+            extra="这里只填普通域名或 IP；UA、用户ID、注册天数、套餐等入口规则请到“入口分配”选项卡维护。"
             rules={[
               { required: true },
-              { validator: (_, value) => hasEntryRuleDSL(value) ? Promise.reject(new Error('节点地址不能包含逗号或条件括号，请到“用户入口分配”维护入口规则')) : Promise.resolve() },
+              { validator: (_, value) => hasEntryRuleDSL(value) ? Promise.reject(new Error('节点地址不能包含逗号或条件括号，请到“入口分配”维护入口规则')) : Promise.resolve() },
             ]}
           ><Input placeholder={currentType === 'v2node' || currentType === 'anytls' ? '地址或IP' : '请输入连接地址'} /></Form.Item></div>
           {currentType === 'v2node' && <div className="form-col-12"><Form.Item name="listen_ip" label="监听地址"><Input placeholder="地址或IP默认为0.0.0.0" /></Form.Item></div>}

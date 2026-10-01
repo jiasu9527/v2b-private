@@ -399,6 +399,7 @@ Legacy PHP HTTP business routes now have Go route coverage.
 - Zero-amount or balance-covered order checkout is handled in Go.
 - Admin `system/config/plan/user/invite-campaign/notice/coupon/giftcard/knowledge/ticket/order/payment` is now in Go.
 - Admin `server/group`, `server/route`, and `server/manage` are now in Go.
+- The administrator **节点管理** page contains **节点列表 → 入口分配 → 客户端入口** tabs. Previous `server/client-entry-user-policy` and `server/client-entry` page URLs open their matching tabs; the API paths are unchanged.
 - Legacy runtime entry files have been removed from the deployment path.
 - Remaining differences are compatibility semantics, not missing business routes. Example: `/api/v1/<admin_path>/system/getQueueMasters` is currently served from the Go queue workload snapshot instead of the old Horizon master list output.
 - Staff `plan/notice/ticket/user` is now in Go, with staff-only auth and forced `is_admin=0/is_staff=0` scope on staff user actions.

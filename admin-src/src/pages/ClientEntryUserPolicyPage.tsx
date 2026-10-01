@@ -1688,7 +1688,7 @@ function StandardRuleActions({ row, serverOptions, onDone, onRemove, onDelete, p
   </>;
 }
 
-export default function ClientEntryUserPolicyPage() {
+export default function ClientEntryUserPolicyPage({ embedded = false }: { embedded?: boolean }) {
   const [rows, setRows] = useState<any[]>([]);
   const [serverOptions, setServerOptions] = useState<ClientEntryServerOption[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1972,8 +1972,8 @@ export default function ClientEntryUserPolicyPage() {
   />;
   const resetFilters = () => { setQuery(''); setStatusFilter('all'); setKindFilter('all'); setMembershipFilter('all'); };
 
-  return <div className={`legacy-page client-entry-page${selectedKeys.length && view === 'manage' ? ' client-entry-page--selecting' : ''}`}>
-    <div className="content-heading">用户入口分配</div>
+  return <div className={`${embedded ? 'server-management-panel' : 'legacy-page'} client-entry-page${selectedKeys.length && view === 'manage' ? ' client-entry-page--selecting' : ''}`}>
+    {!embedded && <div className="content-heading">用户入口分配</div>}
     <Spin spinning={loading}>
       {loadError ? <Alert type="error" showIcon message="入口规则或合集加载失败" description={`${loadError}。已暂停展示与编辑，请重新加载。`} action={<Button onClick={load}>重新加载</Button>} /> : <>
         <Card className="block-card entry-workspace" styles={{ body: { padding: 0 } }}>

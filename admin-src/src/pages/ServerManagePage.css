@@ -1,0 +1,9 @@
+.server-management-content { margin: 0 24px; min-width: 0; }
+.server-management-content > .ant-tabs > .ant-tabs-nav { margin-bottom: 16px; }
+.server-management-panel { min-width: 0; }
+.server-management-content .server-management-panel > .ant-card,
+.server-management-content .server-management-panel > .ant-spin-nested-loading { margin-left: 0 !important; margin-right: 0 !important; }
+@media (max-width: 768px) {
+  .server-management-content { margin: 0 12px; }
+  .server-management-content > .ant-tabs > .ant-tabs-nav .ant-tabs-tab + .ant-tabs-tab { margin-left: 16px; }
+}

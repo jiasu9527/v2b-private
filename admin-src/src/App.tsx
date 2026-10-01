@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Layout, Button, ConfigProvider, Dropdown, Space, theme, Typography } from 'antd';
 import {
-  AppstoreOutlined, DashboardOutlined, UserOutlined, ShoppingCartOutlined, ClusterOutlined,
+  AppstoreOutlined, DashboardOutlined, UserOutlined, ShoppingCartOutlined,
   SettingOutlined, FileTextOutlined, GiftOutlined, CreditCardOutlined, QuestionCircleOutlined,
   MessageOutlined, MenuFoldOutlined, MenuUnfoldOutlined, LogoutOutlined, DeploymentUnitOutlined,
   ShareAltOutlined, DatabaseOutlined, BellOutlined, DownOutlined, SafetyCertificateOutlined, GlobalOutlined
@@ -12,7 +12,7 @@ import Dashboard from './pages/Dashboard';
 import UserPage from './pages/UserPage';
 import OrderPage from './pages/OrderPage';
 import AppleIDPage from './pages/AppleIDPage';
-import ServerManage from './pages/ServerManage';
+import ServerManagePage from './pages/ServerManagePage';
 import TicketPage, { TicketDetailPage } from './pages/TicketPage';
 import ConfigPage from './pages/ConfigPage';
 import QueuePage from './pages/QueuePage';
@@ -25,8 +25,6 @@ import GiftcardPage from './pages/GiftcardPage';
 import NoticePage from './pages/NoticePage';
 import KnowledgePage from './pages/KnowledgePage';
 import ServerRoutePage from './pages/ServerRoutePage';
-import ClientEntryPage from './pages/ClientEntryPage';
-import ClientEntryUserPolicyPage from './pages/ClientEntryUserPolicyPage';
 import SubscribeGuardPage from './pages/SubscribeGuardPage';
 import DNSPodPage from './pages/DNSPodPage';
 import DNSFailoverPage from './pages/DNSFailoverPage';
@@ -50,8 +48,6 @@ const menu = [
   { type: 'item', key: '/server/manage', icon: <DeploymentUnitOutlined />, label: '节点管理' },
   { type: 'item', key: '/server/group', icon: <DatabaseOutlined />, label: '权限组管理' },
   { type: 'item', key: '/server/route', icon: <ShareAltOutlined />, label: '路由管理' },
-  { type: 'item', key: '/server/client-entry', icon: <ClusterOutlined />, label: '客户端入口' },
-  { type: 'item', key: '/server/client-entry-user-policy', icon: <ClusterOutlined />, label: '用户入口分配' },
   { type: 'item', key: '/dns', icon: <GlobalOutlined />, label: '域名解析' },
   { type: 'item', key: '/dns-failover', icon: <GlobalOutlined />, label: '备用监控' },
   { type: 'heading', key: 'finance-heading', label: '财务' },
@@ -90,11 +86,11 @@ function Page({ path }: { path: string }) {
   if (route === '/order') return <OrderPage />;
   if (route === '/apple-id') return <AppleIDPage />;
   if (route === '/apple-id/finance') return <AppleIDPage initialTab="finance" />;
-  if (route === '/server/manage') return <ServerManage />;
+  if (route === '/server/manage') return <ServerManagePage />;
   if (route === '/server/group') return <GenericResourcePage name="serverGroups" />;
   if (route === '/server/route') return <ServerRoutePage />;
-  if (route === '/server/client-entry') return <ClientEntryPage />;
-  if (route === '/server/client-entry-user-policy') return <ClientEntryUserPolicyPage />;
+  if (route === '/server/client-entry') return <ServerManagePage initialTab="client-entry" />;
+  if (route === '/server/client-entry-user-policy') return <ServerManagePage initialTab="assignment" />;
   if (route === '/dns') return <DNSPodPage />;
   if (route === '/dns-failover') return <DNSFailoverPage />;
   if (route === '/config/system') return <ConfigPage />;
@@ -170,6 +166,7 @@ export default function App() {
 
   const selected = useMemo(() => {
     const route = path.split('?')[0];
+    if (route === '/server/client-entry' || route === '/server/client-entry-user-policy') return ['/server/manage'];
     return [route.startsWith('/ticket/') ? '/ticket' : route === '/apple-id/finance' ? '/apple-id' : route];
   }, [path]);
   const navigate = (key: string) => { if (!key.startsWith('/')) return; history.pushState(null, '', `/${adminPath}${key}`); setPath(key); if (isMobile) setCollapsed(true); };
