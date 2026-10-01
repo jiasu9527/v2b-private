@@ -18,6 +18,7 @@
 .apple-id-copy-field .ant-btn { flex-shrink: 0; }
 @media (max-width: 768px) {
   .apple-id-content { margin: 0 12px; }
+  .apple-id-content > .ant-tabs > .ant-tabs-nav .ant-tabs-tab + .ant-tabs-tab { margin-left: 16px; }
   .apple-id-toolbar { align-items: stretch; }
   .apple-id-section .forest-table-action { overflow-x: visible; }
   .apple-id-toolbar .ant-form-item { margin-bottom: 8px; }

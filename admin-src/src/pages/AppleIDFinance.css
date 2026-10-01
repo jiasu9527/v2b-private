@@ -1,4 +1,4 @@
-.apple-finance-content { margin: 0 24px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.apple-finance-content { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
 .apple-finance-intro.ant-typography { margin-bottom: 0; }
 .apple-finance-filter-card > .ant-card-body { padding: 18px; }
 .apple-finance-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; min-width: 0; }
@@ -33,7 +33,7 @@
   .apple-finance-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 768px) {
-  .apple-finance-content { margin: 0 10px; gap: 12px; }
+  .apple-finance-content { gap: 12px; }
   .apple-finance-filter-card > .ant-card-body { padding: 14px 12px; }
   .apple-finance-filters { gap: 12px; }
   .apple-finance-field, .apple-finance-product, .apple-finance-field .ant-picker { width: 100%; }

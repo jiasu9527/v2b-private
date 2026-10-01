@@ -190,8 +190,7 @@ export default function AppleIDFinance() {
     { title: '操作', width: 85, fixed: 'right', render: (_, row) => <Button type="link" onClick={() => setSelectedID(row.order_id)}>详情</Button> },
   ];
 
-  return <div className="legacy-page apple-finance-page">
-    <div className="content-heading">Apple ID 流水</div>
+  return <div className="apple-finance-page">
     <div className="apple-finance-content">
       <Typography.Paragraph type="secondary" className="apple-finance-intro">独立统计 Apple ID 的实际收款与确认退款，不计入套餐流水。</Typography.Paragraph>
       <Card className="apple-finance-filter-card">

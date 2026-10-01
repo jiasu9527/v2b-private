@@ -352,11 +352,12 @@ the existing App API contract is unchanged.
 
 ### Apple ID financial reporting
 
-The administrator submenu **Apple ID 流水** at `/<admin_path>/apple-id/finance`
+The **流水统计** tab in **独享 Apple ID** at `/<admin_path>/apple-id`
 shows independent receipt/refund totals, daily trends, and paginated transaction
 details linked to the existing Apple ID order dialog. The subscription dashboard
 still reports subscription orders only; Apple ID receipts do not change its
-totals or subscription behavior.
+totals or subscription behavior. The previous `/<admin_path>/apple-id/finance`
+URL opens the same tab for compatibility.
 
 The default range is the last 30 calendar days including today, using the
 server's local timezone. Custom ranges must supply both dates, include the end

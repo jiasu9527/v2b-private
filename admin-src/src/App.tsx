@@ -4,7 +4,7 @@ import {
   AppstoreOutlined, DashboardOutlined, UserOutlined, ShoppingCartOutlined, ClusterOutlined,
   SettingOutlined, FileTextOutlined, GiftOutlined, CreditCardOutlined, QuestionCircleOutlined,
   MessageOutlined, MenuFoldOutlined, MenuUnfoldOutlined, LogoutOutlined, DeploymentUnitOutlined,
-  ShareAltOutlined, DatabaseOutlined, BellOutlined, DownOutlined, SafetyCertificateOutlined, GlobalOutlined, LineChartOutlined
+  ShareAltOutlined, DatabaseOutlined, BellOutlined, DownOutlined, SafetyCertificateOutlined, GlobalOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import Login from './pages/Login';
@@ -12,7 +12,6 @@ import Dashboard from './pages/Dashboard';
 import UserPage from './pages/UserPage';
 import OrderPage from './pages/OrderPage';
 import AppleIDPage from './pages/AppleIDPage';
-import AppleIDFinance from './pages/AppleIDFinance';
 import ServerManage from './pages/ServerManage';
 import TicketPage, { TicketDetailPage } from './pages/TicketPage';
 import ConfigPage from './pages/ConfigPage';
@@ -59,7 +58,6 @@ const menu = [
   { type: 'item', key: '/plan', icon: <AppstoreOutlined />, label: '订阅管理' },
   { type: 'item', key: '/order', icon: <ShoppingCartOutlined />, label: '订单管理' },
   { type: 'item', key: '/apple-id', icon: <AppstoreOutlined />, label: '独享 Apple ID' },
-  { type: 'subitem', key: '/apple-id/finance', icon: <LineChartOutlined />, label: 'Apple ID 流水' },
   { type: 'item', key: '/coupon', icon: <GiftOutlined />, label: '优惠券管理' },
   { type: 'item', key: '/giftcard', icon: <GiftOutlined />, label: '礼品卡管理' },
   { type: 'item', key: '/invite-campaign', icon: <ShareAltOutlined />, label: '活动任务' },
@@ -91,7 +89,7 @@ function Page({ path }: { path: string }) {
   if (route === '/plan') return <PlanPage />;
   if (route === '/order') return <OrderPage />;
   if (route === '/apple-id') return <AppleIDPage />;
-  if (route === '/apple-id/finance') return <AppleIDFinance />;
+  if (route === '/apple-id/finance') return <AppleIDPage initialTab="finance" />;
   if (route === '/server/manage') return <ServerManage />;
   if (route === '/server/group') return <GenericResourcePage name="serverGroups" />;
   if (route === '/server/route') return <ServerRoutePage />;
@@ -172,12 +170,12 @@ export default function App() {
 
   const selected = useMemo(() => {
     const route = path.split('?')[0];
-    return [route.startsWith('/ticket/') ? '/ticket' : route];
+    return [route.startsWith('/ticket/') ? '/ticket' : route === '/apple-id/finance' ? '/apple-id' : route];
   }, [path]);
   const navigate = (key: string) => { if (!key.startsWith('/')) return; history.pushState(null, '', `/${adminPath}${key}`); setPath(key); if (isMobile) setCollapsed(true); };
   const navItems = menu.map((item) => item.type === 'heading'
     ? <li key={item.key} className="nav-main-heading">{item.label}</li>
-    : <li key={item.key} className="nav-main-item"><button className={`nav-main-link ${selected.includes(item.key) ? 'active' : ''}`} style={item.type === 'subitem' ? { paddingLeft: 40 } : undefined} onClick={() => navigate(item.key)}><span className="nav-main-link-icon">{item.icon}</span>{!collapsed && <span className="nav-main-link-name">{item.label}</span>}</button></li>);
+    : <li key={item.key} className="nav-main-item"><button className={`nav-main-link ${selected.includes(item.key) ? 'active' : ''}`} onClick={() => navigate(item.key)}><span className="nav-main-link-icon">{item.icon}</span>{!collapsed && <span className="nav-main-link-name">{item.label}</span>}</button></li>);
   if (!authed) return <ConfigProvider locale={zhCN}><Login onDone={() => { setAdminUser(getAdminUserInfo()); setAuthed(true); }} /></ConfigProvider>;
 
   const isTicketDetailPath = /^\/ticket\/\d+/.test(path);
