@@ -1,0 +1,49 @@
+.apple-finance-content { margin: 0 24px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.apple-finance-intro.ant-typography { margin-bottom: 0; }
+.apple-finance-filter-card > .ant-card-body { padding: 18px; }
+.apple-finance-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; min-width: 0; }
+.apple-finance-field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.apple-finance-field > span { font-size: 13px; color: #555; }
+.apple-finance-field .ant-picker { width: 280px; max-width: 100%; }
+.apple-finance-product { width: 245px; }
+.apple-finance-product .ant-select { width: 100%; min-width: 0; }
+.apple-finance-range-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 14px; font-size: 12px; }
+.apple-finance-filter-card .ant-alert { margin-top: 14px; }
+.apple-finance-period { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: #555; }
+.apple-finance-period span { color: #888; }
+.apple-finance-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.apple-finance-summary .ant-card-body { padding: 20px; min-width: 0; }
+.apple-finance-stat-label { font-size: 13px; color: #777; }
+.apple-finance-stat-value { color: #222; font-size: clamp(21px, 2vw, 30px); font-variant-numeric: tabular-nums; line-height: 1.4; margin: 9px 0 6px; overflow-wrap: anywhere; }
+.apple-finance-stat-value small { font-size: 13px; color: #777; margin-left: 8px; }
+.apple-finance-stat-note { color: #888; font-size: 12px; }
+.apple-finance-trend > .ant-card-head, .apple-finance-transactions > .ant-card-head { min-height: 50px; padding: 0 20px; }
+.apple-finance-trend > .ant-card-body { padding: 18px 16px 14px; }
+.apple-finance-chart { width: 100%; min-width: 0; height: 330px; }
+.apple-finance-chart-note.ant-typography { font-size: 12px; margin: 0 4px; line-height: 1.7; }
+.apple-finance-transactions { min-width: 0; }
+.apple-finance-transactions .ant-table { font-family: inherit !important; }
+.apple-finance-transactions .ant-table-cell { overflow-wrap: anywhere; }
+.apple-finance-transactions .ant-table-pagination { padding: 0 16px; }
+.apple-finance-order-link.ant-btn { height: auto; white-space: normal; text-align: left; overflow-wrap: anywhere; padding: 0; }
+.apple-finance-amount { white-space: nowrap; font-variant-numeric: tabular-nums; color: #2b6950; }
+.apple-finance-amount.is-refund { color: #9f5d33; }
+.apple-finance-table-error { padding: 16px 16px 0; }
+@media (max-width: 1100px) {
+  .apple-finance-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 768px) {
+  .apple-finance-content { margin: 0 10px; gap: 12px; }
+  .apple-finance-filter-card > .ant-card-body { padding: 14px 12px; }
+  .apple-finance-filters { gap: 12px; }
+  .apple-finance-field, .apple-finance-product, .apple-finance-field .ant-picker { width: 100%; }
+  .apple-finance-summary { gap: 10px; }
+  .apple-finance-summary .ant-card-body { padding: 14px 12px; }
+  .apple-finance-stat-value { font-size: 22px; }
+  .apple-finance-trend > .ant-card-head, .apple-finance-transactions > .ant-card-head { padding: 0 14px; }
+  .apple-finance-trend > .ant-card-body { padding: 16px 8px 12px; }
+  .apple-finance-chart { height: 290px; }
+  .apple-finance-table-error { padding: 12px 12px 0; }
+  .apple-finance-date-popup .ant-picker-panels { flex-direction: column; }
+  .apple-finance-date-popup .ant-picker-panel-container { max-height: 75vh; overflow-y: auto; }
+}

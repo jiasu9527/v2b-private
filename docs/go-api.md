@@ -224,6 +224,8 @@ NODE_TYPE=vmess \
 - `POST /api/v1/<admin_path>/apple-id/order/refund`
 - `POST /api/v1/<admin_path>/apple-id/order/cancel`
 - `GET /api/v1/<admin_path>/apple-id/order/audits`
+- `GET /api/v1/<admin_path>/apple-id/finance/stats`
+- `GET /api/v1/<admin_path>/apple-id/finance/transactions`
 
 ## Apple ID commerce API
 
@@ -318,6 +320,8 @@ Admin query/action parameters:
 | `order/refund` | `id`, optional `reason` describing the completed external refund |
 | `order/cancel` | `id`, optional `reason`; cancels a pending order and immediately releases its reservation; repeating a canceled order is idempotent |
 | `order/audits` | `id`, optional `current`, `page_size` |
+| `finance/stats` | Optional `start_date`, `end_date` (`YYYY-MM-DD`, inclusive), `product_id` |
+| `finance/transactions` | Same date/product filters, plus optional `current`, `page_size` |
 
 Admin lists return `{ "data": [...], "total": 123 }`; pages default to 20
 rows and are capped at 200. User lists return `{ "data": [...] }`, and
@@ -345,6 +349,42 @@ not revoke an existing payment link: confirmed late payments still allocate
 available inventory or enter status `4` if none is available.
 The customer website must connect to the user routes separately;
 the existing App API contract is unchanged.
+
+### Apple ID financial reporting
+
+The administrator submenu **Apple ID 流水** at `/<admin_path>/apple-id/finance`
+shows independent receipt/refund totals, daily trends, and paginated transaction
+details linked to the existing Apple ID order dialog. The subscription dashboard
+still reports subscription orders only; Apple ID receipts do not change its
+totals or subscription behavior.
+
+The default range is the last 30 calendar days including today, using the
+server's local timezone. Custom ranges must supply both dates, include the end
+date, and span no more than 366 days. `finance/stats` returns `{ "data": { ... } }`
+with `start_date`, `end_date`, `timezone`, `summary`, and `daily`. The summary has
+`paid_count`, `paid_total`, `refund_count`, `refund_total`, and `net_total`; each
+daily row adds `date`. All monetary fields are integer cents. Days without
+transactions are included with zero values.
+
+Receipts use `paid_at` for orders in status `1`, `3`, or `4`, including paid
+orders awaiting manual fulfillment. Pending/canceled orders are excluded.
+Amounts include `price + handling_amount`. Refunds use the first existing
+`refund_confirmed` operation timestamp for status `3` orders, or `updated_at`
+for older rows without that record. Each confirmation represents the full order
+amount under the existing refund workflow. A refund in the selected range is
+included even if its original receipt predates the range. Repeated confirmations
+do not multiply the refund amount. Net cash flow is receipts minus confirmed
+refunds; it is not profit or a payment gateway settlement balance.
+
+`finance/transactions` returns `{ "data": [...], "total": N }`. Each row contains
+`id` (`payment:<order_id>` or `refund:<order_id>`), `order_id`, `trade_no`,
+`user_email`, `product_id`, `product_name`, `event_type` (`payment` or `refund`),
+positive `amount`, `occurred_at` (Unix seconds), `occurred_at_local` (server-local
+date/time with UTC offset), order `status`, and optional
+`payment_id`/`callback_no`. Transaction rows contain no account credentials.
+Both routes require the administrator session and disable response caching.
+Reporting reads existing order/operation data and writes no view logs or
+additional financial history.
 
 ## Important boundary
 

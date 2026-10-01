@@ -26,6 +26,8 @@ type appleIDAdminService interface {
 	AdminCancelOrder(context.Context, appleid.AdminCancelOrderRequest) error
 	AdminMarkOrderRefunded(context.Context, appleid.AdminMarkRefundedRequest) error
 	AdminListAudits(context.Context, appleid.AdminAuditListRequest) (appleid.AdminAuditListResult, error)
+	AdminFinanceStats(context.Context, appleid.AdminFinanceRequest) (appleid.AdminFinanceStatsResult, error)
+	AdminFinanceTransactions(context.Context, appleid.AdminFinanceRequest) (appleid.AdminFinanceTransactionsResult, error)
 }
 
 func handleAdminAppleID(w http.ResponseWriter, r *http.Request, sessions session.Service, service appleIDAdminService, action string) bool {
@@ -40,6 +42,34 @@ func handleAdminAppleID(w http.ResponseWriter, r *http.Request, sessions session
 	}
 
 	switch action {
+	case "finance/stats", "finance/transactions":
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"message": "Method not allowed"})
+			return true
+		}
+		inputs, err := readInputs(r)
+		if err != nil {
+			return writeAdminAppleIDBadRequest(w, err)
+		}
+		query, err := parseAdminAppleFinance(inputs)
+		if err != nil {
+			return writeAdminAppleIDBadRequest(w, err)
+		}
+		if action == "finance/stats" {
+			result, err := service.AdminFinanceStats(r.Context(), query)
+			if err != nil {
+				return handleAdminAppleIDError(w, err)
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"data": result})
+		} else {
+			result, err := service.AdminFinanceTransactions(r.Context(), query)
+			if err != nil {
+				return handleAdminAppleIDError(w, err)
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"data": result.Data, "total": result.Total})
+		}
+		return true
 	case "product/fetch":
 		if r.Method != http.MethodGet {
 			return false
@@ -371,6 +401,25 @@ func parseAdminAppleOrderList(inputs map[string]string) (appleid.AdminOrderListR
 		return appleid.AdminOrderListRequest{}, err
 	}
 	return appleid.AdminOrderListRequest{Current: current, PageSize: pageSize, ProductID: productID, Status: status, UserEmail: inputs["email"], TradeNo: inputs["trade_no"]}, nil
+}
+
+func parseAdminAppleFinance(inputs map[string]string) (appleid.AdminFinanceRequest, error) {
+	current, err := optionalAppleIDInt64Value(inputs, "current")
+	if err != nil {
+		return appleid.AdminFinanceRequest{}, err
+	}
+	pageSize, err := optionalAppleIDInt64Value(inputs, "page_size")
+	if err != nil {
+		return appleid.AdminFinanceRequest{}, err
+	}
+	productID, err := optionalAppleIDInt64(inputs, "product_id")
+	if err != nil {
+		return appleid.AdminFinanceRequest{}, err
+	}
+	if current < 0 || pageSize < 0 || (productID != nil && *productID <= 0) {
+		return appleid.AdminFinanceRequest{}, appleid.ErrInvalidParameter
+	}
+	return appleid.AdminFinanceRequest{StartDate: inputs["start_date"], EndDate: inputs["end_date"], ProductID: productID, Current: current, PageSize: pageSize}, nil
 }
 
 func requiredAppleIDInt64(inputs map[string]string, key string) (int64, error) {

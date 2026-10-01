@@ -205,3 +205,6 @@ CREATE TABLE "v2_apple_order_audit" (
 );
 
 CREATE INDEX "idx_v2_apple_order_audit_order" ON "v2_apple_order_audit" ("order_id", "id" DESC);
+CREATE INDEX "idx_v2_apple_order_finance_paid" ON "v2_apple_order" ("paid_at") WHERE "status" IN (1,3,4) AND "paid_at" IS NOT NULL;
+CREATE INDEX "idx_v2_apple_order_finance_refund" ON "v2_apple_order" ("id") WHERE "status"=3;
+CREATE INDEX "idx_v2_apple_audit_refund_time" ON "v2_apple_order_audit" ("order_id", "created_at") WHERE "action"='refund_confirmed';

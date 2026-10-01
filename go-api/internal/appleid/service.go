@@ -204,6 +204,9 @@ func (s *DBService) ensureSchema(ctx context.Context) error {
 		`ALTER TABLE v2_apple_inventory ADD COLUMN IF NOT EXISTS account_fingerprint char(64) NOT NULL DEFAULT ''`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uniq_v2_apple_order_user_idempotency ON v2_apple_order(user_id, idempotency_key) WHERE idempotency_key <> ''`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uniq_v2_apple_inventory_account_fingerprint ON v2_apple_inventory(account_fingerprint) WHERE account_fingerprint <> ''`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_apple_order_finance_paid ON v2_apple_order(paid_at) WHERE status IN (1,3,4) AND paid_at IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_apple_order_finance_refund ON v2_apple_order(id) WHERE status=3`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_apple_audit_refund_time ON v2_apple_order_audit(order_id,created_at) WHERE action='refund_confirmed'`,
 	)
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
