@@ -14,6 +14,19 @@
 .support-scope-form { display: grid; grid-template-columns: minmax(220px, 2fr) minmax(160px, 1fr); gap: 0 16px; }
 .support-scope-form .support-full-width { grid-column: 1 / -1; }
 .support-scope-form .ant-select { width: 100%; }
+.support-entitlement-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
+.support-entitlement-form .support-full-width { grid-column: 1 / -1; }
+.support-entitlement-form .ant-select,
+.support-entitlement-form .ant-input-number-group-wrapper { width: 100%; }
+.support-entitlement-form .ant-form-item-label > label { height: auto; }
+.support-expiry-controls { display: flex; }
+.support-expiry-controls .ant-picker { max-width: 100%; }
+.support-membership-current { margin-bottom: 16px; }
+.support-membership-row { padding: 8px 0; overflow-wrap: anywhere; }
+.support-operation-group + .support-operation-group { margin-top: 8px; }
+.support-operation-group { overflow-wrap: anywhere; }
+.support-change-list { padding-left: 20px; }
+.support-change-list li { margin-bottom: 8px; }
 .support-probe-status { display: inline-flex; align-items: center; gap: 4px; margin: 0 8px 6px 0; }
 .support-source-detail { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0 12px; }
 .support-empty { padding: 28px 12px; background: #fff; border: 1px solid #e8e8e8; }
@@ -21,6 +34,8 @@
   .support-content { margin: 0 12px; }
   .support-toolbar { align-items: flex-start; }
   .support-scope-form { grid-template-columns: 1fr; }
+  .support-entitlement-form { grid-template-columns: minmax(0, 1fr); }
+  .support-membership-row .ant-typography { overflow-wrap: anywhere; }
   .support-summary { gap: 8px; }
   .support-summary-card { min-width: 90px; padding: 10px 12px; }
   .support-content > .ant-tabs > .ant-tabs-nav .ant-tabs-tab + .ant-tabs-tab { margin-left: 16px; }

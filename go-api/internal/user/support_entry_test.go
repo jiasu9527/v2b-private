@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"forest/go-api/internal/cliententry"
@@ -191,5 +192,134 @@ func TestServersSupportOverrideRunsAfterPermissionFiltering(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func supportMembershipTestRows() *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"id", "name", "enabled", "conditions", "host", "resolve", "has_members", "sort", "members"})
+}
+func TestSupportMembershipOnlySafeEmailGroupsAreOfferedAndDisabledMembershipCanExit(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rows := supportMembershipTestRows().
+		AddRow(1, "Automatic", 1, `[]`, "default.example", 0, true, 10, "vmess:1").
+		AddRow(2, "VIP", 1, `[{"field":"email","operator":"in","values":[]}]`, "vip.example", 0, true, 20, "vmess:9,vless:100").
+		AddRow(3, "Disabled current", 0, `[{"field":"email","operator":"in","values":["u@example.com"]}]`, "paused.example", 0, true, 30, "vmess:1").
+		AddRow(4, "Different plan", 1, `[{"field":"email","operator":"in","values":[]},{"field":"plan_id","operator":"eq","value":100}]`, "plan.example", 0, true, 40, "vmess:1").
+		AddRow(5, "Multiple email AND", 1, `[{"field":"email","operator":"in","values":["u@example.com"]},{"field":"email","operator":"in","values":["u@example.com"]}]`, "ambiguous.example", 0, true, 50, "vmess:1").
+		AddRow(6, "No members", 1, `[{"field":"email","operator":"in","values":[]}]`, "empty.example", 0, false, 60, "").
+		AddRow(7, "Invalid host", 1, `[{"field":"email","operator":"in","values":[]}]`, "https://invalid.example", 0, true, 70, "vmess:1").
+		AddRow(8, "Current but shadowed", 1, `[{"field":"email","operator":"in","values":["u@example.com"]}]`, "shadowed.example", 1, true, 80, "vmess:1")
+	mock.ExpectQuery(`(?s)SELECT p.id,p.name,p.enabled.*WHERE p.mode='standard' AND p.action='override' ORDER BY p.id`).WillReturnRows(rows)
+	membership, err := LoadSupportEntryMembership(context.Background(), db, cliententry.Subject{UserID: 7, Email: "u@example.com", PlanID: 2}, []SupportEntryScope{{SourcePolicyID: 1, Applicable: true}}, nil, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(membership.Targets) != 2 || membership.Targets[0].PolicyID != 2 || membership.Targets[1].PolicyID != 8 {
+		t.Fatalf("unsafe targets: %#v", membership.Targets)
+	}
+	if len(membership.CurrentGroups) != 2 || membership.CurrentGroups[0].Enabled || membership.CurrentGroups[1].Effective {
+		t.Fatalf("current disabled/shadowed groups lost: %#v", membership.CurrentGroups)
+	}
+	if membership.Version < 0 || membership.Version >= 1<<53 {
+		t.Fatalf("unsafe JS version %d", membership.Version)
+	}
+	raw, _ := json.Marshal(membership)
+	if strings.Contains(string(raw), "u@example.com") || strings.Contains(string(raw), "MemberFingerprint") || strings.Contains(string(raw), "conditions") {
+		t.Fatalf("raw email lists/config leaked: %s", raw)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestSupportMembershipEmailEditPreservesAllOtherUsersConditionsAndInput(t *testing.T) {
+	original, err := cliententry.DecodeConditions(`[{"field":"plan_id","operator":"eq","value":2},{"field":"email","operator":"in","values":["other@example.com"]},{"field":"ua","operator":"contains_any","values":["Clash"]}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := SupportEntryMembershipPolicy{PolicyID: 20, Conditions: original, EmailIndex: 1}
+	raw, changed, err := SupportEntryPolicyEmailUpdate(policy, " User@Example.com ", true)
+	if err != nil || !changed {
+		t.Fatalf("add: %s,%v,%v", raw, changed, err)
+	}
+	after, err := cliententry.DecodeConditions(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 3 || len(after[1].Values) != 2 || len(original[1].Values) != 1 || after[0].Field != "plan_id" || after[2].Field != "ua" {
+		t.Fatalf("unrelated fields/membership overwritten: %#v", after)
+	}
+	policy.Conditions = after
+	raw, changed, err = SupportEntryPolicyEmailUpdate(policy, "user@example.com", false)
+	if err != nil || !changed {
+		t.Fatal(err)
+	}
+	after, err = cliententry.DecodeConditions(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after[1].Values) != 1 || string(after[1].Values[0]) != `"other@example.com"` {
+		t.Fatalf("another user's membership lost: %s", raw)
+	}
+}
+func TestSupportMembershipLastExitRetainsDenyAllEmailConditionAndRealFirstMatchFallback(t *testing.T) {
+	email, err := cliententry.DecodeConditions(`[{"field":"email","operator":"in","values":["u@example.com"]}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := SupportEntryMembershipPolicy{PolicyID: 20, Conditions: email, EmailIndex: 0}
+	raw, changed, err := SupportEntryPolicyEmailUpdate(policy, "u@example.com", false)
+	if err != nil || !changed {
+		t.Fatal(err)
+	}
+	empty, err := cliententry.DecodeConditions(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty) != 1 || len(empty[0].Values) != 0 || !strings.Contains(raw, `"values":[]`) {
+		t.Fatalf("last exit broadened match: %s", raw)
+	}
+	run := func(conditions []cliententry.Condition) []map[string]any {
+		// The VIP and default have different full node member sets. No compatibility
+		// override is involved: regular subscription first-match performs the switch.
+		return applyClientEntryUserPolicies([]map[string]any{{"type": "vmess", "id": int64(1), "host": "original.example"}, {"type": "vmess", "id": int64(2), "host": "private.example", "client_entry_only": int64(1)}}, cliententry.Subject{UserID: 7, Email: "u@example.com"}, []clientEntryUserPolicy{{ID: 20, Mode: "standard", Action: "override", EntryHost: "vip.example", Conditions: conditions, Members: []ClientEntryGroupMember{{ServerType: "vmess", ServerID: 1}, {ServerType: "vmess", ServerID: 2}}}, {ID: 10, Mode: "standard", Action: "override", EntryHost: "default.example", Members: []ClientEntryGroupMember{{ServerType: "vmess", ServerID: 1}}}})
+	}
+	joined := run(email)
+	if len(joined) != 2 || joined[0]["host"] != "vip.example" || joined[1]["host"] != "vip.example" {
+		t.Fatalf("membership not applied by actual first-match: %#v", joined)
+	}
+	restored := run(empty)
+	if len(restored) != 1 || restored[0]["host"] != "default.example" {
+		t.Fatalf("last exit did not restore default/entry-only visibility: %#v", restored)
+	}
+}
+func TestSupportMembershipVersionIsUserSpecificButTracksPolicyConfiguration(t *testing.T) {
+	version := func(values string, sort int64, members string) int64 {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		mock.ExpectQuery(`(?s)SELECT p.id,p.name,p.enabled`).WillReturnRows(supportMembershipTestRows().AddRow(20, "VIP", 1, `[{"field":"email","operator":"in","values":`+values+`}]`, "vip.example", 0, true, sort, members))
+		result, err := LoadSupportEntryMembership(context.Background(), db, cliententry.Subject{UserID: 7, Email: "u@example.com"}, nil, nil, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+		return result.Version
+	}
+	base := version(`["other@example.com"]`, 10, "vmess:1")
+	if version(`["other@example.com","another@example.com"]`, 10, "vmess:1") != base {
+		t.Fatal("unrelated user's edit invalidates this user's version")
+	}
+	for _, next := range []int64{version(`["u@example.com","other@example.com"]`, 10, "vmess:1"), version(`["other@example.com"]`, 20, "vmess:1"), version(`["other@example.com"]`, 10, "vmess:1,vless:2")} {
+		if next == base {
+			t.Fatal("membership/sort/full member change did not update version")
+		}
 	}
 }

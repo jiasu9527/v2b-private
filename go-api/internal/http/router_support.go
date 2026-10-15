@@ -18,6 +18,8 @@ type supportService interface {
 	SupportEntryOverview(context.Context) (admin.SupportEntryOverview, error)
 	LookupSupportUser(context.Context, int64, string, string) (admin.SupportUserResult, error)
 	ChangeSupportEntry(context.Context, int64, admin.SupportEntryChangeRequest) (admin.SupportUserResult, error)
+	GetSupportEntitlementOptions(context.Context, int64) ([]admin.SupportEntitlementPlan, error)
+	ChangeSupportEntitlement(context.Context, int64, admin.SupportEntitlementChangeRequest) (admin.SupportEntitlementSnapshot, error)
 	ListSupportOperations(context.Context, int64, int64) (admin.SupportOperationResult, error)
 }
 
@@ -88,12 +90,12 @@ func handleSupport(w http.ResponseWriter, r *http.Request, sessions session.Serv
 			return handleSupportError(w, admin.ErrSupportForbidden)
 		}
 	}
-	if (adminOnly && action != "operations") || (!adminOnly && action != "overview" && action != "user" && action != "entry" && action != "operations") {
+	if (adminOnly && action != "operations") || (!adminOnly && action != "overview" && action != "user" && action != "entry" && action != "entitlement/plans" && action != "entitlement" && action != "operations") {
 		writeJSON(w, 404, map[string]any{"message": "Not found"})
 		return true
 	}
 	expected := http.MethodGet
-	if action == "entry" {
+	if action == "entry" || action == "entitlement" {
 		expected = http.MethodPost
 	}
 	if r.Method != expected {
@@ -117,6 +119,16 @@ func handleSupport(w http.ResponseWriter, r *http.Request, sessions session.Serv
 		}
 		if err = service.ConsumeSupportLimit(r.Context(), identity.ID, "change"); err == nil {
 			result, err = service.ChangeSupportEntry(r.Context(), identity.ID, req)
+		}
+	case !adminOnly && action == "entitlement/plans":
+		result, err = service.GetSupportEntitlementOptions(r.Context(), identity.ID)
+	case !adminOnly && action == "entitlement":
+		var req admin.SupportEntitlementChangeRequest
+		if !decodeSupportJSON(w, r, &req) {
+			return true
+		}
+		if err = service.ConsumeSupportLimit(r.Context(), identity.ID, "change"); err == nil {
+			result, err = service.ChangeSupportEntitlement(r.Context(), identity.ID, req)
 		}
 	case action == "operations":
 		page := int64(1)

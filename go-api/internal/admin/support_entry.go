@@ -27,11 +27,13 @@ var (
 
 type SupportEntryTarget = usersvc.SupportEntryTarget
 type SupportUserResult struct {
-	CanRestore bool                        `json:"can_restore"`
-	Found      bool                        `json:"found"`
-	User       *usersvc.SupportEntryUser   `json:"user"`
-	Scopes     []usersvc.SupportEntryScope `json:"scopes"`
-	UA         string                      `json:"ua"`
+	EntryMembership usersvc.SupportEntryMembership `json:"entry_membership"`
+	Entitlement     *SupportEntitlementSnapshot    `json:"entitlement"`
+	CanRestore      bool                           `json:"can_restore"`
+	Found           bool                           `json:"found"`
+	User            *usersvc.SupportEntryUser      `json:"user"`
+	Scopes          []usersvc.SupportEntryScope    `json:"scopes"`
+	UA              string                         `json:"ua"`
 }
 type SupportEntryChangeRequest struct {
 	UserID         int64  `json:"user_id"`
@@ -45,24 +47,27 @@ type SupportEntryChangeRequest struct {
 	UA             string `json:"ua"`
 }
 type SupportOperationState struct {
-	TargetKey   string `json:"target_key"`
-	TargetName  string `json:"target_name"`
-	EntryHost   string `json:"entry_host"`
-	Active      bool   `json:"active"`
-	ExpiresAt   int64  `json:"expires_at"`
-	Version     int64  `json:"version"`
-	SourceName  string `json:"source_name"`
-	RequestHash string `json:"request_hash,omitempty"`
+	Kind              string                                `json:"kind,omitempty"`
+	MembershipGroups  []usersvc.SupportEntryMembershipGroup `json:"membership_groups,omitempty"`
+	HasLegacyOverride bool                                  `json:"has_legacy_override"`
+	TargetKey         string                                `json:"target_key"`
+	TargetName        string                                `json:"target_name"`
+	EntryHost         string                                `json:"entry_host"`
+	Active            bool                                  `json:"active"`
+	ExpiresAt         int64                                 `json:"expires_at"`
+	Version           int64                                 `json:"version"`
+	SourceName        string                                `json:"source_name"`
+	RequestHash       string                                `json:"request_hash,omitempty"`
 }
 type SupportOperation struct {
-	ID             int64                 `json:"id"`
-	ActorID        int64                 `json:"actor_id"`
-	TargetUserID   int64                 `json:"target_user_id"`
-	SourcePolicyID int64                 `json:"source_policy_id"`
-	Reason         string                `json:"reason"`
-	BeforeState    SupportOperationState `json:"before_state"`
-	AfterState     SupportOperationState `json:"after_state"`
-	CreatedAt      int64                 `json:"created_at"`
+	ID             int64           `json:"id"`
+	ActorID        int64           `json:"actor_id"`
+	TargetUserID   int64           `json:"target_user_id"`
+	SourcePolicyID int64           `json:"source_policy_id"`
+	Reason         string          `json:"reason"`
+	BeforeState    json.RawMessage `json:"before_state"`
+	AfterState     json.RawMessage `json:"after_state"`
+	CreatedAt      int64           `json:"created_at"`
 }
 type SupportOperationResult struct {
 	Items    []SupportOperation `json:"items"`
@@ -112,7 +117,7 @@ func parseSupportLookup(value string) (int64, string, error) {
 	return 0, strings.ToLower(value), nil
 }
 func supportUserResult(preview usersvc.SupportEntryPreview) SupportUserResult {
-	return SupportUserResult{Found: true, User: &preview.User, Scopes: preview.Scopes, UA: preview.UA, CanRestore: true}
+	return SupportUserResult{Found: true, User: &preview.User, Scopes: preview.Scopes, UA: preview.UA, CanRestore: true, EntryMembership: preview.EntryMembership}
 }
 func (s *DBService) LookupSupportUser(ctx context.Context, actorID int64, query, ua string) (SupportUserResult, error) {
 	empty := SupportUserResult{Scopes: []usersvc.SupportEntryScope{}, UA: ua}
@@ -167,14 +172,24 @@ func (s *DBService) LookupSupportUser(ctx context.Context, actorID int64, query,
 	if err != nil {
 		return empty, err
 	}
-	return supportUserResult(preview), nil
+	return supportUserResultWithEntitlement(ctx, s.db, preview)
+}
+
+func supportUserResultWithEntitlement(ctx context.Context, q usersvc.SupportEntryQuerier, preview usersvc.SupportEntryPreview) (SupportUserResult, error) {
+	result := supportUserResult(preview)
+	entitlement, err := LoadSupportEntitlementSnapshot(ctx, q, preview.User.ID)
+	if err != nil {
+		return SupportUserResult{}, err
+	}
+	result.Entitlement = &entitlement
+	return result, nil
 }
 
 func normalizeSupportChange(req SupportEntryChangeRequest, now int64) (SupportEntryChangeRequest, error) {
 	req.TargetKey = strings.TrimSpace(req.TargetKey)
 	req.Reason = strings.TrimSpace(req.Reason)
 	req.RequestID = strings.TrimSpace(req.RequestID)
-	if req.UserID <= 0 || req.SourcePolicyID <= 0 || req.Version < 0 || !supportRequestIDPattern.MatchString(req.RequestID) || req.Reason == "" || utf8.RuneCountInString(req.Reason) > 500 || len(req.UA) > 1024 || len(req.TargetKey) > 255 || req.ExpiresAt < 0 {
+	if req.UserID <= 0 || req.SourcePolicyID != 0 || req.ExpiresAt != 0 || req.Version < 0 || req.Version >= 1<<53 || !supportRequestIDPattern.MatchString(req.RequestID) || req.Reason == "" || utf8.RuneCountInString(req.Reason) > 500 || len(req.UA) > 1024 || len(req.TargetKey) > 255 || req.ExpiresAt < 0 {
 		return req, ErrSupportEntryInvalid
 	}
 	if req.Restore {
@@ -184,14 +199,17 @@ func normalizeSupportChange(req SupportEntryChangeRequest, now int64) (SupportEn
 	} else if req.TargetKey == "" {
 		return req, ErrSupportEntryInvalid
 	}
-	// Past expiry is checked after idempotency lookup: a delayed retry of an
-	// already successful temporary override must not execute again or fail early.
+	// Legacy source-policy address overrides and expiry writes are intentionally rejected.
+	// Staff membership changes only mutate existing explicit email whitelists.
 	_ = now
 	return req, nil
 }
 func supportChangeHash(req SupportEntryChangeRequest) string {
 	req.RequestID = ""
-	raw, _ := json.Marshal(req)
+	raw, _ := json.Marshal(struct {
+		Kind    string
+		Request SupportEntryChangeRequest
+	}{"entry_membership", req})
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }
@@ -279,105 +297,119 @@ func (s *DBService) ChangeSupportEntry(ctx context.Context, actorID int64, req S
 	}
 	if err == nil {
 		var state SupportOperationState
-		if json.Unmarshal([]byte(saved), &state) != nil || state.RequestHash != fingerprint {
+		if json.Unmarshal([]byte(saved), &state) != nil || state.Kind != "entry_membership" || state.RequestHash != fingerprint {
 			return empty, fmt.Errorf("%w: request_id 已被其他请求使用", ErrSupportEntryConflict)
 		}
 		preview, err := usersvc.PreviewSupportEntries(ctx, tx, req.UserID, req.UA, now)
 		if err != nil {
 			return empty, err
 		}
+		result, err := supportUserResultWithEntitlement(ctx, tx, preview)
+		if err != nil {
+			return empty, err
+		}
 		if err = tx.Commit(); err != nil {
 			return empty, err
 		}
-		return supportUserResult(preview), nil
+		return result, nil
 	}
-	if req.ExpiresAt > 0 && req.ExpiresAt <= now {
-		return empty, fmt.Errorf("%w: 临时指定有效期必须晚于当前时间", ErrSupportEntryInvalid)
+
+	// Share the administrator edit/order lock so a newly inserted/reordered rule
+	// cannot appear halfway through this mutation or its subscription preview.
+	if err = lockClientEntryVisibleOrder(ctx, tx); err != nil {
+		return empty, err
+	}
+	// Lock existing policy rows in a consistent order, then merge email lists.
+	// Another user's concurrent membership change is never overwritten.
+	if _, err = usersvc.LoadSupportEntryMembershipPolicies(ctx, tx, true); err != nil {
+		return empty, err
 	}
 	preview, err := usersvc.PreviewSupportEntries(ctx, tx, req.UserID, req.UA, now)
 	if err != nil {
 		return empty, err
 	}
-	index := -1
-	for i := range preview.Scopes {
-		if preview.Scopes[i].SourcePolicyID == req.SourcePolicyID {
-			index = i
-			break
-		}
-	}
-	if index < 0 {
-		return empty, fmt.Errorf("%w: 用户在当前客户端条件下未命中该规则", ErrSupportEntryInvalid)
-	}
-	scope := &preview.Scopes[index]
-	if scope.Version != req.Version {
+	membership := preview.EntryMembership
+	if req.Version != membership.Version {
 		return empty, ErrSupportEntryConflict
 	}
-	before := supportScopeState(*scope)
-	after := SupportOperationState{SourceName: scope.Name, Version: scope.Version + 1, RequestHash: fingerprint}
 	var target SupportEntryTarget
-	if req.Restore {
-		if scope.Override == nil || !scope.Override.Active {
-			return empty, fmt.Errorf("%w: 当前已经按规则自动分配", ErrSupportEntryInvalid)
-		}
-	} else {
-		if !scope.Applicable {
-			return empty, fmt.Errorf("%w: 当前条件下该规则未生效，只能恢复自动分配", ErrSupportEntryInvalid)
-		}
-		for _, candidate := range scope.Targets {
+	if !req.Restore {
+		for _, candidate := range membership.Targets {
 			if candidate.Key == req.TargetKey {
 				target = candidate
 				break
 			}
 		}
-		if target.Key == "" {
-			return empty, fmt.Errorf("%w: 目标入口已停用或节点范围不兼容", ErrSupportEntryInvalid)
+		if target.PolicyID <= 0 {
+			return empty, fmt.Errorf("%w: 该分组不支持指定邮箱、已停用或用户不满足其他条件", ErrSupportEntryInvalid)
 		}
-		if scope.Override != nil && scope.Override.Active && scope.Override.TargetKey == req.TargetKey && scope.Override.ExpiresAt == req.ExpiresAt {
-			return empty, fmt.Errorf("%w: 已是该入口，无需重复设置", ErrSupportEntryInvalid)
+	}
+	// Whitelists match normalized emails, not user IDs. Case-sensitive database
+	// uniqueness alone cannot prevent enrolling a second (even privileged) user.
+	// Check every account before changing any list; do not lock collision rows in
+	// reverse user-ID order while the target row is already held FOR UPDATE.
+	var emailCollisions int64
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_user WHERE LOWER(TRIM(email)) = LOWER(TRIM($1)) AND id <> $2`, preview.User.Email, req.UserID).Scan(&emailCollisions); err != nil {
+		return empty, err
+	}
+	if emailCollisions > 0 {
+		return empty, fmt.Errorf("%w: 存在忽略大小写或前后空格后相同的邮箱账号，请管理员先处理邮箱冲突", ErrSupportEntryInvalid)
+	}
+	changed := false
+	for _, policy := range membership.Policies {
+		include := !req.Restore && policy.PolicyID == target.PolicyID
+		encoded, update, err := usersvc.SupportEntryPolicyEmailUpdate(policy, preview.User.Email, include)
+		if err != nil {
+			return empty, err
 		}
+		if !update {
+			continue
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy SET conditions=$2,updated_at=$3 WHERE id=$1 AND mode='standard' AND action='override'`, policy.PolicyID, encoded, now); err != nil {
+			return empty, err
+		}
+		changed = true
+	}
+	// Replaces the former address-only mechanism, including expired active rows.
+	cleared, err := tx.ExecContext(ctx, `UPDATE v2_support_entry_override SET active=0,version=version+1,updated_by=$2,updated_at=$3 WHERE user_id=$1 AND active=1`, req.UserID, actorID, now)
+	if err != nil {
+		return empty, err
+	}
+	affected, err := cleared.RowsAffected()
+	if err != nil {
+		return empty, err
+	}
+	changed = changed || affected > 0
+	if !changed {
+		return empty, fmt.Errorf("%w: 当前已是所选分组或已恢复默认，无需重复操作", ErrSupportEntryInvalid)
+	}
+	afterPreview, err := usersvc.PreviewSupportEntries(ctx, tx, req.UserID, req.UA, now)
+	if err != nil {
+		return empty, err
+	}
+	before := supportMembershipState(membership)
+	after := supportMembershipState(afterPreview.EntryMembership)
+	after.RequestHash = fingerprint
+	if target.PolicyID > 0 {
 		after.TargetKey = target.Key
 		after.TargetName = target.Name
 		after.EntryHost = target.EntryHost
 		after.Active = true
-		after.ExpiresAt = req.ExpiresAt
-	}
-	var targetPolicy, targetGroup, expires any
-	if !req.Restore {
-		targetPolicy = target.PolicyID
-		if target.GroupID > 0 {
-			targetGroup = target.GroupID
-		}
-		if req.ExpiresAt > 0 {
-			expires = req.ExpiresAt
-		}
-	}
-	active := int64(0)
-	if after.Active {
-		active = 1
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO v2_support_entry_override (user_id,source_policy_id,target_policy_id,target_group_id,target_key,active,expires_at,version,updated_by,updated_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-ON CONFLICT (user_id,source_policy_id) DO UPDATE SET target_policy_id=EXCLUDED.target_policy_id,target_group_id=EXCLUDED.target_group_id,target_key=EXCLUDED.target_key,active=EXCLUDED.active,expires_at=EXCLUDED.expires_at,version=EXCLUDED.version,updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at`, req.UserID, req.SourcePolicyID, targetPolicy, targetGroup, after.TargetKey, active, expires, after.Version, actorID, now)
-	if err != nil {
-		return empty, err
 	}
 	beforeRaw, _ := json.Marshal(before)
 	afterRaw, _ := json.Marshal(after)
-	_, err = tx.ExecContext(ctx, `INSERT INTO v2_support_operation (actor_id,target_user_id,source_policy_id,request_id,reason,before_state,after_state,created_at)
-VALUES ($1,$2,$3,$4,$5,$6::JSONB,$7::JSONB,$8)`, actorID, req.UserID, req.SourcePolicyID, req.RequestID, req.Reason, string(beforeRaw), string(afterRaw), now)
+	if _, err = tx.ExecContext(ctx, `INSERT INTO v2_support_operation (actor_id,target_user_id,source_policy_id,request_id,reason,before_state,after_state,created_at)
+VALUES ($1,$2,$3,$4,$5,$6::JSONB,$7::JSONB,$8)`, actorID, req.UserID, int64(0), req.RequestID, req.Reason, string(beforeRaw), string(afterRaw), now); err != nil {
+		return empty, err
+	}
+	result, err := supportUserResultWithEntitlement(ctx, tx, afterPreview)
 	if err != nil {
 		return empty, err
 	}
 	if err = tx.Commit(); err != nil {
 		return empty, err
 	}
-	scope.Version = after.Version
-	status := "restored"
-	if after.Active {
-		status = "active"
-	}
-	scope.Override = &usersvc.SupportEntryOverride{SourcePolicyID: req.SourcePolicyID, TargetPolicyID: target.PolicyID, TargetGroupID: target.GroupID, TargetKey: after.TargetKey, TargetName: after.TargetName, EntryHost: after.EntryHost, Active: after.Active, Status: status, ExpiresAt: after.ExpiresAt, Version: after.Version}
-	return supportUserResult(preview), nil
+	return result, nil
 }
 func (s *DBService) ListSupportOperations(ctx context.Context, actorID, page int64) (SupportOperationResult, error) {
 	result := SupportOperationResult{Items: []SupportOperation{}, Page: page, PageSize: 20}
@@ -419,15 +451,29 @@ func (s *DBService) ListSupportOperations(ctx context.Context, actorID, page int
 		if err := rows.Scan(&item.ID, &item.ActorID, &item.TargetUserID, &item.SourcePolicyID, &item.Reason, &before, &after, &item.CreatedAt); err != nil {
 			return result, err
 		}
-		if err := json.Unmarshal([]byte(before), &item.BeforeState); err != nil {
+		var err error
+		item.BeforeState, err = sanitizeSupportOperationState(before)
+		if err != nil {
 			return result, err
 		}
-		if err := json.Unmarshal([]byte(after), &item.AfterState); err != nil {
+		item.AfterState, err = sanitizeSupportOperationState(after)
+		if err != nil {
 			return result, err
 		}
-		item.BeforeState.RequestHash = ""
-		item.AfterState.RequestHash = ""
 		result.Items = append(result.Items, item)
 	}
 	return result, rows.Err()
+}
+
+func supportMembershipState(membership usersvc.SupportEntryMembership) SupportOperationState {
+	return SupportOperationState{Kind: "entry_membership", Version: membership.Version, MembershipGroups: membership.CurrentGroups, HasLegacyOverride: membership.HasLegacyOverride, SourceName: "指定邮箱分组"}
+}
+func sanitizeSupportOperationState(raw string) (json.RawMessage, error) {
+	var state map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+		return nil, err
+	}
+	delete(state, "request_hash")
+	encoded, err := json.Marshal(state)
+	return encoded, err
 }

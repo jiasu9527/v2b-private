@@ -77,3 +77,28 @@ func TestEmailConditionIsIndependentFromUserID(t *testing.T) {
 		t.Fatal("email condition must not match another email sharing the same ID-style context")
 	}
 }
+
+func TestEmptyEmailWhitelistSurvivesDecodeSaveAndMatchesNobody(t *testing.T) {
+	for _, raw := range []string{`[{"field":"email","operator":"in","values":[]}]`, `[{"field":"email","operator":"in"}]`} {
+		conditions, err := DecodeConditions(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := EncodeConditions(conditions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if encoded != `[{"field":"email","operator":"in","values":[]}]` {
+			t.Fatalf("empty whitelist lost its condition: %s", encoded)
+		}
+		saved, err := DecodeConditions(encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, subject := range []Subject{{}, {UserID: 7, Email: "vip@example.com"}, {UserID: 9, Email: "other@example.com"}} {
+			if MatchAll(saved, subject) {
+				t.Fatalf("empty whitelist broadened access: %#v", subject)
+			}
+		}
+	}
+}

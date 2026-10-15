@@ -552,7 +552,7 @@ function UserListPanel() {
         <Form.Item name="discount" label="专享折扣比例"><InputNumber addonAfter="%" style={{ width: '100%' }} placeholder="请输入专享折扣比例" /></Form.Item>
         <Form.Item name="speed_limit" label="限速"><InputNumber addonAfter="Mbps" style={{ width: '100%' }} placeholder="留空则不限制" /></Form.Item>
         <Form.Item name="is_admin" label="是否管理员" valuePropName="checked"><Switch /></Form.Item>
-        <Form.Item name="is_staff" label="是否员工" valuePropName="checked" extra="开启后可登录受限员工工作台：查看入口检测、精准搜索用户、切换单用户的兼容入口和查看本人操作记录；不开放完整用户列表、套餐、财务或规则编辑。管理员身份优先，修改员工身份会撤销现有会话。"><Switch aria-label="是否员工" /></Form.Item>
+        <Form.Item name="is_staff" label="是否员工" valuePropName="checked" extra="开启后可登录员工工作台：查看入口检测、精准搜索普通用户、调整其套餐/流量/有效期、加入或退出邮箱指定入口组和查看本人操作记录；不开放完整用户列表、财务、身份权限或规则参数编辑。管理员身份优先，修改员工身份会撤销现有会话。"><Switch aria-label="是否员工" /></Form.Item>
         <Form.Item name="remarks" label="备注" className="form-col-full"><Input.TextArea rows={4} placeholder="请在这里记录.." /></Form.Item>
       </Form>
     </Modal>

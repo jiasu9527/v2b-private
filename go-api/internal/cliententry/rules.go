@@ -29,6 +29,19 @@ type Condition struct {
 	Max      json.RawMessage   `json:"max,omitempty"`
 }
 
+// An empty explicit email list is a deny-all condition, never a missing rule.
+// Keep values:[] visible in APIs and storage so editors preserve that meaning.
+func (condition Condition) MarshalJSON() ([]byte, error) {
+	type alias Condition
+	if condition.Field == "email" && condition.Operator == "in" && len(condition.Values) == 0 {
+		return json.Marshal(struct {
+			alias
+			Values []json.RawMessage `json:"values"`
+		}{alias(condition), []json.RawMessage{}})
+	}
+	return json.Marshal(alias(condition))
+}
+
 type Subject struct {
 	UserID           int64
 	Email            string
@@ -145,8 +158,8 @@ func normalizeCondition(value Condition) (Condition, error) {
 }
 
 func normalizeEmailCondition(value Condition) (Condition, error) {
-	if value.Operator != "in" || len(value.Values) == 0 {
-		return Condition{}, errors.New("邮箱仅支持指定邮箱匹配，且 values 不能为空")
+	if value.Operator != "in" {
+		return Condition{}, errors.New("邮箱仅支持指定邮箱匹配")
 	}
 	values := make([]json.RawMessage, 0, len(value.Values))
 	seen := make(map[string]struct{}, len(value.Values))

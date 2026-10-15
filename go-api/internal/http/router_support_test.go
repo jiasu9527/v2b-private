@@ -19,6 +19,7 @@ type fakeSupportService struct {
 	reads, writes, roleReads int
 	actor                    int64
 	req                      admin.SupportEntryChangeRequest
+	entitlementReq           admin.SupportEntitlementChangeRequest
 }
 
 func (f *fakeSupportService) IsSupportStaff(context.Context, int64) (bool, error) {
@@ -42,6 +43,17 @@ func (f *fakeSupportService) ChangeSupportEntry(_ context.Context, id int64, req
 	f.req = req
 	f.writes++
 	return admin.SupportUserResult{}, nil
+}
+func (f *fakeSupportService) GetSupportEntitlementOptions(_ context.Context, id int64) ([]admin.SupportEntitlementPlan, error) {
+	f.actor = id
+	f.reads++
+	return []admin.SupportEntitlementPlan{}, nil
+}
+func (f *fakeSupportService) ChangeSupportEntitlement(_ context.Context, id int64, req admin.SupportEntitlementChangeRequest) (admin.SupportEntitlementSnapshot, error) {
+	f.actor = id
+	f.entitlementReq = req
+	f.writes++
+	return admin.SupportEntitlementSnapshot{}, nil
 }
 func (f *fakeSupportService) ListSupportOperations(_ context.Context, id, page int64) (admin.SupportOperationResult, error) {
 	f.actor = id
@@ -100,7 +112,7 @@ func TestSupportOperationsScopeComesFromSessionNotRequest(t *testing.T) {
 	}
 }
 func TestSupportMutationRejectsUnknownFieldsOversizeAndTrailingData(t *testing.T) {
-	valid := `{"user_id":5,"source_policy_id":10,"target_key":"policy:20","reason":"repair","version":0,"request_id":"r-1"}`
+	valid := `{"user_id":5,"target_key":"policy:20","reason":"repair","version":1234,"request_id":"r-1"}`
 	for _, body := range []string{`{"user_id":5,"plan_id":999}`, `{"user_id":5,"auth_data":"body-token"}`, valid + ` {}`, `{"reason":"` + strings.Repeat("x", 33<<10) + `"}`} {
 		f := &fakeSupportService{enabled: true}
 		req := httptest.NewRequest("POST", "/api/v1/support/entry", strings.NewReader(body))
@@ -151,7 +163,7 @@ func TestSupportMethodAndPageValidation(t *testing.T) {
 	for _, tc := range []struct {
 		method, path string
 		status       int
-	}{{"POST", "overview", 405}, {"GET", "entry", 405}, {"GET", "operations?page=0", 400}, {"GET", "operations?page=abc", 400}, {"GET", "not-an-endpoint", 404}} {
+	}{{"POST", "overview", 405}, {"GET", "entry", 405}, {"GET", "entitlement", 405}, {"POST", "entitlement/plans", 405}, {"GET", "operations?page=0", 400}, {"GET", "operations?page=abc", 400}, {"GET", "not-an-endpoint", 404}} {
 		f := &fakeSupportService{enabled: true}
 		req := httptest.NewRequest(tc.method, "/api/v1/support/"+tc.path, nil)
 		req.Header.Set("Authorization", "Bearer fixture")
@@ -160,6 +172,71 @@ func TestSupportMethodAndPageValidation(t *testing.T) {
 		if rec.Code != tc.status {
 			t.Fatalf("%+v got %d", tc, rec.Code)
 		}
+	}
+}
+
+func TestSupportEntitlementRoutesUseExistingStaffAndStrictJSON(t *testing.T) {
+	for _, tc := range []struct {
+		method, action, body, contentType string
+		want, writes, reads               int
+	}{
+		{"GET", "entitlement/plans", "", "", 200, 0, 1},
+		{"POST", "entitlement", `{"user_id":5,"transfer_enable":10737418240,"expected":"snapshot","reason":"补单","request_id":"r-1"}`, "application/json", 200, 1, 0},
+		{"POST", "entitlement", `{"user_id":5,"expired_at":null,"reason":"补单","request_id":"r-2"}`, "application/json", 200, 1, 0},
+		{"POST", "entitlement", `{"user_id":5,"is_admin":1}`, "application/json", 400, 0, 0},
+		{"POST", "entitlement", `{"user_id":5,"balance":10000}`, "application/json", 400, 0, 0},
+		{"POST", "entitlement", `{"user_id":5,"auth_data":"body-token"}`, "application/json", 400, 0, 0},
+		{"POST", "entitlement", `{"user_id":5} {}`, "application/json", 400, 0, 0},
+		{"POST", "entitlement", `{"reason":"` + strings.Repeat("x", 33<<10) + `"}`, "application/json", 400, 0, 0},
+		{"POST", "entitlement", "user_id=5", "application/x-www-form-urlencoded", 415, 0, 0},
+	} {
+		f := &fakeSupportService{enabled: true}
+		req := httptest.NewRequest(tc.method, "/api/v1/support/"+tc.action, strings.NewReader(tc.body))
+		req.Header.Set("Authorization", "Bearer fixture")
+		req.Header.Set("Content-Type", tc.contentType)
+		rec := httptest.NewRecorder()
+		supportTestRouter(f, &session.Identity{ID: 7, IsStaff: 1}).ServeHTTP(rec, req)
+		if rec.Code != tc.want || f.writes != tc.writes || f.reads != tc.reads {
+			t.Fatalf("%s: status=%d writes=%d reads=%d body=%s", tc.action, rec.Code, f.writes, f.reads, rec.Body.String())
+		}
+		if tc.writes > 0 && (f.actor != 7 || f.entitlementReq.UserID != 5) {
+			t.Fatalf("actor or target not decoded from trusted sources: %+v", f)
+		}
+		if !strings.Contains(rec.Header().Get("Cache-Control"), "no-store") {
+			t.Fatal("entitlement response cacheable")
+		}
+	}
+}
+
+func TestSupportEntitlementsDenyNonStaffAndRevokedActors(t *testing.T) {
+	for _, identity := range []*session.Identity{nil, {ID: 7}, {ID: 7, IsAdmin: 1}, {ID: 7, IsStaff: 1}} {
+		for _, action := range []string{"entitlement", "entitlement/plans"} {
+			f := &fakeSupportService{enabled: false}
+			method := "GET"
+			if action == "entitlement" {
+				method = "POST"
+			}
+			req := httptest.NewRequest(method, "/api/v1/support/"+action, strings.NewReader(`{"user_id":5}`))
+			req.Header.Set("Authorization", "Bearer fixture")
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			supportTestRouter(f, identity).ServeHTTP(rec, req)
+			if rec.Code != 403 || f.writes != 0 || f.reads != 0 {
+				t.Fatalf("%s identity=%+v status=%d service=%+v", action, identity, rec.Code, f)
+			}
+		}
+	}
+}
+
+func TestSupportEntitlementWritesShareMutationRateLimit(t *testing.T) {
+	f := &fakeSupportService{enabled: true, limitErr: admin.ErrSupportRateLimited}
+	req := httptest.NewRequest("POST", "/api/v1/support/entitlement", strings.NewReader(`{"user_id":5,"reset_usage":true}`))
+	req.Header.Set("Authorization", "Bearer fixture")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	supportTestRouter(f, &session.Identity{ID: 7, IsStaff: 1}).ServeHTTP(rec, req)
+	if rec.Code != 429 || f.writes != 0 || rec.Header().Get("Retry-After") != "60" {
+		t.Fatalf("status=%d writes=%d", rec.Code, f.writes)
 	}
 }
 

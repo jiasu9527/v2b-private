@@ -31,6 +31,36 @@ export type SupportUserResult = {
   found: boolean;
   user?: { id: number; email: string; plan_name: string; expired_at: number | null; remaining_bytes: number; banned?: boolean };
   scopes: SupportScope[];
+  entitlement?: SupportEntitlementSnapshot | null;
+  entry_membership?: SupportEntryMembership | null;
+};
+
+export type SupportEntitlementPlan = { id: number; name: string; transfer_enable: number };
+export type SupportEntitlementSnapshot = {
+  user_id: number;
+  plan_id: number | null;
+  plan_name: string;
+  group_id: number | null;
+  transfer_enable: number;
+  u: number;
+  d: number;
+  expired_at: number | null;
+  device_limit: number | null;
+  speed_limit: number | null;
+  version: string;
+};
+export type SupportMembershipGroup = {
+  policy_id: number;
+  name: string;
+  entry_host: string;
+  enabled: boolean;
+  effective: boolean;
+};
+export type SupportEntryMembership = {
+  version: number;
+  current_groups: SupportMembershipGroup[];
+  targets: SupportEntryTarget[];
+  has_legacy_override: boolean;
 };
 
 export type SupportOperation = {
@@ -40,6 +70,7 @@ export type SupportOperation = {
   target_user_id: number;
   target_email: string;
   source_policy_id: number;
+  kind?: string;
   reason: string;
   before_state: Record<string, any>;
   after_state: Record<string, any>;

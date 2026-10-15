@@ -351,7 +351,7 @@ function validateConditionValues(conditions: EntryCondition[]) {
     const condition = conditions[index];
     const prefix = `第 ${index + 1} 个条件`;
     if (!condition.field || !condition.operator) return `${prefix}不完整`;
-    if (condition.operator === 'in' && !(condition.values || []).length) return condition.field === 'email' ? `${prefix}至少填写一个邮箱` : `${prefix}至少选择一个用户`;
+    if (condition.operator === 'in' && condition.field !== 'email' && !(condition.values || []).length) return `${prefix}至少选择一个用户`;
     if (condition.operator === 'between') {
       if (condition.min === undefined || condition.max === undefined) return `${prefix}需要填写起始值和结束值`;
       if (Number(condition.min) > Number(condition.max)) return `${prefix}的起始值不能大于结束值`;
@@ -477,7 +477,7 @@ function ConditionEditorRow({
       />
     </Form.Item>;
   } else if (field === 'email' && operator === 'in') {
-    valueEditor = <Form.Item name={[name, 'values']} label="邮箱" rules={[{ required: true, message: '请填写至少一个邮箱' }]} style={{ minWidth: 300, flex: 1 }}>
+    valueEditor = <Form.Item name={[name, 'values']} label="邮箱" extra="名单为空时不匹配任何用户；员工可在精准查询后加入用户。" style={{ minWidth: 300, flex: 1 }}>
       <Select
         mode="tags"
         showSearch

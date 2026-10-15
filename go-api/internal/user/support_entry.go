@@ -2,7 +2,10 @@ package user
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -63,10 +66,37 @@ type SupportEntryUser struct {
 	RemainingBytes int64  `json:"remaining_bytes"`
 	Banned         bool   `json:"banned"`
 }
+type SupportEntryMembershipGroup struct {
+	PolicyID  int64  `json:"policy_id"`
+	Name      string `json:"name"`
+	EntryHost string `json:"entry_host"`
+	Enabled   bool   `json:"enabled"`
+	Effective bool   `json:"effective"`
+}
+type SupportEntryMembershipPolicy struct {
+	PolicyID          int64
+	Sort              sql.NullInt64
+	MemberFingerprint string
+	Name              string
+	Enabled           bool
+	EntryHost         string
+	ResolveEntryHost  bool
+	HasMembers        bool
+	Conditions        []cliententry.Condition
+	EmailIndex        int
+}
+type SupportEntryMembership struct {
+	Version           int64                          `json:"version"`
+	CurrentGroups     []SupportEntryMembershipGroup  `json:"current_groups"`
+	Targets           []SupportEntryTarget           `json:"targets"`
+	HasLegacyOverride bool                           `json:"has_legacy_override"`
+	Policies          []SupportEntryMembershipPolicy `json:"-"`
+}
 type SupportEntryPreview struct {
-	User   SupportEntryUser    `json:"user"`
-	Scopes []SupportEntryScope `json:"scopes"`
-	UA     string              `json:"ua"`
+	User            SupportEntryUser       `json:"user"`
+	Scopes          []SupportEntryScope    `json:"scopes"`
+	UA              string                 `json:"ua"`
+	EntryMembership SupportEntryMembership `json:"entry_membership"`
 }
 
 // References follow administrator edits. Split parent groups are not destinations.
@@ -359,6 +389,14 @@ FROM v2_user u LEFT JOIN v2_plan p ON p.id = u.plan_id WHERE u.id = $1`, userID)
 			}
 		}
 	}
+	result.EntryMembership, err = LoadSupportEntryMembership(ctx, q, cliententry.Subject{UserID: userID, Email: result.User.Email, PlanID: planID, RegistrationDays: serverFetchRegistrationDays(createdAt, now), UA: ua}, result.Scopes, records, now)
+	if err != nil {
+		return result, err
+	}
+	// Address overrides are legacy read-only state, not staff destinations.
+	for i := range result.Scopes {
+		result.Scopes[i].Targets = []SupportEntryTarget{}
+	}
 	sort.SliceStable(result.Scopes, func(i, j int) bool { return result.Scopes[i].SourcePolicyID < result.Scopes[j].SourcePolicyID })
 	return result, nil
 }
@@ -412,3 +450,144 @@ ORDER BY CASE WHEN p.mode = 'split' THEN COALESCE(g.global_sort,p.sort) ELSE p.s
 
 // WithSupportEntries opts subscription generation into a separately ensured schema.
 func (s *DBService) WithSupportEntries() *DBService { s.supportEntryEnabled = true; return s }
+
+// Only a single explicit email whitelist on a standard override rule is editable.
+// Split assignments are administrator-managed snapshots, not email membership.
+func LoadSupportEntryMembershipPolicies(ctx context.Context, q SupportEntryQuerier, lock bool) ([]SupportEntryMembershipPolicy, error) {
+	query := `SELECT p.id,p.name,p.enabled,p.conditions,p.entry_host,p.resolve_entry_host,
+ EXISTS(SELECT 1 FROM v2_client_entry_user_policy_member m WHERE m.policy_id=p.id),p.sort,
+ COALESCE((SELECT string_agg(m.server_type||':'||m.server_id::TEXT,',' ORDER BY m.server_type,m.server_id) FROM v2_client_entry_user_policy_member m WHERE m.policy_id=p.id),'')
+ FROM v2_client_entry_user_policy p WHERE p.mode='standard' AND p.action='override' ORDER BY p.id`
+	if lock {
+		query += ` FOR UPDATE OF p`
+	}
+	rows, err := q.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []SupportEntryMembershipPolicy{}
+	for rows.Next() {
+		var p SupportEntryMembershipPolicy
+		var enabled, resolve int64
+		var raw string
+		if err := rows.Scan(&p.PolicyID, &p.Name, &enabled, &raw, &p.EntryHost, &resolve, &p.HasMembers, &p.Sort, &p.MemberFingerprint); err != nil {
+			return nil, err
+		}
+		p.Enabled = enabled != 0
+		p.ResolveEntryHost = resolve != 0
+		p.Conditions, err = cliententry.DecodeConditions(raw)
+		if err != nil {
+			return nil, err
+		}
+		p.EmailIndex = -1
+		emails := 0
+		for i, c := range p.Conditions {
+			if c.Field == "email" && c.Operator == "in" {
+				p.EmailIndex = i
+				emails++
+			}
+		}
+		if emails == 1 {
+			result = append(result, p)
+		}
+	}
+	return result, rows.Err()
+}
+func SupportEntryPolicyContainsEmail(p SupportEntryMembershipPolicy, email string) bool {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if p.EmailIndex < 0 || p.EmailIndex >= len(p.Conditions) {
+		return false
+	}
+	for _, raw := range p.Conditions[p.EmailIndex].Values {
+		var value string
+		if json.Unmarshal(raw, &value) == nil && strings.EqualFold(strings.TrimSpace(value), email) {
+			return true
+		}
+	}
+	return false
+}
+
+// Email values may be empty: the condition remains in place and matches nobody.
+func SupportEntryPolicyEmailUpdate(p SupportEntryMembershipPolicy, email string, include bool) (string, bool, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if p.EmailIndex < 0 || p.EmailIndex >= len(p.Conditions) {
+		return "", false, errors.New("entry policy has no editable email condition")
+	}
+	current := SupportEntryPolicyContainsEmail(p, email)
+	if current == include {
+		return "", false, nil
+	}
+	conditions := append([]cliententry.Condition(nil), p.Conditions...)
+	values := make([]json.RawMessage, 0, len(conditions[p.EmailIndex].Values)+1)
+	for _, raw := range conditions[p.EmailIndex].Values {
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return "", false, err
+		}
+		if !strings.EqualFold(strings.TrimSpace(value), email) {
+			values = append(values, raw)
+		}
+	}
+	if include {
+		raw, _ := json.Marshal(email)
+		values = append(values, raw)
+	}
+	conditions[p.EmailIndex].Values = values
+	encoded, err := cliententry.EncodeConditions(conditions)
+	return encoded, true, err
+}
+func LoadSupportEntryMembership(ctx context.Context, q SupportEntryQuerier, subject cliententry.Subject, scopes []SupportEntryScope, records []SupportEntryOverride, now int64) (SupportEntryMembership, error) {
+	result := SupportEntryMembership{CurrentGroups: []SupportEntryMembershipGroup{}, Targets: []SupportEntryTarget{}}
+	policies, err := LoadSupportEntryMembershipPolicies(ctx, q, false)
+	if err != nil {
+		return result, err
+	}
+	result.Policies = policies
+	effective := map[int64]bool{}
+	for _, scope := range scopes {
+		effective[scope.SourcePolicyID] = scope.Applicable
+	}
+	type versionPolicy struct {
+		ID                                   int64
+		Sort                                 sql.NullInt64
+		Members                              string
+		Name, Host                           string
+		Enabled, Resolve, HasMembers, Member bool
+		Conditions                           []cliententry.Condition
+	}
+	versions := []versionPolicy{}
+	for _, p := range policies {
+		member := SupportEntryPolicyContainsEmail(p, subject.Email)
+		if member {
+			result.CurrentGroups = append(result.CurrentGroups, SupportEntryMembershipGroup{PolicyID: p.PolicyID, Name: p.Name, EntryHost: p.EntryHost, Enabled: p.Enabled, Effective: effective[p.PolicyID]})
+		}
+		other := append([]cliententry.Condition(nil), p.Conditions...)
+		other[p.EmailIndex].Values = nil
+		versions = append(versions, versionPolicy{p.PolicyID, p.Sort, p.MemberFingerprint, p.Name, p.EntryHost, p.Enabled, p.ResolveEntryHost, p.HasMembers, member, other})
+		other = append(other[:p.EmailIndex:p.EmailIndex], other[p.EmailIndex+1:]...)
+		if !p.Enabled || !p.HasMembers || !cliententry.MatchAll(other, subject) {
+			continue
+		}
+		host, err := cliententry.NormalizeHost(p.EntryHost)
+		if err != nil {
+			continue
+		}
+		result.Targets = append(result.Targets, SupportEntryTarget{Key: fmt.Sprintf("policy:%d", p.PolicyID), PolicyID: p.PolicyID, Name: p.Name, EntryHost: host, ResolveEntryHost: p.ResolveEntryHost})
+	}
+	for _, record := range records {
+		if record.Active && (record.ExpiresAt == 0 || record.ExpiresAt > now) {
+			result.HasLegacyOverride = true
+		}
+	}
+	raw, _ := json.Marshal(struct {
+		Email     string
+		Policies  []versionPolicy
+		Overrides []SupportEntryOverride
+	}{subject.Email, versions, records})
+	hash := sha256.Sum256(raw)
+	// 52 bits fit JavaScript's exact integer range; membership is optimistic state,
+	// not an authority token. Other users' email edits do not invalidate this user.
+	result.Version = int64(binary.BigEndian.Uint64(hash[:8]) & ((1 << 52) - 1))
+	return result, nil
+}
