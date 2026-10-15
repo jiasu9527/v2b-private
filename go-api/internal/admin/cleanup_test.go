@@ -202,6 +202,9 @@ func expectClientEntryMonitorCleanup(mock sqlmock.Sqlmock) {
 	mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM v2_support_operation WHERE created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM v2_support_operation`).
 		WithArgs(cleanupCutoffDays(90), int64(dnsFailoverCleanupBatchSize)).
 		WillReturnResult(sqlmock.NewResult(0, 4))
+	mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT actor_id,request_id FROM v2_support_request_receipt WHERE created_at < \$1 ORDER BY created_at,actor_id,request_id LIMIT \$2\s*\).*DELETE FROM v2_support_request_receipt`).
+		WithArgs(cleanupCutoffDays(90), int64(dnsFailoverCleanupBatchSize)).
+		WillReturnResult(sqlmock.NewResult(0, 4))
 
 }
 

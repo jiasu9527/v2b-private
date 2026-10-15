@@ -20,7 +20,9 @@ import (
 )
 
 // This opt-in test must use a disposable database initialized with
-// database/install.pgsql.sql. It only removes fixtures it creates.
+// database/install.pgsql.sql. Its operation log must be empty before this test
+// runs: clearing is global, so refuse to touch any pre-existing operation rows.
+// Fixture cleanup only removes records created by this test.
 func TestSupportPostgresEndToEnd(t *testing.T) {
 	dsn := os.Getenv("FOREST_SUPPORT_TEST_DSN")
 	if dsn == "" {
@@ -41,6 +43,13 @@ func TestSupportPostgresEndToEnd(t *testing.T) {
 	if err = platformpostgres.EnsureClientEntrySchema(ctx, db); err != nil {
 		t.Fatal(err)
 	}
+	var existingOperations int64
+	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_support_operation`).Scan(&existingOperations); err != nil {
+		t.Fatal(err)
+	}
+	if existingOperations != 0 {
+		t.Fatal("refusing global log-clear test: disposable database must have no pre-existing support operations")
+	}
 	cfg := config.Config{AppKey: "support-integration-fixture-key"}
 	s := NewDBService(cfg, db)
 	userService := usersvc.NewDBService(cfg, db).WithSupportEntries()
@@ -52,6 +61,7 @@ func TestSupportPostgresEndToEnd(t *testing.T) {
 	t.Cleanup(func() {
 		for _, id := range userIDs {
 			db.ExecContext(ctx, `DELETE FROM v2_support_operation WHERE actor_id=$1 OR target_user_id=$1`, id)
+			db.ExecContext(ctx, `DELETE FROM v2_support_request_receipt WHERE actor_id=$1`, id)
 			db.ExecContext(ctx, `DELETE FROM v2_support_request_limit WHERE actor_id=$1`, id)
 			db.ExecContext(ctx, `DELETE FROM v2_support_entry_override WHERE user_id=$1`, id)
 			db.ExecContext(ctx, `DELETE FROM v2_auth_session WHERE user_id=$1`, id)
@@ -260,6 +270,100 @@ func TestSupportPostgresEndToEnd(t *testing.T) {
 			t.Fatal("internal fingerprint exposed")
 		}
 	}
+	// Administrators clear only the fence they confirmed. Add a later operation
+	// for another ordinary customer so clearing cannot silently remove new work.
+	clearSnapshot, err := s.ListSupportOperations(ctx, 0, 1)
+	if err != nil || clearSnapshot.Total != 5 || clearSnapshot.LatestID <= 0 {
+		t.Fatalf("clear snapshot %+v %v", clearSnapshot, err)
+	}
+	ordinaryView, err := s.LookupSupportUser(ctx, staffID, ordinaryEmail, "")
+	if err != nil || ordinaryView.Entitlement == nil {
+		t.Fatalf("ordinary entitlement preview %+v %v", ordinaryView, err)
+	}
+	laterQuota := ordinaryView.Entitlement.TransferEnable + 1
+	laterReq := SupportEntitlementChangeRequest{UserID: ordinaryID, TransferEnable: &laterQuota, Expected: ordinaryView.Entitlement.Version, Reason: "new operation after confirmation snapshot", RequestID: "later-" + suffix}
+	if _, err = s.ChangeSupportEntitlement(ctx, staffID, laterReq); err != nil {
+		t.Fatal(err)
+	}
+	captureBusinessState := func() string {
+		t.Helper()
+		snapshot, err := LoadSupportEntitlementSnapshot(ctx, db, targetID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state := string(raw)
+		for _, id := range []int64{targetPolicy, secondPolicy} {
+			var conditions string
+			if err = db.QueryRowContext(ctx, `SELECT conditions FROM v2_client_entry_user_policy WHERE id=$1`, id).Scan(&conditions); err != nil {
+				t.Fatal(err)
+			}
+			state += "\n" + conditions
+		}
+		return state
+	}
+	beforeClear := captureBusinessState()
+	clearReq := SupportOperationClearRequest{ThroughID: clearSnapshot.LatestID, Confirm: true}
+	if _, err = s.ClearSupportOperations(ctx, staffID, clearReq); !errors.Is(err, ErrSupportForbidden) {
+		t.Fatalf("employee must not clear logs: %v", err)
+	}
+	logs, err = s.ListSupportOperations(ctx, 0, 1)
+	if err != nil || logs.Total != 6 || logs.LatestID <= clearSnapshot.LatestID {
+		t.Fatalf("forbidden clear changed history or latest fence missing: %+v %v", logs, err)
+	}
+	laterID := logs.LatestID
+	cleared, err := s.ClearSupportOperations(ctx, adminID, clearReq)
+	if err != nil || cleared.Deleted != 5 {
+		t.Fatalf("administrator clear old snapshot %+v %v", cleared, err)
+	}
+	logs, err = s.ListSupportOperations(ctx, 0, 1)
+	if err != nil || logs.Total != 1 || len(logs.Items) != 1 || logs.LatestID != laterID || logs.Items[0].TargetUserID != ordinaryID {
+		t.Fatalf("clear removed later operation or retained old details: %+v %v", logs, err)
+	}
+	var receiptCount int64
+	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_support_request_receipt WHERE actor_id=$1`, staffID).Scan(&receiptCount); err != nil || receiptCount != 5 {
+		t.Fatalf("compact receipts count=%d err=%v", receiptCount, err)
+	}
+	cleared, err = s.ClearSupportOperations(ctx, adminID, clearReq)
+	if err != nil || cleared.Deleted != 0 {
+		t.Fatalf("repeated confirmation fence must be harmless: %+v %v", cleared, err)
+	}
+	if afterClear := captureBusinessState(); afterClear != beforeClear {
+		t.Fatalf("clearing logs changed entitlements or email lists: before=%s after=%s", beforeClear, afterClear)
+	}
+	// Cleared reset receipts must still prevent a replay from deleting usage
+	// accrued since the original reset. Membership retries must not re-enroll a
+	// user who has subsequently left the original group.
+	benefits, err = s.ChangeSupportEntitlement(ctx, staffID, resetReq)
+	if err != nil || benefits.D != 7 {
+		t.Fatalf("cleared reset replay reset new traffic: %+v %v", benefits, err)
+	}
+	changed, err = s.ChangeSupportEntry(ctx, staffID, req)
+	if err != nil || len(changed.EntryMembership.CurrentGroups) != 0 {
+		t.Fatalf("cleared membership replay rejoined old group: %+v %v", changed, err)
+	}
+	assertHost("automatic.example.test")
+	if afterRetries := captureBusinessState(); afterRetries != beforeClear {
+		t.Fatalf("cleared operation retries changed business state: before=%s after=%s", beforeClear, afterRetries)
+	}
+	alteredReset := resetReq
+	alteredReset.Reason = "different payload after clear"
+	if _, err = s.ChangeSupportEntitlement(ctx, staffID, alteredReset); !errors.Is(err, ErrSupportEntryConflict) {
+		t.Fatalf("cleared reset ID accepted changed payload: %v", err)
+	}
+	if _, err = s.ChangeSupportEntry(ctx, staffID, altered); !errors.Is(err, ErrSupportEntryConflict) {
+		t.Fatalf("cleared membership ID accepted changed payload: %v", err)
+	}
+	if _, err = s.ChangeSupportEntitlement(ctx, staffID, crossKind); !errors.Is(err, ErrSupportEntryConflict) {
+		t.Fatalf("cleared entry ID accepted entitlement payload: %v", err)
+	}
+	logs, err = s.ListSupportOperations(ctx, staffID, 1)
+	if err != nil || logs.Total != 1 || logs.LatestID != laterID {
+		t.Fatalf("cleared idempotent/conflicting retries added history: %+v %v", logs, err)
+	}
 	// PostgreSQL's legacy email UNIQUE constraint is case-sensitive, while entry
 	// lists are not. Even an ID lookup must not mutate a privileged lookalike.
 	duplicateID, _ := createUser("duplicate", 1, 0)
@@ -305,5 +409,5 @@ func TestSupportPostgresEndToEnd(t *testing.T) {
 	if ok, err := s.IsSupportStaff(ctx, ordinaryID); err != nil || !ok {
 		t.Fatalf("existing employee switch grants workbench directly: %v %v", ok, err)
 	}
-	t.Log("verified live SQL: exact-user staff lookup, email membership join/switch/exit->real subscription, safe empty lists, other-user preservation, reference follow/fallback, entitlement repair/reset, idempotency, mixed audit, role switch/session revocation")
+	t.Log("verified live SQL: exact-user staff lookup, email membership join/switch/exit->real subscription, safe empty lists, other-user preservation, reference follow/fallback, entitlement repair/reset, idempotency, mixed audit, admin-only snapshot clear, receipt retries without reset/rejoin, role switch/session revocation")
 }

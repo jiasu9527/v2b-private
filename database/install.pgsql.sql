@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS "v2_support_request_receipt";
 DROP TABLE IF EXISTS "v2_support_operation";
 DROP TABLE IF EXISTS "v2_support_entry_override";
 DROP TABLE IF EXISTS "v2_support_request_limit";
@@ -249,3 +250,14 @@ UNIQUE (actor_id, request_id)
 );
 CREATE INDEX IF NOT EXISTS v2_support_operation_actor_idx ON v2_support_operation (actor_id, id DESC);
 CREATE INDEX IF NOT EXISTS v2_support_operation_created_idx ON v2_support_operation (created_at, id);
+
+-- Compact request receipts retain idempotency after clearing employee history.
+CREATE TABLE IF NOT EXISTS v2_support_request_receipt (
+actor_id INTEGER NOT NULL,
+request_id VARCHAR(80) NOT NULL,
+kind VARCHAR(32) NOT NULL,
+request_hash VARCHAR(64) NOT NULL,
+created_at BIGINT NOT NULL,
+PRIMARY KEY (actor_id, request_id)
+);
+CREATE INDEX IF NOT EXISTS v2_support_request_receipt_created_idx ON v2_support_request_receipt (created_at, actor_id, request_id);

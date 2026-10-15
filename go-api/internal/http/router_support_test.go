@@ -20,6 +20,8 @@ type fakeSupportService struct {
 	actor                    int64
 	req                      admin.SupportEntryChangeRequest
 	entitlementReq           admin.SupportEntitlementChangeRequest
+	clearReq                 admin.SupportOperationClearRequest
+	clearErr                 error
 }
 
 func (f *fakeSupportService) IsSupportStaff(context.Context, int64) (bool, error) {
@@ -59,6 +61,12 @@ func (f *fakeSupportService) ListSupportOperations(_ context.Context, id, page i
 	f.actor = id
 	f.reads++
 	return admin.SupportOperationResult{}, nil
+}
+func (f *fakeSupportService) ClearSupportOperations(_ context.Context, id int64, req admin.SupportOperationClearRequest) (admin.SupportOperationClearResult, error) {
+	f.actor = id
+	f.clearReq = req
+	f.writes++
+	return admin.SupportOperationClearResult{Deleted: 12}, f.clearErr
 }
 func supportTestRouter(f *fakeSupportService, identity *session.Identity) http.Handler {
 	return NewRouter(config.Config{AdminPath: "admin-test"}, WithSessionService(strictAppleIDSession{identity: identity}), WithSupportService(f))
@@ -319,6 +327,92 @@ func TestRemovedEmployeeGrantEndpointsAreNotAvailableToAdministrator(t *testing.
 			if rec.Code != 404 || f.reads != 0 || f.writes != 0 {
 				t.Fatalf("removed route %s %s remains: %d", method, path, rec.Code)
 			}
+		}
+	}
+}
+
+func TestSupportClearOperationsRequiresAdministratorAndStrictJSON(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, body, contentType string
+		want, writes                    int
+	}{
+		{"valid", "POST", `{"through_id":123,"confirm":true}`, "application/json", 200, 1},
+		{"empty snapshot", "POST", `{"through_id":0,"confirm":true}`, "application/json", 200, 1},
+		{"wrong method", "GET", "", "", 405, 0},
+		{"form", "POST", "through_id=123&confirm=true", "application/x-www-form-urlencoded", 415, 0},
+		{"unconfirmed", "POST", `{"through_id":123,"confirm":false}`, "application/json", 400, 0},
+		{"missing confirmation", "POST", `{"through_id":123}`, "application/json", 400, 0},
+		{"negative fence", "POST", `{"through_id":-1,"confirm":true}`, "application/json", 400, 0},
+		{"auth in body", "POST", `{"through_id":123,"confirm":true,"auth_data":"body-token"}`, "application/json", 400, 0},
+		{"actor in body", "POST", `{"through_id":123,"confirm":true,"actor_id":9}`, "application/json", 400, 0},
+		{"unknown field", "POST", `{"through_id":123,"confirm":true,"all":true}`, "application/json", 400, 0},
+		{"trailing object", "POST", `{"through_id":123,"confirm":true} {}`, "application/json", 400, 0},
+		{"wrong type", "POST", `{"through_id":"123","confirm":true}`, "application/json", 400, 0},
+		{"oversize", "POST", `{"confirm":true,"through_id":123,"extra":"` + strings.Repeat("x", 33<<10) + `"}`, "application/json", 400, 0},
+		{"null", "POST", `null`, "application/json", 400, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeSupportService{}
+			req := httptest.NewRequest(tc.method, "/api/v1/admin-test/support/operations/clear?actor_id=99", strings.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer fixture")
+			req.Header.Set("Content-Type", tc.contentType)
+			rec := httptest.NewRecorder()
+			supportTestRouter(f, &session.Identity{ID: 7, IsAdmin: 1}).ServeHTTP(rec, req)
+			if rec.Code != tc.want || f.writes != tc.writes || f.reads != 0 {
+				t.Fatalf("status=%d writes=%d reads=%d body=%s", rec.Code, f.writes, f.reads, rec.Body.String())
+			}
+			if tc.writes > 0 && (f.actor != 7 || !f.clearReq.Confirm || !strings.Contains(rec.Body.String(), `"deleted":12`)) {
+				t.Fatalf("untrusted actor or incorrect result: %+v %s", f, rec.Body.String())
+			}
+			if rec.Code == 405 && rec.Header().Get("Allow") != "POST" {
+				t.Fatal("clear must only allow POST")
+			}
+			if !strings.Contains(rec.Header().Get("Cache-Control"), "no-store") {
+				t.Fatal("clear response was cacheable")
+			}
+		})
+	}
+}
+
+func TestSupportClearOperationsRejectsNonAdminAndEmployeePath(t *testing.T) {
+	for _, identity := range []*session.Identity{nil, {ID: 7}, {ID: 7, IsStaff: 1}} {
+		f := &fakeSupportService{enabled: true}
+		req := httptest.NewRequest("POST", "/api/v1/admin-test/support/operations/clear", strings.NewReader(`{"through_id":123,"confirm":true}`))
+		req.Header.Set("Authorization", "Bearer fixture")
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		supportTestRouter(f, identity).ServeHTTP(rec, req)
+		if rec.Code != 403 || f.writes != 0 {
+			t.Fatalf("identity=%+v status=%d writes=%d", identity, rec.Code, f.writes)
+		}
+	}
+	f := &fakeSupportService{enabled: true}
+	req := httptest.NewRequest("POST", "/api/v1/support/operations/clear", strings.NewReader(`{"through_id":123,"confirm":true}`))
+	req.Header.Set("Authorization", "Bearer fixture")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	supportTestRouter(f, &session.Identity{ID: 7, IsStaff: 1}).ServeHTTP(rec, req)
+	if rec.Code != 404 || f.writes != 0 {
+		t.Fatalf("employee clear route remains: %d writes=%d", rec.Code, f.writes)
+	}
+}
+
+func TestSupportClearOperationsUsesFreshSessionAndServiceRoleCheck(t *testing.T) {
+	for _, freshErr := range []error{session.ErrUnauthorized, nil} {
+		f := &fakeSupportService{clearErr: admin.ErrSupportForbidden}
+		sessions := &freshOnlySupportSession{strictAppleIDSession: strictAppleIDSession{identity: &session.Identity{ID: 7, IsAdmin: 1}}, err: freshErr}
+		router := NewRouter(config.Config{AdminPath: "admin-test"}, WithSessionService(sessions), WithSupportService(f))
+		req := httptest.NewRequest("POST", "/api/v1/admin-test/support/operations/clear", strings.NewReader(`{"through_id":123,"confirm":true}`))
+		req.Header.Set("Authorization", "Bearer fixture")
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		wantWrites := 1
+		if freshErr != nil {
+			wantWrites = 0
+		}
+		if rec.Code != 403 || sessions.freshCalls != 1 || f.writes != wantWrites {
+			t.Fatalf("status=%d fresh=%d writes=%d", rec.Code, sessions.freshCalls, f.writes)
 		}
 	}
 }

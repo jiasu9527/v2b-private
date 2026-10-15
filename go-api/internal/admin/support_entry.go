@@ -72,6 +72,7 @@ type SupportOperation struct {
 type SupportOperationResult struct {
 	Items    []SupportOperation `json:"items"`
 	Total    int64              `json:"total"`
+	LatestID int64              `json:"latest_id"`
 	Page     int64              `json:"page"`
 	PageSize int64              `json:"page_size"`
 }
@@ -291,7 +292,7 @@ func (s *DBService) ChangeSupportEntry(ctx context.Context, actorID int64, req S
 	}
 	fingerprint := supportChangeHash(req)
 	var saved string
-	err = tx.QueryRowContext(ctx, `SELECT after_state::TEXT FROM v2_support_operation WHERE actor_id = $1 AND request_id = $2`, actorID, req.RequestID).Scan(&saved)
+	err = tx.QueryRowContext(ctx, supportRequestStateQuery, actorID, req.RequestID).Scan(&saved)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return empty, err
 	}
@@ -436,7 +437,7 @@ func (s *DBService) ListSupportOperations(ctx context.Context, actorID, page int
 		where = " WHERE actor_id = $1"
 		args = append(args, actorID)
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_support_operation`+where, args...).Scan(&result.Total); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(MAX(id),0) FROM v2_support_operation`+where, args...).Scan(&result.Total, &result.LatestID); err != nil {
 		return result, err
 	}
 	args = append(args, (page-1)*20)

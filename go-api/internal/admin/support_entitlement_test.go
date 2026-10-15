@@ -33,7 +33,7 @@ func expectSupportEntitlementSnapshot(mock sqlmock.Sqlmock, state SupportEntitle
 func expectSupportEntitlementMutationStart(mock sqlmock.Sqlmock, req SupportEntitlementChangeRequest, state SupportEntitlementSnapshot) {
 	expectSupportStaffRead(mock)
 	expectSupportMutationLocks(mock, req.RequestID, false)
-	mock.ExpectQuery(`SELECT after_state::TEXT FROM v2_support_operation`).WithArgs(int64(7), req.RequestID).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(regexp.QuoteMeta(supportRequestStateQuery)).WithArgs(int64(7), req.RequestID).WillReturnError(sql.ErrNoRows)
 	expectSupportEntitlementSnapshot(mock, state)
 }
 
@@ -294,7 +294,7 @@ func TestSupportEntitlementRetryDoesNotMutateOrAuditAgain(t *testing.T) {
 	expectSupportStaffRead(mock)
 	expectSupportMutationLocks(mock, req.RequestID, false)
 	saved, _ := json.Marshal(supportEntitlementOperationState{Kind: "entitlement", RequestHash: supportEntitlementChangeHash(req)})
-	mock.ExpectQuery(`SELECT after_state::TEXT FROM v2_support_operation`).WithArgs(int64(7), req.RequestID).WillReturnRows(sqlmock.NewRows([]string{"state"}).AddRow(string(saved)))
+	mock.ExpectQuery(regexp.QuoteMeta(supportRequestStateQuery)).WithArgs(int64(7), req.RequestID).WillReturnRows(sqlmock.NewRows([]string{"state"}).AddRow(string(saved)))
 	current := supportEntitlementFixture()
 	current.TransferEnable, current.U = 2000, 123
 	expectSupportEntitlementSnapshot(mock, current)
@@ -313,7 +313,7 @@ func TestSupportEntitlementResetRetryPreservesTrafficRecordedAfterOriginalReset(
 	expectSupportStaffRead(mock)
 	expectSupportMutationLocks(mock, req.RequestID, false)
 	saved, _ := json.Marshal(supportEntitlementOperationState{Kind: "entitlement", RequestHash: supportEntitlementChangeHash(req)})
-	mock.ExpectQuery(`SELECT after_state::TEXT FROM v2_support_operation`).WithArgs(int64(7), req.RequestID).WillReturnRows(sqlmock.NewRows([]string{"state"}).AddRow(string(saved)))
+	mock.ExpectQuery(regexp.QuoteMeta(supportRequestStateQuery)).WithArgs(int64(7), req.RequestID).WillReturnRows(sqlmock.NewRows([]string{"state"}).AddRow(string(saved)))
 	current := supportEntitlementFixture()
 	current.U, current.D = 40, 60
 	expectSupportEntitlementSnapshot(mock, current)
@@ -337,7 +337,7 @@ func TestSupportEntitlementRequestKeyRejectsDifferentPayloadOrEntryOperation(t *
 				hash = "different payload"
 			}
 			saved, _ := json.Marshal(supportEntitlementOperationState{Kind: kind, RequestHash: hash})
-			mock.ExpectQuery(`SELECT after_state::TEXT FROM v2_support_operation`).WithArgs(int64(7), req.RequestID).WillReturnRows(sqlmock.NewRows([]string{"state"}).AddRow(string(saved)))
+			mock.ExpectQuery(regexp.QuoteMeta(supportRequestStateQuery)).WithArgs(int64(7), req.RequestID).WillReturnRows(sqlmock.NewRows([]string{"state"}).AddRow(string(saved)))
 			mock.ExpectRollback()
 			if _, err := s.ChangeSupportEntitlement(context.Background(), 7, req); !errors.Is(err, ErrSupportEntryConflict) {
 				t.Fatalf("expected idempotency conflict: %v", err)

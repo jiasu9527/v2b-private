@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -170,7 +171,7 @@ func supportTestChangeRequest(t *testing.T, f supportMembershipFixture) SupportE
 	return SupportEntryChangeRequest{UserID: 5, TargetKey: "policy:20", Reason: "repair", RequestID: "request-1", Version: supportMembershipVersion(t, f)}
 }
 func expectSupportIdempotencyMissing(mock sqlmock.Sqlmock, req SupportEntryChangeRequest) {
-	mock.ExpectQuery(`SELECT after_state::TEXT FROM v2_support_operation`).WithArgs(int64(7), req.RequestID).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(regexp.QuoteMeta(supportRequestStateQuery)).WithArgs(int64(7), req.RequestID).WillReturnError(sql.ErrNoRows)
 }
 func TestSupportChangeRejectsOtherStaffAccounts(t *testing.T) {
 	s, mock, done := newSupportEntryTestService(t)
@@ -343,7 +344,7 @@ func TestSupportChangeIdenticalRetryIsReadOnlyAndRequestReuseRejected(t *testing
 			}
 			expectSupportStaffRead(mock)
 			expectSupportMutationLocks(mock, req.RequestID, false)
-			mock.ExpectQuery(`SELECT after_state::TEXT FROM v2_support_operation`).WithArgs(int64(7), req.RequestID).WillReturnRows(sqlmock.NewRows([]string{"state"}).AddRow(string(raw)))
+			mock.ExpectQuery(regexp.QuoteMeta(supportRequestStateQuery)).WithArgs(int64(7), req.RequestID).WillReturnRows(sqlmock.NewRows([]string{"state"}).AddRow(string(raw)))
 			if conflict {
 				mock.ExpectRollback()
 			} else {
@@ -376,14 +377,14 @@ func TestSupportOperationListFiltersActorPreservesEntitlementsAndStripsHash(t *t
 	s, mock, done := newSupportEntryTestService(t)
 	defer done()
 	expectSupportStaffRead(mock)
-	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM v2_support_operation WHERE actor_id = \$1`).WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*),COALESCE(MAX(id),0) FROM v2_support_operation WHERE actor_id = $1`)).WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"count", "latest_id"}).AddRow(1, 1))
 	mock.ExpectQuery(`(?s)SELECT id,actor_id,target_user_id.*WHERE actor_id = \$1 ORDER BY id DESC LIMIT 20 OFFSET \$2`).WithArgs(int64(7), int64(0)).WillReturnRows(sqlmock.NewRows([]string{"id", "actor", "target", "source", "reason", "before", "after", "created"}).AddRow(1, 7, 5, 0, "repair", `{}`, `{"kind":"entitlement","plan_id":12,"transfer_enable":1099511627776,"expired_at":123,"request_hash":"internal"}`, 100))
 	result, err := s.ListSupportOperations(context.Background(), 7, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	raw := string(result.Items[0].AfterState)
-	if result.Total != 1 || strings.Contains(raw, "request_hash") || !strings.Contains(raw, `"transfer_enable":1099511627776`) {
+	if result.Total != 1 || result.LatestID != 1 || strings.Contains(raw, "request_hash") || !strings.Contains(raw, `"transfer_enable":1099511627776`) {
 		t.Fatalf("list lost state/privacy: %s", raw)
 	}
 }

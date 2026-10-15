@@ -168,6 +168,14 @@ SELECT id FROM v2_support_operation WHERE created_at < $1 ORDER BY id LIMIT $2
 DELETE FROM v2_support_operation WHERE id IN (SELECT id FROM doomed)`, nowUnix-(supportOperationKeepDays*86400), dnsFailoverCleanupBatchSize); err != nil {
 		return fmt.Errorf("cleanup support operations: %w", err)
 	}
+	// Cleared operation details are gone immediately; their small retry receipts
+	// expire on the original operation timestamp, never 90 days from clearing.
+	if err := deleteDNSFailoverRetentionRows(ctx, s.db, `WITH doomed AS (
+SELECT actor_id,request_id FROM v2_support_request_receipt WHERE created_at < $1 ORDER BY created_at,actor_id,request_id LIMIT $2
+)
+DELETE FROM v2_support_request_receipt WHERE (actor_id,request_id) IN (SELECT actor_id,request_id FROM doomed)`, nowUnix-(supportOperationKeepDays*86400), dnsFailoverCleanupBatchSize); err != nil {
+		return fmt.Errorf("cleanup support request receipts: %w", err)
+	}
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO v2_runtime_kv (k, v, expire_at, created_at, updated_at)
 VALUES ($1, $2, 0, $3, $3)
 ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = EXCLUDED.expire_at, updated_at = EXCLUDED.updated_at`,

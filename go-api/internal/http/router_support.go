@@ -21,6 +21,7 @@ type supportService interface {
 	GetSupportEntitlementOptions(context.Context, int64) ([]admin.SupportEntitlementPlan, error)
 	ChangeSupportEntitlement(context.Context, int64, admin.SupportEntitlementChangeRequest) (admin.SupportEntitlementSnapshot, error)
 	ListSupportOperations(context.Context, int64, int64) (admin.SupportOperationResult, error)
+	ClearSupportOperations(context.Context, int64, admin.SupportOperationClearRequest) (admin.SupportOperationClearResult, error)
 }
 
 func WithSupportService(service supportService) Option {
@@ -90,12 +91,12 @@ func handleSupport(w http.ResponseWriter, r *http.Request, sessions session.Serv
 			return handleSupportError(w, admin.ErrSupportForbidden)
 		}
 	}
-	if (adminOnly && action != "operations") || (!adminOnly && action != "overview" && action != "user" && action != "entry" && action != "entitlement/plans" && action != "entitlement" && action != "operations") {
+	if (adminOnly && action != "operations" && action != "operations/clear") || (!adminOnly && action != "overview" && action != "user" && action != "entry" && action != "entitlement/plans" && action != "entitlement" && action != "operations") {
 		writeJSON(w, 404, map[string]any{"message": "Not found"})
 		return true
 	}
 	expected := http.MethodGet
-	if action == "entry" || action == "entitlement" {
+	if action == "entry" || action == "entitlement" || action == "operations/clear" {
 		expected = http.MethodPost
 	}
 	if r.Method != expected {
@@ -130,6 +131,15 @@ func handleSupport(w http.ResponseWriter, r *http.Request, sessions session.Serv
 		if err = service.ConsumeSupportLimit(r.Context(), identity.ID, "change"); err == nil {
 			result, err = service.ChangeSupportEntitlement(r.Context(), identity.ID, req)
 		}
+	case adminOnly && action == "operations/clear":
+		var req admin.SupportOperationClearRequest
+		if !decodeSupportJSON(w, r, &req) {
+			return true
+		}
+		if !req.Confirm || req.ThroughID < 0 {
+			return handleSupportError(w, admin.ErrSupportEntryInvalid)
+		}
+		result, err = service.ClearSupportOperations(r.Context(), identity.ID, req)
 	case action == "operations":
 		page := int64(1)
 		if value := r.URL.Query().Get("page"); value != "" {

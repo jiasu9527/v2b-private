@@ -185,7 +185,7 @@ func (s *DBService) ChangeSupportEntitlement(ctx context.Context, actorID int64,
 	}
 	fingerprint := supportEntitlementChangeHash(req)
 	var saved string
-	err = tx.QueryRowContext(ctx, `SELECT after_state::TEXT FROM v2_support_operation WHERE actor_id = $1 AND request_id = $2`, actorID, req.RequestID).Scan(&saved)
+	err = tx.QueryRowContext(ctx, supportRequestStateQuery, actorID, req.RequestID).Scan(&saved)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return empty, err
 	}
