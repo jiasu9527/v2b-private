@@ -61,7 +61,7 @@ type SupportEntrySummary struct {
 	Partial     int64 `json:"partial"`
 	Unhealthy   int64 `json:"unhealthy"`
 	Stale       int64 `json:"stale"`
-	Unmonitored int64 `json:"unmonitored"`
+	Unmonitored int64 `json:"unmonitored"` // Compatibility field; unconfigured sources are excluded.
 	Disabled    int64 `json:"disabled"`
 }
 
@@ -121,7 +121,7 @@ FROM v2_dns_probe WHERE enabled = 1 ORDER BY id`)
 func buildSupportEntryOverview(policies []ClientEntryMonitorPolicy, monitors []ClientEntryMonitorRecord, probes []supportMonitorProbe, now int64) SupportEntryOverview {
 	result := SupportEntryOverview{
 		Coverage: "entry_assignment", GeneratedAt: now,
-		CoverageNote: "仅覆盖节点管理中的入口分配；包含规则入口、固定分组叶子入口及保留原入口规则选中的节点。不包含独立客户端入口或未关联规则的节点。检测仅代表 TCP 连通性，不代表业务全链路可用。",
+		CoverageNote: "仅显示节点管理中的入口分配里已纳入监测的入口；包含已配置检测的规则入口、固定分组叶子入口及保留原入口规则选中的节点。未配置检测的规则及其来源不显示，不包含独立客户端入口或未关联规则的节点。检测仅代表 TCP 连通性，不代表业务全链路可用。",
 		Items:        make([]SupportEntryItem, 0),
 	}
 	monitorsByPolicy := make(map[int64]ClientEntryMonitorRecord, len(monitors))
@@ -131,6 +131,12 @@ func buildSupportEntryOverview(policies []ClientEntryMonitorPolicy, monitors []C
 	itemByKey := make(map[string]int)
 	for _, policy := range policies {
 		monitor, configured := monitorsByPolicy[policy.ID]
+		// Exclude unconfigured sources before endpoint deduplication and status
+		// aggregation: a separate unmonitored rule must not create a phantom
+		// endpoint or downgrade another rule's monitored healthy endpoint.
+		if !configured {
+			continue
+		}
 		targetBySource := make(map[string]ClientEntryMonitorTarget, len(monitor.Targets))
 		for _, target := range monitor.Targets {
 			targetBySource[target.SourceKey] = target
@@ -190,8 +196,6 @@ func buildSupportEntryOverview(policies []ClientEntryMonitorPolicy, monitors []C
 			result.Summary.Unhealthy++
 		case "stale":
 			result.Summary.Stale++
-		case "unmonitored":
-			result.Summary.Unmonitored++
 		case "disabled":
 			result.Summary.Disabled++
 		}

@@ -102,12 +102,12 @@ func TestSupportEntryOverviewFreshnessIsPerSourceAndRequiresOnlineProbe(t *testi
 	}
 }
 
-func TestSupportEntryOverviewKeepsEveryProbeAndUnmonitoredSourceVisible(t *testing.T) {
+func TestSupportEntryOverviewHidesUnmonitoredSourcesButKeepsEveryConfiguredProbe(t *testing.T) {
 	p1, m1 := supportMonitorFixture(1, "entry.example.com", 443, true, supportMonitorTestNow)
-	p2, _ := supportMonitorFixture(2, "entry.example.com", 443, true, supportMonitorTestNow)
+	p2, m2 := supportMonitorFixture(2, "entry.example.com", 443, true, supportMonitorTestNow)
 	result := buildSupportEntryOverview([]ClientEntryMonitorPolicy{p1, p2}, []ClientEntryMonitorRecord{m1}, supportOnlineTestProbes(), supportMonitorTestNow)
-	if result.Items[0].Status != "partial" || len(result.Items[0].Sources) != 2 || result.Items[0].Sources[1].Status != "unmonitored" {
-		t.Fatalf("unmonitored source hidden: %#v", result.Items[0])
+	if len(result.Items) != 1 || result.Items[0].Status != "healthy" || len(result.Items[0].Sources) != 1 || result.Summary.Unmonitored != 0 || result.Summary.Partial != 0 {
+		t.Fatalf("unmonitored source affected monitored endpoint: %#v", result)
 	}
 	probes := append(supportOnlineTestProbes(), supportMonitorProbe{ID: 8, Name: "无结果探针", LastHeartbeatAt: sql.NullInt64{Int64: supportMonitorTestNow, Valid: true}})
 	result = buildSupportEntryOverview([]ClientEntryMonitorPolicy{p1}, []ClientEntryMonitorRecord{m1}, probes, supportMonitorTestNow)
@@ -115,7 +115,7 @@ func TestSupportEntryOverviewKeepsEveryProbeAndUnmonitoredSourceVisible(t *testi
 		t.Fatalf("missing probe hidden: %#v", result.Items[0])
 	}
 	p2.Enabled = false
-	result = buildSupportEntryOverview([]ClientEntryMonitorPolicy{p1, p2}, []ClientEntryMonitorRecord{m1}, supportOnlineTestProbes(), supportMonitorTestNow)
+	result = buildSupportEntryOverview([]ClientEntryMonitorPolicy{p1, p2}, []ClientEntryMonitorRecord{m1, m2}, supportOnlineTestProbes(), supportMonitorTestNow)
 	if result.Items[0].Status != "healthy" || result.Items[0].Sources[1].Status != "disabled" {
 		t.Fatalf("disabled source should stay visible without affecting active endpoint: %#v", result.Items[0])
 	}
@@ -166,11 +166,11 @@ func TestSupportEntryOverviewMissingDisabledAndPendingStates(t *testing.T) {
 	}
 }
 
-func TestSupportEntryOverviewListsUnmonitoredSourcesAndDoesNotReuseOldHostHealth(t *testing.T) {
+func TestSupportEntryOverviewHidesUnmonitoredSourcesAndDoesNotReuseOldHostHealth(t *testing.T) {
 	policy, monitor := supportMonitorFixture(1, "new.example.com", 443, true, supportMonitorTestNow)
 	result := buildSupportEntryOverview([]ClientEntryMonitorPolicy{policy}, nil, supportOnlineTestProbes(), supportMonitorTestNow)
-	if result.Items[0].Status != "unmonitored" || result.Items[0].Sources[0].Monitored || result.Summary.Unmonitored != 1 {
-		t.Fatalf("unmonitored entry absent or healthy: %#v", result)
+	if result.Items == nil || len(result.Items) != 0 || result.Summary != (SupportEntrySummary{}) {
+		t.Fatalf("unmonitored entry must be excluded from list and summary: %#v", result)
 	}
 	monitor.Targets[0].Host = "old.example.com"
 	result = buildSupportEntryOverview([]ClientEntryMonitorPolicy{policy}, []ClientEntryMonitorRecord{monitor}, supportOnlineTestProbes(), supportMonitorTestNow)
@@ -192,7 +192,7 @@ func TestSupportEntryOverviewDoesNotDeduplicateInvalidLegacyHosts(t *testing.T) 
 func TestSupportEntryOverviewSortsProblemsBeforeHealthyAndKeepsCoverageExplicit(t *testing.T) {
 	var policies []ClientEntryMonitorPolicy
 	var monitors []ClientEntryMonitorRecord
-	for index, host := range []string{"a-healthy.example.com", "z-failing.example.com", "b-stale.example.com", "c-unmonitored.example.com", "d-disabled.example.com"} {
+	for index, host := range []string{"a-healthy.example.com", "z-failing.example.com", "b-stale.example.com", "c-unmonitored.example.com", "d-disabled.example.com", "e-partial.example.com"} {
 		policy, monitor := supportMonitorFixture(int64(index+1), host, 443, index != 1, supportMonitorTestNow)
 		if index == 2 {
 			*monitor.Targets[0].States[0].LastReportedAt = 1
@@ -200,19 +200,25 @@ func TestSupportEntryOverviewSortsProblemsBeforeHealthyAndKeepsCoverageExplicit(
 		if index == 4 {
 			policy.Enabled = false
 		}
+		if index == 5 {
+			monitor.Targets[0].States[0].ConsecutiveFailure = 1
+		}
 		policies = append(policies, policy)
 		if index != 3 {
 			monitors = append(monitors, monitor)
 		}
 	}
 	result := buildSupportEntryOverview(policies, monitors, supportOnlineTestProbes(), supportMonitorTestNow)
-	want := []string{"unhealthy", "stale", "unmonitored", "healthy", "disabled"}
+	want := []string{"unhealthy", "partial", "stale", "healthy", "disabled"}
+	if len(result.Items) != len(want) || result.Summary != (SupportEntrySummary{Total: 5, Healthy: 1, Partial: 1, Unhealthy: 1, Stale: 1, Disabled: 1}) {
+		t.Fatalf("unmonitored entry affected list or statistics: %#v", result)
+	}
 	for i, status := range want {
 		if result.Items[i].Status != status {
 			t.Fatalf("sort[%d] = %q, want %q", i, result.Items[i].Status, status)
 		}
 	}
-	if result.Coverage != "entry_assignment" || !strings.Contains(result.CoverageNote, "不包含独立客户端入口") {
+	if result.Coverage != "entry_assignment" || !strings.Contains(result.CoverageNote, "不包含独立客户端入口") || !strings.Contains(result.CoverageNote, "已纳入监测") || !strings.Contains(result.CoverageNote, "未配置检测的规则及其来源不显示") {
 		t.Fatalf("coverage is ambiguous: %#v", result)
 	}
 }
@@ -297,5 +303,77 @@ func TestSupportEntryOverviewRejectsUnavailableService(t *testing.T) {
 		if _, err := service.SupportEntryOverview(context.Background()); !errors.Is(err, ErrUnavailable) {
 			t.Fatalf("error = %v", err)
 		}
+	}
+}
+
+func TestSupportEntryOverviewAllUnmonitoredPoliciesReturnEmptyListAndZeroSummary(t *testing.T) {
+	policies := []ClientEntryMonitorPolicy{}
+	for index, host := range []string{"entry.example.com", "ENTRY.example.com.", "disabled.example.com", "invalid host"} {
+		policy, _ := supportMonitorFixture(int64(index+1), host, 443, true, supportMonitorTestNow)
+		if index == 2 {
+			policy.Enabled = false
+		}
+		policies = append(policies, policy)
+	}
+	result := buildSupportEntryOverview(policies, nil, supportOnlineTestProbes(), supportMonitorTestNow)
+	if result.Items == nil || len(result.Items) != 0 || result.Summary != (SupportEntrySummary{}) {
+		t.Fatalf("unconfigured policies must not create entries or summary counts: %#v", result)
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"items":[]`) || !strings.Contains(string(raw), `"unmonitored":0`) {
+		t.Fatalf("empty list and compatibility counter must keep stable JSON shape: %s", raw)
+	}
+}
+
+func TestSupportEntryOverviewMixedSourcesIgnoreUnconfiguredRulesBeforeAggregation(t *testing.T) {
+	for _, status := range []string{"healthy", "unhealthy", "stale", "disabled"} {
+		t.Run(status, func(t *testing.T) {
+			configured, monitor := supportMonitorFixture(1, "Entry.Example.com.", 443, status != "unhealthy", supportMonitorTestNow)
+			unconfigured, _ := supportMonitorFixture(2, "entry.example.com", 443, true, supportMonitorTestNow)
+			switch status {
+			case "stale":
+				monitor.Targets = nil
+			case "disabled":
+				monitor.Enabled = false
+			}
+			// Put the unconfigured source first to catch endpoint rows created before
+			// filtering. A configured-but-paused monitor is still part of the overview.
+			result := buildSupportEntryOverview([]ClientEntryMonitorPolicy{unconfigured, configured}, []ClientEntryMonitorRecord{monitor}, supportOnlineTestProbes(), supportMonitorTestNow)
+			if len(result.Items) != 1 || result.Items[0].Status != status || len(result.Items[0].Sources) != 1 || result.Items[0].Sources[0].PolicyID != 1 || !result.Items[0].Sources[0].Monitored {
+				t.Fatalf("unconfigured source changed endpoint aggregation: %#v", result)
+			}
+			expected := SupportEntrySummary{Total: 1}
+			switch status {
+			case "healthy":
+				expected.Healthy = 1
+			case "unhealthy":
+				expected.Unhealthy = 1
+			case "stale":
+				expected.Stale = 1
+			case "disabled":
+				expected.Disabled = 1
+			}
+			if result.Summary != expected {
+				t.Fatalf("summary = %#v, want %#v", result.Summary, expected)
+			}
+			for _, probe := range result.Items[0].Probes {
+				if probe.SourceCount != 1 {
+					t.Fatalf("unconfigured source included in probe count: %#v", probe)
+				}
+			}
+		})
+	}
+}
+
+func TestSupportEntryOverviewUnconfiguredRuleCannotCreatePhantomPort(t *testing.T) {
+	monitored, monitor := supportMonitorFixture(1, "entry.example.com", 443, true, supportMonitorTestNow)
+	unconfigured, _ := supportMonitorFixture(2, "entry.example.com", 443, true, supportMonitorTestNow)
+	monitor.Targets[0].Port = 8443
+	result := buildSupportEntryOverview([]ClientEntryMonitorPolicy{unconfigured, monitored}, []ClientEntryMonitorRecord{monitor}, supportOnlineTestProbes(), supportMonitorTestNow)
+	if len(result.Items) != 1 || result.Items[0].Port != 8443 || result.Items[0].Status != "healthy" || result.Summary.Total != 1 || result.Summary.Healthy != 1 || result.Summary.Unmonitored != 0 {
+		t.Fatalf("unconfigured suggested port created a phantom endpoint: %#v", result)
 	}
 }

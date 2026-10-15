@@ -61,13 +61,21 @@ export default function SupportOverviewPanel() {
     const timer = window.setInterval(() => { if (document.visibilityState === 'visible') load(); }, 30000);
     return () => { mounted.current = false; window.clearInterval(timer); };
   }, []);
+  // Also hide legacy unmonitored rows during a rolling backend update, and
+  // derive cards from the same visible scope rather than old server totals.
+  const monitoredEntries = useMemo(() => (overview?.items || []).filter((entry) => entry.status !== 'unmonitored'), [overview]);
+  const summary = useMemo(() => {
+    const counts: Record<string, number> = { total: monitoredEntries.length, healthy: 0, partial: 0, unhealthy: 0, stale: 0, disabled: 0 };
+    monitoredEntries.forEach((entry) => { counts[entry.status] = (counts[entry.status] || 0) + 1; });
+    return counts;
+  }, [monitoredEntries]);
   const entries = useMemo(() => {
     const search = keyword.trim().toLowerCase();
-    return (overview?.items || []).filter((entry) => {
-      if (onlyIssues && !['unhealthy', 'partial', 'stale', 'unmonitored'].includes(entry.status)) return false;
+    return monitoredEntries.filter((entry) => {
+      if (onlyIssues && !['unhealthy', 'partial', 'stale'].includes(entry.status)) return false;
       return !search || `${entry.host}:${entry.port} ${(entry.sources || []).map((source) => `${source.name} ${source.policy_name}`).join(' ')}`.toLowerCase().includes(search);
     }).slice().sort((a, b) => (priorities[a.status] ?? 3) - (priorities[b.status] ?? 3) || a.host.localeCompare(b.host) || a.port - b.port);
-  }, [overview, keyword, onlyIssues]);
+  }, [monitoredEntries, keyword, onlyIssues]);
   const columns: any[] = [
     { title: '入口', key: 'entry', width: 270, render: (_: any, row: SupportHealthEntry) => <><Typography.Text code>{row.host.includes(':') ? `[${row.host}]` : row.host}:{row.port}</Typography.Text><div className="support-muted">{(row.protocol || 'tcp').toUpperCase()}</div></> },
     { title: '状态', dataIndex: 'status', width: 130, render: (value: string, row: SupportHealthEntry) => statusTag(value, row.status_reason) },
@@ -76,9 +84,9 @@ export default function SupportOverviewPanel() {
     { title: '最近检测', dataIndex: 'last_reported_at', width: 180, render: supportDate },
   ];
   return <div className="support-panel">
-    <Alert type="info" showIcon className="support-alert" message={overview?.coverage_note || '显示入口分配中的 TCP 检测结果；同地址、同端口合并显示。未监测或过期的数据不视为正常。'} description="仅展示已有检测结果，每 30 秒刷新；不触发即时探测，不开放规则、探针参数或整组分流修改。" />
+    <Alert type="info" showIcon className="support-alert" message={overview?.coverage_note || '仅显示已纳入监测的入口分配 TCP 检测结果；同地址、同端口合并显示。数据过期或探针离线不视为正常。'} description="未监测入口不显示、不计入统计；每 30 秒刷新已有结果，不触发即时探测，不开放规则、探针参数或整组分流修改。" />
     {error && <Alert type="error" showIcon className="support-alert" message={error} description={overview ? `当前仍显示 ${supportDate(overview.generated_at)} 的旧快照，请勿当作实时状态。` : undefined} />}
-    <div className="support-summary"><div className="support-summary-card"><span>去重入口</span><strong>{overview?.summary?.total ?? '—'}</strong></div>{(['healthy', 'partial', 'unhealthy', 'stale', 'unmonitored'] as SupportHealthStatus[]).map((key) => <div className="support-summary-card" key={key}><span>{statuses[key].label}</span><strong>{overview?.summary?.[key] ?? '—'}</strong></div>)}</div>
+    <div className="support-summary"><div className="support-summary-card"><span>去重入口</span><strong>{overview ? summary.total : '—'}</strong></div>{(['healthy', 'partial', 'unhealthy', 'stale'] as SupportHealthStatus[]).map((key) => <div className="support-summary-card" key={key}><span>{statuses[key].label}</span><strong>{overview ? summary[key] : '—'}</strong></div>)}</div>
     <div className="support-toolbar"><Space wrap><Input aria-label="筛选入口或关联组" prefix={<SearchOutlined aria-hidden />} placeholder="筛选入口或关联组" value={keyword} allowClear onChange={(event) => setKeyword(event.target.value)} style={{ width: 260 }} /><Checkbox checked={onlyIssues} onChange={(event) => setOnlyIssues(event.target.checked)}>只看异常 / 未知</Checkbox></Space><Button icon={<ReloadOutlined aria-hidden />} loading={loading} onClick={load}>刷新</Button></div>
     <Typography.Paragraph type="secondary">最近快照：{supportDate(overview?.generated_at)} · 展开入口查看关联分组，再展开分组查看原始探针结果。</Typography.Paragraph>
     <Table rowKey="key" columns={columns} dataSource={entries} loading={loading} scroll={{ x: 1050 }} expandable={{ expandedRowRender: (entry) => <EntrySources entry={entry} />, rowExpandable: (entry) => !!entry.sources?.length }} pagination={{ pageSize: 20, showSizeChanger: false, showTotal: (total) => `共 ${total} 个去重入口` }} locale={{ emptyText: <Empty description={overview ? '暂无符合条件的入口' : '暂无检测数据'} /> }} />
