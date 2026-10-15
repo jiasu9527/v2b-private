@@ -115,6 +115,11 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 		UA:               ua,
 	}, userPolicies, s.clientEntryHostResolver)
 
+	servers, err = s.applySupportEntries(ctx, servers, userPolicies, userID, now)
+	if err != nil {
+		return nil, err
+	}
+
 	filtered := make([]map[string]any, 0, len(servers))
 	for _, item := range servers {
 		if rawPort, isRange := serverPortRange(item["port"]); isRange {

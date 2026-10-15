@@ -43,6 +43,7 @@ type routerState struct {
 	session           session.Service
 	user              usersvc.Service
 	payment           payment.Service
+	support           supportService
 	admin             admin.Service
 	appleID           appleIDUserService
 	appleIDAdmin      appleIDAdminService
@@ -110,6 +111,9 @@ func WithPaymentService(service payment.Service) Option {
 func WithAdminService(service admin.Service) Option {
 	return func(state *routerState) {
 		state.admin = service
+		if support, ok := service.(supportService); ok {
+			state.support = support
+		}
 		if probeService, ok := service.(admin.DNSProbeService); ok {
 			state.dnsProbe = probeService
 		}
@@ -389,7 +393,7 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 				return
 			}
 		case r.URL.Path == "/api/v1/user/checkLogin":
-			if handleUserCheckLogin(w, r, state.session) {
+			if handleUserCheckLogin(w, r, state.session, state.support) {
 				return
 			}
 		case r.URL.Path == "/api/v1/user/info":
@@ -562,6 +566,14 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			}
 		case r.URL.Path == "/api/v1/user/order/cancel":
 			if handleUserOrderCancel(w, r, state.session, state.user) {
+				return
+			}
+		case strings.HasPrefix(r.URL.Path, "/api/v1/support/"):
+			if handleSupport(w, r, state.session, state.support, strings.TrimPrefix(r.URL.Path, "/api/v1/support/"), false) {
+				return
+			}
+		case strings.HasPrefix(r.URL.Path, adminPrefix+"/support/"):
+			if handleSupport(w, r, state.session, state.support, strings.TrimPrefix(r.URL.Path, adminPrefix+"/support/"), true) {
 				return
 			}
 		case r.URL.Path == "/api/v1/staff/plan/fetch":
@@ -1876,14 +1888,33 @@ func handlePassportLoginWithMailLink(w http.ResponseWriter, r *http.Request, ser
 	return true
 }
 
-func handleUserCheckLogin(w http.ResponseWriter, r *http.Request, service session.Service) bool {
-	identity, ok := authenticateRequest(w, r, service, false)
+func handleUserCheckLogin(w http.ResponseWriter, r *http.Request, service session.Service, supports ...supportService) bool {
+	// Preserve legacy App/browser query, JSON and form auth_data inputs, while
+	// validating sessions freshly for backend identity checks.
+	if service == nil {
+		return handleSessionError(w, session.ErrUnavailable)
+	}
+	token, err := readAuthToken(r)
+	if err != nil {
+		writeJSON(w, 400, map[string]any{"message": err.Error()})
+		return true
+	}
+	identity, ok := authenticateSupportToken(w, r, service, token, false)
 	if !ok {
 		return true
 	}
 
 	data := map[string]any{
-		"is_login": true,
+		"is_login": true, "id": identity.ID, "email": identity.Email,
+	}
+	if identity.IsAdmin == 0 && len(supports) > 0 && supports[0] != nil {
+		allowed, err := supports[0].IsSupportStaff(r.Context(), identity.ID)
+		if err != nil {
+			return handleSupportError(w, err)
+		}
+		if allowed {
+			data["is_support"] = true
+		}
 	}
 	if identity.IsAdmin != 0 {
 		data["is_admin"] = true
@@ -3419,7 +3450,7 @@ func handleStaffUserGetInfo(w http.ResponseWriter, r *http.Request, sessionServi
 		return true
 	}
 
-	data, err := adminService.GetUserInfoByID(r.Context(), id)
+	data, err := adminService.GetUserInfoByID(admin.WithLegacyStaffScope(r.Context()), id)
 	if err != nil {
 		return handleAdminError(w, err)
 	}
@@ -3451,7 +3482,7 @@ func handleStaffUserUpdate(w http.ResponseWriter, r *http.Request, sessionServic
 		return true
 	}
 
-	data, err := adminService.GetUserInfoByID(r.Context(), id)
+	data, err := adminService.GetUserInfoByID(admin.WithLegacyStaffScope(r.Context()), id)
 	if err != nil {
 		return handleAdminError(w, err)
 	}
@@ -3463,7 +3494,7 @@ func handleStaffUserUpdate(w http.ResponseWriter, r *http.Request, sessionServic
 	values := copyInputsWithout(inputs, "auth_data", "id")
 	values["is_admin"] = "0"
 	values["is_staff"] = "0"
-	updated, err := adminService.UpdateUser(r.Context(), admin.UserUpdateRequest{
+	updated, err := adminService.UpdateUser(admin.WithLegacyStaffScope(r.Context()), admin.UserUpdateRequest{
 		ID:     id,
 		Values: values,
 	})
@@ -3489,7 +3520,7 @@ func handleStaffUserSendMail(w http.ResponseWriter, r *http.Request, sessionServ
 		return true
 	}
 
-	sent, err := adminService.SendUserMail(r.Context(), admin.UserMailRequest{
+	sent, err := adminService.SendUserMail(admin.WithLegacyStaffScope(r.Context()), admin.UserMailRequest{
 		Subject:  strings.TrimSpace(inputs["subject"]),
 		Content:  strings.TrimSpace(inputs["content"]),
 		Sort:     strings.TrimSpace(inputs["sort"]),
@@ -3518,7 +3549,7 @@ func handleStaffUserBan(w http.ResponseWriter, r *http.Request, sessionService s
 		return true
 	}
 
-	banned, err := adminService.BanUsers(r.Context(), enforceStaffUserScope(userFilters(inputs)))
+	banned, err := adminService.BanUsers(admin.WithLegacyStaffScope(r.Context()), enforceStaffUserScope(userFilters(inputs)))
 	if err != nil {
 		return handleAdminError(w, err)
 	}
@@ -3541,7 +3572,7 @@ func handleStaffUserUnban(w http.ResponseWriter, r *http.Request, sessionService
 		return true
 	}
 
-	unbanned, err := adminService.UnbanUsers(r.Context(), enforceStaffUserScope(userFilters(inputs)))
+	unbanned, err := adminService.UnbanUsers(admin.WithLegacyStaffScope(r.Context()), enforceStaffUserScope(userFilters(inputs)))
 	if err != nil {
 		return handleAdminError(w, err)
 	}

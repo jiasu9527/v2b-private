@@ -199,6 +199,10 @@ func expectClientEntryMonitorCleanup(mock sqlmock.Sqlmock) {
 	mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM v2_client_entry_monitor_run WHERE status <> 'running' AND created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM v2_client_entry_monitor_run`).
 		WithArgs(cleanupCutoffHours(24), int64(dnsFailoverCleanupBatchSize)).
 		WillReturnResult(sqlmock.NewResult(0, 4))
+	mock.ExpectExec(`(?s)WITH doomed AS \(\s*SELECT id FROM v2_support_operation WHERE created_at < \$1 ORDER BY id LIMIT \$2\s*\).*DELETE FROM v2_support_operation`).
+		WithArgs(cleanupCutoffDays(90), int64(dnsFailoverCleanupBatchSize)).
+		WillReturnResult(sqlmock.NewResult(0, 4))
+
 }
 
 func TestDeleteDNSFailoverRetentionRowsRunsBoundedBatchesUntilDrained(t *testing.T) {

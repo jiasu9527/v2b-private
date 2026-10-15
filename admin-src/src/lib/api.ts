@@ -102,6 +102,10 @@ function normalizeError(json: any, fallback: string) {
 
 async function parseResponse(res: Response, options: { raw?: boolean } = {}) {
   const text = await res.text();
+  if (res.status === 401) {
+    clearAuth();
+    window.dispatchEvent(new Event('forest-auth-invalid'));
+  }
   if (options.raw) {
     if (!res.ok) {
       let fallback = text || res.statusText;
@@ -260,4 +264,48 @@ export function compactObject<T extends AnyRecord>(value: T): T {
     if (value[key] === undefined || value[key] === '') delete value[key];
   });
   return value;
+}
+
+let supportIdentityRefresh: Promise<void> | null = null;
+async function revalidateSupportIdentity(res: Response) {
+  if (res.status !== 403) return;
+  if (!supportIdentityRefresh) {
+    supportIdentityRefresh = (async () => {
+      const token = getAuth();
+      let revoked = false;
+      try {
+        const response = await fetch(`/api/v1/user/checkLogin?${toQuery()}`, { credentials: 'same-origin', cache: 'no-store' });
+        if (response.status === 401 || response.status === 403) revoked = true;
+        else if (response.ok) {
+          const payload = await response.json();
+          revoked = !payload?.data?.is_support && !payload?.data?.is_admin;
+        }
+      } catch { /* A transport error is not proof of revoked access. */ }
+      if (revoked && token === getAuth()) {
+        clearAuth();
+        window.dispatchEvent(new Event('forest-auth-invalid'));
+      }
+    })().finally(() => { supportIdentityRefresh = null; });
+  }
+  await supportIdentityRefresh;
+}
+
+// Support endpoints are independent of the administrator route and accept no auth fields in their JSON DTOs.
+export async function supportGet(path: string, params: AnyRecord = {}) {
+  const qs = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => appendValue(qs, key, value));
+  const auth = getAuth();
+  const res = await fetch(`/api/v1/support${path}${qs.size ? `?${qs}` : ''}`, { credentials: 'same-origin', cache: 'no-store', headers: auth ? { Authorization: `Bearer ${auth}` } : {} });
+  await revalidateSupportIdentity(res);
+  return parseResponse(res);
+}
+
+export async function supportPost(path: string, body: AnyRecord = {}) {
+  const auth = getAuth();
+  const res = await fetch(`/api/v1/support${path}`, {
+    method: 'POST', credentials: 'same-origin', cache: 'no-store',
+    headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: `Bearer ${auth}` } : {}) }, body: JSON.stringify(body),
+  });
+  await revalidateSupportIdentity(res);
+  return parseResponse(res);
 }

@@ -257,6 +257,7 @@ type DBService struct {
 	authCache *session.AuthCache
 
 	clientEntryHostResolver *clientEntryHostResolver
+	supportEntryEnabled     bool
 
 	clientEntryEnsureOnce sync.Once
 	clientEntryEnsureErr  error

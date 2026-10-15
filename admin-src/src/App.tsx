@@ -1,13 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Layout, Button, ConfigProvider, Dropdown, Space, theme, Typography } from 'antd';
+import { Layout, Button, ConfigProvider, Dropdown, Space, Spin, theme, Typography } from 'antd';
 import {
   AppstoreOutlined, DashboardOutlined, UserOutlined, ShoppingCartOutlined,
   SettingOutlined, FileTextOutlined, GiftOutlined, CreditCardOutlined, QuestionCircleOutlined,
   MessageOutlined, MenuFoldOutlined, MenuUnfoldOutlined, LogoutOutlined, DeploymentUnitOutlined,
-  ShareAltOutlined, DatabaseOutlined, BellOutlined, DownOutlined, SafetyCertificateOutlined, GlobalOutlined
+  ShareAltOutlined, DatabaseOutlined, BellOutlined, DownOutlined, SafetyCertificateOutlined, GlobalOutlined, TeamOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import Login from './pages/Login';
+import SupportWorkbenchPage from './pages/SupportWorkbenchPage';
+import SupportStaffPage from './pages/SupportStaffPage';
 import Dashboard from './pages/Dashboard';
 import UserPage from './pages/UserPage';
 import OrderPage from './pages/OrderPage';
@@ -28,7 +30,7 @@ import ServerRoutePage from './pages/ServerRoutePage';
 import SubscribeGuardPage from './pages/SubscribeGuardPage';
 import DNSPodPage from './pages/DNSPodPage';
 import DNSFailoverPage from './pages/DNSFailoverPage';
-import { checkLogin, clearAuth, getAdminUserInfo, getAuth, getCurrentUserInfo, getSettings, pathAdminSegment, setAdminUserInfo } from './lib/api';
+import { checkLogin, clearAuth, getAuth, getCurrentUserInfo, getSettings, pathAdminSegment, setAdminUserInfo } from './lib/api';
 
 const { Header, Sider, Content } = Layout;
 const MOBILE_QUERY = '(max-width: 768px)';
@@ -59,6 +61,7 @@ const menu = [
   { type: 'item', key: '/invite-campaign', icon: <ShareAltOutlined />, label: '活动任务' },
   { type: 'heading', key: 'user-heading', label: '用户' },
   { type: 'item', key: '/user', icon: <UserOutlined />, label: '用户管理' },
+  { type: 'item', key: '/support/staff', icon: <TeamOutlined />, label: '员工管理' },
   { type: 'item', key: '/notice', icon: <BellOutlined />, label: '公告管理' },
   { type: 'item', key: '/ticket', icon: <MessageOutlined />, label: '工单管理' },
   { type: 'item', key: '/knowledge', icon: <QuestionCircleOutlined />, label: '知识库管理' },
@@ -82,6 +85,7 @@ function Page({ path }: { path: string }) {
   const route = path.split('?')[0];
   if (route === '/dashboard') return <Dashboard />;
   if (route === '/user') return <UserPage />;
+  if (route === '/support/staff') return <SupportStaffPage />;
   if (route === '/plan') return <PlanPage />;
   if (route === '/order') return <OrderPage />;
   if (route === '/apple-id') return <AppleIDPage />;
@@ -109,10 +113,11 @@ function Page({ path }: { path: string }) {
 }
 
 export default function App() {
-  const [authed, setAuthed] = useState(!!getAuth());
+  const [authed, setAuthed] = useState(false);
+  const [authChecking, setAuthChecking] = useState(!!getAuth());
   const [isMobile, setIsMobile] = useState(getIsMobileViewport);
   const [collapsed, setCollapsed] = useState(() => getIsMobileViewport());
-  const [adminUser, setAdminUser] = useState(() => getAdminUserInfo());
+  const [adminUser, setAdminUser] = useState<Record<string, any>>({});
   const [path, setPath] = useState(normalizePath());
   const settings = getSettings();
   const title = settings.title || 'Forest';
@@ -138,29 +143,40 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!getAuth()) return;
-    checkLogin().then(async (r) => {
-      if (!r.data?.is_admin) {
-        clearAuth();
-        setAdminUser({});
-        setAuthed(false);
-        return;
-      }
-      try {
-        const info = await getCurrentUserInfo();
-        const user = info.data || {};
-        if (user.email) {
-          setAdminUserInfo(user);
-          setAdminUser(user);
-        }
-      } catch {
-        setAdminUser(getAdminUserInfo());
-      }
-    }).catch(() => {
+    let mounted = true;
+    let checking = false;
+    const rejectIdentity = () => {
       clearAuth();
-      setAdminUser({});
-      setAuthed(false);
-    });
+      if (mounted) { setAdminUser({}); setAuthed(false); setAuthChecking(false); }
+    };
+    const verify = async () => {
+      const token = getAuth();
+      if (!token || checking) return;
+      checking = true;
+      try {
+        const response = await checkLogin();
+        if (!mounted || token !== getAuth()) return;
+        const identity = response.data || {};
+        if (!identity.is_admin && !identity.is_support) { rejectIdentity(); return; }
+        setAdminUserInfo(identity); setAdminUser(identity); setAuthed(true);
+        // Staff identity uses only the dedicated checkLogin DTO, never administrator/user-detail endpoints.
+        if (identity.is_admin) {
+          try {
+            const info = await getCurrentUserInfo();
+            if (mounted && token === getAuth()) {
+              const user = { ...(info.data || {}), ...identity };
+              setAdminUserInfo(user); setAdminUser(user);
+            }
+          } catch { /* checkLogin remains the authority; optional profile data is not needed. */ }
+        }
+      } catch { if (mounted && token === getAuth()) rejectIdentity(); }
+      finally { checking = false; if (mounted) setAuthChecking(false); }
+    };
+    const onVisible = () => { if (document.visibilityState === 'visible') verify(); };
+    window.addEventListener('forest-auth-invalid', rejectIdentity);
+    document.addEventListener('visibilitychange', onVisible);
+    verify();
+    return () => { mounted = false; window.removeEventListener('forest-auth-invalid', rejectIdentity); document.removeEventListener('visibilitychange', onVisible); };
   }, []);
   useEffect(() => { const f=()=>setPath(normalizePath()); window.addEventListener('popstate',f); window.addEventListener('hashchange',f); return()=>{ window.removeEventListener('popstate',f); window.removeEventListener('hashchange',f); }; }, []);
 
@@ -170,12 +186,15 @@ export default function App() {
     return [route.startsWith('/ticket/') ? '/ticket' : route === '/apple-id/finance' ? '/apple-id' : route];
   }, [path]);
   const navigate = (key: string) => { if (!key.startsWith('/')) return; history.pushState(null, '', `/${adminPath}${key}`); setPath(key); if (isMobile) setCollapsed(true); };
-  const navItems = menu.map((item) => item.type === 'heading'
+  const supportOnly = authed && !adminUser.is_admin && !!adminUser.is_support;
+  const visibleMenu = supportOnly ? [{ type: 'item', key: '/support/workbench', icon: <SafetyCertificateOutlined />, label: '员工工作台' }] : menu;
+  const navItems = visibleMenu.map((item) => item.type === 'heading'
     ? <li key={item.key} className="nav-main-heading">{item.label}</li>
-    : <li key={item.key} className="nav-main-item"><button className={`nav-main-link ${selected.includes(item.key) ? 'active' : ''}`} onClick={() => navigate(item.key)}><span className="nav-main-link-icon">{item.icon}</span>{!collapsed && <span className="nav-main-link-name">{item.label}</span>}</button></li>);
-  if (!authed) return <ConfigProvider locale={zhCN}><Login onDone={() => { setAdminUser(getAdminUserInfo()); setAuthed(true); }} /></ConfigProvider>;
+    : <li key={item.key} className="nav-main-item"><button className={`nav-main-link ${(supportOnly || selected.includes(item.key)) ? 'active' : ''}`} onClick={() => navigate(item.key)}><span className="nav-main-link-icon">{item.icon}</span>{!collapsed && <span className="nav-main-link-name">{item.label}</span>}</button></li>);
+  if (authChecking) return <ConfigProvider locale={zhCN}><div className="login-page"><Spin size="large" tip="正在验证后台权限"><div style={{ width: 240, height: 80 }} /></Spin></div></ConfigProvider>;
+  if (!authed) return <ConfigProvider locale={zhCN}><Login onDone={(user) => { setAdminUser(user); setAuthed(true); setAuthChecking(false); if (!user.is_admin) { history.replaceState(null, '', `/${adminPath}/support/workbench`); setPath('/support/workbench'); } }} /></ConfigProvider>;
 
-  const isTicketDetailPath = /^\/ticket\/\d+/.test(path);
+  const isTicketDetailPath = !supportOnly && /^\/ticket\/\d+/.test(path);
   const adminDisplayName = String(adminUser.email || adminUser.account || adminUser.name || 'Admin');
   const logout = () => {
     clearAuth();
@@ -193,7 +212,7 @@ export default function App() {
       {isMobile && !collapsed && <div className="admin-sider-mask" onClick={() => setCollapsed(true)} />}
       <Layout>
         <Header className="admin-header"><Button type="text" aria-label={collapsed ? '展开菜单' : '收起菜单'} icon={collapsed ? <MenuUnfoldOutlined/> : <MenuFoldOutlined/>} onClick={()=>setCollapsed((value)=>!value)} /><div className="header-spacer"/><Dropdown trigger={['click']} menu={{ items: [{ key: 'logout', icon: <LogoutOutlined />, label: '退出登录', onClick: logout }] }}><Button type="text" className="admin-account-button"><Space size={6}><UserOutlined /><span className="admin-account-name" title={adminDisplayName}>{adminDisplayName}</span><DownOutlined /></Space></Button></Dropdown></Header>
-        <Content className="admin-content"><Page key={path} path={path} /></Content>
+        <Content className="admin-content">{supportOnly ? <SupportWorkbenchPage /> : <Page key={path} path={path} />}</Content>
       </Layout>
     </Layout>}
   </ConfigProvider>;

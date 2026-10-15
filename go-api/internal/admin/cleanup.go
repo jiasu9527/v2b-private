@@ -14,6 +14,7 @@ const (
 	dnsProbeResultInboxKeepDays int64 = 3
 	dnsFailoverEventKeepDays    int64 = 3
 	clientEntryMonitorRetention       = 24 * time.Hour
+	supportOperationKeepDays    int64 = 90
 	dnsFailoverCleanupBatchSize       = 5000
 )
 
@@ -160,6 +161,12 @@ SELECT id FROM v2_client_entry_monitor_run WHERE status <> 'running' AND created
 )
 DELETE FROM v2_client_entry_monitor_run WHERE id IN (SELECT id FROM doomed)`, clientEntryCutoff, dnsFailoverCleanupBatchSize); err != nil {
 		return fmt.Errorf("cleanup client entry monitor run: %w", err)
+	}
+	if err := deleteDNSFailoverRetentionRows(ctx, s.db, `WITH doomed AS (
+SELECT id FROM v2_support_operation WHERE created_at < $1 ORDER BY id LIMIT $2
+)
+DELETE FROM v2_support_operation WHERE id IN (SELECT id FROM doomed)`, nowUnix-(supportOperationKeepDays*86400), dnsFailoverCleanupBatchSize); err != nil {
+		return fmt.Errorf("cleanup support operations: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO v2_runtime_kv (k, v, expire_at, created_at, updated_at)
 VALUES ($1, $2, 0, $3, $3)

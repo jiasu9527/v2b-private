@@ -453,6 +453,8 @@ type DBService struct {
 	dnsFailoverLogf           func(string, ...any)
 	dnsFailoverLogWriter      func(context.Context, []dnsFailoverLogEntry) error
 
+	supportEnsureOnce       sync.Once
+	supportEnsureErr        error
 	clientEntryEnsureOnce   sync.Once
 	clientEntryEnsureErr    error
 	clientEntryMonitorMu    sync.Mutex

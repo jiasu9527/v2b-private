@@ -49,6 +49,9 @@ func main() {
 		if err := postgres.EnsureClientEntrySchema(ctx, db); err != nil {
 			log.Fatalf("ensure client entry schema: %v", err)
 		}
+		if err := postgres.EnsureSupportSchema(ctx, db); err != nil {
+			log.Fatalf("ensure support schema: %v", err)
+		}
 		report, err := postgres.MigrateLegacyServerHostEntryRules(ctx, db)
 		if err != nil {
 			var migrationErr *postgres.LegacyEntryHostMigrationError
@@ -92,7 +95,7 @@ func main() {
 	jobQueue.Start()
 	defer jobQueue.Shutdown(context.Background())
 	if db != nil {
-		userDBService := usersvc.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
+		userDBService := usersvc.NewDBService(cfg, db).WithSupportEntries().WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
 		telegramService = telegram.NewService(cfg, db).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue)
 		userDBService = userDBService.WithAdminNotifier(telegramService)
 		passportService = passport.NewDBServiceWithConfig(cfg, db).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
