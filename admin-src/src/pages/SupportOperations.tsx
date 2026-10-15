@@ -36,7 +36,7 @@ export default function SupportOperations({ administrator = false }: { administr
     { title: '时间', dataIndex: 'created_at', width: 180, render: supportDate },
     ...(administrator ? [{ title: '操作员工', dataIndex: 'actor_email', width: 200, render: (v: string, r: SupportOperation) => v || `#${r.actor_id}` }] : []),
     { title: '用户', dataIndex: 'target_email', width: 210, render: (v: string, r: SupportOperation) => <>{v || '—'}<div className="support-muted">ID {r.target_user_id}</div></> },
-    { title: '线路范围', dataIndex: 'source_policy_id', width: 110, render: (v: number, row: SupportOperation) => row.after_state?.source_name || row.before_state?.source_name || (v > 0 ? `规则 #${v}` : '员工授权') },
+    { title: '线路范围', dataIndex: 'source_policy_id', width: 110, render: (v: number, row: SupportOperation) => row.after_state?.source_name || row.before_state?.source_name || (v > 0 ? `规则 #${v}` : '员工操作') },
     { title: '变更前', dataIndex: 'before_state', width: 190, render: stateDescription },
     { title: '变更后', dataIndex: 'after_state', width: 190, render: stateDescription },
     { title: '原因', dataIndex: 'reason', width: 230 },

@@ -356,20 +356,16 @@ func (s *Service) NotifyAdmins(ctx context.Context, message string, includeStaff
 	return nil
 }
 
-func (s *Service) lookupRecipients(ctx context.Context, includeStaff bool) ([]int64, error) {
+func (s *Service) lookupRecipients(ctx context.Context, _ bool) ([]int64, error) {
 	if s.db == nil {
 		return nil, nil
 	}
 
+	// Broad admin notifications can contain full user/ticket/operational data.
+	// Restricted employees retrieve only their precise workbench scope instead.
 	query := `SELECT telegram_id
 FROM v2_user
-WHERE telegram_id IS NOT NULL
-	AND banned = 0
-  AND (is_admin = 1`
-	if includeStaff {
-		query += ` OR is_staff = 1`
-	}
-	query += `)
+WHERE telegram_id IS NOT NULL AND banned = 0 AND is_admin = 1
 ORDER BY id ASC`
 
 	rows, err := s.db.QueryContext(ctx, query)

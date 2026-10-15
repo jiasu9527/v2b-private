@@ -146,7 +146,7 @@ func (s *DBService) RequestClientEntryManualAutoSplit(ctx context.Context, targe
 	var operatorID int64
 	if err := tx.QueryRowContext(ctx, `SELECT id
 FROM v2_user
-WHERE id = $1 AND banned = 0 AND (is_admin = 1 OR is_staff = 1)
+WHERE id = $1 AND banned = 0 AND is_admin = 1
 FOR SHARE`, requestedByUserID).Scan(&operatorID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, ErrClientEntryManualAutoSplitForbidden

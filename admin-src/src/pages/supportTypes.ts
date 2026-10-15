@@ -29,19 +29,8 @@ export type SupportScope = {
 
 export type SupportUserResult = {
   found: boolean;
-  can_restore?: boolean;
   user?: { id: number; email: string; plan_name: string; expired_at: number | null; remaining_bytes: number; banned?: boolean };
   scopes: SupportScope[];
-};
-
-export type SupportStaff = {
-  user_id: number;
-  email: string;
-  enabled: boolean;
-  target_keys: string[];
-  version: number;
-  created_at: number;
-  updated_at: number;
 };
 
 export type SupportOperation = {

@@ -5236,7 +5236,7 @@ func TestRouterAdminUserAllDelEndpoint(t *testing.T) {
 }
 
 func TestRouterStaffPlanFetchEndpoint(t *testing.T) {
-	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsStaff: 1}}
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsAdmin: 1}}
 	adminService := &fakeAdminService{
 		plans: []admin.PlanRecord{{ID: 3, Name: "Starter", Count: 12}},
 	}
@@ -5256,8 +5256,8 @@ func TestRouterStaffPlanFetchEndpoint(t *testing.T) {
 	if rec.Header().Get("Cache-Control") != "no-store, no-cache, must-revalidate, max-age=0" {
 		t.Fatalf("expected staff plan fetch to disable cache, got %q", rec.Header().Get("Cache-Control"))
 	}
-	if sessionService.lastRequireAdmin {
-		t.Fatalf("staff route should not require admin auth")
+	if !sessionService.lastRequireAdmin {
+		t.Fatalf("legacy staff route must require admin auth")
 	}
 	if !strings.Contains(rec.Body.String(), `"Starter"`) {
 		t.Fatalf("expected plan payload in body, got %s", rec.Body.String())
@@ -5265,7 +5265,7 @@ func TestRouterStaffPlanFetchEndpoint(t *testing.T) {
 }
 
 func TestRouterStaffTicketFetchEndpoint(t *testing.T) {
-	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsStaff: 1}}
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsAdmin: 1}}
 	adminService := &fakeAdminService{
 		ticketList: admin.TicketListResult{
 			Data:  []admin.TicketRecord{{ID: 21, Subject: "Need help", Status: 0, ReplyStatus: 1}},
@@ -5294,7 +5294,7 @@ func TestRouterStaffTicketFetchEndpoint(t *testing.T) {
 }
 
 func TestRouterStaffTicketReplyEndpoint(t *testing.T) {
-	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsStaff: 1}}
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsAdmin: 1}}
 	adminService := &fakeAdminService{}
 	router := NewRouter(
 		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
@@ -5316,7 +5316,7 @@ func TestRouterStaffTicketReplyEndpoint(t *testing.T) {
 }
 
 func TestRouterStaffTicketCloseEndpoint(t *testing.T) {
-	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsStaff: 1}}
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsAdmin: 1}}
 	adminService := &fakeAdminService{}
 	router := NewRouter(
 		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
@@ -5338,7 +5338,7 @@ func TestRouterStaffTicketCloseEndpoint(t *testing.T) {
 }
 
 func TestRouterStaffNoticeFetchEndpoint(t *testing.T) {
-	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsStaff: 1}}
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsAdmin: 1}}
 	adminService := &fakeAdminService{
 		notices: []admin.NoticeRecord{{ID: 9, Title: "Maintenance", Show: 1}},
 	}
@@ -5361,7 +5361,7 @@ func TestRouterStaffNoticeFetchEndpoint(t *testing.T) {
 }
 
 func TestRouterStaffNoticeSaveEndpoint(t *testing.T) {
-	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsStaff: 1}}
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsAdmin: 1}}
 	adminService := &fakeAdminService{}
 	router := NewRouter(
 		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
@@ -5383,7 +5383,7 @@ func TestRouterStaffNoticeSaveEndpoint(t *testing.T) {
 }
 
 func TestRouterStaffNoticeDropEndpoint(t *testing.T) {
-	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsStaff: 1}}
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsAdmin: 1}}
 	adminService := &fakeAdminService{}
 	router := NewRouter(
 		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
@@ -5405,7 +5405,7 @@ func TestRouterStaffNoticeDropEndpoint(t *testing.T) {
 }
 
 func TestRouterStaffUserGetInfoEndpoint(t *testing.T) {
-	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsStaff: 1}}
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsAdmin: 1}}
 	adminService := &fakeAdminService{
 		userInfoDetail: map[string]any{"id": int64(9), "email": "demo@example.com", "is_admin": int64(0), "is_staff": int64(0)},
 	}
@@ -5428,7 +5428,7 @@ func TestRouterStaffUserGetInfoEndpoint(t *testing.T) {
 }
 
 func TestRouterStaffUserUpdateEndpoint(t *testing.T) {
-	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsStaff: 1}}
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsAdmin: 1}}
 	adminService := &fakeAdminService{
 		userInfoDetail: map[string]any{"id": int64(9), "email": "demo@example.com", "is_admin": int64(0), "is_staff": int64(0)},
 	}
@@ -5456,7 +5456,7 @@ func TestRouterStaffUserUpdateEndpoint(t *testing.T) {
 }
 
 func TestRouterStaffUserSendMailEndpoint(t *testing.T) {
-	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsStaff: 1}}
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsAdmin: 1}}
 	adminService := &fakeAdminService{}
 	router := NewRouter(
 		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
@@ -5481,7 +5481,7 @@ func TestRouterStaffUserSendMailEndpoint(t *testing.T) {
 }
 
 func TestRouterStaffUserBanEndpoint(t *testing.T) {
-	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsStaff: 1}}
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsAdmin: 1}}
 	adminService := &fakeAdminService{}
 	router := NewRouter(
 		config.Config{AppName: "forest-go", AdminPath: "localadmin"},
@@ -5503,7 +5503,7 @@ func TestRouterStaffUserBanEndpoint(t *testing.T) {
 }
 
 func TestRouterStaffUserUnbanEndpoint(t *testing.T) {
-	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsStaff: 1}}
+	sessionService := &fakeSessionService{user: &session.Identity{ID: 7, IsAdmin: 1}}
 	adminService := &fakeAdminService{}
 	router := NewRouter(
 		config.Config{AppName: "forest-go", AdminPath: "localadmin"},

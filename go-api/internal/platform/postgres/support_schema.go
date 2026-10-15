@@ -6,8 +6,8 @@ import (
 	"fmt"
 )
 
-// EnsureSupportSchema deliberately keeps support membership separate from the
-// legacy is_staff flag, which grants much broader API and Telegram capabilities.
+// EnsureSupportSchema adds only workbench state. Employee identity is the
+// existing v2_user.is_staff flag; no independent role or target grants exist.
 func EnsureSupportSchema(ctx context.Context, db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("db is nil")
@@ -22,14 +22,6 @@ func EnsureSupportSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	for _, stmt := range []string{
-		`CREATE TABLE IF NOT EXISTS v2_support_staff (
-user_id INTEGER PRIMARY KEY,
-enabled SMALLINT NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
-target_keys JSONB NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(target_keys) = 'array'),
-version BIGINT NOT NULL DEFAULT 1 CHECK (version > 0),
-created_at BIGINT NOT NULL,
-updated_at BIGINT NOT NULL
-)`,
 		`CREATE TABLE IF NOT EXISTS v2_support_request_limit (
 actor_id INTEGER NOT NULL,
 action VARCHAR(16) NOT NULL,

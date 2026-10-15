@@ -111,28 +111,16 @@ func parseSupportLookup(value string) (int64, string, error) {
 	}
 	return 0, strings.ToLower(value), nil
 }
-func supportUserResult(preview usersvc.SupportEntryPreview, staff SupportStaffRecord) SupportUserResult {
-	allowed := map[string]bool{}
-	for _, key := range staff.TargetKeys {
-		allowed[key] = true
-	}
-	for i := range preview.Scopes {
-		targets := []SupportEntryTarget{}
-		for _, target := range preview.Scopes[i].Targets {
-			if allowed[target.Key] {
-				targets = append(targets, target)
-			}
-		}
-		preview.Scopes[i].Targets = targets
-	}
-	return SupportUserResult{Found: true, User: &preview.User, Scopes: preview.Scopes, UA: preview.UA, CanRestore: len(staff.TargetKeys) > 0}
+func supportUserResult(preview usersvc.SupportEntryPreview) SupportUserResult {
+	return SupportUserResult{Found: true, User: &preview.User, Scopes: preview.Scopes, UA: preview.UA, CanRestore: true}
 }
 func (s *DBService) LookupSupportUser(ctx context.Context, actorID int64, query, ua string) (SupportUserResult, error) {
 	empty := SupportUserResult{Scopes: []usersvc.SupportEntryScope{}, UA: ua}
-	staff, err := s.requireSupportStaff(ctx, actorID)
+	_, err := s.requireSupportStaff(ctx, actorID)
 	if err != nil {
 		return empty, err
 	}
+	empty.CanRestore = true
 	id, email, err := parseSupportLookup(query)
 	if err != nil {
 		return empty, err
@@ -151,7 +139,6 @@ func (s *DBService) LookupSupportUser(ctx context.Context, actorID int64, query,
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT u.id FROM v2_user u WHERE `+where+`
  AND u.is_admin = 0 AND u.is_staff = 0
- AND NOT EXISTS (SELECT 1 FROM v2_support_staff staff WHERE staff.user_id = u.id)
  ORDER BY u.id LIMIT 2`, value)
 	if err != nil {
 		return empty, err
@@ -180,7 +167,7 @@ func (s *DBService) LookupSupportUser(ctx context.Context, actorID int64, query,
 	if err != nil {
 		return empty, err
 	}
-	return supportUserResult(preview, staff), nil
+	return supportUserResult(preview), nil
 }
 
 func normalizeSupportChange(req SupportEntryChangeRequest, now int64) (SupportEntryChangeRequest, error) {
@@ -209,35 +196,22 @@ func supportChangeHash(req SupportEntryChangeRequest) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Authorize while holding the same user->membership lock order as role edits.
+// Lock the existing employee row while mutating an entry. User role changes
+// update this same row, serializing revocation with an in-flight operation.
 func lockSupportActor(ctx context.Context, tx *sql.Tx, actorID int64) (SupportStaffRecord, error) {
 	var staff SupportStaffRecord
-	var id int64
-	err := tx.QueryRowContext(ctx, `SELECT id FROM v2_user WHERE id = $1 AND banned = 0 AND is_admin = 0 AND is_staff = 0 FOR SHARE`, actorID).Scan(&id)
+	err := tx.QueryRowContext(ctx, `SELECT id,email FROM v2_user WHERE id = $1 AND banned = 0 AND is_admin = 0 AND is_staff = 1 FOR SHARE`, actorID).Scan(&staff.UserID, &staff.Email)
 	if errors.Is(err, sql.ErrNoRows) {
 		return staff, ErrSupportForbidden
 	}
 	if err != nil {
 		return staff, err
 	}
-	var raw string
-	err = tx.QueryRowContext(ctx, `SELECT user_id,target_keys::TEXT FROM v2_support_staff WHERE user_id = $1 AND enabled = 1 FOR SHARE`, actorID).Scan(&staff.UserID, &raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return staff, ErrSupportForbidden
-	}
-	if err != nil {
-		return staff, err
-	}
-	if err = json.Unmarshal([]byte(raw), &staff.TargetKeys); err != nil {
-		return staff, err
-	}
-	staff.Enabled = true
 	return staff, nil
 }
 func lockSupportTargetUser(ctx context.Context, tx *sql.Tx, userID int64) error {
 	var id, isAdmin, isStaff int64
-	err := tx.QueryRowContext(ctx, `SELECT id,is_admin,is_staff FROM v2_user WHERE id = $1 AND is_admin = 0 AND is_staff = 0
- AND NOT EXISTS (SELECT 1 FROM v2_support_staff staff WHERE staff.user_id = v2_user.id) FOR UPDATE`, userID).Scan(&id, &isAdmin, &isStaff)
+	err := tx.QueryRowContext(ctx, `SELECT id,is_admin,is_staff FROM v2_user WHERE id = $1 AND is_admin = 0 AND is_staff = 0 FOR UPDATE`, userID).Scan(&id, &isAdmin, &isStaff)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrSupportEntryNotFound
 	}
@@ -245,13 +219,6 @@ func lockSupportTargetUser(ctx context.Context, tx *sql.Tx, userID int64) error 
 		return err
 	}
 	if isAdmin != 0 || isStaff != 0 {
-		return ErrSupportForbidden
-	}
-	var support bool
-	if err = tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM v2_support_staff WHERE user_id = $1)`, userID).Scan(&support); err != nil {
-		return err
-	}
-	if support {
 		return ErrSupportForbidden
 	}
 	return nil
@@ -289,7 +256,7 @@ func (s *DBService) ChangeSupportEntry(ctx context.Context, actorID int64, req S
 		return empty, err
 	}
 	defer tx.Rollback()
-	staff, err := lockSupportActor(ctx, tx, actorID)
+	_, err = lockSupportActor(ctx, tx, actorID)
 	if err != nil {
 		return empty, err
 	}
@@ -322,7 +289,7 @@ func (s *DBService) ChangeSupportEntry(ctx context.Context, actorID int64, req S
 		if err = tx.Commit(); err != nil {
 			return empty, err
 		}
-		return supportUserResult(preview, staff), nil
+		return supportUserResult(preview), nil
 	}
 	if req.ExpiresAt > 0 && req.ExpiresAt <= now {
 		return empty, fmt.Errorf("%w: 临时指定有效期必须晚于当前时间", ErrSupportEntryInvalid)
@@ -349,23 +316,10 @@ func (s *DBService) ChangeSupportEntry(ctx context.Context, actorID int64, req S
 	after := SupportOperationState{SourceName: scope.Name, Version: scope.Version + 1, RequestHash: fingerprint}
 	var target SupportEntryTarget
 	if req.Restore {
-		if len(staff.TargetKeys) == 0 {
-			return empty, ErrSupportForbidden
-		}
 		if scope.Override == nil || !scope.Override.Active {
 			return empty, fmt.Errorf("%w: 当前已经按规则自动分配", ErrSupportEntryInvalid)
 		}
 	} else {
-		allowed := false
-		for _, key := range staff.TargetKeys {
-			if key == req.TargetKey {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			return empty, ErrSupportForbidden
-		}
 		if !scope.Applicable {
 			return empty, fmt.Errorf("%w: 当前条件下该规则未生效，只能恢复自动分配", ErrSupportEntryInvalid)
 		}
@@ -423,7 +377,7 @@ VALUES ($1,$2,$3,$4,$5,$6::JSONB,$7::JSONB,$8)`, actorID, req.UserID, req.Source
 		status = "active"
 	}
 	scope.Override = &usersvc.SupportEntryOverride{SourcePolicyID: req.SourcePolicyID, TargetPolicyID: target.PolicyID, TargetGroupID: target.GroupID, TargetKey: after.TargetKey, TargetName: after.TargetName, EntryHost: after.EntryHost, Active: after.Active, Status: status, ExpiresAt: after.ExpiresAt, Version: after.Version}
-	return supportUserResult(preview, staff), nil
+	return supportUserResult(preview), nil
 }
 func (s *DBService) ListSupportOperations(ctx context.Context, actorID, page int64) (SupportOperationResult, error) {
 	result := SupportOperationResult{Items: []SupportOperation{}, Page: page, PageSize: 20}

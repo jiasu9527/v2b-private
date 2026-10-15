@@ -14,7 +14,7 @@ export default function Login({ onDone }: { onDone: (user: AnyRecord) => void })
       setAuth(data.auth_data || data.token);
       const checked = await checkLogin();
       const identity = checked.data || {};
-      if (!identity.is_admin && !identity.is_support) throw new Error('当前账号没有管理员或员工工作台权限');
+      if (!identity.is_admin && !identity.is_staff) throw new Error('当前账号没有管理员或员工工作台权限');
       const user = { ...identity, email: identity.email || values.email };
       setAdminUserInfo(user);
       message.success('登录成功');
@@ -25,7 +25,7 @@ export default function Login({ onDone }: { onDone: (user: AnyRecord) => void })
   return <div className="login-page">
     <Card className="login-card">
       <Typography.Title level={3}>{settings.title || 'Forest'} 管理后台</Typography.Title>
-      <Typography.Paragraph type="secondary">请输入管理员或获授权的员工账号登录</Typography.Paragraph>
+      <Typography.Paragraph type="secondary">请输入管理员或员工账号登录</Typography.Paragraph>
       <Form layout="vertical" onFinish={submit}>
         <Form.Item name="email" label="邮箱" rules={[{ required: true }]}><Input aria-label="邮箱" autoComplete="username" /></Form.Item>
         <Form.Item name="password" label="密码" rules={[{ required: true }]}><Input.Password aria-label="密码" autoComplete="current-password" /></Form.Item>

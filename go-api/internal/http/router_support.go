@@ -15,8 +15,6 @@ import (
 type supportService interface {
 	IsSupportStaff(context.Context, int64) (bool, error)
 	ConsumeSupportLimit(context.Context, int64, string) error
-	ListSupportStaff(context.Context) (admin.SupportStaffListResult, error)
-	SaveSupportStaff(context.Context, int64, admin.SupportStaffSaveRequest) (admin.SupportStaffRecord, error)
 	SupportEntryOverview(context.Context) (admin.SupportEntryOverview, error)
 	LookupSupportUser(context.Context, int64, string, string) (admin.SupportUserResult, error)
 	ChangeSupportEntry(context.Context, int64, admin.SupportEntryChangeRequest) (admin.SupportUserResult, error)
@@ -79,6 +77,9 @@ func handleSupport(w http.ResponseWriter, r *http.Request, sessions session.Serv
 		return true
 	}
 	if !adminOnly {
+		if identity.IsStaff == 0 || identity.IsAdmin != 0 {
+			return handleSupportError(w, admin.ErrSupportForbidden)
+		}
 		allowed, err := service.IsSupportStaff(r.Context(), identity.ID)
 		if err != nil {
 			return handleSupportError(w, err)
@@ -87,8 +88,12 @@ func handleSupport(w http.ResponseWriter, r *http.Request, sessions session.Serv
 			return handleSupportError(w, admin.ErrSupportForbidden)
 		}
 	}
+	if (adminOnly && action != "operations") || (!adminOnly && action != "overview" && action != "user" && action != "entry" && action != "operations") {
+		writeJSON(w, 404, map[string]any{"message": "Not found"})
+		return true
+	}
 	expected := http.MethodGet
-	if action == "entry" || action == "staff/save" {
+	if action == "entry" {
 		expected = http.MethodPost
 	}
 	if r.Method != expected {
@@ -126,14 +131,6 @@ func handleSupport(w http.ResponseWriter, r *http.Request, sessions session.Serv
 			actor = 0
 		}
 		result, err = service.ListSupportOperations(r.Context(), actor, page)
-	case adminOnly && action == "staff":
-		result, err = service.ListSupportStaff(r.Context())
-	case adminOnly && action == "staff/save":
-		var req admin.SupportStaffSaveRequest
-		if !decodeSupportJSON(w, r, &req) {
-			return true
-		}
-		result, err = service.SaveSupportStaff(r.Context(), identity.ID, req)
 	default:
 		writeJSON(w, 404, map[string]any{"message": "Not found"})
 		return true
@@ -167,11 +164,11 @@ func handleSupportError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, admin.ErrSupportRateLimited):
 		status, message = 429, err.Error()
 		w.Header().Set("Retry-After", "60")
-	case errors.Is(err, admin.ErrSupportEntryConflict), errors.Is(err, admin.ErrSupportStaffConflict):
+	case errors.Is(err, admin.ErrSupportEntryConflict):
 		status, message = 409, err.Error()
 	case errors.Is(err, admin.ErrSupportEntryNotFound):
 		status, message = 404, err.Error()
-	case errors.Is(err, admin.ErrSupportEntryInvalid), errors.Is(err, admin.ErrSupportStaffInvalid):
+	case errors.Is(err, admin.ErrSupportEntryInvalid):
 		status, message = 400, err.Error()
 	case errors.Is(err, admin.ErrUnavailable):
 		status = 503

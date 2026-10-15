@@ -57,7 +57,7 @@ func (f *fakeEntryMonitorController) RequestClientEntryManualAutoSplit(ctx conte
 	return f.requestManual(ctx, targetID, requestedByUserID)
 }
 
-const telegramOperatorQueryPattern = `(?s)SELECT id.*FROM v2_user.*WHERE telegram_id = \$1 AND banned = 0 AND \(is_admin = 1 OR is_staff = 1\).*ORDER BY id ASC.*LIMIT 1`
+const telegramOperatorQueryPattern = `(?s)SELECT id.*FROM v2_user.*WHERE telegram_id = \$1 AND banned = 0 AND \(is_admin = 1 OR is_staff = 1\).*ORDER BY is_admin DESC, id ASC.*LIMIT 1`
 
 func (f *fakeEntryMonitorController) StartClientEntryMonitorRun(ctx context.Context, userID, chatID int64, requestKey string) (int64, error) {
 	if f == nil || f.start == nil {
@@ -92,7 +92,7 @@ func TestMonitorCommandsShowPersistentAndInlineKeyboardsToBoundOperators(t *test
 		command string
 	}{
 		{name: "admin start", command: "/start"},
-		{name: "staff monitor", command: "/monitor@forest_bot"},
+		{name: "admin monitor", command: "/monitor@forest_bot"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			db, mock, err := sqlmock.New()
@@ -115,7 +115,7 @@ func TestMonitorCommandsShowPersistentAndInlineKeyboardsToBoundOperators(t *test
 
 			mock.ExpectQuery(telegramOperatorQueryPattern).
 				WithArgs(int64(123)).
-				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+				WillReturnRows(sqlmock.NewRows([]string{"id", "is_admin"}).AddRow(int64(9), int64(1)))
 
 			err = svc.HandleWebhook(context.Background(), monitorCommandPayload(test.command, 123))
 			if err != nil {
@@ -223,7 +223,7 @@ func TestMonitorCommandRejectsBannedOperator(t *testing.T) {
 	}
 }
 
-func TestMonitorRunCallbackAcknowledgesAndStartsForAuthorizedStaff(t *testing.T) {
+func TestMonitorRunCallbackAcknowledgesAndStartsForAdministrator(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -261,7 +261,7 @@ func TestMonitorRunCallbackAcknowledgesAndStartsForAuthorizedStaff(t *testing.T)
 	}
 	mock.ExpectQuery(telegramOperatorQueryPattern).
 		WithArgs(int64(123)).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "is_admin"}).AddRow(int64(9), int64(1)))
 
 	if err := svc.HandleWebhook(context.Background(), monitorCallbackPayload("callback-1", "cem:r:1", 123)); err != nil {
 		t.Fatalf("HandleWebhook: %v", err)
@@ -311,7 +311,7 @@ func TestMonitorRecentCallbackAcknowledgesAndSplitsReport(t *testing.T) {
 	}
 	mock.ExpectQuery(telegramOperatorQueryPattern).
 		WithArgs(int64(123)).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "is_admin"}).AddRow(int64(9), int64(1)))
 
 	if err := svc.HandleWebhook(context.Background(), monitorCallbackPayload("callback-2", clientEntryMonitorRecentCallback, 123)); err != nil {
 		t.Fatalf("HandleWebhook: %v", err)
@@ -370,7 +370,7 @@ func TestMonitorRecentCallbackSendsImageWithInlineKeyboard(t *testing.T) {
 	}
 	mock.ExpectQuery(telegramOperatorQueryPattern).
 		WithArgs(int64(123)).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "is_admin"}).AddRow(int64(9), int64(1)))
 
 	if err := svc.HandleWebhook(context.Background(), monitorCallbackPayload("callback-image", clientEntryMonitorRecentCallback, 123)); err != nil {
 		t.Fatalf("HandleWebhook: %v", err)
@@ -392,7 +392,7 @@ func TestMonitorPhotoRunCallbackOpensTextPickerForEditableProgress(t *testing.T)
 	for range 3 {
 		mock.ExpectQuery(telegramOperatorQueryPattern).
 			WithArgs(int64(123)).
-			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+			WillReturnRows(sqlmock.NewRows([]string{"id", "is_admin"}).AddRow(int64(9), int64(1)))
 	}
 
 	started := 0
@@ -478,7 +478,7 @@ func TestMonitorRunReplyKeyboardTextCreatesOnePickerPerWebhookMessage(t *testing
 	for range 2 {
 		mock.ExpectQuery(telegramOperatorQueryPattern).
 			WithArgs(int64(123)).
-			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+			WillReturnRows(sqlmock.NewRows([]string{"id", "is_admin"}).AddRow(int64(9), int64(1)))
 	}
 
 	payload := monitorTextPayload(clientEntryMonitorRunButtonText, 123, 77)
@@ -523,7 +523,7 @@ func TestManualAutoSplitReplyKeyboardTextOpensFailedEntryPicker(t *testing.T) {
 	}
 	mock.ExpectQuery(telegramOperatorQueryPattern).
 		WithArgs(int64(123)).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "is_admin"}).AddRow(int64(9), int64(1)))
 
 	if err := svc.HandleWebhook(context.Background(), monitorTextPayload(clientEntryManualAutoSplitText, 123, 91)); err != nil {
 		t.Fatalf("HandleWebhook: %v", err)
@@ -549,7 +549,7 @@ func TestManualAutoSplitCallbackRequiresConfirmationAndQueuesOnlyOnce(t *testing
 	for range 3 {
 		mock.ExpectQuery(telegramOperatorQueryPattern).
 			WithArgs(int64(123)).
-			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+			WillReturnRows(sqlmock.NewRows([]string{"id", "is_admin"}).AddRow(int64(9), int64(1)))
 	}
 
 	requests := 0
@@ -617,7 +617,7 @@ func TestManualAutoSplitConfirmRetryAcceptsExistingPendingOperation(t *testing.T
 	defer db.Close()
 	mock.ExpectQuery(telegramOperatorQueryPattern).
 		WithArgs(int64(123)).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "is_admin"}).AddRow(int64(9), int64(1)))
 
 	requests := 0
 	controller := &fakeEntryMonitorController{requestManual: func(_ context.Context, targetID, userID int64) (int64, error) {
@@ -672,7 +672,7 @@ func TestMonitorRecentReplyKeyboardTextUsesSameAuthorizedAction(t *testing.T) {
 	}
 	mock.ExpectQuery(telegramOperatorQueryPattern).
 		WithArgs(int64(123)).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "is_admin"}).AddRow(int64(9), int64(1)))
 
 	if err := svc.HandleWebhook(context.Background(), monitorTextPayload(clientEntryMonitorRecentButtonText, 123, 78)); err != nil {
 		t.Fatalf("HandleWebhook: %v", err)
@@ -828,7 +828,7 @@ func TestMonitorCallbackStillStartsWhenAcknowledgementFails(t *testing.T) {
 	svc.editMessageText = func(context.Context, int64, int64, string, any) error { return nil }
 	mock.ExpectQuery(telegramOperatorQueryPattern).
 		WithArgs(int64(123)).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "is_admin"}).AddRow(int64(9), int64(1)))
 
 	if err := svc.HandleWebhook(context.Background(), monitorCallbackPayload("callback-ack-failed", "cem:r:1", 123)); err != nil {
 		t.Fatalf("HandleWebhook: %v", err)
@@ -917,7 +917,7 @@ func TestDirectNotifierNotifyChatAndAdminsSplitLongMessages(t *testing.T) {
 	}
 }
 
-func TestDirectNotifierIncludesBoundAdminsAndStaff(t *testing.T) {
+func TestDirectNotifierExcludesRestrictedStaff(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -930,7 +930,7 @@ func TestDirectNotifierIncludesBoundAdminsAndStaff(t *testing.T) {
 		chats = append(chats, chatID)
 		return nil
 	}
-	mock.ExpectQuery(`(?s)SELECT telegram_id.*FROM v2_user.*telegram_id IS NOT NULL.*banned = 0.*\(is_admin = 1 OR is_staff = 1\).*ORDER BY id ASC`).
+	mock.ExpectQuery(`(?s)SELECT telegram_id.*FROM v2_user.*telegram_id IS NOT NULL.*banned = 0.*is_admin = 1.*ORDER BY id ASC`).
 		WillReturnRows(sqlmock.NewRows([]string{"telegram_id"}).AddRow(int64(11)).AddRow(int64(22)))
 
 	if err := svc.DirectNotifier().NotifyAdmins(context.Background(), "入口告警", true); err != nil {
@@ -1225,7 +1225,7 @@ func TestEntryMonitorMenuLockPreventsQueuedRuleFromOverwritingStartedRun(t *test
 	defer db.Close()
 	mock.MatchExpectationsInOrder(false)
 	for range 2 {
-		mock.ExpectQuery(telegramOperatorQueryPattern).WithArgs(int64(123)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+		mock.ExpectQuery(telegramOperatorQueryPattern).WithArgs(int64(123)).WillReturnRows(sqlmock.NewRows([]string{"id", "is_admin"}).AddRow(int64(9), int64(1)))
 	}
 
 	started := make(chan struct{})
@@ -1326,7 +1326,7 @@ func TestEntryMonitorRunCallbackRetryStartsOnlyOnce(t *testing.T) {
 	}
 	defer db.Close()
 	for range 2 {
-		mock.ExpectQuery(telegramOperatorQueryPattern).WithArgs(int64(123)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+		mock.ExpectQuery(telegramOperatorQueryPattern).WithArgs(int64(123)).WillReturnRows(sqlmock.NewRows([]string{"id", "is_admin"}).AddRow(int64(9), int64(1)))
 	}
 	starts := 0
 	controller := &fakeEntryMonitorController{

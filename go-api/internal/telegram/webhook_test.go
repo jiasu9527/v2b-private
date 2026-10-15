@@ -207,7 +207,7 @@ func TestHandleWebhookReplyMessageUsesAdminService(t *testing.T) {
 	svc := NewService(config.Config{TelegramBotEnable: true, TelegramBotToken: "bot-token"}, db).WithAdminService(adminService)
 	svc.sendMessage = func(context.Context, int64, string) error { return nil }
 
-	mock.ExpectQuery(`SELECT id, email, is_admin, is_staff FROM v2_user WHERE telegram_id = \$1 LIMIT 1`).
+	mock.ExpectQuery(`SELECT id, email, is_admin, is_staff FROM v2_user WHERE telegram_id = \$1 AND banned = 0 AND is_admin = 1 LIMIT 1`).
 		WithArgs(int64(123)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "is_admin", "is_staff"}).AddRow(int64(7), "admin@example.com", int64(1), int64(0)))
 

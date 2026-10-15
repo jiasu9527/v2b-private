@@ -509,7 +509,7 @@ func (s *DBService) clientEntryMonitorRunRequesterAuthorized(ctx context.Context
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS (
 	SELECT 1 FROM v2_user
 	WHERE id = $1 AND telegram_id = $2 AND banned = 0
-	  AND (is_admin = 1 OR is_staff = 1)
+	  AND is_admin = 1
 )`, requestedBy.Int64, chatID).Scan(&authorized)
 	return authorized, err
 }

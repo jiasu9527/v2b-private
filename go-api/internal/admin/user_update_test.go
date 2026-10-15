@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"regexp"
+	"strconv"
 	"testing"
 	"time"
 
@@ -44,6 +45,54 @@ func TestUpdateUserAllowsInviteUserOnlyUpdate(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestUpdateUserRoleChangesRevokeSessionsButUnchangedRoleKeepsThem(t *testing.T) {
+	for _, tc := range []struct {
+		name                                             string
+		beforeAdmin, beforeStaff, afterAdmin, afterStaff int64
+	}{
+		{"grant existing employee flag", 0, 0, 0, 1},
+		{"revoke employee flag", 0, 1, 0, 0},
+		{"unchanged employee", 0, 1, 0, 1},
+		{"revoke administrator", 1, 0, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			cache := session.NewAuthCache(time.Minute)
+			cache.Store("employee-token", "employee-session", &session.Identity{ID: 9, IsAdmin: tc.beforeAdmin, IsStaff: tc.beforeStaff})
+			svc := &DBService{db: db, authCache: cache}
+			mock.ExpectQuery(`SELECT email FROM v2_user WHERE id = \$1 LIMIT 1`).WithArgs(int64(9)).
+				WillReturnRows(sqlmock.NewRows([]string{"email"}).AddRow("employee@example.test"))
+			mock.ExpectQuery(`SELECT id FROM v2_user WHERE LOWER\(email\) = \$1 LIMIT 1`).WithArgs("employee@example.test").
+				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(9))
+			mock.ExpectBegin()
+			mock.ExpectQuery(regexp.QuoteMeta(`SELECT is_admin, is_staff FROM v2_user WHERE id = $1 FOR UPDATE`)).WithArgs(int64(9)).
+				WillReturnRows(sqlmock.NewRows([]string{"is_admin", "is_staff"}).AddRow(tc.beforeAdmin, tc.beforeStaff))
+			changed := tc.beforeAdmin != tc.afterAdmin || tc.beforeStaff != tc.afterStaff
+			if changed {
+				mock.ExpectExec(`DELETE FROM v2_auth_session WHERE user_id = \$1`).WithArgs(int64(9)).WillReturnResult(sqlmock.NewResult(0, 1))
+			}
+			mock.ExpectExec(`UPDATE v2_user SET .* WHERE id = \$1`).WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectCommit()
+			ok, err := svc.UpdateUser(context.Background(), UserUpdateRequest{ID: 9, Values: map[string]string{
+				"email": "employee@example.test", "banned": "0", "is_admin": strconv.FormatInt(tc.afterAdmin, 10), "is_staff": strconv.FormatInt(tc.afterStaff, 10),
+			}})
+			if err != nil || !ok {
+				t.Fatalf("update: %v %v", ok, err)
+			}
+			if _, cached := cache.Get("employee-token"); cached == changed {
+				t.Fatalf("cached=%v, role changed=%v", cached, changed)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -127,6 +176,8 @@ func TestUpdateUserBannedInvalidatesAuthCache(t *testing.T) {
 		WithArgs("demo@example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
 	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT is_admin, is_staff FROM v2_user WHERE id = $1 FOR UPDATE`)).
+		WithArgs(int64(9)).WillReturnRows(sqlmock.NewRows([]string{"is_admin", "is_staff"}).AddRow(0, 0))
 	mock.ExpectExec(`DELETE FROM v2_auth_session WHERE user_id = \$1`).
 		WithArgs(int64(9)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -173,6 +224,8 @@ func TestUpdateUserCanClearExpiredAt(t *testing.T) {
 		WithArgs("demo@example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
 	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT is_admin, is_staff FROM v2_user WHERE id = $1 FOR UPDATE`)).
+		WithArgs(int64(9)).WillReturnRows(sqlmock.NewRows([]string{"is_admin", "is_staff"}).AddRow(0, 0))
 	mock.ExpectExec(`UPDATE v2_user SET .*expired_at = \$[0-9]+.*updated_at = \$[0-9]+ WHERE id = \$1`).
 		WithArgs(int64(9), "demo@example.com", int64(0), int64(0), int64(0), nil, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -215,6 +268,8 @@ func TestUpdateUserPersistsSpeedLimit(t *testing.T) {
 		WithArgs("demo@example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
 	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT is_admin, is_staff FROM v2_user WHERE id = $1 FOR UPDATE`)).
+		WithArgs(int64(9)).WillReturnRows(sqlmock.NewRows([]string{"is_admin", "is_staff"}).AddRow(0, 0))
 	mock.ExpectExec(`UPDATE v2_user SET .*speed_limit = \$[0-9]+.*updated_at = \$[0-9]+ WHERE id = \$1`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -256,6 +311,8 @@ func TestUpdateUserUpdatesInviteCodeAndLinkedCampaign(t *testing.T) {
 		WithArgs("demo@example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
 	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT is_admin, is_staff FROM v2_user WHERE id = $1 FOR UPDATE`)).
+		WithArgs(int64(9)).WillReturnRows(sqlmock.NewRows([]string{"is_admin", "is_staff"}).AddRow(0, 0))
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, code, invite_campaign_id
 FROM v2_invite_code
 WHERE user_id = $1 AND status = 0
@@ -314,6 +371,8 @@ func TestUpdateUserCreatesInviteCodeWhenMissing(t *testing.T) {
 		WithArgs("demo@example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
 	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT is_admin, is_staff FROM v2_user WHERE id = $1 FOR UPDATE`)).
+		WithArgs(int64(9)).WillReturnRows(sqlmock.NewRows([]string{"is_admin", "is_staff"}).AddRow(0, 0))
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, code, invite_campaign_id
 FROM v2_invite_code
 WHERE user_id = $1 AND status = 0

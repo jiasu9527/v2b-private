@@ -48,7 +48,7 @@ func expectClientEntryMonitorProgressClaim(mock sqlmock.Sqlmock, attempts int, a
 		WithArgs(int64(91), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	mock.ExpectQuery(`(?s)SELECT EXISTS \(.*FROM v2_user.*WHERE id = \$1 AND telegram_id = \$2 AND banned = 0.*is_admin = 1 OR is_staff = 1`).
+	mock.ExpectQuery(`(?s)SELECT EXISTS \(.*FROM v2_user.*WHERE id = \$1 AND telegram_id = \$2 AND banned = 0.*AND is_admin = 1`).
 		WithArgs(int64(9), int64(12345)).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(authorized))
 }

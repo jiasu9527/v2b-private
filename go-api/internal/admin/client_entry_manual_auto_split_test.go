@@ -43,6 +43,26 @@ func TestListClientEntryManualAutoSplitOptionsReturnsOnlyQueryEligibleLeaves(t *
 	}
 }
 
+func TestRequestClientEntryManualAutoSplitRejectsEmployeeOrRevokedAdminBeforeChanges(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	service := &DBService{db: db, dnsFailoverSchemaOK: true}
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT id.*FROM v2_user.*WHERE id = \$1 AND banned = 0 AND is_admin = 1.*FOR SHARE`).
+		WithArgs(int64(88)).WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectRollback()
+	operationID, err := service.RequestClientEntryManualAutoSplit(context.Background(), 5, 88)
+	if operationID != 0 || !errors.Is(err, ErrClientEntryManualAutoSplitForbidden) {
+		t.Fatalf("unauthorized operator: id=%d err=%v", operationID, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRequestClientEntryManualAutoSplitAllowsDisabledAutomaticFlag(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -132,7 +152,7 @@ func TestRequestClientEntryManualAutoSplitReturnsExistingPendingOperationWithout
 	defer db.Close()
 	service := &DBService{db: db, dnsFailoverSchemaOK: true}
 	mock.ExpectBegin()
-	mock.ExpectQuery(`(?s)SELECT id.*FROM v2_user.*is_admin = 1 OR is_staff = 1`).
+	mock.ExpectQuery(`(?s)SELECT id.*FROM v2_user.*banned = 0 AND is_admin = 1`).
 		WithArgs(int64(88)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(88)))
 	mock.ExpectQuery(`(?s)SELECT id.*FROM v2_client_entry_auto_split_operation.*target_id = \$1 AND status = 'pending'.*LIMIT 1`).
 		WithArgs(int64(5)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(77)))
@@ -206,7 +226,7 @@ func expectManualClientEntrySplitValidation(mock sqlmock.Sqlmock, now int64, sta
 		failureThreshold = failureThresholdValues[0]
 	}
 	mock.ExpectBegin()
-	mock.ExpectQuery(`(?s)SELECT id.*FROM v2_user.*is_admin = 1 OR is_staff = 1`).
+	mock.ExpectQuery(`(?s)SELECT id.*FROM v2_user.*banned = 0 AND is_admin = 1`).
 		WithArgs(int64(88)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(88)))
 	mock.ExpectQuery(`(?s)SELECT id.*FROM v2_client_entry_auto_split_operation.*target_id = \$1 AND status = 'pending'.*LIMIT 1`).
 		WithArgs(int64(5)).WillReturnError(sql.ErrNoRows)

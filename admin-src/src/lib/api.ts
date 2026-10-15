@@ -278,7 +278,7 @@ async function revalidateSupportIdentity(res: Response) {
         if (response.status === 401 || response.status === 403) revoked = true;
         else if (response.ok) {
           const payload = await response.json();
-          revoked = !payload?.data?.is_support && !payload?.data?.is_admin;
+          revoked = !payload?.data?.is_staff && !payload?.data?.is_admin;
         }
       } catch { /* A transport error is not proof of revoked access. */ }
       if (revoked && token === getAuth()) {

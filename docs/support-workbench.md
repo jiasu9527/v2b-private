@@ -1,23 +1,26 @@
-# 受限员工工作台
+# 员工工作台（现有员工权限）
 
 ## 使用
 
-1. 先注册一个普通用户账号；不要给它开启旧版 `is_staff` 或管理员权限。
-2. 管理员登录后台，在「用户 → 员工管理 → 员工权限」按完整邮箱绑定账号，启用工作台并选择允许指定的目标入口。
-3. 不选目标入口时为只读：能查看入口检测、精准查询用户和自己的操作记录，不能指定或恢复入口。
-4. 员工从同一个后台地址登录，默认进入「入口状态」，仅有「入口状态 / 精准查询用户 / 我的操作记录」三个页内选项。
-5. 管理员在「员工管理 → 全部操作记录」查看全部单用户入口变更。启停员工、调整授权均撤销该员工现有会话，需重新登录。
+1. 直接复用现有用户的「是否员工」开关，即 `v2_user.is_staff`，不新增角色、不需要额外添加员工或配置目标入口授权。
+2. 管理员在「用户 → 用户管理 → 用户列表」编辑已有账号，开启「是否员工」。已有员工账号可直接使用，无须重新配置。
+3. 员工从同一个后台地址登录，默认进入「入口状态」，仅有「入口状态 / 精准查询用户 / 我的操作记录」三个页内选项。
+4. 所有未封禁、非管理员的员工均可精准查询普通用户，切换到完整节点成员集合相同的兼容入口，或恢复自动分配。不能查询、操作管理员或其他员工账号。
+5. 管理员在「用户管理 → 员工操作记录」页内选项查看全部单用户入口变更。原 `/support/staff` 页面只兼容打开此记录选项，不再有独立权限配置页面。
+6. 关闭「是否员工」或封禁账号即撤权。修改员工/管理员身份时会撤销该账号会话，需重新登录；普通资料修改不强制退出。管理员身份优先，即使同时开启员工开关也仍进入管理员后台。
 
-本模块不改网站用户前端，不要求 App 新增接口。已有 `user/checkLogin` 兼容 query、JSON、form 的 `auth_data`，仅新增 `id`、`email`、`is_support` 身份字段；旧管理员字段保持兼容。
+本模块不改网站用户前端，不要求 App 新增接口。已有 `user/checkLogin` 兼容 query、JSON、form 的 `auth_data`，返回 `id`、`email`、`is_staff` 身份字段；原管理员字段保持兼容。
 
-新员工不继承旧版 staff 或 Telegram 运维权限。旧 staff 的用户管理接口也不能读取、修改或批量处理新员工账号（包括已停用员工）；旧 staff 用户详情不返回认证凭据或完整邀请人记录。管理员原有用户管理能力保持不变。
+这是直接收紧原员工权限，而不是并存两套员工。旧 `/staff/*` 管理接口不再向员工开放，不能绕过工作台修改用户资料、套餐、余额、公告、工单、批量封禁或群发邮件。管理员原有能力保持不变。权限校验实时读取数据库，后台缓存不能延长已撤销的员工权限。
+
+Telegram 同步收紧：员工保留绑定、个人流量等用户功能，以及查看已有入口检测结果；主动发起检测、整组入口二分、回复全站工单和接收全站管理通知仅限管理员。历史消息中的按钮也重新检查当前角色，不会因旧按钮保留额外权限。
 
 ## 入口指定的生效边界
 
 - 自动规则先按套餐节点权限、条件、UA、固定名单和第一命中顺序决定可见节点。
 - 人工指定记录键是 **用户 ID + 原规则 ID**，只替换该原规则已下发的正常节点入口地址及地址解析方式；不增加节点、不绕过隐藏、不复制目标规则的附加节点或条件。
 - 源规则和目标入口必须拥有相同的完整成员节点集合，不只是用户当前可见节点或两者交集。目标可以是普通 override 规则或固定二分的叶子组。
-- 员工必须获授权目标入口；授权不允许编辑入口地址、规则、探针、节点权限或批量分流。
+- 员工可选择所有已启用且与源规则完整成员集合相同的目标入口，不需要额外授权；不能编辑入口地址、规则、探针、节点权限或批量分流。
 - UA 是查询及提交时的预览上下文，不是人工指定的额外 UA 绑定。其他客户端如果也命中同一原规则，就会采用同一人工入口。
 - 目标保存为引用：管理员修改入口地址、解析方式会跟随；停用、删除、节点集合不兼容或临时指定到期时回退自动规则。无效引用未被静默删除，仍可在精准查询中看到并恢复。
 - 无期限指定持续到恢复或失效；临时指定支持 1 小时、24 小时、7 天。生效依赖用户下次更新订阅，不会强制切换已建立连接。
@@ -61,30 +64,30 @@
 }
 ```
 
-恢复时 `restore=true`、`target_key=""`、`expires_at=0`，并提交当前 `version` 和新的 `request_id`。查询结果包含白名单 `user`、`scopes`、`ua`、`can_restore`。每个 scope 包含 `source_policy_id,name,automatic_entry_host,version,override,targets,nodes,applicable`；只有 `override.active && override.status == "active" && applicable` 才表示当前预览生效，不能只看 active 原始开关。
+恢复时 `restore=true`、`target_key=""`、`expires_at=0`，并提交当前 `version` 和新的 `request_id`。查询结果包含白名单 `user`、`scopes`、`ua`；`can_restore=true` 仅为兼容字段，不表示独立授权。每个 scope 包含 `source_policy_id,name,automatic_entry_host,version,override,targets,nodes,applicable`；只有 `override.active && override.status == "active" && applicable` 才表示当前预览生效，不能只看 active 原始开关。
 
 管理员接口前缀 `/api/v1/{secure_path}`：
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| GET | `/support/staff` | 员工列表和可授权入口 |
-| POST | `/support/staff/save` | `{email,enabled,target_keys,version}`；新建 version=0 |
 | GET | `/support/operations?page=1` | 全部员工的入口变更记录 |
+
+身份通过原用户管理接口中的 `is_staff` 字段设置，没有独立的员工添加、启停或目标授权 API。
 
 错误：400 参数/格式；403 会话/角色失效或操作未授权；404 用户不可操作；409 版本或幂等冲突；415 非 JSON；429 限频。精准查询每员工每分钟 30 次，变更每分钟 20 次；限频仅保存每员工每动作一个计数器，不记录查询内容。
 
 ## 部署与记录保留
 
-Go 服务启动前自动幂等创建 `v2_support_staff`、`v2_support_request_limit`、`v2_support_entry_override`、`v2_support_operation`。无须手工开旧员工权限。需要更新 Go 二进制及 `public/assets/admin-new` 构建产物，重启后生效。
+Go 服务启动前自动幂等创建 `v2_support_request_limit`、`v2_support_entry_override`、`v2_support_operation` 三张业务状态表，不创建独立员工授权表。需要更新 Go 二进制及 `public/assets/admin-new` 构建产物，重启后生效。旧版本如曾创建 `v2_support_staff`，其记录不再被读取、也不会自动提升普通账号；为避免破坏历史配置，升级不会自动删除旧表。
 
-成功指定或恢复与结构化操作记录同一事务；不写搜索、查看、轮询日志，不存完整请求体或用户凭据。变更记录保留 90 天，由现有每日维护任务分批清理。撤销员工权限不会抹掉历史记录，也不会自动撤销该员工此前为客户做出的有效指定。
+成功指定或恢复与结构化操作记录同一事务；不写搜索、查看、轮询日志，不存完整请求体或用户凭据。变更记录保留 90 天，由现有每日维护任务分批清理。关闭员工开关不会抹掉历史记录，也不会自动撤销该员工此前为客户做出的有效指定。
 
 ## 验证
 
 ```sh
 cd go-api
 go test ./...
-go test -race ./internal/admin ./internal/user ./internal/http ./internal/session -run 'Test(Support|ServersSupport|Fresh|CheckLoginPreserves|LegacyStaff|RouterStaff)' -count=1
+go test -race ./internal/admin ./internal/user ./internal/http ./internal/session ./internal/telegram -count=1
 ```
 
 可选真实 SQL/订阅链路验收测试：先准备**一次性测试数据库**并导入 `database/install.pgsql.sql`，再设置 `FOREST_SUPPORT_TEST_DSN` 运行 `go test ./internal/admin -run '^TestSupportPostgresEndToEnd$' -v -count=1`。未设置时跳过；测试会创建并清理自身样例。该测试也可连接兼容 PostgreSQL 协议的隔离 PGlite 实例；此时不能据此声称已验证真实多实例数据库锁竞争。

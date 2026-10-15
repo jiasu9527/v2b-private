@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Badge, Button, Card, DatePicker, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, message } from 'antd';
+import { Badge, Button, Card, DatePicker, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tabs, Tag, Tooltip, message } from 'antd';
 import type { MenuProps } from 'antd';
-import { AccountBookOutlined, CheckCircleOutlined, CopyOutlined, DeleteOutlined, DownOutlined, EditOutlined, ExportOutlined, MailOutlined, ReloadOutlined, SolutionOutlined, StopOutlined, UserAddOutlined, UsergroupAddOutlined } from '@ant-design/icons';
+import { AccountBookOutlined, AuditOutlined, CheckCircleOutlined, CopyOutlined, DeleteOutlined, DownOutlined, EditOutlined, ExportOutlined, MailOutlined, ReloadOutlined, SolutionOutlined, StopOutlined, UserAddOutlined, UsergroupAddOutlined, UserOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { apiGet, apiPost, bytes, bytesToGB, bytesToGBText, gbToBytes, getAdminPath, unixTime } from '../lib/api';
 import LegacyFilterDrawer, { FilterButton } from '../components/LegacyFilterDrawer';
+import SupportOperations from './SupportOperations';
+import './SupportPage.css';
 
 const periodText: Record<string, string> = {
   month_price: '月付',
@@ -361,7 +363,7 @@ export function userFormValuesToPayload(values: any = {}) {
   return payload;
 }
 
-export default function UserPage() {
+function UserListPanel() {
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -512,8 +514,7 @@ export default function UserPage() {
     { title: '操作', dataIndex: 'action', align: 'right', fixed: 'right', width: 120, render: (_: any, row: any) => <Dropdown trigger={['click']} menu={{ items: rowMenu(row) }}><a>操作 <DownOutlined /></a></Dropdown> },
   ];
 
-  return <div className="legacy-page user-page">
-    <div className="content-heading">用户管理</div>
+  return <div className="user-management-panel">
     <Card className="block-card" styles={{ body: { padding: 0 } }}>
       <div className="forest-table-action">
         <Tooltip title="Tips：可以使用过滤器过滤后再使用操作对过滤的用户进行操作。" placement="right">
@@ -551,7 +552,7 @@ export default function UserPage() {
         <Form.Item name="discount" label="专享折扣比例"><InputNumber addonAfter="%" style={{ width: '100%' }} placeholder="请输入专享折扣比例" /></Form.Item>
         <Form.Item name="speed_limit" label="限速"><InputNumber addonAfter="Mbps" style={{ width: '100%' }} placeholder="留空则不限制" /></Form.Item>
         <Form.Item name="is_admin" label="是否管理员" valuePropName="checked"><Switch /></Form.Item>
-        <Form.Item name="is_staff" label="是否员工" valuePropName="checked"><Switch /></Form.Item>
+        <Form.Item name="is_staff" label="是否员工" valuePropName="checked" extra="开启后可登录受限员工工作台：查看入口检测、精准搜索用户、切换单用户的兼容入口和查看本人操作记录；不开放完整用户列表、套餐、财务或规则编辑。管理员身份优先，修改员工身份会撤销现有会话。"><Switch aria-label="是否员工" /></Form.Item>
         <Form.Item name="remarks" label="备注" className="form-col-full"><Input.TextArea rows={4} placeholder="请在这里记录.." /></Form.Item>
       </Form>
     </Modal>
@@ -560,4 +561,13 @@ export default function UserPage() {
     <UserGenerateModal open={generateOpen} plans={plans} onClose={() => setGenerateOpen(false)} onDone={() => load()} />
     <UserMailModal open={mailOpen} filtered={effectiveFilters.length > 0} onClose={() => setMailOpen(false)} onSubmit={sendMail} />
   </div>;
+}
+
+
+export default function UserPage({ initialTab = 'users' }: { initialTab?: 'users' | 'staff-operations' }) {
+  const [tab, setTab] = useState<string>(initialTab);
+  return <div className="legacy-page user-page"><div className="content-heading">用户管理</div><div className="support-content user-management-content"><Tabs activeKey={tab} onChange={setTab} destroyOnHidden items={[
+    { key: 'users', label: <span><UserOutlined aria-hidden /> 用户列表</span>, children: <UserListPanel /> },
+    { key: 'staff-operations', label: <span><AuditOutlined aria-hidden /> 员工操作记录</span>, children: <SupportOperations administrator /> },
+  ]} /></div></div>;
 }

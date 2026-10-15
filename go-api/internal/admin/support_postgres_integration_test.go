@@ -52,7 +52,6 @@ func TestSupportPostgresEndToEnd(t *testing.T) {
 			db.ExecContext(ctx, `DELETE FROM v2_support_operation WHERE actor_id=$1 OR target_user_id=$1`, id)
 			db.ExecContext(ctx, `DELETE FROM v2_support_request_limit WHERE actor_id=$1`, id)
 			db.ExecContext(ctx, `DELETE FROM v2_support_entry_override WHERE user_id=$1`, id)
-			db.ExecContext(ctx, `DELETE FROM v2_support_staff WHERE user_id=$1`, id)
 			db.ExecContext(ctx, `DELETE FROM v2_auth_session WHERE user_id=$1`, id)
 			db.ExecContext(ctx, `DELETE FROM v2_user_subscribe_activity WHERE user_id=$1`, id)
 			db.ExecContext(ctx, `DELETE FROM v2_user WHERE id=$1`, id)
@@ -64,11 +63,11 @@ func TestSupportPostgresEndToEnd(t *testing.T) {
 		db.ExecContext(ctx, `DELETE FROM v2_server_vmess WHERE id=$1`, nodeID)
 		db.ExecContext(ctx, `DELETE FROM v2_server_group WHERE id=$1`, groupID)
 	})
-	createUser := func(label string, isAdmin int64) (int64, string) {
+	createUser := func(label string, isAdmin, isStaff int64) (int64, string) {
 		t.Helper()
 		var id int64
 		email := label + suffix + "@example.test"
-		err := db.QueryRowContext(ctx, `INSERT INTO v2_user(email,password,uuid,token,is_admin,transfer_enable,group_id,created_at,updated_at) VALUES($1,'fixture-password',$2,$3,$4,1000000,$5,$6,$6) RETURNING id`, email, label+suffix, fmt.Sprintf("%032s", label+suffix), isAdmin, groupID, now).Scan(&id)
+		err := db.QueryRowContext(ctx, `INSERT INTO v2_user(email,password,uuid,token,is_admin,is_staff,transfer_enable,group_id,created_at,updated_at) VALUES($1,'fixture-password',$2,$3,$4,$5,1000000,$6,$7,$7) RETURNING id`, email, label+suffix, fmt.Sprintf("%032s", label+suffix), isAdmin, isStaff, groupID, now).Scan(&id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -78,10 +77,10 @@ func TestSupportPostgresEndToEnd(t *testing.T) {
 	if err = db.QueryRowContext(ctx, `INSERT INTO v2_server_group(name,created_at,updated_at) VALUES($1,$2,$2) RETURNING id`, "support-it-"+suffix, now).Scan(&groupID); err != nil {
 		t.Fatal(err)
 	}
-	adminID, _ := createUser("admin", 1)
-	staffID, staffEmail := createUser("staff", 0)
-	readonlyID, readonlyEmail := createUser("readonly", 0)
-	targetID, targetEmail := createUser("target", 0)
+	adminID, adminEmail := createUser("admin", 1, 0)
+	staffID, staffEmail := createUser("staff", 0, 1)
+	ordinaryID, ordinaryEmail := createUser("ordinary", 0, 0)
+	targetID, targetEmail := createUser("target", 0, 0)
 	if err = db.QueryRowContext(ctx, `INSERT INTO v2_server_vmess(group_id,name,host,port,server_port,rate,network,"show",created_at,updated_at) VALUES($1,$2,'original.example.test','443',443,'1','tcp',1,$3,$3) RETURNING id`, fmt.Sprintf("[%d]", groupID), "support-it-node-"+suffix, now).Scan(&nodeID); err != nil {
 		t.Fatal(err)
 	}
@@ -101,38 +100,14 @@ func TestSupportPostgresEndToEnd(t *testing.T) {
 	sourceID := createPolicy("source", "automatic.example.test", fmt.Sprintf(`[{"field":"user_id","operator":"in","values":[%d]}]`, targetID))
 	targetPolicy := createPolicy("destination", "repair.example.test", `[{"field":"user_id","operator":"in","values":[2147483647]}]`)
 	targetKey := fmt.Sprintf("policy:%d", targetPolicy)
-	staff, err := s.SaveSupportStaff(ctx, adminID, SupportStaffSaveRequest{Email: staffEmail, Enabled: true, TargetKeys: []string{targetKey}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.SaveSupportStaff(ctx, adminID, SupportStaffSaveRequest{Email: readonlyEmail, Enabled: true}); err != nil {
-		t.Fatal(err)
-	}
 	if ok, err := s.IsSupportStaff(ctx, staffID); err != nil || !ok {
-		t.Fatalf("staff grant: %v %v", ok, err)
+		t.Fatalf("existing staff works without extra provisioning: %v %v", ok, err)
 	}
-	legacyCtx := WithLegacyStaffScope(ctx)
-	if _, err = s.GetUserInfoByID(legacyCtx, staffID); err == nil {
-		t.Fatal("legacy staff could read support account")
-	}
-	if _, err = db.ExecContext(ctx, `UPDATE v2_user SET invite_user_id=$1 WHERE id=$2`, staffID, targetID); err != nil {
-		t.Fatal(err)
-	}
-	customer, err := s.GetUserInfoByID(legacyCtx, targetID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, key := range []string{"password", "token", "uuid", "invite_user"} {
-		if _, ok := customer[key]; ok {
-			t.Fatalf("legacy staff detail leaked %s", key)
+	for _, excluded := range []string{staffEmail, adminEmail, fmt.Sprint(adminID)} {
+		view, err := s.LookupSupportUser(ctx, staffID, excluded, "")
+		if err != nil || view.Found {
+			t.Fatalf("staff must not query privileged account %s: %+v %v", excluded, view, err)
 		}
-	}
-	if _, err = s.BanUsers(legacyCtx, []UserFilter{{Key: "id", Condition: "=", Value: fmt.Sprint(staffID)}}); err != nil {
-		t.Fatal(err)
-	}
-	var banned int64
-	if err = db.QueryRowContext(ctx, `SELECT banned FROM v2_user WHERE id=$1`, staffID).Scan(&banned); err != nil || banned != 0 {
-		t.Fatalf("legacy bulk ban reached support account: %d %v", banned, err)
 	}
 	view, err := s.LookupSupportUser(ctx, staffID, targetEmail, "")
 	if err != nil {
@@ -193,15 +168,15 @@ func TestSupportPostgresEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	restore := SupportEntryChangeRequest{UserID: targetID, SourcePolicyID: sourceID, Restore: true, Reason: "repair complete", Version: 1, RequestID: "restore-" + suffix}
-	if _, err = s.ChangeSupportEntry(ctx, readonlyID, restore); !errors.Is(err, ErrSupportForbidden) {
-		t.Fatalf("read-only restore %v", err)
+	if _, err = s.ChangeSupportEntry(ctx, ordinaryID, restore); !errors.Is(err, ErrSupportForbidden) {
+		t.Fatalf("ordinary user restore %v", err)
 	}
 	if _, err = s.ChangeSupportEntry(ctx, staffID, restore); err != nil {
 		t.Fatal(err)
 	}
 	assertHost("automatic.example.test")
-	if _, err = s.LookupSupportUser(ctx, staffID, readonlyEmail, ""); err != nil {
-		t.Fatal(err)
+	if view, err = s.LookupSupportUser(ctx, staffID, ordinaryEmail, ""); err != nil || !view.Found {
+		t.Fatalf("ordinary customer lookup: %+v %v", view, err)
 	}
 	sessionID := "support-it-" + suffix
 	if _, err = db.ExecContext(ctx, `INSERT INTO v2_auth_session(user_id,session_id,login_at,created_at,updated_at) VALUES($1,$2,$3,$3,$3)`, staffID, sessionID, now); err != nil {
@@ -215,7 +190,7 @@ func TestSupportPostgresEndToEnd(t *testing.T) {
 	if _, err = auth.Authenticate(ctx, token, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.SaveSupportStaff(ctx, adminID, SupportStaffSaveRequest{Email: staffEmail, Enabled: false, TargetKeys: staff.TargetKeys, Version: staff.Version}); err != nil {
+	if _, err = s.UpdateUser(ctx, UserUpdateRequest{ID: staffID, Values: map[string]string{"email": staffEmail, "banned": "0", "is_admin": "0", "is_staff": "0"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = auth.AuthenticateFresh(ctx, token, false); !errors.Is(err, session.ErrUnauthorized) {
@@ -224,5 +199,11 @@ func TestSupportPostgresEndToEnd(t *testing.T) {
 	if _, err = s.LookupSupportUser(ctx, staffID, targetEmail, ""); !errors.Is(err, ErrSupportForbidden) {
 		t.Fatalf("revoked staff accepted: %v", err)
 	}
-	t.Log("verified live SQL: isolated role, exact user, override->subscription, reference follow/fallback, idempotency, audit, read-only restore, revocation")
+	if _, err = s.UpdateUser(ctx, UserUpdateRequest{ID: ordinaryID, Values: map[string]string{"email": ordinaryEmail, "banned": "0", "is_admin": "0", "is_staff": "1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.IsSupportStaff(ctx, ordinaryID); err != nil || !ok {
+		t.Fatalf("existing employee switch grants workbench directly: %v %v", ok, err)
+	}
+	t.Log("verified live SQL: existing staff flag, exact user, compatible entry->subscription, reference follow/fallback, idempotency, audit, ordinary-user denial, role switch/session revocation")
 }

@@ -512,15 +512,7 @@ CREATE INDEX IF NOT EXISTS "idx_v2_apple_order_finance_paid" ON "v2_apple_order"
 CREATE INDEX IF NOT EXISTS "idx_v2_apple_order_finance_refund" ON "v2_apple_order" ("id") WHERE "status"=3;
 CREATE INDEX IF NOT EXISTS "idx_v2_apple_audit_refund_time" ON "v2_apple_order_audit" ("order_id", "created_at") WHERE "action"='refund_confirmed';
 
--- Restricted support workbench (independent of legacy is_staff).
-CREATE TABLE IF NOT EXISTS v2_support_staff (
-user_id INTEGER PRIMARY KEY,
-enabled SMALLINT NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
-target_keys JSONB NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(target_keys) = 'array'),
-version BIGINT NOT NULL DEFAULT 1 CHECK (version > 0),
-created_at BIGINT NOT NULL,
-updated_at BIGINT NOT NULL
-);
+-- Restricted employee workbench using the existing v2_user.is_staff flag.
 CREATE TABLE IF NOT EXISTS v2_support_request_limit (
 actor_id INTEGER NOT NULL,
 action VARCHAR(16) NOT NULL,

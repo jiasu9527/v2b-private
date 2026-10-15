@@ -20,7 +20,7 @@ function uuid() {
 }
 
 type ChangeOptions = { scope: SupportScope; target: string; restore: boolean; reason: string; duration: number };
-function ScopeEditor({ scope, busy, canRestore, change }: { scope: SupportScope; busy: boolean; canRestore?: boolean; change: (options: ChangeOptions) => void }) {
+function ScopeEditor({ scope, busy, change }: { scope: SupportScope; busy: boolean; change: (options: ChangeOptions) => void }) {
   const [target, setTarget] = useState('');
   const [duration, setDuration] = useState(0);
   const [reason, setReason] = useState('');
@@ -32,10 +32,10 @@ function ScopeEditor({ scope, busy, canRestore, change }: { scope: SupportScope;
     {scope.nodes?.length > 0 && <Typography.Paragraph><span className="support-muted">影响节点：</span>{scope.nodes.map((node) => <Tag key={`${node.type}:${node.id}`}>{node.name || `${node.type} #${node.id}`}</Tag>)}</Typography.Paragraph>}
     {scope.applicable === false && <Alert type="warning" showIcon className="support-alert" message="当前用户 / UA 条件未命中此规则，不能新增指定；已有记录仅供查看或恢复自动分配。" />}
     <div className="support-scope-form">
-      <Form.Item label="切换目标"><Select aria-label={`${scope.name}切换目标`} value={target || undefined} placeholder={scope.targets?.length ? '选择授权的兼容入口组' : '暂无已授权的兼容入口'} disabled={busy || !scope.targets?.length} showSearch optionFilterProp="label" onChange={setTarget} options={(scope.targets || []).map((item) => ({ value: item.key, label: `${item.name} · ${item.entry_host}` }))} /></Form.Item>
+      <Form.Item label="切换目标"><Select aria-label={`${scope.name}切换目标`} value={target || undefined} placeholder={scope.targets?.length ? '选择兼容的入口组' : '暂无兼容入口'} disabled={busy || !scope.targets?.length} showSearch optionFilterProp="label" onChange={setTarget} options={(scope.targets || []).map((item) => ({ value: item.key, label: `${item.name} · ${item.entry_host}` }))} /></Form.Item>
       <Form.Item label="有效期"><Select aria-label={`${scope.name}有效期`} value={duration} disabled={busy} onChange={setDuration} options={[{ value: 0, label: '永久（直到恢复自动）' }, { value: 3600, label: '1 小时' }, { value: 86400, label: '24 小时' }, { value: 604800, label: '7 天' }]} /></Form.Item>
       <Form.Item className="support-full-width" label="操作原因" required><Input.TextArea aria-label={`${scope.name}操作原因`} placeholder="填写本次排障或切换原因（必填）" maxLength={500} showCount autoSize={{ minRows: 2, maxRows: 4 }} disabled={busy} value={reason} onChange={(event) => setReason(event.target.value)} /></Form.Item>
-      <Space className="support-full-width" wrap><Button type="primary" disabled={busy || scope.applicable === false || !target || !reason.trim()} onClick={() => change({ scope, target, restore: false, reason, duration })}>指定入口</Button><Button icon={<UndoOutlined aria-hidden />} disabled={busy || canRestore === false || !override?.active || !reason.trim()} onClick={() => change({ scope, target: '', restore: true, reason, duration: 0 })}>恢复自动分配</Button><Typography.Text type="secondary">只影响此用户的本线路范围，不修改分组规则、套餐或节点权限。</Typography.Text></Space>
+      <Space className="support-full-width" wrap><Button type="primary" disabled={busy || scope.applicable === false || !target || !reason.trim()} onClick={() => change({ scope, target, restore: false, reason, duration })}>指定入口</Button><Button icon={<UndoOutlined aria-hidden />} disabled={busy || !override?.active || !reason.trim()} onClick={() => change({ scope, target: '', restore: true, reason, duration: 0 })}>恢复自动分配</Button><Typography.Text type="secondary">只影响此用户的本线路范围，不修改分组规则、套餐或节点权限。</Typography.Text></Space>
     </div>
   </Card>;
 }
@@ -94,7 +94,7 @@ export default function SupportUserSearch() {
     });
   };
   return <div className="support-panel">
-    <Alert type="info" showIcon className="support-alert" message="只支持完整邮箱或用户 ID 精准查询，不提供用户列表、模糊搜索和导出。" description="员工只可指定获授权的兼容入口；规则条件不修改，套餐、流量、有效期和节点权限不变。" />
+    <Alert type="info" showIcon className="support-alert" message="只支持完整邮箱或用户 ID 精准查询，不提供用户列表、模糊搜索和导出。" description="员工只可指定与当前线路范围兼容的入口；规则条件不修改，套餐、流量、有效期和节点权限不变。" />
     <Card><Form layout="vertical" onFinish={search}><Form.Item label="精准查询用户" required><Space.Compact style={{ width: '100%' }}><Input aria-label="完整邮箱或用户ID" placeholder="完整邮箱或完整用户 ID" maxLength={254} autoComplete="off" value={query} disabled={loading || saving} onChange={(event) => { setQuery(event.target.value); clearResult(); }} /><Button type="primary" htmlType="submit" icon={<SearchOutlined aria-hidden />} loading={loading} disabled={saving || !query.trim()}>精准查询</Button></Space.Compact></Form.Item><Collapse size="small" ghost items={[{ key: 'ua', label: '高级：按客户端 UA 预览匹配规则', children: <><Input aria-label="客户端UA" placeholder="可选，输入用户订阅客户端的完整 User-Agent" maxLength={1024} autoComplete="off" value={ua} disabled={loading || saving} onChange={(event) => { setUA(event.target.value); clearResult(); }} /><Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>入口规则可能按 UA 匹配。留空使用默认预览；填写后只预览该 UA 下的线路范围，不修改用户客户端或规则条件。</Typography.Paragraph></> }]} /></Form></Card>
     {error && <Alert type="error" showIcon className="support-alert" style={{ marginTop: 16 }} message={error} />}
     {result && !result.found && <div className="support-empty" style={{ marginTop: 16 }}><Empty description="未找到可操作用户，请检查完整邮箱或用户 ID。" /></div>}
@@ -105,7 +105,7 @@ export default function SupportUserSearch() {
         { key: 'remain', label: '剩余流量', children: bytes(result.user.remaining_bytes) },
       ]} /><Typography.Text type="secondary">本次查询：{resolvedQuery}{resolvedUA ? ` · UA：${resolvedUA}` : ' · 默认 UA 预览'}</Typography.Text></Card>
       <Alert type="warning" showIcon className="support-alert" message="不同线路可能使用不同入口，请确认要调整的线路范围。保存后让用户更新订阅。" />
-      {(result.scopes || []).map((scope) => <ScopeEditor key={`${result.user.id}:${scope.source_policy_id}:${scope.version}`} scope={scope} busy={saving || loading} canRestore={result.can_restore} change={change} />)}
+      {(result.scopes || []).map((scope) => <ScopeEditor key={`${result.user.id}:${scope.source_policy_id}:${scope.version}`} scope={scope} busy={saving || loading} change={change} />)}
       {!result.scopes?.length && <div className="support-empty"><Empty description="该用户当前没有可由你调整的入口范围。" /></div>}
     </>}
   </div>;

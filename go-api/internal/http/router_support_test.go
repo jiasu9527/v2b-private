@@ -28,14 +28,6 @@ func (f *fakeSupportService) IsSupportStaff(context.Context, int64) (bool, error
 func (f *fakeSupportService) ConsumeSupportLimit(context.Context, int64, string) error {
 	return f.limitErr
 }
-func (f *fakeSupportService) ListSupportStaff(context.Context) (admin.SupportStaffListResult, error) {
-	f.reads++
-	return admin.SupportStaffListResult{}, nil
-}
-func (f *fakeSupportService) SaveSupportStaff(context.Context, int64, admin.SupportStaffSaveRequest) (admin.SupportStaffRecord, error) {
-	f.writes++
-	return admin.SupportStaffRecord{}, nil
-}
 func (f *fakeSupportService) SupportEntryOverview(context.Context) (admin.SupportEntryOverview, error) {
 	f.reads++
 	return admin.SupportEntryOverview{}, nil
@@ -59,7 +51,7 @@ func (f *fakeSupportService) ListSupportOperations(_ context.Context, id, page i
 func supportTestRouter(f *fakeSupportService, identity *session.Identity) http.Handler {
 	return NewRouter(config.Config{AdminPath: "admin-test"}, WithSessionService(strictAppleIDSession{identity: identity}), WithSupportService(f))
 }
-func TestSupportRoutesDenyOrdinaryLegacyStaffAndAdminUnlessExplicitlyAuthorized(t *testing.T) {
+func TestSupportRoutesDenyOrdinaryAdminAndRevokedStaff(t *testing.T) {
 	for _, identity := range []*session.Identity{nil, {ID: 7}, {ID: 7, IsStaff: 1}, {ID: 7, IsAdmin: 1}} {
 		f := &fakeSupportService{}
 		router := supportTestRouter(f, identity)
@@ -78,7 +70,7 @@ func TestSupportIdentityCannotAccessAdminOrLegacyStaffRoutes(t *testing.T) {
 		req := httptest.NewRequest("GET", path, nil)
 		req.Header.Set("Authorization", "Bearer fixture")
 		rec := httptest.NewRecorder()
-		supportTestRouter(f, &session.Identity{ID: 7}).ServeHTTP(rec, req)
+		supportTestRouter(f, &session.Identity{ID: 7, IsStaff: 1}).ServeHTTP(rec, req)
 		if rec.Code != 403 || f.reads != 0 || f.writes != 0 {
 			t.Fatalf("%s status=%d body=%s", path, rec.Code, rec.Body.String())
 		}
@@ -87,7 +79,7 @@ func TestSupportIdentityCannotAccessAdminOrLegacyStaffRoutes(t *testing.T) {
 func TestSupportOperationsScopeComesFromSessionNotRequest(t *testing.T) {
 	for _, asAdmin := range []bool{false, true} {
 		f := &fakeSupportService{enabled: true}
-		identity := &session.Identity{ID: 7}
+		identity := &session.Identity{ID: 7, IsStaff: 1}
 		path := "/api/v1/support/operations?actor_id=99&page=2"
 		want := int64(7)
 		if asAdmin {
@@ -115,7 +107,7 @@ func TestSupportMutationRejectsUnknownFieldsOversizeAndTrailingData(t *testing.T
 		req.Header.Set("Authorization", "Bearer fixture")
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
-		supportTestRouter(f, &session.Identity{ID: 7}).ServeHTTP(rec, req)
+		supportTestRouter(f, &session.Identity{ID: 7, IsStaff: 1}).ServeHTTP(rec, req)
 		if rec.Code != 400 || f.writes != 0 {
 			t.Fatalf("status=%d writes=%d", rec.Code, f.writes)
 		}
@@ -125,14 +117,14 @@ func TestSupportMutationRejectsUnknownFieldsOversizeAndTrailingData(t *testing.T
 	req.Header.Set("Authorization", "Bearer fixture")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
-	supportTestRouter(f, &session.Identity{ID: 7}).ServeHTTP(rec, req)
+	supportTestRouter(f, &session.Identity{ID: 7, IsStaff: 1}).ServeHTTP(rec, req)
 	if rec.Code != 200 || f.actor != 7 || f.req.UserID != 5 {
 		t.Fatalf("valid request: %d %+v", rec.Code, f)
 	}
 }
 func TestSupportRouteRechecksRoleAndEnforcesRateLimit(t *testing.T) {
 	f := &fakeSupportService{enabled: true}
-	router := supportTestRouter(f, &session.Identity{ID: 7})
+	router := supportTestRouter(f, &session.Identity{ID: 7, IsStaff: 1})
 	for _, want := range []int{200, 429, 403} {
 		if want == 429 {
 			f.limitErr = admin.ErrSupportRateLimited
@@ -164,7 +156,7 @@ func TestSupportMethodAndPageValidation(t *testing.T) {
 		req := httptest.NewRequest(tc.method, "/api/v1/support/"+tc.path, nil)
 		req.Header.Set("Authorization", "Bearer fixture")
 		rec := httptest.NewRecorder()
-		supportTestRouter(f, &session.Identity{ID: 7}).ServeHTTP(rec, req)
+		supportTestRouter(f, &session.Identity{ID: 7, IsStaff: 1}).ServeHTTP(rec, req)
 		if rec.Code != tc.status {
 			t.Fatalf("%+v got %d", tc, rec.Code)
 		}
@@ -187,7 +179,7 @@ func (f *freshOnlySupportSession) AuthenticateFresh(context.Context, string, boo
 func TestSupportAndCheckLoginBypassCachedSession(t *testing.T) {
 	for _, path := range []string{"/api/v1/support/overview", "/api/v1/user/checkLogin"} {
 		f := &fakeSupportService{enabled: true}
-		sessions := &freshOnlySupportSession{strictAppleIDSession: strictAppleIDSession{identity: &session.Identity{ID: 7}}, err: session.ErrUnauthorized}
+		sessions := &freshOnlySupportSession{strictAppleIDSession: strictAppleIDSession{identity: &session.Identity{ID: 7, IsStaff: 1}}, err: session.ErrUnauthorized}
 		router := NewRouter(config.Config{}, WithSessionService(sessions), WithSupportService(f))
 		req := httptest.NewRequest("GET", path+"?auth_data=fixture", nil)
 		rec := httptest.NewRecorder()
@@ -211,9 +203,45 @@ func TestCheckLoginPreservesLegacyJSONAndFormAuth(t *testing.T) {
 		req := httptest.NewRequest("POST", "/api/v1/user/checkLogin", strings.NewReader(tc.body))
 		req.Header.Set("Content-Type", tc.mime)
 		rec := httptest.NewRecorder()
-		supportTestRouter(f, &session.Identity{ID: 7, Email: "staff@example.test"}).ServeHTTP(rec, req)
-		if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"is_support":true`) {
+		supportTestRouter(f, &session.Identity{ID: 7, IsStaff: 1, Email: "staff@example.test"}).ServeHTTP(rec, req)
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"is_staff":true`) || !strings.Contains(rec.Body.String(), `"is_support":true`) || f.roleReads != 0 {
 			t.Fatalf("legacy %s: %d %s", tc.mime, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestExistingStaffCanUseWorkbenchWithoutSeparateGrant(t *testing.T) {
+	f := &fakeSupportService{enabled: true}
+	req := httptest.NewRequest("GET", "/api/v1/support/overview", nil)
+	req.Header.Set("Authorization", "Bearer fixture")
+	rec := httptest.NewRecorder()
+	supportTestRouter(f, &session.Identity{ID: 7, IsStaff: 1}).ServeHTTP(rec, req)
+	if rec.Code != 200 || f.reads != 1 {
+		t.Fatalf("existing employee denied: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCheckLoginReportsExistingStaffWithoutSupportService(t *testing.T) {
+	router := NewRouter(config.Config{}, WithSessionService(strictAppleIDSession{identity: &session.Identity{ID: 7, IsStaff: 1}}))
+	req := httptest.NewRequest("GET", "/api/v1/user/checkLogin?auth_data=fixture", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"is_staff":true`) || !strings.Contains(rec.Body.String(), `"is_support":true`) {
+		t.Fatalf("checkLogin relies on separate grant: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRemovedEmployeeGrantEndpointsAreNotAvailableToAdministrator(t *testing.T) {
+	for _, path := range []string{"staff", "staff/save"} {
+		for _, method := range []string{"GET", "POST"} {
+			f := &fakeSupportService{}
+			req := httptest.NewRequest(method, "/api/v1/admin-test/support/"+path, nil)
+			req.Header.Set("Authorization", "Bearer fixture")
+			rec := httptest.NewRecorder()
+			supportTestRouter(f, &session.Identity{ID: 1, IsAdmin: 1}).ServeHTTP(rec, req)
+			if rec.Code != 404 || f.reads != 0 || f.writes != 0 {
+				t.Fatalf("removed route %s %s remains: %d", method, path, rec.Code)
+			}
 		}
 	}
 }

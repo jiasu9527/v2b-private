@@ -4,12 +4,11 @@ import {
   AppstoreOutlined, DashboardOutlined, UserOutlined, ShoppingCartOutlined,
   SettingOutlined, FileTextOutlined, GiftOutlined, CreditCardOutlined, QuestionCircleOutlined,
   MessageOutlined, MenuFoldOutlined, MenuUnfoldOutlined, LogoutOutlined, DeploymentUnitOutlined,
-  ShareAltOutlined, DatabaseOutlined, BellOutlined, DownOutlined, SafetyCertificateOutlined, GlobalOutlined, TeamOutlined
+  ShareAltOutlined, DatabaseOutlined, BellOutlined, DownOutlined, SafetyCertificateOutlined, GlobalOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import Login from './pages/Login';
 import SupportWorkbenchPage from './pages/SupportWorkbenchPage';
-import SupportStaffPage from './pages/SupportStaffPage';
 import Dashboard from './pages/Dashboard';
 import UserPage from './pages/UserPage';
 import OrderPage from './pages/OrderPage';
@@ -61,7 +60,6 @@ const menu = [
   { type: 'item', key: '/invite-campaign', icon: <ShareAltOutlined />, label: '活动任务' },
   { type: 'heading', key: 'user-heading', label: '用户' },
   { type: 'item', key: '/user', icon: <UserOutlined />, label: '用户管理' },
-  { type: 'item', key: '/support/staff', icon: <TeamOutlined />, label: '员工管理' },
   { type: 'item', key: '/notice', icon: <BellOutlined />, label: '公告管理' },
   { type: 'item', key: '/ticket', icon: <MessageOutlined />, label: '工单管理' },
   { type: 'item', key: '/knowledge', icon: <QuestionCircleOutlined />, label: '知识库管理' },
@@ -85,7 +83,7 @@ function Page({ path }: { path: string }) {
   const route = path.split('?')[0];
   if (route === '/dashboard') return <Dashboard />;
   if (route === '/user') return <UserPage />;
-  if (route === '/support/staff') return <SupportStaffPage />;
+  if (route === '/support/staff' || route === '/support/operations') return <UserPage initialTab="staff-operations" />;
   if (route === '/plan') return <PlanPage />;
   if (route === '/order') return <OrderPage />;
   if (route === '/apple-id') return <AppleIDPage />;
@@ -157,7 +155,7 @@ export default function App() {
         const response = await checkLogin();
         if (!mounted || token !== getAuth()) return;
         const identity = response.data || {};
-        if (!identity.is_admin && !identity.is_support) { rejectIdentity(); return; }
+        if (!identity.is_admin && !identity.is_staff) { rejectIdentity(); return; }
         setAdminUserInfo(identity); setAdminUser(identity); setAuthed(true);
         // Staff identity uses only the dedicated checkLogin DTO, never administrator/user-detail endpoints.
         if (identity.is_admin) {
@@ -182,11 +180,12 @@ export default function App() {
 
   const selected = useMemo(() => {
     const route = path.split('?')[0];
+    if (route === '/support/staff' || route === '/support/operations') return ['/user'];
     if (route === '/server/client-entry' || route === '/server/client-entry-user-policy') return ['/server/manage'];
     return [route.startsWith('/ticket/') ? '/ticket' : route === '/apple-id/finance' ? '/apple-id' : route];
   }, [path]);
   const navigate = (key: string) => { if (!key.startsWith('/')) return; history.pushState(null, '', `/${adminPath}${key}`); setPath(key); if (isMobile) setCollapsed(true); };
-  const supportOnly = authed && !adminUser.is_admin && !!adminUser.is_support;
+  const supportOnly = authed && !adminUser.is_admin && !!adminUser.is_staff;
   const visibleMenu = supportOnly ? [{ type: 'item', key: '/support/workbench', icon: <SafetyCertificateOutlined />, label: '员工工作台' }] : menu;
   const navItems = visibleMenu.map((item) => item.type === 'heading'
     ? <li key={item.key} className="nav-main-heading">{item.label}</li>

@@ -29,10 +29,10 @@ func TestSupportLookupAcceptsOnlyCompleteEmailOrPositiveDecimalID(t *testing.T) 
 		t.Fatalf("email result: %d,%s,%v", id, email, err)
 	}
 }
-func TestSupportResultUsesFieldWhitelistAndAuthorizedTargets(t *testing.T) {
-	result := supportUserResult(usersvc.SupportEntryPreview{User: usersvc.SupportEntryUser{ID: 5, Email: "u@example.com"}, Scopes: []usersvc.SupportEntryScope{{SourcePolicyID: 10, Targets: []SupportEntryTarget{{Key: "policy:20"}, {Key: "policy:30"}}}}}, SupportStaffRecord{TargetKeys: []string{"policy:20"}})
-	if len(result.Scopes[0].Targets) != 1 || result.Scopes[0].Targets[0].Key != "policy:20" {
-		t.Fatal("unauthorized target shown")
+func TestSupportResultUsesFieldWhitelistAndCompatibleTargets(t *testing.T) {
+	result := supportUserResult(usersvc.SupportEntryPreview{User: usersvc.SupportEntryUser{ID: 5, Email: "u@example.com"}, Scopes: []usersvc.SupportEntryScope{{SourcePolicyID: 10, Targets: []SupportEntryTarget{{Key: "policy:20"}, {Key: "policy:30"}}}}})
+	if len(result.Scopes[0].Targets) != 2 || result.Scopes[0].Targets[1].Key != "policy:30" {
+		t.Fatal("compatible targets should not require a separate employee allowlist")
 	}
 	raw, _ := json.Marshal(result)
 	for _, key := range []string{"password", "token", "uuid", "balance", "commission", "subscribe_url"} {
@@ -83,15 +83,17 @@ func newSupportEntryTestService(t *testing.T) (*DBService, sqlmock.Sqlmock, func
 	}
 }
 func expectSupportStaffRead(mock sqlmock.Sqlmock) {
-	mock.ExpectQuery(`SELECT staff.user_id, users.email, staff.enabled, staff.target_keys::TEXT`).WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"id", "email", "enabled", "keys", "version", "created", "updated"}).AddRow(7, "staff@example.com", 1, `["policy:20"]`, 1, 1, 1))
+	mock.ExpectQuery(`SELECT id,email FROM v2_user WHERE id = \$1 AND banned = 0 AND is_admin = 0 AND is_staff = 1`).WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(7, "staff@example.com"))
 }
-func expectSupportMutationLocks(mock sqlmock.Sqlmock, requestID string, targetSupport bool) {
+func expectSupportMutationLocks(mock sqlmock.Sqlmock, requestID string, targetStaff bool) {
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id FROM v2_user.*FOR SHARE`).WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(7))
-	mock.ExpectQuery(`SELECT user_id,target_keys::TEXT FROM v2_support_staff.*FOR SHARE`).WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"id", "keys"}).AddRow(7, `["policy:20"]`))
+	mock.ExpectQuery(`SELECT id,email FROM v2_user.*is_staff = 1 FOR SHARE`).WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(7, "staff@example.com"))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs("7:" + requestID).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`SELECT id,is_admin,is_staff FROM v2_user.*FOR UPDATE`).WithArgs(int64(5)).WillReturnRows(sqlmock.NewRows([]string{"id", "admin", "staff"}).AddRow(5, 0, 0))
-	mock.ExpectQuery(`SELECT EXISTS .*v2_support_staff`).WithArgs(int64(5)).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(targetSupport))
+	rows := sqlmock.NewRows([]string{"id", "admin", "staff"})
+	if !targetStaff {
+		rows.AddRow(5, 0, 0)
+	}
+	mock.ExpectQuery(`SELECT id,is_admin,is_staff FROM v2_user.*is_admin = 0 AND is_staff = 0 FOR UPDATE`).WithArgs(int64(5)).WillReturnRows(rows)
 }
 func expectSupportPreview(mock sqlmock.Sqlmock, version int64) {
 	mock.ExpectQuery(`SELECT u.id,u.email,COALESCE\(p.name,''\),u.expired_at`).WithArgs(int64(5)).WillReturnRows(sqlmock.NewRows([]string{"id", "email", "plan", "expiry", "group", "plan_id", "banned", "transfer", "u", "d", "created"}).AddRow(5, "user@example.com", "Plan", nil, 1, 2, 0, 1000, 10, 20, time.Now().Unix()-86400))
@@ -113,7 +115,7 @@ func expectSupportPreview(mock sqlmock.Sqlmock, version int64) {
 func supportTestChangeRequest() SupportEntryChangeRequest {
 	return SupportEntryChangeRequest{UserID: 5, SourcePolicyID: 10, TargetKey: "policy:20", Reason: "repair", RequestID: "request-1"}
 }
-func TestSupportChangeRejectsOtherSupportAccountEvenWhenNotLegacyStaff(t *testing.T) {
+func TestSupportChangeRejectsOtherStaffAccounts(t *testing.T) {
 	s, mock, done := newSupportEntryTestService(t)
 	defer done()
 	expectSupportStaffRead(mock)
@@ -121,8 +123,8 @@ func TestSupportChangeRejectsOtherSupportAccountEvenWhenNotLegacyStaff(t *testin
 	expectSupportMutationLocks(mock, req.RequestID, true)
 	mock.ExpectRollback()
 	_, err := s.ChangeSupportEntry(context.Background(), 7, req)
-	if !errors.Is(err, ErrSupportForbidden) {
-		t.Fatalf("expected forbidden, got %v", err)
+	if !errors.Is(err, ErrSupportEntryNotFound) {
+		t.Fatalf("expected privileged target hidden, got %v", err)
 	}
 }
 func TestSupportChangeRechecksLiveRoleInsideTransaction(t *testing.T) {
@@ -130,8 +132,7 @@ func TestSupportChangeRechecksLiveRoleInsideTransaction(t *testing.T) {
 	defer done()
 	expectSupportStaffRead(mock)
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id FROM v2_user.*FOR SHARE`).WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(7))
-	mock.ExpectQuery(`SELECT user_id,target_keys::TEXT FROM v2_support_staff.*FOR SHARE`).WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"id", "keys"}))
+	mock.ExpectQuery(`SELECT id,email FROM v2_user.*is_staff = 1 FOR SHARE`).WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"id", "email"}))
 	mock.ExpectRollback()
 	_, err := s.ChangeSupportEntry(context.Background(), 7, supportTestChangeRequest())
 	if !errors.Is(err, ErrSupportForbidden) {
@@ -152,7 +153,7 @@ func TestSupportChangeRejectsStaleVersionBeforeWriting(t *testing.T) {
 		t.Fatalf("expected stale version error, got %v", err)
 	}
 }
-func TestSupportChangeRejectsUnauthorizedTargetOnServer(t *testing.T) {
+func TestSupportChangeRejectsUnavailableTargetOnServer(t *testing.T) {
 	s, mock, done := newSupportEntryTestService(t)
 	defer done()
 	expectSupportStaffRead(mock)
@@ -163,8 +164,8 @@ func TestSupportChangeRejectsUnauthorizedTargetOnServer(t *testing.T) {
 	expectSupportPreview(mock, 0)
 	mock.ExpectRollback()
 	_, err := s.ChangeSupportEntry(context.Background(), 7, req)
-	if !errors.Is(err, ErrSupportForbidden) {
-		t.Fatalf("expected server authorization error, got %v", err)
+	if !errors.Is(err, ErrSupportEntryInvalid) {
+		t.Fatalf("expected unavailable/incompatible target error, got %v", err)
 	}
 }
 func expectSupportMutationWrites(mock sqlmock.Sqlmock, req SupportEntryChangeRequest, logErr error) {
@@ -249,7 +250,7 @@ func TestSupportLookupDoesNotReturnPrivilegedOrAmbiguousAccounts(t *testing.T) {
 	s, mock, done := newSupportEntryTestService(t)
 	defer done()
 	expectSupportStaffRead(mock)
-	mock.ExpectQuery(`(?s)SELECT u.id FROM v2_user u WHERE LOWER\(u.email\) = \$1.*u.is_admin = 0 AND u.is_staff = 0.*NOT EXISTS .*v2_support_staff.*LIMIT 2`).WithArgs("staff@example.com").WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery(`(?s)SELECT u.id FROM v2_user u WHERE LOWER\(u.email\) = \$1.*u.is_admin = 0 AND u.is_staff = 0.*LIMIT 2`).WithArgs("staff@example.com").WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	result, err := s.LookupSupportUser(context.Background(), 7, "staff@example.com", "")
 	if err != nil || result.Found || result.User != nil {
 		t.Fatalf("privileged lookup: %#v,%v", result, err)
@@ -323,29 +324,6 @@ func TestSupportChangeExpiresAtMustBeFutureForFirstExecution(t *testing.T) {
 	}
 }
 
-func TestSupportReadOnlyStaffCannotRestoreExistingOverride(t *testing.T) {
-	s, mock, done := newSupportEntryTestService(t)
-	defer done()
-	expectSupportStaffRead(mock)
-	req := supportTestChangeRequest()
-	req.Restore = true
-	req.TargetKey = ""
-	req.Version = 1
-	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id FROM v2_user.*FOR SHARE`).WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(7))
-	mock.ExpectQuery(`SELECT user_id,target_keys::TEXT FROM v2_support_staff.*FOR SHARE`).WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"id", "keys"}).AddRow(7, `[]`))
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs("7:" + req.RequestID).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`SELECT id,is_admin,is_staff FROM v2_user.*FOR UPDATE`).WithArgs(int64(5)).WillReturnRows(sqlmock.NewRows([]string{"id", "admin", "staff"}).AddRow(5, 0, 0))
-	mock.ExpectQuery(`SELECT EXISTS .*v2_support_staff`).WithArgs(int64(5)).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	mock.ExpectQuery(`SELECT after_state::TEXT FROM v2_support_operation`).WithArgs(int64(7), req.RequestID).WillReturnError(sql.ErrNoRows)
-	expectSupportPreview(mock, 1)
-	mock.ExpectRollback()
-	_, err := s.ChangeSupportEntry(context.Background(), 7, req)
-	if !errors.Is(err, ErrSupportForbidden) {
-		t.Fatalf("read-only staff restoration must be forbidden: %v", err)
-	}
-}
-
 func TestSupportTargetLockFiltersKnownPrivilegedAccountsBeforeLocking(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -357,7 +335,7 @@ func TestSupportTargetLockFiltersKnownPrivilegedAccountsBeforeLocking(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	mock.ExpectQuery(`(?s)SELECT id,is_admin,is_staff FROM v2_user WHERE id = \$1 AND is_admin = 0 AND is_staff = 0.*NOT EXISTS .*v2_support_staff.*FOR UPDATE`).WithArgs(int64(8)).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`(?s)SELECT id,is_admin,is_staff FROM v2_user WHERE id = \$1 AND is_admin = 0 AND is_staff = 0 FOR UPDATE`).WithArgs(int64(8)).WillReturnError(sql.ErrNoRows)
 	if err = lockSupportTargetUser(context.Background(), tx, 8); !errors.Is(err, ErrSupportEntryNotFound) {
 		t.Fatalf("expected hidden privileged target, got %v", err)
 	}
@@ -367,12 +345,9 @@ func TestSupportTargetLockFiltersKnownPrivilegedAccountsBeforeLocking(t *testing
 		t.Fatal(err)
 	}
 }
-func TestSupportResultCanRestoreUsesRoleNotCurrentCompatibleTargets(t *testing.T) {
+func TestSupportResultCanRestoreDoesNotRequireAnyCompatibleTarget(t *testing.T) {
 	preview := usersvc.SupportEntryPreview{Scopes: []usersvc.SupportEntryScope{{Targets: []SupportEntryTarget{}}}}
-	if supportUserResult(preview, SupportStaffRecord{}).CanRestore {
-		t.Fatal("readonly role cannot restore")
-	}
-	if !supportUserResult(preview, SupportStaffRecord{TargetKeys: []string{"policy:deleted"}}).CanRestore {
-		t.Fatal("role with stale authorized destination should still restore old override")
+	if !supportUserResult(preview).CanRestore {
+		t.Fatal("all employees can restore an existing override even if its old destination was removed")
 	}
 }

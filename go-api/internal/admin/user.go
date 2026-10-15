@@ -170,9 +170,6 @@ func (s *DBService) GetUserInfoByID(ctx context.Context, id int64) (map[string]a
 	if id <= 0 {
 		return nil, errors.New("参数错误")
 	}
-	if isLegacyStaffScope(ctx) {
-		return s.getLegacyStaffUserInfo(ctx, id)
-	}
 
 	user, err := s.queryJSONMap(ctx, adminUserJSONMapQuery(`SELECT * FROM v2_user WHERE id = $1 LIMIT 1`), id)
 	if err != nil {
@@ -233,19 +230,8 @@ func (s *DBService) UpdateUser(ctx context.Context, req UserUpdateRequest) (bool
 	if req.ID <= 0 {
 		return false, errors.New("用户不存在")
 	}
-	legacyStaff := isLegacyStaffScope(ctx)
-	if legacyStaff {
-		if err := s.ensureSupportSchema(ctx); err != nil {
-			return false, err
-		}
-	}
-
 	values := cloneStringMap(req.Values)
-	if legacyStaff {
-		values["is_admin"] = "0"
-		values["is_staff"] = "0"
-	}
-	if !legacyStaff && len(values) == 1 {
+	if len(values) == 1 {
 		if _, ok := values["invite_user_email"]; ok {
 			return s.updateInviteUserBinding(ctx, req.ID, strings.TrimSpace(values["invite_user_email"]))
 		}
@@ -432,11 +418,13 @@ func (s *DBService) UpdateUser(ctx context.Context, req UserUpdateRequest) (bool
 	}
 	defer tx.Rollback()
 
-	if legacyStaff {
-		if err := lockLegacyStaffUser(ctx, tx, req.ID); err != nil {
-			return false, err
-		}
+	// Synchronize role changes with in-flight employee operations, which hold
+	// a shared lock on this row. Check the current values after obtaining it.
+	var currentIsAdmin, currentIsStaff int64
+	if err := tx.QueryRowContext(ctx, `SELECT is_admin, is_staff FROM v2_user WHERE id = $1 FOR UPDATE`, req.ID).Scan(&currentIsAdmin, &currentIsStaff); err != nil {
+		return false, fmt.Errorf("lock admin user update target: %w", err)
 	}
+	roleChanged := currentIsAdmin != isAdminValue || currentIsStaff != isStaffValue
 
 	if rawInviteCode, ok := values["invite_code"]; ok {
 		if err := s.savePrimaryInviteCodeTx(ctx, tx, req.ID, rawInviteCode, now); err != nil {
@@ -444,7 +432,7 @@ func (s *DBService) UpdateUser(ctx context.Context, req UserUpdateRequest) (bool
 		}
 	}
 
-	if bannedValue == 1 {
+	if bannedValue == 1 || roleChanged {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_auth_session WHERE user_id = $1`, req.ID); err != nil {
 			return false, fmt.Errorf("clear user sessions: %w", err)
 		}
@@ -462,7 +450,7 @@ func (s *DBService) UpdateUser(ctx context.Context, req UserUpdateRequest) (bool
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit admin user update transaction: %w", err)
 	}
-	if bannedValue == 1 && s.authCache != nil {
+	if (bannedValue == 1 || roleChanged) && s.authCache != nil {
 		s.authCache.InvalidateUser(req.ID)
 	}
 	return true, nil
@@ -949,16 +937,6 @@ func (s *DBService) setUsersBanned(ctx context.Context, filters []UserFilter, ba
 	}
 	defer tx.Rollback()
 
-	if isLegacyStaffScope(ctx) {
-		ids, err = lockLegacyStaffUsers(ctx, tx, ids)
-		if err != nil {
-			return false, err
-		}
-		if len(ids) == 0 {
-			return true, tx.Commit()
-		}
-	}
-
 	if banned == 1 {
 		if err := deleteAuthSessionsByUserIDs(ctx, tx, ids, "处理失败"); err != nil {
 			return false, err
@@ -1262,20 +1240,11 @@ func deleteAuthSessionsByUserIDs(ctx context.Context, tx *sql.Tx, ids []int64, m
 }
 
 func (s *DBService) buildUserWhere(ctx context.Context, filters []UserFilter) (string, []any, error) {
-	legacyStaff := isLegacyStaffScope(ctx)
-	if legacyStaff {
-		if err := s.ensureSupportSchema(ctx); err != nil {
-			return "", nil, err
-		}
-	}
-	if len(filters) == 0 && !legacyStaff {
+	if len(filters) == 0 {
 		return "", nil, nil
 	}
 
 	parts := make([]string, 0, len(filters))
-	if legacyStaff {
-		parts = append(parts, legacyStaffUserPredicate)
-	}
 	args := make([]any, 0, len(filters))
 	for _, filter := range filters {
 		key := strings.TrimSpace(filter.Key)

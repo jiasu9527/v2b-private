@@ -137,12 +137,21 @@ func (s *Service) handleMonitorCommand(ctx context.Context, message webhookMessa
 		return nil
 	}
 
-	_, authorized, err := s.lookupTelegramOperator(ctx, message.ChatID)
+	_, isAdmin, authorized, err := s.lookupTelegramOperatorRole(ctx, message.ChatID)
 	if err != nil {
 		return err
 	}
 	if !authorized {
 		return s.sendMessage(ctx, message.ChatID, "无权限：仅已绑定 Telegram 的管理员和员工可使用入口检测。")
+	}
+
+	if !isAdmin {
+		if err := s.sendMessageMarkup(ctx, message.ChatID,
+			"🛡 用户入口状态\n员工可查看已有检测结果；主动检测和批量入口调整仅限管理员。",
+			entryMonitorReadOnlyReplyKeyboard()); err != nil {
+			return err
+		}
+		return s.sendMessageMarkup(ctx, message.ChatID, "查看已有检测结果", entryMonitorReadOnlyInlineKeyboard())
 	}
 
 	// Telegram only accepts one reply_markup per message. Send the persistent
@@ -214,7 +223,7 @@ func (s *Service) handleManualAutoSplitTextAction(ctx context.Context, message w
 		return err
 	}
 	if !authorized {
-		return s.sendMessage(ctx, message.ChatID, "⛔ 无权限\n仅已绑定 Telegram 的管理员和员工可执行入口二分。")
+		return s.sendMessage(ctx, message.ChatID, "⛔ 无权限\n仅已绑定 Telegram 的管理员可执行入口二分。")
 	}
 	controller, ok := s.entryMonitor.(EntryMonitorManualAutoSplitController)
 	if !ok {
@@ -244,10 +253,10 @@ func (s *Service) handleManualAutoSplitCallback(ctx context.Context, callback we
 	}
 	if !authorized {
 		if !callback.IsText {
-			return s.sendMessage(ctx, callback.ChatID, "⛔ 无权限\n仅已绑定 Telegram 的管理员和员工可执行入口二分。")
+			return s.sendMessage(ctx, callback.ChatID, "⛔ 无权限\n仅已绑定 Telegram 的管理员可执行入口二分。")
 		}
 		return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID,
-			"⛔ 无权限\n仅已绑定 Telegram 的管理员和员工可执行入口二分。", entryMonitorInlineKeyboard())
+			"⛔ 无权限\n仅已绑定 Telegram 的管理员可执行入口二分。", entryMonitorReadOnlyInlineKeyboard())
 	}
 	controller, ok := s.entryMonitor.(EntryMonitorManualAutoSplitController)
 	if !ok {
@@ -331,7 +340,7 @@ func (s *Service) handleMonitorRuleTextAction(ctx context.Context, message webho
 		return err
 	}
 	if !authorized {
-		return s.sendMessage(ctx, message.ChatID, "⛔ 无权限\n仅已绑定 Telegram 的管理员和员工可使用入口检测。")
+		return s.sendMessage(ctx, message.ChatID, "⛔ 无权限\n主动检测仅限管理员；员工可查看已有检测结果。")
 	}
 	_ = userID // Authorization is deliberately checked before loading run options.
 	controller, ok := s.entryMonitor.(EntryMonitorRunOptionsController)
@@ -362,9 +371,9 @@ func (s *Service) handleMonitorRuleCallback(ctx context.Context, callback webhoo
 	}
 	if !authorized {
 		if !callback.IsText {
-			return s.sendMessage(ctx, callback.ChatID, "⛔ 无权限\n仅已绑定 Telegram 的管理员和员工可使用入口检测。")
+			return s.sendMessage(ctx, callback.ChatID, "⛔ 无权限\n主动检测仅限管理员；员工可查看已有检测结果。")
 		}
-		return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID, "⛔ 无权限\n仅已绑定 Telegram 的管理员和员工可使用入口检测。", entryMonitorInlineKeyboard())
+		return s.editMonitorMenu(ctx, callback.ChatID, callback.MessageID, "⛔ 无权限\n主动检测仅限管理员；员工可查看已有检测结果。", entryMonitorReadOnlyInlineKeyboard())
 	}
 	controller, ok := s.entryMonitor.(EntryMonitorRunOptionsController)
 	if !ok {
@@ -433,7 +442,7 @@ func (s *Service) editMonitorMenu(ctx context.Context, chatID, messageID int64, 
 }
 
 func (s *Service) handleMonitorAction(ctx context.Context, telegramID, chatID int64, action, requestKey string) error {
-	userID, authorized, err := s.lookupTelegramOperator(ctx, telegramID)
+	userID, isAdmin, authorized, err := s.lookupTelegramOperatorRole(ctx, telegramID)
 	if err != nil {
 		return err
 	}
@@ -447,6 +456,9 @@ func (s *Service) handleMonitorAction(ctx context.Context, telegramID, chatID in
 
 	switch action {
 	case clientEntryMonitorRunCallback:
+		if !isAdmin {
+			return s.sendMessage(ctx, chatID, "⛔ 主动检测仅限管理员，员工只能查看已有检测结果。")
+		}
 		_, err := s.entryMonitor.StartClientEntryMonitorRun(ctx, userID, chatID, requestKey)
 		if err != nil {
 			return s.sendMessage(ctx, chatID, "❌ 启动检测失败\n原因："+err.Error())
@@ -457,7 +469,11 @@ func (s *Service) handleMonitorAction(ctx context.Context, telegramID, chatID in
 		if imageController, ok := s.entryMonitor.(EntryMonitorImageController); ok && s.sendPhoto != nil {
 			imageBytes, caption, renderErr := imageController.RecentClientEntryMonitorReportImage(ctx)
 			if renderErr == nil && len(imageBytes) > 0 {
-				if err := s.sendPhoto(ctx, chatID, imageBytes, caption, entryMonitorInlineKeyboard()); err != nil {
+				keyboard := entryMonitorReadOnlyInlineKeyboard()
+				if isAdmin {
+					keyboard = entryMonitorInlineKeyboard()
+				}
+				if err := s.sendPhoto(ctx, chatID, imageBytes, caption, keyboard); err != nil {
 					return fmt.Errorf("send recent client entry monitor image: %w", err)
 				}
 				return nil
@@ -476,24 +492,39 @@ func (s *Service) handleMonitorAction(ctx context.Context, telegramID, chatID in
 	}
 }
 
+// Mutating legacy Telegram operations are administrator-only. Employee reads
+// use lookupTelegramOperatorRole explicitly, and all checks hit current DB state.
 func (s *Service) lookupTelegramOperator(ctx context.Context, telegramID int64) (int64, bool, error) {
-	if s.db == nil {
-		return 0, false, errors.New("telegram service unavailable")
-	}
+	id, administrator, authorized, err := s.lookupTelegramOperatorRole(ctx, telegramID)
+	return id, administrator && authorized, err
+}
 
-	var userID int64
-	err := s.db.QueryRowContext(ctx, `SELECT id
+func (s *Service) lookupTelegramOperatorRole(ctx context.Context, telegramID int64) (int64, bool, bool, error) {
+	if s.db == nil {
+		return 0, false, false, errors.New("telegram service unavailable")
+	}
+	var userID, isAdmin int64
+	err := s.db.QueryRowContext(ctx, `SELECT id, is_admin
 FROM v2_user
 WHERE telegram_id = $1 AND banned = 0 AND (is_admin = 1 OR is_staff = 1)
-ORDER BY id ASC
-LIMIT 1`, telegramID).Scan(&userID)
+ORDER BY is_admin DESC, id ASC
+LIMIT 1`, telegramID).Scan(&userID, &isAdmin)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return 0, false, nil
+			return 0, false, false, nil
 		}
-		return 0, false, fmt.Errorf("lookup telegram operator: %w", err)
+		return 0, false, false, fmt.Errorf("lookup telegram operator: %w", err)
 	}
-	return userID, true, nil
+	return userID, isAdmin != 0, true, nil
+}
+
+func entryMonitorReadOnlyInlineKeyboard() inlineKeyboardMarkup {
+	return inlineKeyboardMarkup{InlineKeyboard: [][]inlineKeyboardButton{
+		{{Text: clientEntryMonitorRecentButtonText, CallbackData: clientEntryMonitorRecentCallback}},
+	}}
+}
+func entryMonitorReadOnlyReplyKeyboard() replyKeyboardMarkup {
+	return replyKeyboardMarkup{Keyboard: [][]replyKeyboardButton{{{Text: clientEntryMonitorRecentButtonText}}}, ResizeKeyboard: true, IsPersistent: true}
 }
 
 func entryMonitorInlineKeyboard() inlineKeyboardMarkup {
@@ -917,13 +948,13 @@ func (s *Service) handleReplyMessage(ctx context.Context, message webhookMessage
 		isAdmin int64
 		isStaff int64
 	)
-	if err := s.db.QueryRowContext(ctx, `SELECT id, email, is_admin, is_staff FROM v2_user WHERE telegram_id = $1 LIMIT 1`, message.ChatID).Scan(&adminID, &email, &isAdmin, &isStaff); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT id, email, is_admin, is_staff FROM v2_user WHERE telegram_id = $1 AND banned = 0 AND is_admin = 1 LIMIT 1`, message.ChatID).Scan(&adminID, &email, &isAdmin, &isStaff); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
 		}
 		return true, err
 	}
-	if isAdmin == 0 && isStaff == 0 {
+	if isAdmin == 0 {
 		return false, nil
 	}
 
