@@ -26,12 +26,12 @@ export function AppleIDOrderStatus({ status }: { status: number }) {
 }
 const auditActions: Record<string, string> = {
   created: '创建订单', paid: '支付并发货', manual_paid: '人工确认支付', late_payment: '迟到付款待处理',
-  delivery_view: '用户查看交付', credential_view: '管理员查看凭据', inventory_replace: '售后换号',
-  refund_confirmed: '确认外部退款', cancel: '用户取消订单', admin_cancel: '管理员取消订单', reservation_expired: '预留超时释放',
+  delivery_view: '用户查看交付', credential_view: '后台查看凭据', inventory_replace: '售后换号',
+  refund_confirmed: '确认外部退款', cancel: '用户取消订单', admin_cancel: '后台取消订单', reservation_expired: '预留超时释放',
 };
 function auditActor(row: Audit) {
   if (!row.actor_admin_id) return '系统';
-  return `${['created', 'delivery_view', 'cancel'].includes(row.action) ? '用户' : '管理员'} #${row.actor_admin_id}`;
+  return `${['created', 'delivery_view', 'cancel'].includes(row.action) ? '用户' : '后台操作员'} #${row.actor_admin_id}`;
 }
 function auditDetail(detail: Audit['detail']) {
   const fragments = [

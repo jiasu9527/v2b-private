@@ -26,3 +26,5 @@
   .apple-id-copy-field { flex-direction: column; }
   .apple-id-copy-field textarea { flex: none; width: 100%; }
 }
+
+.apple-id-page-embedded > .apple-id-content { margin: 0; }

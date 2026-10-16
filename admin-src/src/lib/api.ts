@@ -134,6 +134,7 @@ async function parseResponse(res: Response, options: { raw?: boolean } = {}) {
 export async function apiGet(path: string, params: AnyRecord = {}) {
   const qs = toQuery(params);
   const res = await fetch(`/api/v1/${getAdminPath()}${path}${qs ? `?${qs}` : ''}`, { credentials: 'same-origin' });
+  if (path.startsWith('/apple-id/')) await revalidateSupportIdentity(res);
   return parseResponse(res);
 }
 
@@ -163,6 +164,7 @@ export async function apiPost(path: string, body: AnyRecord = {}, options: { for
     init.body = JSON.stringify(payload);
   }
   const res = await fetch(`/api/v1/${getAdminPath()}${path}`, init);
+  if (path.startsWith('/apple-id/')) await revalidateSupportIdentity(res);
   return parseResponse(res, { raw: options.raw });
 }
 

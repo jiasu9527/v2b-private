@@ -273,8 +273,19 @@ of order. A late payment tries to atomically allocate another available item;
 if none exists,
 the order moves to status `4` for refund or manual resolution.
 
-Administrator routes use the configured `<admin_path>` and require an admin
-session. Product save accepts `name`, `region`, `owned_shadowrocket`, `price`,
+Apple ID management routes use the configured `<admin_path>` and accept an
+administrator or existing employee (`is_staff=1`) session. All Apple ID module
+capabilities, including product/inventory management, order credentials,
+replacement/cancellation/refund confirmation, audits, and financial reporting,
+are available to employees. Each request authenticates the current session and
+role directly, bypassing the normal identity cache; banned users, revoked
+sessions, and users with neither role are rejected. This is module-scoped and
+does not grant employee access to unrelated administrator APIs or log deletion.
+Authentication keeps the existing `Authorization` header and query/JSON/form
+`auth_data` compatibility.
+The audit actor always comes from the authenticated identity, never a submitted
+actor field; for management actions, legacy `actor_admin_id` identifies either
+an administrator or an employee. Product save accepts `name`, `region`, `owned_shadowrocket`, `price`,
 `after_sales`, and optional `enabled` (plus `id` when editing). Batch inventory
 import uses JSON with one opaque credential record per item:
 
@@ -335,16 +346,21 @@ Apple ID purchases.
 Install/update SQL includes the new tables. Run the normal database update
 before deploying the new server. The administrator interface includes an
 "独享 Apple ID" navigation item at `/<admin_path>/apple-id`, with product,
-inventory, and order tabs. Product prices are entered in yuan and submitted
+inventory, order, and financial reporting tabs. Employees use the same module
+inside the existing workbench’s "独享 Apple ID" tab; direct Apple ID/finance
+page URLs also open that workbench tab without exposing other administrator
+pages. No new employee role, user-website API change, or App change is required.
+Product prices are entered in yuan and submitted
 as integer cents. Inventory import accepts one complete account record per line.
 The record may include the account, password, security questions, and other
 delivery data without a fixed separator. Empty lines are ignored and the batch
-is limited to 500 records. Administrators can directly read and copy account
+is limited to 500 records. Administrators and employees can directly read and copy account
 records without masking or view logging. Replacement retires the previous
 account. Refund confirmation
-requires the administrator to confirm that the gateway refund has already
+requires the operator to confirm that the gateway refund has already
 completed. Pending orders can be canceled from the order list or detail dialog;
-the administrator and reason are recorded as `admin_cancel`. Canceling does
+the authenticated operator and reason are recorded as `admin_cancel` (the action
+name remains unchanged for employee cancellations). Canceling does
 not revoke an existing payment link: confirmed late payments still allocate
 available inventory or enter status `4` if none is available.
 The customer website must connect to the user routes separately;
@@ -383,7 +399,7 @@ refunds; it is not profit or a payment gateway settlement balance.
 positive `amount`, `occurred_at` (Unix seconds), `occurred_at_local` (server-local
 date/time with UTC offset), order `status`, and optional
 `payment_id`/`callback_no`. Transaction rows contain no account credentials.
-Both routes require the administrator session and disable response caching.
+Both routes require an administrator or employee session and disable response caching.
 Reporting reads existing order/operation data and writes no view logs or
 additional financial history.
 

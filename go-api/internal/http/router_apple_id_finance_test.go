@@ -15,9 +15,11 @@ import (
 )
 
 func (f *fakeAppleIDService) AdminFinanceStats(context.Context, appleid.AdminFinanceRequest) (appleid.AdminFinanceStatsResult, error) {
+	f.adminCalls++
 	return appleid.AdminFinanceStatsResult{}, f.adminErr
 }
 func (f *fakeAppleIDService) AdminFinanceTransactions(context.Context, appleid.AdminFinanceRequest) (appleid.AdminFinanceTransactionsResult, error) {
+	f.adminCalls++
 	return appleid.AdminFinanceTransactionsResult{}, f.adminErr
 }
 
@@ -44,7 +46,7 @@ func appleFinanceRequest(service *fakeAppleFinanceService, identity *session.Ide
 	router.ServeHTTP(rec, req)
 	return rec
 }
-func TestAppleIDFinanceRequiresAdmin(t *testing.T) {
+func TestAppleIDFinanceRequiresAdministratorOrStaff(t *testing.T) {
 	for _, endpoint := range []string{"stats", "transactions"} {
 		for _, identity := range []*session.Identity{nil, {ID: 7}} {
 			service := &fakeAppleFinanceService{}

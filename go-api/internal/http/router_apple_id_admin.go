@@ -30,9 +30,40 @@ type appleIDAdminService interface {
 	AdminFinanceTransactions(context.Context, appleid.AdminFinanceRequest) (appleid.AdminFinanceTransactionsResult, error)
 }
 
+// Apple ID management is the only administrator module also granted to the
+// existing staff role. Do not broaden the shared administrator authenticator.
+func authenticateAppleIDOperator(w http.ResponseWriter, r *http.Request, sessions session.Service) (*session.Identity, bool) {
+	if sessions == nil {
+		handleSessionError(w, session.ErrUnavailable)
+		return nil, false
+	}
+	// Preserve existing query/form/JSON auth_data clients and replayable payloads.
+	token, err := readAuthToken(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		return nil, false
+	}
+	if token == "" {
+		handleSessionError(w, session.ErrUnauthorized)
+		return nil, false
+	}
+	// The production session service bypasses its process-local role cache here,
+	// so a revoked session, removed staff flag or ban is effective immediately.
+	identity, ok := authenticateSupportToken(w, r, sessions, token, false)
+	if !ok {
+		return nil, false
+	}
+	if identity.ID <= 0 || (identity.IsAdmin != 1 && identity.IsStaff != 1) {
+		handleSessionError(w, session.ErrUnauthorized)
+		return nil, false
+	}
+	return identity, true
+}
+
 func handleAdminAppleID(w http.ResponseWriter, r *http.Request, sessions session.Service, service appleIDAdminService, action string) bool {
 	disableResponseCache(w)
-	identity, ok := authenticateRequest(w, r, sessions, true)
+	w.Header().Set("Vary", "Authorization")
+	identity, ok := authenticateAppleIDOperator(w, r, sessions)
 	if !ok {
 		return true
 	}

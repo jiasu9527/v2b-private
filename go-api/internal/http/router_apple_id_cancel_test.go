@@ -12,7 +12,7 @@ import (
 	"forest/go-api/internal/session"
 )
 
-func TestAppleIDAdminCancelRequiresAdmin(t *testing.T) {
+func TestAppleIDAdminCancelRequiresAdministratorOrStaff(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		identity *session.Identity
@@ -38,7 +38,7 @@ func TestAppleIDAdminCancelRequiresAdmin(t *testing.T) {
 				t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 			}
 			if service.lastCancel != (appleid.AdminCancelOrderRequest{}) {
-				t.Fatalf("cancellation service called before administrator authentication: %+v", service.lastCancel)
+				t.Fatalf("cancellation service called before operator authentication: %+v", service.lastCancel)
 			}
 			assertAppleIDNoStore(t, rec)
 		})

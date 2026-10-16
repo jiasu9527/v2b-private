@@ -25,12 +25,15 @@ type fakeAppleIDService struct {
 	userErr  error
 	adminErr error
 
+	adminCalls        int
 	listProductsCalls int
 	lastUserID        int64
 	lastTradeNo       string
 	credentialsCalls  int
 	lastAdminID       int64
 	lastAdminOrderID  int64
+	lastSaveProduct   appleid.AdminSaveProductRequest
+	lastImport        appleid.AdminAddInventoryRequest
 	lastDisable       appleid.AdminDisableInventoryRequest
 	lastReplace       appleid.AdminReplaceInventoryRequest
 	lastCancel        appleid.AdminCancelOrderRequest
@@ -92,43 +95,55 @@ func (f *fakeAppleIDService) CancelOrder(_ context.Context, userID int64, tradeN
 }
 
 func (f *fakeAppleIDService) AdminListProducts(context.Context) ([]appleid.AdminProduct, error) {
+	f.adminCalls++
 	return nil, f.adminErr
 }
 
-func (f *fakeAppleIDService) AdminSaveProduct(context.Context, appleid.AdminSaveProductRequest) (appleid.AdminProduct, error) {
+func (f *fakeAppleIDService) AdminSaveProduct(_ context.Context, req appleid.AdminSaveProductRequest) (appleid.AdminProduct, error) {
+	f.adminCalls++
+	f.lastSaveProduct = req
 	return appleid.AdminProduct{}, f.adminErr
 }
 
 func (f *fakeAppleIDService) AdminSetProductEnabled(context.Context, appleid.AdminSetProductEnabledRequest) error {
+	f.adminCalls++
 	return f.adminErr
 }
 
 func (f *fakeAppleIDService) AdminDeleteProduct(context.Context, int64) error {
+	f.adminCalls++
 	return f.adminErr
 }
 
-func (f *fakeAppleIDService) AdminAddInventoryBatch(context.Context, appleid.AdminAddInventoryRequest) (appleid.AdminAddInventoryResult, error) {
+func (f *fakeAppleIDService) AdminAddInventoryBatch(_ context.Context, req appleid.AdminAddInventoryRequest) (appleid.AdminAddInventoryResult, error) {
+	f.adminCalls++
+	f.lastImport = req
 	return appleid.AdminAddInventoryResult{}, f.adminErr
 }
 
 func (f *fakeAppleIDService) AdminListInventory(context.Context, appleid.AdminInventoryListRequest) (appleid.AdminInventoryListResult, error) {
+	f.adminCalls++
 	return appleid.AdminInventoryListResult{}, f.adminErr
 }
 
 func (f *fakeAppleIDService) AdminDisableInventory(_ context.Context, req appleid.AdminDisableInventoryRequest) error {
+	f.adminCalls++
 	f.lastDisable = req
 	return f.adminErr
 }
 
 func (f *fakeAppleIDService) AdminListOrders(context.Context, appleid.AdminOrderListRequest) (appleid.AdminOrderListResult, error) {
+	f.adminCalls++
 	return appleid.AdminOrderListResult{}, f.adminErr
 }
 
 func (f *fakeAppleIDService) AdminGetOrderDetail(context.Context, int64) (appleid.AdminOrderDetail, error) {
+	f.adminCalls++
 	return appleid.AdminOrderDetail{}, f.adminErr
 }
 
 func (f *fakeAppleIDService) AdminGetOrderCredentials(_ context.Context, orderID, adminID int64) (appleid.AdminCredentialDetail, error) {
+	f.adminCalls++
 	f.credentialsCalls++
 	f.lastAdminOrderID = orderID
 	f.lastAdminID = adminID
@@ -136,21 +151,25 @@ func (f *fakeAppleIDService) AdminGetOrderCredentials(_ context.Context, orderID
 }
 
 func (f *fakeAppleIDService) AdminReplaceInventory(_ context.Context, req appleid.AdminReplaceInventoryRequest) (appleid.AdminReplaceInventoryResult, error) {
+	f.adminCalls++
 	f.lastReplace = req
 	return appleid.AdminReplaceInventoryResult{}, f.adminErr
 }
 
 func (f *fakeAppleIDService) AdminCancelOrder(_ context.Context, req appleid.AdminCancelOrderRequest) error {
+	f.adminCalls++
 	f.lastCancel = req
 	return f.adminErr
 }
 
 func (f *fakeAppleIDService) AdminMarkOrderRefunded(_ context.Context, req appleid.AdminMarkRefundedRequest) error {
+	f.adminCalls++
 	f.lastRefund = req
 	return f.adminErr
 }
 
 func (f *fakeAppleIDService) AdminListAudits(_ context.Context, req appleid.AdminAuditListRequest) (appleid.AdminAuditListResult, error) {
+	f.adminCalls++
 	f.auditCalls++
 	f.lastAudit = req
 	return appleid.AdminAuditListResult{}, f.adminErr
@@ -183,7 +202,7 @@ func TestAppleIDRoutesRequireExpectedAuthentication(t *testing.T) {
 		requireAdmin bool
 	}{
 		{name: "user login", method: http.MethodGet, path: "/api/v1/apple-id/products?auth_data=invalid"},
-		{name: "administrator", method: http.MethodGet, path: "/api/v1/localadmin/apple-id/product/fetch?auth_data=invalid", requireAdmin: true},
+		{name: "apple module operator", method: http.MethodGet, path: "/api/v1/localadmin/apple-id/product/fetch?auth_data=invalid"},
 	}
 
 	for _, tt := range tests {
@@ -212,7 +231,7 @@ func TestAppleIDRoutesRequireExpectedAuthentication(t *testing.T) {
 	}
 }
 
-func TestAdminAppleIDRouteRejectsNonAdminUser(t *testing.T) {
+func TestAdminAppleIDRouteRejectsOrdinaryUser(t *testing.T) {
 	service := &fakeAppleIDService{}
 	router := NewRouter(
 		config.Config{AdminPath: "localadmin"},
@@ -408,7 +427,7 @@ func TestAppleIDPaymentUnknownErrorDoesNotExposeInternalDetails(t *testing.T) {
 	assertAppleIDNoStore(t, rec)
 }
 
-func TestAdminAppleIDCredentialsRequireAdminAndCarryAuditActor(t *testing.T) {
+func TestAdminAppleIDCredentialsAuthenticateOperatorAndCarryAuditActor(t *testing.T) {
 	sessions := &fakeSessionService{user: &session.Identity{ID: 77, Email: "admin@example.com", IsAdmin: 1}}
 	service := &fakeAppleIDService{credential: appleid.AdminCredentialDetail{
 		OrderID: 11, TradeNo: "apple-11", InventoryID: 8, ProductID: 3, Account: "buyer@example.com", Password: "secret",
@@ -432,8 +451,8 @@ func TestAdminAppleIDCredentialsRequireAdminAndCarryAuditActor(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	assertAppleIDNoStore(t, rec)
-	if !sessions.lastRequireAdmin {
-		t.Fatal("credentials endpoint did not require administrator authentication")
+	if sessions.lastRequireAdmin {
+		t.Fatal("Apple ID operator authentication must allow the staff role")
 	}
 	if service.credentialsCalls != 1 || service.lastAdminOrderID != 11 || service.lastAdminID != 77 {
 		t.Fatalf("audit actor was not forwarded: calls=%d order=%d admin=%d", service.credentialsCalls, service.lastAdminOrderID, service.lastAdminID)
@@ -507,8 +526,8 @@ func TestAdminAppleIDMutationRoutesCarryAuditActor(t *testing.T) {
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
 			}
-			if !sessions.lastRequireAdmin {
-				t.Fatal("mutation did not require administrator authentication")
+			if sessions.lastRequireAdmin {
+				t.Fatal("Apple ID mutation authentication must allow the staff role")
 			}
 			tt.assert(t, service)
 		})
