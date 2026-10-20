@@ -403,6 +403,30 @@ Both routes require an administrator or employee session and disable response ca
 Reporting reads existing order/operation data and writes no view logs or
 additional financial history.
 
+## Entry-rule configured email export
+
+Administrators can open **节点管理 → 入口分配 → a standard rule's 更多 → 查看指定邮箱**
+for rules containing `email / in` conditions. The dialog shows the complete
+configured email list and count, with **复制全部** and **导出 TXT**. The UTF-8 text
+contains one email per line, without a heading, user details, or pagination limits.
+
+This exports **explicitly configured email values only**, not users who currently
+match the rule or use its entry address. It includes emails later added by staff,
+emails without a current website account, and entries for expired or banned users;
+no user lookup or subscription matching is performed. Disabled rules may also be
+exported. Values are trimmed, normalized to lowercase, deduplicated, and sorted.
+If a rule contains multiple email conditions, the export is their configured
+values' union, not their AND-match intersection; the dialog explains this distinction.
+Rules without an email condition and fixed split groups do not offer this action.
+
+Opening or refreshing the dialog re-reads the existing administrator-only
+`GET /api/v1/{admin_path}/server/client-entry-user-policy/fetch` endpoint, whose
+response is now `no-store`. It does not reuse a stale list-row copy. Failed reads,
+a deleted rule, or a changed rule without standard email conditions disable export
+instead of preserving an old result. The operation neither changes rules nor writes
+view logs. No new endpoint, database migration, employee permission, customer
+website change, or App change is required.
+
 ## Important boundary
 
 Legacy PHP HTTP business routes now have Go route coverage.

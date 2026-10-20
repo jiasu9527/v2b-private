@@ -1025,6 +1025,8 @@ func splitClientEntryLines(raw string) []string {
 }
 
 func handleAdminClientEntryUserPolicyFetch(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	disableResponseCache(w)
+	w.Header().Set("Vary", "Authorization")
 	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
 		return true
 	}

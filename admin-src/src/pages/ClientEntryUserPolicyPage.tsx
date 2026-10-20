@@ -36,6 +36,8 @@ import {
 } from '@ant-design/icons';
 import { apiGet, apiPost, apiJsonPost, bytes } from '../lib/api';
 import EntryCollectionEditor from './EntryCollectionEditor';
+import EntryUserEmailsModal from './EntryUserEmailsModal';
+import { hasConfiguredEmailCondition } from './entryUserEmails';
 import { filterEntryRows, entryRuleName, entryRuleHost, moveEntryRow } from './clientEntryLayout';
 import { attachEntryCollections, effectiveEntryResolveHost, entryCollectionResolveLabel, parseEntryCollections, canJoinEntryCollection, entryCollectionMember, entryCollectionMemberKey, type EntryCollection, type EntryCollectionOption } from './clientEntryCollections';
 import { buildVisibleServerOptions, memberKey, splitMemberKey, type ClientEntryServerOption } from './clientEntryHelpers';
@@ -1664,6 +1666,7 @@ function StandardRuleActions({ row, serverOptions, onDone, onRemove, onDelete, p
   row: any; serverOptions: ClientEntryServerOption[]; onDone: () => void;
   onRemove?: () => void; onDelete: () => void; pending?: boolean;
 }) {
+  const [emailsOpen, setEmailsOpen] = useState(false);
   const copyTrigger = useRef<HTMLButtonElement>(null);
   const splitTrigger = useRef<HTMLButtonElement>(null);
   const copyRow = { ...row, id: undefined, __entry_collection: undefined, name: `${row.name || `规则 #${row.id}`} - 副本` };
@@ -1671,18 +1674,21 @@ function StandardRuleActions({ row, serverOptions, onDone, onRemove, onDelete, p
     <Space className="client-entry-actions" size={4}>
       <PolicyEditor row={row} onDone={onDone} serverOptions={serverOptions}><Button type="link" size="small" disabled={pending}>编辑</Button></PolicyEditor>
       <Dropdown trigger={['click']} menu={{ items: [
+        ...(hasConfiguredEmailCondition(row) ? [{ key: 'emails', icon: <TeamOutlined />, label: '查看指定邮箱' }] : []),
         { key: 'copy', icon: <CopyOutlined />, label: '复制规则' },
         ...(canConvertRangeToSplit(row) ? [{ key: 'split', icon: <BranchesOutlined />, label: '转换为固定二分' }] : []),
         ...(onRemove ? [{ key: 'remove', label: '移出合集' }] : []),
         { type: 'divider' as const },
         { key: 'delete', icon: <DeleteOutlined />, label: '删除规则', danger: true },
       ], onClick: ({ key }) => {
+        if (key === 'emails') setEmailsOpen(true);
         if (key === 'copy') copyTrigger.current?.click();
         if (key === 'split') splitTrigger.current?.click();
         if (key === 'remove') onRemove?.();
         if (key === 'delete') onDelete();
       } }}><Button type="text" size="small" icon={<MoreOutlined />} disabled={pending}>更多</Button></Dropdown>
     </Space>
+    <EntryUserEmailsModal policyID={Number(row.id)} open={emailsOpen} onClose={() => setEmailsOpen(false)} />
     <PolicyEditor row={copyRow} onDone={onDone} serverOptions={serverOptions}><button type="button" ref={copyTrigger} hidden /></PolicyEditor>
     {canConvertRangeToSplit(row) && <RangePolicySplitConverter row={row} onDone={onDone}><button type="button" ref={splitTrigger} hidden /></RangePolicySplitConverter>}
   </>;
