@@ -28,6 +28,27 @@ func (s *DBService) ensureSchema(ctx context.Context) error {
  receipt_json TEXT NOT NULL,
  created_at BIGINT NOT NULL
  )`,
+		`CREATE TABLE IF NOT EXISTS v2_user_migration_member (
+ preview_id VARCHAR(64) NOT NULL,
+ user_id INTEGER NOT NULL,
+ PRIMARY KEY (preview_id, user_id)
+ )`,
+		`CREATE TABLE IF NOT EXISTS v2_user_migration_mail (
+ id BIGSERIAL NOT NULL UNIQUE,
+ request_id VARCHAR(64) PRIMARY KEY,
+ preview_id VARCHAR(64) NOT NULL,
+ actor_id INTEGER NOT NULL,
+ content_hash VARCHAR(64) NOT NULL,
+ status VARCHAR(24) NOT NULL,
+ recipients INTEGER NOT NULL,
+ sent INTEGER NOT NULL DEFAULT 0,
+ failed INTEGER NOT NULL DEFAULT 0,
+ interval_seconds BIGINT NOT NULL,
+ created_at BIGINT NOT NULL,
+ updated_at BIGINT NOT NULL
+ )`,
+		`CREATE INDEX IF NOT EXISTS v2_user_migration_mail_batch_idx ON v2_user_migration_mail (preview_id, id DESC)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS v2_user_migration_mail_active_idx ON v2_user_migration_mail (preview_id) WHERE status IN ('queued','running')`,
 		`CREATE TABLE IF NOT EXISTS v2_runtime_kv (
  k VARCHAR(191) PRIMARY KEY,
  v TEXT NOT NULL,
@@ -220,11 +241,11 @@ func (s *DBService) Apply(ctx context.Context, actorID int64, req ApplyRequest) 
 		if end > len(p.users) {
 			end = len(p.users)
 		}
-		if err = insertBatch(ctx, tx, p.users[start:end], p.resetMethod, now); err != nil {
+		if err = insertBatch(ctx, tx, req.PreviewID, p.users[start:end], p.resetMethod, now); err != nil {
 			return Receipt{}, err
 		}
 	}
-	receipt := Receipt{PreviewID: req.PreviewID, Status: "completed", Imported: len(p.users), Counts: p.result.Counts, SourceDigest: p.result.SourceDigest, LockingBalancePolicy: p.result.LockingBalancePolicy, RegenerateTokens: p.result.RegenerateTokens, RegenerateUUIDs: p.result.RegenerateUUIDs, CreatedAt: now.Unix(), CompletedAt: s.now().Unix()}
+	receipt := Receipt{MailTrackingAvailable: true, PreviewID: req.PreviewID, Status: "completed", Imported: len(p.users), Counts: p.result.Counts, SourceDigest: p.result.SourceDigest, LockingBalancePolicy: p.result.LockingBalancePolicy, RegenerateTokens: p.result.RegenerateTokens, RegenerateUUIDs: p.result.RegenerateUUIDs, CreatedAt: now.Unix(), CompletedAt: s.now().Unix()}
 	raw, err := json.Marshal(receipt)
 	if err != nil {
 		return Receipt{}, ErrTargetWrite
@@ -248,7 +269,7 @@ func (s *DBService) Apply(ctx context.Context, actorID int64, req ApplyRequest) 
 	return receipt, nil
 }
 
-func insertBatch(ctx context.Context, tx *sql.Tx, users []insertUser, defaultMethod int64, now time.Time) error {
+func insertBatch(ctx context.Context, tx *sql.Tx, previewID string, users []insertUser, defaultMethod int64, now time.Time) error {
 	if len(users) == 0 {
 		return nil
 	}
@@ -281,6 +302,8 @@ func insertBatch(ctx context.Context, tx *sql.Tx, users []insertUser, defaultMet
 	}
 	markerValues := []string{}
 	markerArgs := []any{}
+	memberValues := []string{}
+	memberArgs := []any{}
 	returned := 0
 	for rows.Next() {
 		var id int64
@@ -296,6 +319,8 @@ func insertBatch(ctx context.Context, tx *sql.Tx, users []insertUser, defaultMet
 		}
 		delete(byEmail, email)
 		returned++
+		memberValues = append(memberValues, fmt.Sprintf("($%d,$%d)", len(memberArgs)+1, len(memberArgs)+2))
+		memberArgs = append(memberArgs, previewID, id)
 		if u.TargetPlan == nil {
 			continue
 		}
@@ -322,6 +347,9 @@ func insertBatch(ctx context.Context, tx *sql.Tx, users []insertUser, defaultMet
 	err = rows.Err()
 	rows.Close()
 	if err != nil || returned != len(users) {
+		return ErrTargetWrite
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO v2_user_migration_member (preview_id,user_id) VALUES `+strings.Join(memberValues, ","), memberArgs...); err != nil {
 		return ErrTargetWrite
 	}
 	if len(markerValues) > 0 {

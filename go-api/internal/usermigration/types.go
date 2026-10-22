@@ -8,20 +8,26 @@ import (
 )
 
 var (
-	ErrUnavailable      = errors.New("user migration unavailable")
-	ErrInvalidParameter = errors.New("invalid migration parameter")
-	ErrSourceConnection = errors.New("cannot connect to source MySQL; check connection details and network access")
-	ErrSourceRead       = errors.New("cannot read source Xboard snapshot; check read-only permissions and schema")
-	ErrSourceSchema     = errors.New("unsupported source Xboard schema")
-	ErrSourceLimit      = errors.New("source exceeds migration limit of 200000 users")
-	ErrTargetRead       = errors.New("cannot read migration target")
-	ErrTargetWrite      = errors.New("migration transaction failed and was not committed")
-	ErrBusy             = errors.New("another migration operation is in progress; try again later")
-	ErrPreviewExpired   = errors.New("migration preview not found or expired; create a new preview")
-	ErrPreviewBlocked   = errors.New("migration preview contains blocking issues")
-	ErrPreviewStale     = errors.New("target users or mapped plans changed; create a new preview")
-	ErrReceiptNotFound  = errors.New("migration receipt not found")
-	ErrCommitUnknown    = errors.New("migration commit outcome is unknown; query receipt before any further import")
+	ErrUnavailable             = errors.New("user migration unavailable")
+	ErrInvalidParameter        = errors.New("invalid migration parameter")
+	ErrSourceConnection        = errors.New("cannot connect to source MySQL; check connection details and network access")
+	ErrSourceRead              = errors.New("cannot read source Xboard snapshot; check read-only permissions and schema")
+	ErrSourceSchema            = errors.New("unsupported source Xboard schema")
+	ErrSourceLimit             = errors.New("source exceeds migration limit of 200000 users")
+	ErrTargetRead              = errors.New("cannot read migration target")
+	ErrTargetWrite             = errors.New("migration database operation failed; query operation status before retrying")
+	ErrBusy                    = errors.New("another migration operation is in progress; try again later")
+	ErrPreviewExpired          = errors.New("migration preview not found or expired; create a new preview")
+	ErrPreviewBlocked          = errors.New("migration preview contains blocking issues")
+	ErrPreviewStale            = errors.New("target users or mapped plans changed; create a new preview")
+	ErrReceiptNotFound         = errors.New("migration receipt not found")
+	ErrMailTrackingUnavailable = errors.New("migration batch has no precise recipient tracking")
+	ErrMailUnavailable         = errors.New("migration mail is not configured or cannot be prepared")
+	ErrMailQueueUnavailable    = errors.New("migration mail queue is unavailable")
+	ErrMailNoRecipients        = errors.New("migration batch has no eligible recipients")
+	ErrMailConflict            = errors.New("migration mail request id was already used with different content")
+	ErrMailBusy                = errors.New("this migration batch already has an active mail task")
+	ErrCommitUnknown           = errors.New("migration commit outcome is unknown; query operation status before creating another task")
 )
 
 const (
@@ -110,16 +116,17 @@ type ApplyRequest struct {
 }
 
 type Receipt struct {
-	PreviewID            string `json:"preview_id"`
-	Status               string `json:"status"`
-	Imported             int    `json:"imported"`
-	Counts               Counts `json:"counts"`
-	SourceDigest         string `json:"source_digest"`
-	LockingBalancePolicy string `json:"locking_balance_policy"`
-	RegenerateTokens     bool   `json:"regenerate_tokens"`
-	RegenerateUUIDs      bool   `json:"regenerate_uuids"`
-	CreatedAt            int64  `json:"created_at"`
-	CompletedAt          int64  `json:"completed_at"`
+	MailTrackingAvailable bool   `json:"mail_tracking_available"`
+	PreviewID             string `json:"preview_id"`
+	Status                string `json:"status"`
+	Imported              int    `json:"imported"`
+	Counts                Counts `json:"counts"`
+	SourceDigest          string `json:"source_digest"`
+	LockingBalancePolicy  string `json:"locking_balance_policy"`
+	RegenerateTokens      bool   `json:"regenerate_tokens"`
+	RegenerateUUIDs       bool   `json:"regenerate_uuids"`
+	CreatedAt             int64  `json:"created_at"`
+	CompletedAt           int64  `json:"completed_at"`
 }
 
 // sourceUser deliberately excludes source administrative grants, referral links,

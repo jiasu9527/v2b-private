@@ -107,6 +107,7 @@ func main() {
 		migrationService = usermigration.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig)
 		paymentService = payment.NewDBService(cfg, db, userDBService).WithExternalOrderManager(appleIDService).WithRuntimeConfig(runtimeConfig)
 		adminDBService := admin.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
+		migrationService.WithMailDispatcher(adminDBService, jobQueue)
 		if err := initializeDNSFailoverBeforeServe(ctx, adminDBService); err != nil {
 			log.Fatalf("initialize DNS failover schema: %v", err)
 		}

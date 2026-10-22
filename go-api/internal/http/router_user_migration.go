@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"forest/go-api/internal/session"
 	"forest/go-api/internal/usermigration"
@@ -20,6 +21,8 @@ type userMigrationService interface {
 	Preview(context.Context, int64, usermigration.PreviewRequest) (usermigration.PreviewResult, error)
 	Apply(context.Context, int64, usermigration.ApplyRequest) (usermigration.Receipt, error)
 	Receipt(context.Context, int64, string) (usermigration.Receipt, error)
+	MailInfo(context.Context, int64, string) (usermigration.MailInfo, error)
+	SendMail(context.Context, int64, usermigration.MailRequest) (usermigration.MailTask, error)
 }
 
 func WithUserMigrationService(service *usermigration.DBService) Option {
@@ -54,8 +57,8 @@ func handleUserMigration(w http.ResponseWriter, r *http.Request, sessions sessio
 	}
 	method := http.MethodPost
 	switch action {
-	case "inspect", "preview", "apply":
-	case "receipt":
+	case "inspect", "preview", "apply", "mail/send":
+	case "receipt", "mail/status":
 		method = http.MethodGet
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]any{"message": "迁移接口不存在"})
@@ -67,7 +70,7 @@ func handleUserMigration(w http.ResponseWriter, r *http.Request, sessions sessio
 		return
 	}
 	query, queryErr := url.ParseQuery(r.URL.RawQuery)
-	if queryErr != nil || action != "receipt" && r.URL.RawQuery != "" || action == "receipt" && (len(query) != 1 || len(query["preview_id"]) != 1) {
+	if queryErr != nil || method == http.MethodPost && r.URL.RawQuery != "" || method == http.MethodGet && (len(query) != 1 || len(query["preview_id"]) != 1) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "迁移参数请通过 JSON 请求体提交，凭据禁止放在 URL 中"})
 		return
 	}
@@ -105,13 +108,30 @@ func handleUserMigration(w http.ResponseWriter, r *http.Request, sessions sessio
 			return
 		}
 		result, err = service.Apply(ctx, identity.ID, req)
-	case "receipt":
+	case "receipt", "mail/status":
 		id := query.Get("preview_id")
 		if !validMigrationPreviewID(id) {
 			writeMigrationError(w, usermigration.ErrInvalidParameter)
 			return
 		}
-		result, err = service.Receipt(ctx, identity.ID, id)
+		if action == "mail/status" {
+			result, err = service.MailInfo(ctx, identity.ID, id)
+		} else {
+			result, err = service.Receipt(ctx, identity.ID, id)
+		}
+	case "mail/send":
+		var req usermigration.MailRequest
+		// Allow escaped JSON for a 100 KB message, without changing the smaller
+		// bound on database credentials or other migration operations.
+		if !decodeMigrationJSONLimit(w, r, &req, 1<<20) {
+			return
+		}
+		req.Subject, req.Content = strings.TrimSpace(req.Subject), strings.TrimSpace(req.Content)
+		if !req.Confirm || !validMigrationPreviewID(req.PreviewID) || !validMigrationPreviewID(req.RequestID) || req.Subject == "" || utf8.RuneCountInString(req.Subject) > 200 || strings.ContainsAny(req.Subject, "\r\n\x00") || req.Content == "" || len(req.Content) > 100000 {
+			writeMigrationError(w, usermigration.ErrInvalidParameter)
+			return
+		}
+		result, err = service.SendMail(ctx, identity.ID, req)
 	}
 	if err != nil {
 		writeMigrationError(w, err)
@@ -157,12 +177,16 @@ func validMigrationPreviewID(id string) bool {
 }
 
 func decodeMigrationJSON(w http.ResponseWriter, r *http.Request, target any) bool {
+	return decodeMigrationJSONLimit(w, r, target, 64<<10)
+}
+
+func decodeMigrationJSONLimit(w http.ResponseWriter, r *http.Request, target any, limit int64) bool {
 	typ, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || typ != "application/json" {
 		writeJSON(w, http.StatusUnsupportedMediaType, map[string]any{"message": "请使用 application/json 提交迁移参数"})
 		return false
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	defer r.Body.Close()
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -184,7 +208,7 @@ func writeMigrationError(w http.ResponseWriter, err error) {
 	status, code, message := http.StatusInternalServerError, "migration_failed", "迁移操作失败；请检查迁移结果后再操作"
 	switch {
 	case errors.Is(err, usermigration.ErrInvalidParameter):
-		status, code, message = 400, "invalid_parameter", "迁移参数不完整或无效，请检查连接、套餐映射和确认选项"
+		status, code, message = 400, "invalid_parameter", "迁移参数不完整或无效，请检查填写内容和确认选项"
 	case errors.Is(err, usermigration.ErrUnavailable):
 		status, code, message = 503, "unavailable", "用户迁移服务不可用"
 	case errors.Is(err, usermigration.ErrSourceConnection):
@@ -204,13 +228,25 @@ func writeMigrationError(w http.ResponseWriter, err error) {
 	case errors.Is(err, usermigration.ErrReceiptNotFound):
 		status, code, message = 404, "receipt_not_found", "尚未找到该任务的完成记录；请勿据此认定写入失败或立即重新导入"
 	case errors.Is(err, usermigration.ErrCommitUnknown):
-		status, code, message = 409, "commit_unknown", "提交结果暂时无法确认，请查询任务结果，不要重新创建导入任务"
+		status, code, message = 409, "commit_unknown", "提交结果暂时无法确认，请查询任务结果，不要重新创建导入或邮件任务"
 	case errors.Is(err, usermigration.ErrTargetWrite):
-		status, code, message = 500, "target_write", "迁移事务执行失败，未提交用户变更"
+		status, code, message = 500, "target_write", "数据库操作失败，请先查询迁移或邮件任务结果"
 	case errors.Is(err, usermigration.ErrTargetRead):
 		status, code, message = 503, "target_read", "无法读取目标数据库，请稍后重试查询"
+	case errors.Is(err, usermigration.ErrMailTrackingUnavailable):
+		status, code, message = 409, "mail_tracking_unavailable", "该批次未记录实际迁入用户，不能精准群发"
+	case errors.Is(err, usermigration.ErrMailUnavailable):
+		status, code, message = 503, "mail_unavailable", "邮件服务未配置或暂不可用，请检查后台邮件设置"
+	case errors.Is(err, usermigration.ErrMailQueueUnavailable):
+		status, code, message = 503, "mail_queue_unavailable", "邮件队列不可用，本次未创建发送任务"
+	case errors.Is(err, usermigration.ErrMailNoRecipients):
+		status, code, message = 409, "mail_no_recipients", "本批次没有当前可发送的普通用户"
+	case errors.Is(err, usermigration.ErrMailConflict):
+		status, code, message = 409, "mail_conflict", "该邮件请求编号已使用且内容不同，请先查询原任务"
+	case errors.Is(err, usermigration.ErrMailBusy):
+		status, code, message = 409, "mail_busy", "本批已有排队或发送中的邮件任务，请先查询任务状态"
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
-		status, code, message = 504, "timeout", "操作超时或中断；若已确认导入，请先查询任务结果"
+		status, code, message = 504, "timeout", "操作超时或中断；若已确认导入或发信，请先查询任务结果"
 	}
 	writeJSON(w, status, map[string]any{"message": message, "code": code})
 }

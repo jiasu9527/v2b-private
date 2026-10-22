@@ -342,7 +342,7 @@ func TestMigrationIntegrationSecondBatchFailureRollsBackEverything(t *testing.T)
 	if got := integrationCount(t, f.pg, `SELECT last_value FROM integration_insert_attempts`); got != 501 {
 		t.Fatalf("failure was not in second batch: %d attempted inserts", got)
 	}
-	for _, table := range []string{"v2_user", "v2_runtime_kv", "v2_user_migration_receipt"} {
+	for _, table := range []string{"v2_user", "v2_runtime_kv", "v2_user_migration_member", "v2_user_migration_receipt"} {
 		if got := integrationCount(t, f.pg, `SELECT count(*) FROM `+table); got != 0 {
 			t.Fatalf("partial transaction left %d rows in %s", got, table)
 		}
@@ -370,7 +370,7 @@ func TestMigrationIntegrationStalePlanBlocksBeforeUserWrites(t *testing.T) {
 	if _, err := f.service.Apply(ctx, 7, ApplyRequest{PreviewID: p.PreviewID, Confirm: true}); !errors.Is(err, ErrPreviewStale) {
 		t.Fatalf("changed target plan was silently imported: %v", err)
 	}
-	for _, table := range []string{"v2_user", "v2_runtime_kv", "v2_user_migration_receipt"} {
+	for _, table := range []string{"v2_user", "v2_runtime_kv", "v2_user_migration_member", "v2_user_migration_receipt"} {
 		if got := integrationCount(t, f.pg, `SELECT count(*) FROM `+table); got != 0 {
 			t.Fatalf("stale preview wrote %d rows to %s", got, table)
 		}

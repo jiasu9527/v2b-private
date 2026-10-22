@@ -63,6 +63,7 @@ func expectStartApply(m sqlmock.Sqlmock, id string, collision bool) {
 func expectInsert(m sqlmock.Sqlmock) {
 	src := sampleUser(1)
 	m.ExpectQuery(`INSERT INTO v2_user \(email,password,`).WithArgs(src.Email, src.Password, nil, nil, int64(1234), int64(567), src.T, src.U, src.D, src.TransferEnable, int64(0), 0, 0, src.UUID, int64(3), int64(9), int64(4), int64(100), src.Token, *src.ExpiredAt, src.CreatedAt, fixedNow.Unix(), 0).WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(101, src.Email))
+	m.ExpectExec(`INSERT INTO v2_user_migration_member`).WithArgs(strings.Repeat("a", 64), int64(101)).WillReturnResult(sqlmock.NewResult(0, 1))
 	m.ExpectExec(`INSERT INTO v2_runtime_kv`).WithArgs("TRAFFIC_RESET_CYCLE_USER_101", sqlmock.AnyArg(), fixedNow.Add(400*24*time.Hour).Unix(), fixedNow.Unix(), fixedNow.Unix()).WillReturnResult(sqlmock.NewResult(0, 1))
 	m.ExpectExec(`INSERT INTO v2_user_migration_receipt`).WithArgs(strings.Repeat("a", 64), int64(7), sqlmock.AnyArg(), fixedNow.Unix()).WillReturnResult(sqlmock.NewResult(0, 1))
 }
@@ -208,12 +209,30 @@ func TestLegacyReceiptWithoutRegenerationFieldsRemainsReadable(t *testing.T) {
 		m.ExpectQuery(`SELECT receipt_json FROM v2_user_migration_receipt`).WithArgs(id, int64(7)).WillReturnRows(sqlmock.NewRows([]string{"receipt_json"}).AddRow(raw))
 	}
 	r, err := s.Receipt(context.Background(), 7, id)
-	if err != nil || r.Imported != 1 || r.RegenerateTokens || r.RegenerateUUIDs {
+	if err != nil || r.Imported != 1 || r.RegenerateTokens || r.RegenerateUUIDs || r.MailTrackingAvailable {
 		t.Fatalf("legacy receipt compatibility failed: %+v err=%v", r, err)
 	}
 	again, err := s.Apply(context.Background(), 7, ApplyRequest{PreviewID: id, Confirm: true})
 	if err != nil || again != r {
 		t.Fatalf("legacy idempotent Apply changed policy: %+v err=%v", again, err)
+	}
+	if err := m.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApplyMembershipFailureRollsBackUsersAndReceipt(t *testing.T) {
+	s, m := mockService(t)
+	id := preparedPreview(t, s)
+	expectStartApply(m, id, false)
+	m.ExpectQuery(`INSERT INTO v2_user`).WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(101, sampleUser(1).Email))
+	m.ExpectExec(`INSERT INTO v2_user_migration_member`).WithArgs(id, int64(101)).WillReturnError(errors.New("membership storage failure"))
+	m.ExpectRollback()
+	if _, err := s.Apply(context.Background(), 7, ApplyRequest{PreviewID: id, Confirm: true}); !errors.Is(err, ErrTargetWrite) {
+		t.Fatal(err)
+	}
+	if s.previews[id].state != "ready" {
+		t.Fatal("definite rollback became non-retryable")
 	}
 	if err := m.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

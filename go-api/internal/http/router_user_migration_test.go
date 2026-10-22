@@ -21,17 +21,20 @@ const migrationTestPreviewID = "0123456789abcdef0123456789abcdef0123456789abcdef
 const migrationTestSecret = "migration-secret-must-not-appear-in-response"
 
 type fakeUserMigrationService struct {
-	calls      []string
-	actorID    int64
-	source     usermigration.SourceConfig
-	preview    usermigration.PreviewRequest
-	apply      usermigration.ApplyRequest
-	receiptID  string
-	lastCtx    context.Context
-	err        error
-	inspection usermigration.Inspection
-	result     usermigration.PreviewResult
-	receipt    usermigration.Receipt
+	calls       []string
+	actorID     int64
+	source      usermigration.SourceConfig
+	preview     usermigration.PreviewRequest
+	apply       usermigration.ApplyRequest
+	receiptID   string
+	lastCtx     context.Context
+	err         error
+	inspection  usermigration.Inspection
+	result      usermigration.PreviewResult
+	receipt     usermigration.Receipt
+	mailRequest usermigration.MailRequest
+	mailInfo    usermigration.MailInfo
+	mailTask    usermigration.MailTask
 }
 
 func (f *fakeUserMigrationService) record(ctx context.Context, actorID int64, action string) {
@@ -63,6 +66,18 @@ func (f *fakeUserMigrationService) Receipt(ctx context.Context, actorID int64, i
 	return f.receipt, f.err
 }
 
+func (f *fakeUserMigrationService) MailInfo(ctx context.Context, actorID int64, id string) (usermigration.MailInfo, error) {
+	f.record(ctx, actorID, "mail/status")
+	f.receiptID = id
+	return f.mailInfo, f.err
+}
+
+func (f *fakeUserMigrationService) SendMail(ctx context.Context, actorID int64, req usermigration.MailRequest) (usermigration.MailTask, error) {
+	f.record(ctx, actorID, "mail/send")
+	f.mailRequest = req
+	return f.mailTask, f.err
+}
+
 type userMigrationRoute struct {
 	action, method, query, body string
 }
@@ -72,6 +87,8 @@ var userMigrationRoutes = []userMigrationRoute{
 	{action: "preview", method: http.MethodPost, body: `{"source":{"host":"source.example.test","port":3306,"database":"xboard","username":"reader","password":"` + migrationTestSecret + `","tls":true},"plan_mapping":{"1":7,"2":9},"locking_balance_policy":"discard","confirm_locking_balance":true}`},
 	{action: "apply", method: http.MethodPost, body: `{"preview_id":"` + migrationTestPreviewID + `","confirm":true}`},
 	{action: "receipt", method: http.MethodGet, query: "?preview_id=" + migrationTestPreviewID},
+	{action: "mail/status", method: http.MethodGet, query: "?preview_id=" + migrationTestPreviewID},
+	{action: "mail/send", method: http.MethodPost, body: `{"preview_id":"` + migrationTestPreviewID + `","request_id":"` + migrationTestPreviewID + `","subject":"迁移通知","content":"请登录新站获取订阅。","confirm":true}`},
 }
 
 func newUserMigrationRouter(sessions session.Service, service userMigrationService, opts ...Option) http.Handler {
@@ -157,7 +174,7 @@ func TestUserMigrationUsesFreshAdministratorAndSessionOwner(t *testing.T) {
 				if service.apply.PreviewID != migrationTestPreviewID || !service.apply.Confirm {
 					t.Fatalf("apply confirmation lost: %+v", service.apply)
 				}
-			case "receipt":
+			case "receipt", "mail/status":
 				if service.receiptID != migrationTestPreviewID {
 					t.Fatalf("receipt ID=%q", service.receiptID)
 				}
@@ -234,7 +251,7 @@ func TestUserMigrationApplyCannotOverridePreviewRegenerationSettings(t *testing.
 }
 
 func TestUserMigrationReceiptResponsesKeepRegenerationFlags(t *testing.T) {
-	for _, route := range userMigrationRoutes[2:] {
+	for _, route := range userMigrationRoutes[2:4] {
 		for _, options := range []struct{ tokens, uuids bool }{{}, {tokens: true}, {uuids: true}, {tokens: true, uuids: true}} {
 			t.Run(fmt.Sprintf("%s/tokens=%v/uuids=%v", route.action, options.tokens, options.uuids), func(t *testing.T) {
 				service := &fakeUserMigrationService{receipt: usermigration.Receipt{

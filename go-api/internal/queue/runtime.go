@@ -182,6 +182,42 @@ func (r *Runtime) Enqueue(queueName, jobName string, fn JobFunc) error {
 	}
 }
 
+// TryEnqueue submits a job only when the runtime has immediate buffer capacity.
+// Unlike Enqueue it never waits for a worker or executes the job on the caller.
+func (r *Runtime) TryEnqueue(queueName, jobName string, fn JobFunc) error {
+	if r == nil {
+		return errors.New("queue runtime unavailable")
+	}
+	if fn == nil {
+		return errors.New("queue job is nil")
+	}
+
+	queueName = normalizeQueueName(queueName)
+	job := queuedJob{
+		queueName: queueName,
+		jobName:   jobName,
+		enqueued:  time.Now(),
+		run:       fn,
+	}
+
+	// Shutdown detaches the channel under this same lock before closing it.
+	// Keep the check and nonblocking send together so a concurrent shutdown
+	// cannot close a channel that this method is still about to send to.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.started.Load() || r.jobs == nil {
+		return errors.New("queue runtime not started")
+	}
+	select {
+	case r.jobs <- job:
+		state := r.queueState(queueName)
+		state.pendingTimes = append(state.pendingTimes, job.enqueued)
+		return nil
+	default:
+		return errors.New("queue runtime full")
+	}
+}
+
 func (r *Runtime) Snapshot() Snapshot {
 	if r == nil {
 		return Snapshot{}

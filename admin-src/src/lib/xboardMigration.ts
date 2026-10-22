@@ -59,6 +59,36 @@ export type MigrationReceipt = {
   regenerate_uuids?: boolean;
   created_at: number;
   completed_at: number;
+  mail_tracking_available?: boolean;
+};
+
+export type MigrationMailTask = {
+  request_id: string;
+  preview_id: string;
+  status: 'queued' | 'running' | 'completed' | 'partial_failed' | 'interrupted' | 'queue_failed';
+  recipients: number;
+  sent: number;
+  failed: number;
+  interval_seconds: number;
+  created_at: number;
+  updated_at: number;
+};
+export type MigrationMailInfo = {
+  preview_id: string;
+  imported: number;
+  recipients: number;
+  tracking_available: boolean;
+  configured: boolean;
+  queue_available: boolean;
+  interval_seconds: number;
+  task: MigrationMailTask | null;
+};
+export type MigrationMailRequest = {
+  preview_id: string;
+  request_id: string;
+  subject: string;
+  content: string;
+  confirm: true;
 };
 
 export class MigrationRequestError extends Error {
@@ -101,3 +131,5 @@ export const inspectXboard = (source: XboardSource) => request<MigrationInspecti
 export const previewXboard = (body: MigrationPreviewRequest) => request<MigrationPreview>('/preview', body);
 export const applyXboard = (previewID: string) => request<MigrationReceipt>('/apply', { preview_id: previewID, confirm: true });
 export const getXboardReceipt = (previewID: string) => request<MigrationReceipt>(`/receipt?preview_id=${encodeURIComponent(previewID)}`);
+export const getXboardMailInfo = (previewID: string) => request<MigrationMailInfo>(`/mail/status?preview_id=${encodeURIComponent(previewID)}`);
+export const sendXboardMail = (body: MigrationMailRequest) => request<MigrationMailTask>('/mail/send', body);

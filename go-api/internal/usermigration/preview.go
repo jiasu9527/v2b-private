@@ -18,20 +18,23 @@ import (
 	"time"
 
 	"forest/go-api/internal/config"
+	"forest/go-api/internal/queue"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type DBService struct {
-	cfg        config.Config
-	runtime    *config.RuntimeState
-	db         *sql.DB
-	mu         sync.Mutex
-	previews   map[string]*storedPreview
-	gate       chan struct{}
-	ensureMu   sync.Mutex
-	ensured    bool
-	now        func() time.Time
-	openSource func(SourceConfig) (*sql.DB, error)
+	mailDispatcher MailDispatcher
+	jobs           queue.Enqueuer
+	cfg            config.Config
+	runtime        *config.RuntimeState
+	db             *sql.DB
+	mu             sync.Mutex
+	previews       map[string]*storedPreview
+	gate           chan struct{}
+	ensureMu       sync.Mutex
+	ensured        bool
+	now            func() time.Time
+	openSource     func(SourceConfig) (*sql.DB, error)
 }
 
 func NewDBService(cfg config.Config, db *sql.DB) *DBService {

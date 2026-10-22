@@ -1072,46 +1072,11 @@ type bulkMailConfig struct {
 }
 
 func (s *DBService) dispatchUserMailJobs(ctx context.Context, emails []string, subject, content string, cfg bulkMailConfig) error {
-	emailList := make([]string, 0, len(emails))
-	for _, email := range emails {
-		email = strings.TrimSpace(email)
-		if email != "" {
-			emailList = append(emailList, email)
-		}
-	}
+	emailList := normalizeUserMailRecipients(emails)
 	if len(emailList) == 0 {
 		return nil
 	}
-	if cfg.bulkIntervalSeconds < 0 {
-		cfg.bulkIntervalSeconds = 0
-	}
-
-	runBatch := func(jobCtx context.Context) error {
-		var batchErr error
-		for idx, email := range emailList {
-			var sendErr error
-			if cfg.host == "" {
-				sendErr = errors.New("邮件服务未配置")
-			} else {
-				renderedBody := renderAdminMailBody(cfg, "notify", content, nil)
-				sendErr = s.adminMailSender()(cfg.host, int(cfg.port), cfg.encryption, cfg.username, cfg.password, cfg.from, cfg.fromName, email, subject, renderedBody)
-			}
-			_ = s.insertMailLog(jobCtx, email, subject, sendErr)
-			if sendErr != nil && batchErr == nil {
-				batchErr = sendErr
-			}
-			if idx >= len(emailList)-1 || cfg.bulkIntervalSeconds <= 0 {
-				continue
-			}
-			if err := s.sleepContext(jobCtx, time.Duration(cfg.bulkIntervalSeconds)*time.Second); err != nil {
-				if batchErr == nil {
-					batchErr = err
-				}
-				break
-			}
-		}
-		return batchErr
-	}
+	runBatch := s.userMailBatch(emailList, subject, content, cfg, nil)
 
 	if s.jobs != nil {
 		if err := s.jobs.Enqueue("send_email_mass", "batch:"+subject, runBatch); err == nil {

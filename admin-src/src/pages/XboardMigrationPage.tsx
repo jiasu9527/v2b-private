@@ -4,6 +4,7 @@ import { DatabaseOutlined, ReloadOutlined } from '@ant-design/icons';
 import { money } from '../lib/api';
 import { applyXboard, getXboardReceipt, inspectXboard, MigrationRequestError, previewXboard } from '../lib/xboardMigration';
 import type { LockingBalancePolicy, MigrationCounts, MigrationInspection, MigrationPlan, MigrationPreview, MigrationReceipt, XboardSource } from '../lib/xboardMigration';
+import XboardMigrationMail from './XboardMigrationMail';
 
 const { Paragraph, Text } = Typography;
 const infoStyle = { background: '#f5f7fa', borderColor: '#d9e2ed' };
@@ -218,7 +219,9 @@ export default function XboardMigrationPage() {
 
       {receipt && <Card className="migration-card" title="4. 迁移结果" styles={cardStyles}><Result status="success" title={`已新增 ${receipt.imported.toLocaleString()} 个用户`} subTitle={`完成时间：${formatTime(receipt.completed_at)}；只新增普通用户，不覆盖目标站已有用户。`} /><Space direction="vertical" style={{ width: '100%' }} size={16}><CredentialOptions value={receipt} /><Counts value={receipt.counts} /><Space><Text>迁移编号：</Text><Text copyable>{receipt.preview_id}</Text></Space><Alert type="info" style={infoStyle} message="数据库密码已从本页清除。建议抽查账号登录、套餐权限、已用流量和重置时间，再安排用户切换订阅。" showIcon />{(receipt.regenerate_tokens || receipt.regenerate_uuids) && <Alert type="warning" showIcon message="本次已强制重生成订阅凭据，请用户重新获取目标站订阅" description="只影响此次新增用户。源站旧凭据仍然存在，用户登录密码未修改。" />}</Space></Card>}
 
-      <Card className="migration-card" title="查询已有迁移回执" size="small" styles={cardStyles}><Space direction="vertical" style={{ width: '100%' }}><Text type="secondary">页面意外关闭后，可使用此前保存的迁移编号查询结果；仅当前管理员创建的迁移可查询，不需要源数据库密码。</Text><Space.Compact style={{ width: '100%' }}><Input value={pendingID || recoveryID} disabled={!!busy || !!pendingID} placeholder="迁移编号（preview_id）" onChange={(event) => setRecoveryID(event.target.value)} /><Button disabled={!!busy || !(pendingID || recoveryID).trim()} loading={busy === 'receipt'} onClick={lookupReceipt}>查询回执</Button></Space.Compact></Space></Card>
+      {receipt?.status === 'completed' && <XboardMigrationMail key={receipt.preview_id} receipt={receipt} />}
+
+      <Card className="migration-card" title="查询已有迁移回执" size="small" styles={cardStyles}><Space direction="vertical" style={{ width: '100%' }}><Text type="secondary">页面意外关闭后，可使用此前保存的迁移编号查询结果及本批邮件状态；仅当前管理员创建的迁移可查询，不需要源数据库密码。</Text><Space.Compact style={{ width: '100%' }}><Input value={pendingID || recoveryID} disabled={!!busy || !!pendingID} placeholder="迁移编号（preview_id）" onChange={(event) => setRecoveryID(event.target.value)} /><Button disabled={!!busy || !(pendingID || recoveryID).trim()} loading={busy === 'receipt'} onClick={lookupReceipt}>查询回执</Button></Space.Compact></Space></Card>
     </Space>
 
     <Modal title="最终确认：新增普通用户" open={confirmOpen} onCancel={() => setConfirmOpen(false)} onOk={apply} okText="执行迁移" okButtonProps={{ danger: true, disabled: expired || !backedUp || !sourceStopped || confirmText !== 'IMPORT_USERS' }} confirmLoading={busy === 'apply'}>
