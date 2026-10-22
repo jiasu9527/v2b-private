@@ -36,12 +36,21 @@ function Warnings({ items }: { items?: string[] }) {
   return items?.length ? <Alert type="warning" showIcon message="迁移注意事项" description={<ul style={{ margin: 0, paddingLeft: 20 }}>{items.map((item, index) => <li key={index}>{item}</li>)}</ul>} /> : null;
 }
 
+function CredentialOptions({ value }: { value: Pick<MigrationPreview, 'regenerate_tokens' | 'regenerate_uuids'> }) {
+  return <Descriptions size="small" bordered column={{ xs: 1, sm: 2 }}>
+    <Descriptions.Item label="强制重生成订阅 Token">{value.regenerate_tokens ? '开' : '关'}</Descriptions.Item>
+    <Descriptions.Item label="强制重生成 UUID">{value.regenerate_uuids ? '开' : '关'}</Descriptions.Item>
+  </Descriptions>;
+}
+
 export default function XboardMigrationPage() {
   const [form] = Form.useForm<XboardSource>();
   const [inspection, setInspection] = useState<MigrationInspection>();
   const [mapping, setMapping] = useState<Record<string, number>>({});
   const [policy, setPolicy] = useState<LockingBalancePolicy>('discard');
   const [confirmLocked, setConfirmLocked] = useState(false);
+  const [regenerateTokens, setRegenerateTokens] = useState(true);
+  const [regenerateUUIDs, setRegenerateUUIDs] = useState(true);
   const [preview, setPreview] = useState<MigrationPreview>();
   const [receipt, setReceipt] = useState<MigrationReceipt>();
   const [pendingID, setPendingID] = useState('');
@@ -96,7 +105,7 @@ export default function XboardMigrationPage() {
     if (!begin('preview')) return;
     clearPreview();
     try {
-      const data = await previewXboard({ source: await readSource(), plan_mapping: mapping, locking_balance_policy: policy, confirm_locking_balance: confirmLocked });
+      const data = await previewXboard({ source: await readSource(), plan_mapping: mapping, locking_balance_policy: policy, confirm_locking_balance: confirmLocked, regenerate_tokens: regenerateTokens, regenerate_uuids: regenerateUUIDs });
       if (mounted.current) { setPreview(data); setNow(Date.now()); }
     } catch (e) { showError(e); }
     finally { finish(); }
@@ -183,22 +192,31 @@ export default function XboardMigrationPage() {
           {policy === 'to_balance' && <Alert type="error" showIcon message="会将待解锁佣金变成可直接消费的余额" description="这会改变用户资金性质并增加目标站可消费余额。仅在明确完成资金核对后使用。" />}
           {policy === 'skip' && <Alert type="warning" showIcon message="含待解锁佣金的用户将整人跳过" description="这些用户的账号、套餐、普通余额和流量均不会在本次迁入。" />}
           {lockingConfirmationRequired && <Checkbox disabled={locked} checked={confirmLocked} onChange={(event) => { setConfirmLocked(event.target.checked); clearPreview(); }}>我已核对并确认：{policyLabels[policy]}。</Checkbox>}
+          <div>
+            <Paragraph strong>迁入用户的订阅凭据</Paragraph>
+            <Space wrap size={[24, 12]}>
+              <Space><Switch aria-label="强制重生成订阅 Token" checkedChildren="开" unCheckedChildren="关" checked={regenerateTokens} disabled={locked} onChange={(checked) => { setRegenerateTokens(checked); clearPreview(); }} /><Text>强制重生成订阅 Token</Text></Space>
+              <Space><Switch aria-label="强制重生成 UUID" checkedChildren="开" unCheckedChildren="关" checked={regenerateUUIDs} disabled={locked} onChange={(checked) => { setRegenerateUUIDs(checked); clearPreview(); }} /><Text>强制重生成 UUID</Text></Space>
+            </Space>
+          </div>
+          <Alert type={regenerateTokens || regenerateUUIDs ? 'warning' : 'info'} showIcon message={regenerateTokens || regenerateUUIDs ? '已启用的凭据将对本次所有新增用户重新生成' : '保留有效且不冲突的原订阅凭据'} description="两个开关独立生效，仅影响本次迁入的新增用户，不修改目标站已有邮箱的用户。开启任一开关后，用户需重新获取目标站订阅。关闭时，缺失、无效或冲突的凭据仍会自动重生成。只修改目标站，源站旧凭据仍然存在；登录密码不变，不能据此认定已彻底消除旧库泄露风险。" />
           <Space wrap><Button type="primary" loading={busy === 'preview'} disabled={locked || missingMappings > 0 || (lockingConfirmationRequired && !confirmLocked)} onClick={makePreview}>生成只读预览</Button>{missingMappings > 0 && <Text type="warning">还有 {missingMappings} 个源套餐未选择对应关系</Text>}<Text type="secondary">连接或选项修改后，旧预览立即失效。</Text></Space>
         </Space>
       </Card>}
 
       {preview && !receipt && <Card className="migration-card" title="3. 核对预览并确认导入" styles={cardStyles}>
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <CredentialOptions value={preview} />
           <Counts value={preview.counts} />
           <Warnings items={preview.warnings} />
           {!!preview.blockers?.length && <Alert type="error" showIcon message="以下问题阻止导入" description={<ul style={{ margin: 0, paddingLeft: 20 }}>{preview.blockers.map((item, index) => <li key={index}>{item}</li>)}</ul>} />}
-          <Alert type="info" style={infoStyle} showIcon message="不会自动接管旧站订阅域名" description="用户需要通过目标站登录并获取订阅；发生 Token / UUID 冲突时会重新生成。预览之后源站的充值、用量或权益变化不会自动同步，请先安排冻结写入和备份。" />
+          <Alert type="info" style={infoStyle} showIcon message="不会自动接管旧站订阅域名" description="用户需要通过目标站登录并获取订阅；启用强制重生成的凭据、缺失、无效或冲突的 Token / UUID 会重新生成，实际数量见上方统计。预览之后源站的充值、用量或权益变化不会自动同步，请先安排冻结写入和备份。" />
           <Space wrap><Tag color={expired ? 'error' : 'blue'}>{expired ? '预览已过期，请重新生成' : `有效至 ${formatTime(preview.expires_at)}`}</Tag><Text type="secondary">迁移编号：</Text><Text copyable>{preview.preview_id}</Text></Space>
           <Button type="primary" danger disabled={locked || expired || !preview.can_apply || !preview.counts.importable} onClick={askConfirmation}>确认新增 {preview.counts.importable || 0} 个用户</Button>
         </Space>
       </Card>}
 
-      {receipt && <Card className="migration-card" title="4. 迁移结果" styles={cardStyles}><Result status="success" title={`已新增 ${receipt.imported.toLocaleString()} 个用户`} subTitle={`完成时间：${formatTime(receipt.completed_at)}；只新增普通用户，不覆盖目标站已有用户。`} /><Space direction="vertical" style={{ width: '100%' }} size={16}><Counts value={receipt.counts} /><Space><Text>迁移编号：</Text><Text copyable>{receipt.preview_id}</Text></Space><Alert type="info" style={infoStyle} message="数据库密码已从本页清除。建议抽查账号登录、套餐权限、已用流量和重置时间，再安排用户切换订阅。" showIcon /></Space></Card>}
+      {receipt && <Card className="migration-card" title="4. 迁移结果" styles={cardStyles}><Result status="success" title={`已新增 ${receipt.imported.toLocaleString()} 个用户`} subTitle={`完成时间：${formatTime(receipt.completed_at)}；只新增普通用户，不覆盖目标站已有用户。`} /><Space direction="vertical" style={{ width: '100%' }} size={16}><CredentialOptions value={receipt} /><Counts value={receipt.counts} /><Space><Text>迁移编号：</Text><Text copyable>{receipt.preview_id}</Text></Space><Alert type="info" style={infoStyle} message="数据库密码已从本页清除。建议抽查账号登录、套餐权限、已用流量和重置时间，再安排用户切换订阅。" showIcon />{(receipt.regenerate_tokens || receipt.regenerate_uuids) && <Alert type="warning" showIcon message="本次已强制重生成订阅凭据，请用户重新获取目标站订阅" description="只影响此次新增用户。源站旧凭据仍然存在，用户登录密码未修改。" />}</Space></Card>}
 
       <Card className="migration-card" title="查询已有迁移回执" size="small" styles={cardStyles}><Space direction="vertical" style={{ width: '100%' }}><Text type="secondary">页面意外关闭后，可使用此前保存的迁移编号查询结果；仅当前管理员创建的迁移可查询，不需要源数据库密码。</Text><Space.Compact style={{ width: '100%' }}><Input value={pendingID || recoveryID} disabled={!!busy || !!pendingID} placeholder="迁移编号（preview_id）" onChange={(event) => setRecoveryID(event.target.value)} /><Button disabled={!!busy || !(pendingID || recoveryID).trim()} loading={busy === 'receipt'} onClick={lookupReceipt}>查询回执</Button></Space.Compact></Space></Card>
     </Space>
@@ -206,6 +224,8 @@ export default function XboardMigrationPage() {
     <Modal title="最终确认：新增普通用户" open={confirmOpen} onCancel={() => setConfirmOpen(false)} onOk={apply} okText="执行迁移" okButtonProps={{ danger: true, disabled: expired || !backedUp || !sourceStopped || confirmText !== 'IMPORT_USERS' }} confirmLoading={busy === 'apply'}>
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Alert type="warning" showIcon message={`将向当前 V2B 新增 ${preview?.counts.importable || 0} 个用户`} description="迁移不是双向同步。源数据库只读，但目标数据库会新增用户；提交后不要反复点击或在不确定结果时重新导入。" />
+        {preview && <CredentialOptions value={preview} />}
+        {(preview?.regenerate_tokens || preview?.regenerate_uuids) && <Alert type="warning" showIcon message="将强制重生成所选订阅凭据，用户需重新获取目标站订阅" description="仅影响本次新增用户，不修改源站旧凭据及登录密码。" />}
         <Checkbox checked={backedUp} onChange={(event) => setBackedUp(event.target.checked)}>我已完成源站和目标站数据库备份，并确认可恢复。</Checkbox>
         <Checkbox checked={sourceStopped} onChange={(event) => setSourceStopped(event.target.checked)}>我已暂停源站相关写入并重新生成当前预览，或已核对预览后的变化，接受未同步差异风险。</Checkbox>
         <div><Paragraph>请输入 <Text code>IMPORT_USERS</Text> 确认此次导入：</Paragraph><Input autoComplete="off" value={confirmText} onChange={(event) => setConfirmText(event.target.value)} /></div>

@@ -224,7 +224,7 @@ func (s *DBService) Apply(ctx context.Context, actorID int64, req ApplyRequest) 
 			return Receipt{}, err
 		}
 	}
-	receipt := Receipt{PreviewID: req.PreviewID, Status: "completed", Imported: len(p.users), Counts: p.result.Counts, SourceDigest: p.result.SourceDigest, LockingBalancePolicy: p.result.LockingBalancePolicy, CreatedAt: now.Unix(), CompletedAt: s.now().Unix()}
+	receipt := Receipt{PreviewID: req.PreviewID, Status: "completed", Imported: len(p.users), Counts: p.result.Counts, SourceDigest: p.result.SourceDigest, LockingBalancePolicy: p.result.LockingBalancePolicy, RegenerateTokens: p.result.RegenerateTokens, RegenerateUUIDs: p.result.RegenerateUUIDs, CreatedAt: now.Unix(), CompletedAt: s.now().Unix()}
 	raw, err := json.Marshal(receipt)
 	if err != nil {
 		return Receipt{}, ErrTargetWrite

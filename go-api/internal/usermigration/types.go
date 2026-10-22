@@ -68,6 +68,8 @@ type PreviewRequest struct {
 	PlanMapping           map[string]int64 `json:"plan_mapping"`
 	LockingBalancePolicy  string           `json:"locking_balance_policy"`
 	ConfirmLockingBalance bool             `json:"confirm_locking_balance"`
+	RegenerateTokens      bool             `json:"regenerate_tokens"`
+	RegenerateUUIDs       bool             `json:"regenerate_uuids"`
 }
 
 type Counts struct {
@@ -98,6 +100,8 @@ type PreviewResult struct {
 	CanApply             bool     `json:"can_apply"`
 	SourceDigest         string   `json:"source_digest"`
 	LockingBalancePolicy string   `json:"locking_balance_policy"`
+	RegenerateTokens     bool     `json:"regenerate_tokens"`
+	RegenerateUUIDs      bool     `json:"regenerate_uuids"`
 }
 
 type ApplyRequest struct {
@@ -112,6 +116,8 @@ type Receipt struct {
 	Counts               Counts `json:"counts"`
 	SourceDigest         string `json:"source_digest"`
 	LockingBalancePolicy string `json:"locking_balance_policy"`
+	RegenerateTokens     bool   `json:"regenerate_tokens"`
+	RegenerateUUIDs      bool   `json:"regenerate_uuids"`
 	CreatedAt            int64  `json:"created_at"`
 	CompletedAt          int64  `json:"completed_at"`
 }

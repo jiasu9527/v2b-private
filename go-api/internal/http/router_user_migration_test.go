@@ -166,6 +166,96 @@ func TestUserMigrationUsesFreshAdministratorAndSessionOwner(t *testing.T) {
 	}
 }
 
+func TestUserMigrationPreviewRegenerationFlagsAreIndependentAndDefaultOff(t *testing.T) {
+	for _, tc := range []struct {
+		name, fields  string
+		tokens, uuids bool
+	}{
+		{"omitted", "", false, false},
+		{"explicit false", `,"regenerate_tokens":false,"regenerate_uuids":false`, false, false},
+		{"tokens only", `,"regenerate_tokens":true`, true, false},
+		{"uuids only", `,"regenerate_uuids":true`, false, true},
+		{"both", `,"regenerate_tokens":true,"regenerate_uuids":true`, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := &fakeUserMigrationService{result: usermigration.PreviewResult{
+				PreviewID: migrationTestPreviewID, CanApply: true,
+				RegenerateTokens: tc.tokens, RegenerateUUIDs: tc.uuids,
+			}}
+			route := userMigrationRoutes[1]
+			route.body = strings.TrimSuffix(route.body, "}") + tc.fields + "}"
+			rec := requestUserMigration(t, newUserMigrationRouter(userMigrationAdminSession(), service), route, "header-token")
+			if rec.Code != http.StatusOK || len(service.calls) != 1 || service.preview.RegenerateTokens != tc.tokens || service.preview.RegenerateUUIDs != tc.uuids {
+				t.Fatalf("preview lost regeneration options: status=%d calls=%v tokens=%v uuids=%v", rec.Code, service.calls, service.preview.RegenerateTokens, service.preview.RegenerateUUIDs)
+			}
+			var response struct {
+				Data struct {
+					RegenerateTokens *bool `json:"regenerate_tokens"`
+					RegenerateUUIDs  *bool `json:"regenerate_uuids"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || response.Data.RegenerateTokens == nil || response.Data.RegenerateUUIDs == nil || *response.Data.RegenerateTokens != tc.tokens || *response.Data.RegenerateUUIDs != tc.uuids {
+				t.Fatalf("preview response lost regeneration options: %s err=%v", rec.Body.String(), err)
+			}
+		})
+	}
+}
+
+func TestUserMigrationPreviewRejectsInvalidRegenerationFlagTypes(t *testing.T) {
+	for _, field := range []string{"regenerate_tokens", "regenerate_uuids"} {
+		for _, value := range []string{`"true"`, `"` + migrationTestSecret + `"`, `0`, `1`, `{}`, `[]`} {
+			t.Run(field+"/"+value, func(t *testing.T) {
+				service := &fakeUserMigrationService{}
+				route := userMigrationRoutes[1]
+				route.body = strings.TrimSuffix(route.body, "}") + `,"` + field + `":` + value + `}`
+				rec := requestUserMigration(t, newUserMigrationRouter(userMigrationAdminSession(), service), route, "header-token")
+				if rec.Code != http.StatusBadRequest || len(service.calls) != 0 || strings.Contains(rec.Body.String(), migrationTestSecret) {
+					t.Fatalf("nonboolean flag accepted or reflected: status=%d calls=%v body=%s", rec.Code, service.calls, rec.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func TestUserMigrationApplyCannotOverridePreviewRegenerationSettings(t *testing.T) {
+	for _, field := range []string{"regenerate_tokens", "regenerate_uuids"} {
+		for _, value := range []string{"true", "false"} {
+			t.Run(field+"/"+value, func(t *testing.T) {
+				service := &fakeUserMigrationService{}
+				route := userMigrationRoutes[2]
+				route.body = strings.TrimSuffix(route.body, "}") + `,"` + field + `":` + value + `}`
+				rec := requestUserMigration(t, newUserMigrationRouter(userMigrationAdminSession(), service), route, "header-token")
+				if rec.Code != http.StatusBadRequest || len(service.calls) != 0 {
+					t.Fatalf("Apply may override preview options: status=%d calls=%v body=%s", rec.Code, service.calls, rec.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func TestUserMigrationReceiptResponsesKeepRegenerationFlags(t *testing.T) {
+	for _, route := range userMigrationRoutes[2:] {
+		for _, options := range []struct{ tokens, uuids bool }{{}, {tokens: true}, {uuids: true}, {tokens: true, uuids: true}} {
+			t.Run(fmt.Sprintf("%s/tokens=%v/uuids=%v", route.action, options.tokens, options.uuids), func(t *testing.T) {
+				service := &fakeUserMigrationService{receipt: usermigration.Receipt{
+					PreviewID: migrationTestPreviewID, Status: "completed", Imported: 2,
+					RegenerateTokens: options.tokens, RegenerateUUIDs: options.uuids,
+				}}
+				rec := requestUserMigration(t, newUserMigrationRouter(userMigrationAdminSession(), service), route, "header-token")
+				var response struct {
+					Data struct {
+						RegenerateTokens *bool `json:"regenerate_tokens"`
+						RegenerateUUIDs  *bool `json:"regenerate_uuids"`
+					} `json:"data"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || rec.Code != http.StatusOK || response.Data.RegenerateTokens == nil || response.Data.RegenerateUUIDs == nil || *response.Data.RegenerateTokens != options.tokens || *response.Data.RegenerateUUIDs != options.uuids {
+					t.Fatalf("receipt response lost regeneration options: %s err=%v", rec.Body.String(), err)
+				}
+			})
+		}
+	}
+}
+
 func TestUserMigrationRejectsStaffOrdinaryRevokedAndInvalidIdentities(t *testing.T) {
 	for _, state := range []struct {
 		name string

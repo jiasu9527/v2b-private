@@ -33,6 +33,8 @@ export type MigrationPreviewRequest = {
   plan_mapping: Record<string, number>;
   locking_balance_policy: LockingBalancePolicy;
   confirm_locking_balance: boolean;
+  regenerate_tokens: boolean;
+  regenerate_uuids: boolean;
 };
 export type MigrationPreview = {
   preview_id: string;
@@ -43,6 +45,8 @@ export type MigrationPreview = {
   can_apply: boolean;
   source_digest: string;
   locking_balance_policy: LockingBalancePolicy;
+  regenerate_tokens?: boolean;
+  regenerate_uuids?: boolean;
 };
 export type MigrationReceipt = {
   preview_id: string;
@@ -51,6 +55,8 @@ export type MigrationReceipt = {
   counts: MigrationCounts;
   source_digest: string;
   locking_balance_policy: LockingBalancePolicy;
+  regenerate_tokens?: boolean;
+  regenerate_uuids?: boolean;
   created_at: number;
   completed_at: number;
 };

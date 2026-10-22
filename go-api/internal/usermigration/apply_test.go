@@ -28,7 +28,7 @@ func mockService(t *testing.T) (*DBService, sqlmock.Sqlmock) {
 }
 func preparedPreview(t *testing.T, s *DBService) string {
 	t.Helper()
-	result, users, plans, err := buildPreview(snapshot{users: []sourceUser{sampleUser(1)}}, sampleTarget(), map[int64]int64{4: 9}, "discard", fixedNow)
+	result, users, plans, err := buildPreview(snapshot{users: []sourceUser{sampleUser(1)}}, sampleTarget(), map[int64]int64{4: 9}, "discard", regenerationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +192,28 @@ func TestReceiptDoesNotDiscloseAnotherActorsImport(t *testing.T) {
 	expectMissingReceipt(m, id, 8)
 	if _, err := s.Receipt(context.Background(), 8, id); !errors.Is(err, ErrReceiptNotFound) {
 		t.Fatal(err)
+	}
+	if err := m.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLegacyReceiptWithoutRegenerationFieldsRemainsReadable(t *testing.T) {
+	s, m := mockService(t)
+	id := strings.Repeat("a", 64)
+	// Receipts already stored before these options existed do not have either
+	// field. Reading and replaying them must preserve the old non-forced policy.
+	raw := `{"preview_id":"` + id + `","status":"completed","imported":1,"counts":{"importable":1},"source_digest":"old-digest","locking_balance_policy":"discard","created_at":1700000000,"completed_at":1700000001}`
+	for i := 0; i < 2; i++ {
+		m.ExpectQuery(`SELECT receipt_json FROM v2_user_migration_receipt`).WithArgs(id, int64(7)).WillReturnRows(sqlmock.NewRows([]string{"receipt_json"}).AddRow(raw))
+	}
+	r, err := s.Receipt(context.Background(), 7, id)
+	if err != nil || r.Imported != 1 || r.RegenerateTokens || r.RegenerateUUIDs {
+		t.Fatalf("legacy receipt compatibility failed: %+v err=%v", r, err)
+	}
+	again, err := s.Apply(context.Background(), 7, ApplyRequest{PreviewID: id, Confirm: true})
+	if err != nil || again != r {
+		t.Fatalf("legacy idempotent Apply changed policy: %+v err=%v", again, err)
 	}
 	if err := m.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

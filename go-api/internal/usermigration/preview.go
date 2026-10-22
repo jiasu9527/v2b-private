@@ -177,7 +177,8 @@ func (s *DBService) Preview(ctx context.Context, actorID int64, req PreviewReque
 		}
 	}
 	now := s.now()
-	result, users, usedPlans, err := buildPreview(snap, target, mappings, policy, now)
+	regenerate := regenerationOptions{tokens: req.RegenerateTokens, uuids: req.RegenerateUUIDs}
+	result, users, usedPlans, err := buildPreview(snap, target, mappings, policy, regenerate)
 	if err != nil {
 		return PreviewResult{}, err
 	}
@@ -189,11 +190,13 @@ func (s *DBService) Preview(ctx context.Context, actorID int64, req PreviewReque
 	result.ExpiresAt = now.Add(PreviewTTL).Unix()
 	result.LockingBalancePolicy = policy
 	raw, err := json.Marshal(struct {
-		Users    []sourceUser
-		Plans    []Plan
-		Mappings map[int64]int64
-		Policy   string
-	}{snap.users, snap.plans, mappings, policy})
+		Users            []sourceUser
+		Plans            []Plan
+		Mappings         map[int64]int64
+		Policy           string
+		RegenerateTokens bool
+		RegenerateUUIDs  bool
+	}{snap.users, snap.plans, mappings, policy, regenerate.tokens, regenerate.uuids})
 	if err != nil {
 		return PreviewResult{}, ErrSourceRead
 	}
@@ -286,8 +289,31 @@ func validValues(u sourceUser, policy string) bool {
 	return true
 }
 
-func buildPreview(snap snapshot, target targetState, mappings map[int64]int64, policy string, _ time.Time) (PreviewResult, []insertUser, map[int64]Plan, error) {
+type regenerationOptions struct {
+	tokens bool
+	uuids  bool
+}
+
+func buildPreview(snap snapshot, target targetState, mappings map[int64]int64, policy string, regenerate regenerationOptions) (PreviewResult, []insertUser, map[int64]Plan, error) {
 	out := PreviewResult{Counts: Counts{Total: len(snap.users)}, Blockers: []string{}, Warnings: []string{"邮箱去除首尾空白、不区分大小写比对；目标已有账号跳过，密码、余额和权益不变。", "导入的是预览时快照；源站后续变更不会自动包含，需重新预览。", "生成新预览会使当前管理员之前的预览失效。", "保留源用户额度、已用流量和到期时间；后续重置按目标套餐周期，本周期不会立即清零已用流量。", "无套餐用户保留源额度和到期字段，但不分配目标套餐或线路分组，不额外赋予套餐权限。"}}
+	out.RegenerateTokens, out.RegenerateUUIDs = regenerate.tokens, regenerate.uuids
+	if regenerate.tokens {
+		out.Warnings = append(out.Warnings, "已开启强制重新生成订阅 Token：全部新增用户使用新 Token，需重新获取目标站订阅。")
+	}
+	if regenerate.uuids {
+		out.Warnings = append(out.Warnings, "已开启强制重新生成 UUID：全部新增用户使用新 UUID，需重新获取并更新客户端订阅。")
+	}
+	if regenerate.tokens || regenerate.uuids {
+		out.Warnings = append(out.Warnings, "仅更换目标站本次新增用户的选定凭据，不修改源站凭据或用户登录密码；旧站继续运行时，旧凭据仍可能有效。")
+	}
+	// Generated credentials must not reuse ANY old source credential, including
+	// skipped accounts and rows not yet visited. Keep this separate from target
+	// collision tracking so the disabled-switch preservation behavior is unchanged.
+	sourceTokens, sourceUUIDs := map[string]bool{}, map[string]bool{}
+	for _, src := range snap.users {
+		sourceTokens[strings.TrimSpace(src.Token)] = true
+		sourceUUIDs[strings.ToLower(strings.TrimSpace(src.UUID))] = true
+	}
 	users := make([]insertUser, 0, len(snap.users))
 	plans := map[int64]Plan{}
 	seen := map[string]bool{}
@@ -362,14 +388,14 @@ func buildPreview(snap snapshot, target targetState, mappings map[int64]int64, p
 
 		}
 		src.Token = strings.TrimSpace(src.Token)
-		if !tokenPattern.MatchString(src.Token) || target.tokens[src.Token] {
+		if regenerate.tokens || !tokenPattern.MatchString(src.Token) || target.tokens[src.Token] {
 			var err error
 			for {
 				src.Token, err = randomHex(16)
 				if err != nil {
 					return PreviewResult{}, nil, nil, ErrUnavailable
 				}
-				if !target.tokens[src.Token] {
+				if !target.tokens[src.Token] && !sourceTokens[src.Token] {
 					break
 				}
 			}
@@ -377,14 +403,14 @@ func buildPreview(snap snapshot, target targetState, mappings map[int64]int64, p
 		}
 		target.tokens[src.Token] = true
 		src.UUID = strings.ToLower(strings.TrimSpace(src.UUID))
-		if !uuidPattern.MatchString(src.UUID) || target.uuids[src.UUID] {
+		if regenerate.uuids || !uuidPattern.MatchString(src.UUID) || target.uuids[src.UUID] {
 			for {
 				v, err := randomHex(16)
 				if err != nil {
 					return PreviewResult{}, nil, nil, ErrUnavailable
 				}
 				src.UUID = v[:8] + "-" + v[8:12] + "-4" + v[13:16] + "-a" + v[17:20] + "-" + v[20:]
-				if !target.uuids[src.UUID] {
+				if !target.uuids[src.UUID] && !sourceUUIDs[src.UUID] {
 					break
 				}
 			}

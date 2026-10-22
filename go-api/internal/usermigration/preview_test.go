@@ -1,6 +1,8 @@
 package usermigration
 
 import (
+	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -32,7 +34,7 @@ var fixedNow = time.Date(2026, time.October, 22, 8, 0, 0, 0, time.UTC)
 
 func TestPreviewPreservesAssetsAndMapsOnlyPlanSettings(t *testing.T) {
 	src := sampleUser(1)
-	out, users, plans, err := buildPreview(snapshot{users: []sourceUser{src}}, sampleTarget(), map[int64]int64{4: 9}, "discard", fixedNow)
+	out, users, plans, err := buildPreview(snapshot{users: []sourceUser{src}}, sampleTarget(), map[int64]int64{4: 9}, "discard", regenerationOptions{})
 	if err != nil || !out.CanApply || len(users) != 1 {
 		t.Fatalf("preview = %+v err=%v", out, err)
 	}
@@ -58,7 +60,7 @@ func TestNoPlanPreservesAssetsWithoutGrantingPlan(t *testing.T) {
 		src := sampleUser(1)
 		src.PlanID = nil
 		src.ExpiredAt = expiry
-		out, users, _, err := buildPreview(snapshot{users: []sourceUser{src}}, sampleTarget(), nil, "skip", fixedNow)
+		out, users, _, err := buildPreview(snapshot{users: []sourceUser{src}}, sampleTarget(), nil, "skip", regenerationOptions{})
 		if err != nil || !out.CanApply || out.Counts.NoPlan != 1 || users[0].TargetPlan != nil || users[0].PlanID != nil || users[0].TransferEnable != src.TransferEnable || !reflect.DeepEqual(users[0].ExpiredAt, src.ExpiredAt) {
 			t.Fatalf("unpaid account gained rights: %+v %v", users, err)
 		}
@@ -68,7 +70,7 @@ func TestNoPlanPreservesAssetsWithoutGrantingPlan(t *testing.T) {
 	}
 	src := sampleUser(1)
 	src.ExpiredAt = nil
-	_, users, _, _ := buildPreview(snapshot{users: []sourceUser{src}}, sampleTarget(), map[int64]int64{4: 9}, "skip", fixedNow)
+	_, users, _, _ := buildPreview(snapshot{users: []sourceUser{src}}, sampleTarget(), map[int64]int64{4: 9}, "skip", regenerationOptions{})
 	if users[0].ExpiredAt != nil {
 		t.Fatal("existing purchased permanent account lost exact NULL expiry")
 	}
@@ -83,7 +85,7 @@ func TestPrivilegedExistingDuplicateAndIdentityCollision(t *testing.T) {
 	b.IsStaff = 1
 	c.Email = " PERSON3@EXAMPLE.TEST "
 	e.Email = " PERSON4@EXAMPLE.TEST "
-	out, users, _, err := buildPreview(snapshot{users: []sourceUser{a, b, c, d, e}}, target, map[int64]int64{4: 9}, "skip", fixedNow)
+	out, users, _, err := buildPreview(snapshot{users: []sourceUser{a, b, c, d, e}}, target, map[int64]int64{4: 9}, "skip", regenerationOptions{})
 	if err != nil || !out.CanApply || out.Counts.SkippedPrivileged != 2 || out.Counts.SkippedExisting != 1 || out.Counts.SkippedDuplicateEmail != 1 || out.Counts.RegeneratedTokens != 1 || out.Counts.RegeneratedUUIDs != 1 || len(users) != 1 {
 		t.Fatalf("counts %+v %v", out.Counts, err)
 	}
@@ -96,7 +98,7 @@ func TestLockedCommissionPolicies(t *testing.T) {
 		t.Run(policy, func(t *testing.T) {
 			src := sampleUser(1)
 			src.LockingBalance = 100
-			out, users, _, err := buildPreview(snapshot{users: []sourceUser{src}}, sampleTarget(), map[int64]int64{4: 9}, policy, fixedNow)
+			out, users, _, err := buildPreview(snapshot{users: []sourceUser{src}}, sampleTarget(), map[int64]int64{4: 9}, policy, regenerationOptions{})
 			if err != nil || out.Counts.LockingBalanceUsers != 1 || out.Counts.LockingBalanceTotal != 100 {
 				t.Fatalf("wrong count %+v %v", out, err)
 			}
@@ -134,7 +136,7 @@ func TestPreviewBlocksUnsupportedAndUnmapped(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			u := sampleUser(1)
 			tc.mutate(&u)
-			out, _, _, err := buildPreview(snapshot{users: []sourceUser{u}}, sampleTarget(), tc.mapping, "skip", fixedNow)
+			out, _, _, err := buildPreview(snapshot{users: []sourceUser{u}}, sampleTarget(), tc.mapping, "skip", regenerationOptions{})
 			if err != nil || out.CanApply || tc.count(out.Counts) != 1 || len(out.Blockers) == 0 {
 				t.Fatalf("unsafe preview allowed: %+v %v", out, err)
 			}
@@ -142,7 +144,7 @@ func TestPreviewBlocksUnsupportedAndUnmapped(t *testing.T) {
 	}
 	u := sampleUser(1)
 	u.Password = "unsupported"
-	out, _, _, err := buildPreview(snapshot{users: []sourceUser{u}}, sampleTarget(), map[int64]int64{4: 0}, "skip", fixedNow)
+	out, _, _, err := buildPreview(snapshot{users: []sourceUser{u}}, sampleTarget(), map[int64]int64{4: 0}, "skip", regenerationOptions{})
 	if err != nil || out.Counts.SkippedPlan != 1 || out.Counts.UnsupportedPassword != 0 {
 		t.Fatal("explicit exclusion not honored")
 	}
@@ -150,13 +152,13 @@ func TestPreviewBlocksUnsupportedAndUnmapped(t *testing.T) {
 func TestToBalanceOverflowIsBlocked(t *testing.T) {
 	u := sampleUser(1)
 	u.LockingBalance = math.MaxInt32
-	out, _, _, _ := buildPreview(snapshot{users: []sourceUser{u}}, sampleTarget(), map[int64]int64{4: 9}, "to_balance", fixedNow)
+	out, _, _, _ := buildPreview(snapshot{users: []sourceUser{u}}, sampleTarget(), map[int64]int64{4: 9}, "to_balance", regenerationOptions{})
 	if out.Counts.InvalidValues != 1 || out.CanApply {
 		t.Fatal("locking sum overflow not blocked")
 	}
 }
 func TestTargetChangesInvalidatePreview(t *testing.T) {
-	_, users, plans, err := buildPreview(snapshot{users: []sourceUser{sampleUser(1)}}, sampleTarget(), map[int64]int64{4: 9}, "discard", fixedNow)
+	_, users, plans, err := buildPreview(snapshot{users: []sourceUser{sampleUser(1)}}, sampleTarget(), map[int64]int64{4: 9}, "discard", regenerationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,9 +206,138 @@ func TestBcryptVariantsAndTokenBlankRegeneration(t *testing.T) {
 		u.Password = prefix + u.Password[4:]
 		u.Token = ""
 		u.UUID = ""
-		result, users, _, err := buildPreview(snapshot{users: []sourceUser{u}}, sampleTarget(), map[int64]int64{4: 9}, "skip", fixedNow)
+		result, users, _, err := buildPreview(snapshot{users: []sourceUser{u}}, sampleTarget(), map[int64]int64{4: 9}, "skip", regenerationOptions{})
 		if err != nil || !result.CanApply || result.Counts.RegeneratedTokens != 1 || result.Counts.RegeneratedUUIDs != 1 || len(users) != 1 {
 			t.Fatalf("bcrypt %s / empty identity failed: %+v %v", prefix, result, err)
 		}
+	}
+}
+
+func TestPreviewCredentialRegenerationOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		options regenerationOptions
+	}{
+		{"preserve", regenerationOptions{}},
+		{"tokens", regenerationOptions{tokens: true}},
+		{"uuids", regenerationOptions{uuids: true}},
+		{"both", regenerationOptions{tokens: true, uuids: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first, second, admin, staff, existing, skipped, duplicate, locked := sampleUser(1), sampleUser(2), sampleUser(3), sampleUser(4), sampleUser(5), sampleUser(6), sampleUser(7), sampleUser(8)
+			admin.IsAdmin, staff.IsStaff = 1, 1
+			skipped.PlanID = i64(10)
+			duplicate.Email = first.Email
+			locked.LockingBalance = 123
+			source := []sourceUser{first, second, admin, staff, existing, skipped, duplicate, locked}
+			target := sampleTarget()
+			target.emails[emailKey(existing.Email)] = true
+			out, users, _, err := buildPreview(snapshot{users: source}, target, map[int64]int64{4: 9, 10: 0}, "skip", tc.options)
+			if err != nil || !out.CanApply || len(users) != 2 || out.Counts.Importable != 2 {
+				t.Fatalf("regeneration preview failed: %+v err=%v", out, err)
+			}
+			if out.Counts.SkippedPrivileged != 2 || out.Counts.SkippedExisting != 1 || out.Counts.SkippedPlan != 1 || out.Counts.SkippedDuplicateEmail != 1 || out.Counts.SkippedLockedBalance != 1 {
+				t.Fatalf("regeneration changed exclusions: %+v", out.Counts)
+			}
+			wantTokens, wantUUIDs := 0, 0
+			if tc.options.tokens {
+				wantTokens = 2
+			}
+			if tc.options.uuids {
+				wantUUIDs = 2
+			}
+			if out.Counts.RegeneratedTokens != wantTokens || out.Counts.RegeneratedUUIDs != wantUUIDs {
+				t.Fatalf("counts must include imported users only: %+v", out.Counts)
+			}
+			if out.RegenerateTokens != tc.options.tokens || out.RegenerateUUIDs != tc.options.uuids {
+				t.Fatalf("preview lost regeneration selection: %+v", out)
+			}
+			for i, u := range users {
+				original := source[i]
+				if tc.options.tokens {
+					if !tokenPattern.MatchString(u.Token) {
+						t.Fatal("regenerated token is not valid")
+					}
+					for _, old := range source {
+						if u.Token == old.Token {
+							t.Fatal("regenerated token reused a source credential")
+						}
+					}
+				} else if u.Token != original.Token {
+					t.Fatal("disabled token regeneration changed a compatible token")
+				}
+				if tc.options.uuids {
+					if !uuidPattern.MatchString(u.UUID) {
+						t.Fatal("regenerated UUID is not valid")
+					}
+					for _, old := range source {
+						if u.UUID == old.UUID {
+							t.Fatal("regenerated UUID reused a source credential")
+						}
+					}
+				} else if u.UUID != original.UUID {
+					t.Fatal("disabled UUID regeneration changed a compatible UUID")
+				}
+				if u.Password != original.Password || u.Balance != original.Balance || u.U != original.U || u.D != original.D || u.TransferEnable != original.TransferEnable || !reflect.DeepEqual(u.ExpiredAt, original.ExpiredAt) {
+					t.Fatal("credential regeneration changed password, assets or usage")
+				}
+			}
+			if users[0].Token == users[1].Token || users[0].UUID == users[1].UUID {
+				t.Fatal("imported users share a generated credential")
+			}
+		})
+	}
+}
+
+func TestRegeneratedCredentialsAvoidAllOldSourceAndTargetValues(t *testing.T) {
+	// A deterministic entropy stream proves that rejection covers excluded and
+	// not-yet-visited source rows, rather than relying on improbable random hits.
+	// Package tests intentionally do not run in parallel while rand.Reader is
+	// overridden, and the process-global reader is restored for every subtest.
+	uuidForByte := func(b byte) string {
+		v := fmt.Sprintf("%x", bytes.Repeat([]byte{b}, 16))
+		return v[:8] + "-" + v[8:12] + "-4" + v[13:16] + "-a" + v[17:20] + "-" + v[20:]
+	}
+	for _, tc := range []struct {
+		name    string
+		options regenerationOptions
+	}{
+		{"tokens", regenerationOptions{tokens: true}},
+		{"uuids", regenerationOptions{uuids: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := make([]sourceUser, 5)
+			for i := range source {
+				source[i] = sampleUser(int64(i + 1))
+				b := byte((i + 1) * 0x11)
+				source[i].Token = fmt.Sprintf("%x", bytes.Repeat([]byte{b}, 16))
+				source[i].UUID = strings.ToUpper(uuidForByte(b))
+			}
+			source[1].IsAdmin = 1
+			source[3].PlanID = i64(10)
+			target := sampleTarget()
+			target.emails[emailKey(source[2].Email)] = true
+			target.tokens[strings.Repeat("66", 16)] = true
+			target.uuids[uuidForByte(0x66)] = true
+			var entropy []byte
+			for _, b := range []byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x77, 0x88} {
+				entropy = append(entropy, bytes.Repeat([]byte{b}, 16)...)
+			}
+			oldReader := rand.Reader
+			rand.Reader = bytes.NewReader(entropy)
+			t.Cleanup(func() { rand.Reader = oldReader })
+			out, users, _, err := buildPreview(snapshot{users: source}, target, map[int64]int64{4: 9, 10: 0}, "skip", tc.options)
+			if err != nil || !out.CanApply || len(users) != 2 {
+				t.Fatalf("deterministic regeneration failed: %+v err=%v", out, err)
+			}
+			for i, b := range []byte{0x77, 0x88} {
+				if tc.options.tokens && users[i].Token != fmt.Sprintf("%x", bytes.Repeat([]byte{b}, 16)) {
+					t.Fatal("token generator failed to reject an old source or target value")
+				}
+				if tc.options.uuids && users[i].UUID != uuidForByte(b) {
+					t.Fatal("UUID generator failed to reject an old source or target value")
+				}
+			}
+		})
 	}
 }

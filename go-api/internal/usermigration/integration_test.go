@@ -442,3 +442,140 @@ func TestMigrationIntegrationSourceAccountNeedsOnlyTableSelect(t *testing.T) {
 		t.Fatalf("read-only migration modified source user/plan rows: %v", err)
 	}
 }
+
+func TestMigrationIntegrationCredentialRegenerationPersistsAndIsIdempotent(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		tokens, uuids bool
+	}{
+		{"preserve", false, false},
+		{"tokens", true, false},
+		{"uuids", false, true},
+		{"both", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newMigrationIntegrationFixture(t)
+			ctx := context.Background()
+			users := f.users(t, 3)
+			admin, staff, existing, skipped := sampleUser(10), sampleUser(11), sampleUser(12), sampleUser(13)
+			admin.IsAdmin, staff.IsStaff = 1, 1
+			skipped.PlanID = i64(5)
+			users = append(users, admin, staff, existing, skipped)
+			f.seedSource(t, users)
+			// The first source user's token and UUID already belong to the target
+			// account: disabled flags must still resolve identity collisions.
+			if _, err := f.pg.ExecContext(ctx, `INSERT INTO v2_user (email,password,uuid,token,created_at,updated_at) VALUES ($1,'unchanged-target-password',$2,$3,1700000000,1700000001)`, existing.Email, users[0].UUID, users[0].Token); err != nil {
+				t.Fatal(err)
+			}
+			var beforeExisting, afterExisting string
+			if err := f.pg.QueryRowContext(ctx, `SELECT row_to_json(target_row)::text FROM v2_user target_row WHERE email=$1`, existing.Email).Scan(&beforeExisting); err != nil {
+				t.Fatal(err)
+			}
+			beforeSource, err := f.service.sourceSnapshot(ctx, f.config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, err := f.service.Preview(ctx, 7, PreviewRequest{
+				Source: f.config, PlanMapping: map[string]int64{"4": 9, "5": 0},
+				LockingBalancePolicy: "discard", ConfirmLockingBalance: true,
+				RegenerateTokens: tc.tokens, RegenerateUUIDs: tc.uuids,
+			})
+			if err != nil || !p.CanApply || p.RegenerateTokens != tc.tokens || p.RegenerateUUIDs != tc.uuids {
+				t.Fatalf("regeneration preview failed: %+v err=%v", p, err)
+			}
+			wantTokens, wantUUIDs := 1, 1
+			if tc.tokens {
+				wantTokens = 3
+			}
+			if tc.uuids {
+				wantUUIDs = 3
+			}
+			if p.Counts.Importable != 3 || p.Counts.SkippedPrivileged != 2 || p.Counts.SkippedExisting != 1 || p.Counts.SkippedPlan != 1 || p.Counts.RegeneratedTokens != wantTokens || p.Counts.RegeneratedUUIDs != wantUUIDs {
+				t.Fatalf("regeneration preview counts mismatch: %+v", p.Counts)
+			}
+			// Capture the generated in-memory identities before Apply clears the
+			// sensitive snapshot: Apply must write these exact values, not reroll.
+			expected := make(map[string]insertUser)
+			for _, u := range f.service.previews[p.PreviewID].users {
+				expected[u.Email] = u
+			}
+			r, err := f.service.Apply(ctx, 7, ApplyRequest{PreviewID: p.PreviewID, Confirm: true})
+			if err != nil || r.Status != "completed" || r.Imported != 3 || r.Counts != p.Counts || r.RegenerateTokens != tc.tokens || r.RegenerateUUIDs != tc.uuids || r.SourceDigest != p.SourceDigest {
+				t.Fatalf("regeneration apply lost settings: %+v err=%v", r, err)
+			}
+			for _, service := range []*DBService{f.service, NewDBService(config.Config{}, f.pg)} {
+				got, err := service.Receipt(ctx, 7, p.PreviewID)
+				if err != nil || got != r {
+					t.Fatalf("durable regeneration receipt mismatch: %+v err=%v", got, err)
+				}
+				again, err := service.Apply(ctx, 7, ApplyRequest{PreviewID: p.PreviewID, Confirm: true})
+				if err != nil || again != r {
+					t.Fatalf("idempotent regeneration receipt mismatch: %+v err=%v", again, err)
+				}
+			}
+			if integrationCount(t, f.pg, `SELECT count(*) FROM v2_user`) != 4 || integrationCount(t, f.pg, `SELECT count(*) FROM v2_user_migration_receipt`) != 1 {
+				t.Fatal("repeat Apply inserted duplicate users or receipts")
+			}
+			for i, original := range users[:3] {
+				var token, uuid, password string
+				if err := f.pg.QueryRowContext(ctx, `SELECT token,uuid,password FROM v2_user WHERE email=$1`, original.Email).Scan(&token, &uuid, &password); err != nil {
+					t.Fatal(err)
+				}
+				if token != expected[original.Email].Token || uuid != expected[original.Email].UUID || password != original.Password {
+					t.Fatal("Apply or repeated Apply changed the preview's generated identities/password")
+				}
+				if tc.tokens || i == 0 {
+					if !tokenPattern.MatchString(token) {
+						t.Fatal("regenerated token has invalid format")
+					}
+					for _, old := range users {
+						if token == old.Token {
+							t.Fatal("target token reused a source credential")
+						}
+					}
+				} else if token != original.Token {
+					t.Fatal("disabled token option did not preserve compatible token")
+				}
+				if tc.uuids || i == 0 {
+					if !uuidPattern.MatchString(uuid) {
+						t.Fatal("regenerated UUID has invalid format")
+					}
+					for _, old := range users {
+						if uuid == old.UUID {
+							t.Fatal("target UUID reused a source credential")
+						}
+					}
+				} else if uuid != original.UUID {
+					t.Fatal("disabled UUID option did not preserve compatible UUID")
+				}
+			}
+			if err := f.pg.QueryRowContext(ctx, `SELECT row_to_json(target_row)::text FROM v2_user target_row WHERE email=$1`, existing.Email).Scan(&afterExisting); err != nil || beforeExisting != afterExisting {
+				t.Fatalf("regeneration changed an existing target user: %v", err)
+			}
+			afterSource, err := f.service.sourceSnapshot(ctx, f.config)
+			if err != nil || !reflect.DeepEqual(beforeSource, afterSource) {
+				t.Fatalf("credential regeneration modified the source database: %v", err)
+			}
+		})
+	}
+}
+
+func TestMigrationIntegrationRegenerationSettingsAreBoundToPreviewDigest(t *testing.T) {
+	f := newMigrationIntegrationFixture(t)
+	f.seedSource(t, f.users(t, 1))
+	seen := make(map[string]bool)
+	for _, options := range []regenerationOptions{{}, {tokens: true}, {uuids: true}, {tokens: true, uuids: true}} {
+		p, err := f.service.Preview(context.Background(), 7, PreviewRequest{
+			Source: f.config, PlanMapping: map[string]int64{"4": 9},
+			RegenerateTokens: options.tokens, RegenerateUUIDs: options.uuids,
+		})
+		if err != nil || !p.CanApply || p.SourceDigest == "" {
+			t.Fatalf("preview failed: %+v err=%v", p, err)
+		}
+		if seen[p.SourceDigest] {
+			t.Fatal("different regeneration settings have the same preview digest")
+		}
+		seen[p.SourceDigest] = true
+		f.service.expirePreview(p.PreviewID)
+	}
+}
