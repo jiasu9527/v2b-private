@@ -54,6 +54,9 @@ type statusRecorder struct {
 	status int
 }
 
+// Allow ResponseController to reach the connection through access logging.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
 func (r *statusRecorder) WriteHeader(status int) {
 	r.status = status
 	r.ResponseWriter.WriteHeader(status)

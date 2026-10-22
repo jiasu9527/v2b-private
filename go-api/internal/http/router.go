@@ -47,6 +47,7 @@ type routerState struct {
 	admin             admin.Service
 	appleID           appleIDUserService
 	appleIDAdmin      appleIDAdminService
+	userMigration     userMigrationService
 	dnsProbe          admin.DNSProbeService
 	dnsProbeIP        probeRequestIPResolver
 	node              nodeapi.Service
@@ -624,6 +625,9 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleStaffUserUnban(w, r, state.session, state.admin) {
 				return
 			}
+		case strings.HasPrefix(r.URL.Path, adminPrefix+"/migration/xboard/"):
+			handleUserMigration(w, r, state.session, state.userMigration, strings.TrimPrefix(r.URL.Path, adminPrefix+"/migration/xboard/"))
+			return
 		case strings.HasPrefix(r.URL.Path, adminPrefix+"/apple-id/"):
 			if handleAdminAppleID(w, r, state.session, state.appleIDAdmin, strings.TrimPrefix(r.URL.Path, adminPrefix+"/apple-id/")) {
 				return

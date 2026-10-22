@@ -23,6 +23,7 @@ import (
 	"forest/go-api/internal/session"
 	"forest/go-api/internal/telegram"
 	usersvc "forest/go-api/internal/user"
+	"forest/go-api/internal/usermigration"
 )
 
 func main() {
@@ -86,6 +87,7 @@ func main() {
 	var userService usersvc.Service
 	var paymentService payment.Service
 	var appleIDService *appleid.DBService
+	var migrationService *usermigration.DBService
 	var adminService admin.Service
 	var nodeService nodeapi.Service
 	var telegramService *telegram.Service
@@ -102,6 +104,7 @@ func main() {
 		sessionService = session.NewDBService(cfg, db).WithAuthCache(authCache)
 		userService = userDBService
 		appleIDService = appleid.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig)
+		migrationService = usermigration.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig)
 		paymentService = payment.NewDBService(cfg, db, userDBService).WithExternalOrderManager(appleIDService).WithRuntimeConfig(runtimeConfig)
 		adminDBService := admin.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
 		if err := initializeDNSFailoverBeforeServe(ctx, adminDBService); err != nil {
@@ -136,6 +139,7 @@ func main() {
 			httpapi.WithUserService(userService),
 			httpapi.WithPaymentService(paymentService),
 			httpapi.WithAppleIDService(appleIDService),
+			httpapi.WithUserMigrationService(migrationService),
 			httpapi.WithAdminService(adminService),
 			httpapi.WithNodeService(nodeService),
 			httpapi.WithQueueRuntime(jobQueue),
