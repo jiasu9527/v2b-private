@@ -216,7 +216,9 @@ func (s *DBService) SendEmailVerify(ctx context.Context, req SendEmailVerifyRequ
 		return err
 	}
 
-	if cfg.EmailWhitelistEnabled && !emailSuffixAllowed(email, cfg.EmailWhitelist) {
+	// Registration policy must not lock existing accounts out of password recovery.
+	isPasswordRecovery := req.HasIsForget && req.IsForget == 1 && exists
+	if !isPasswordRecovery && cfg.EmailWhitelistEnabled && !emailSuffixAllowed(email, cfg.EmailWhitelist) {
 		return NewHTTPError(http.StatusInternalServerError, "Email suffix is not in the Whitelist")
 	}
 	if cfg.EmailGmailLimitEnabled && gmailAlias(email) {

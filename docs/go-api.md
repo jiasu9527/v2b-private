@@ -32,6 +32,27 @@ NODE_TYPE=vmess \
 
 ## Current Go endpoints
 
+### Email verification for registration and password recovery
+
+`POST /api/v1/passport/comm/sendEmailVerify` keeps the same request and response
+format. Send `email`, optional `recaptcha_data`, and the purpose flag `isforget`:
+
+- Registration: `isforget: 0`. The configured email suffix whitelist still applies.
+- Password recovery: `isforget: 1`. An existing account may receive a recovery code
+  even when its suffix is no longer in the registration whitelist. The account must
+  already exist; setting this flag does not bypass registration checks.
+- Missing, invalid, or other `isforget` values do not bypass the whitelist. Clients
+  that already send `1` for password recovery require no request changes. Do not
+  apply a registration-only whitelist check in the recovery page itself.
+
+JSON numbers, JSON integer strings, and form-encoded integer values are supported.
+Email format, CAPTCHA when enabled, per-IP throttling, and the per-email resend
+cooldown remain enforced. Submit the code and new password to
+`POST /api/v1/passport/auth/forget`; code validation and reset attempt limits are
+unchanged. `POST /api/v1/passport/auth/register` independently enforces the whitelist.
+
+### Endpoint list
+
 - `GET /healthz`
 - `GET /readyz`
 - `GET /api/_meta/runtime`
