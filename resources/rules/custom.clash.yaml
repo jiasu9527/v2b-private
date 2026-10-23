@@ -84,8 +84,10 @@ rules:
   - DOMAIN-SUFFIX,dns.alidns.com,全球直连
   - DOMAIN-SUFFIX,doh.360.cn,全球直连
   - IP-CIDR,1.12.12.12/32,全球直连,no-resolve
-  - DOMAIN-SUFFIX,services.googleapis.cn,全球直连
-  - DOMAIN-SUFFIX,xn--ngstr-lra8j.com,全球直连
+
+  # Google Play 中国服务 / 下载域名：保持代理，避免规则模式下载失败
+  - DOMAIN-SUFFIX,services.googleapis.cn,国际服务
+  - DOMAIN-SUFFIX,xn--ngstr-lra8j.com,国际服务
 
   # AI 服务
   - DOMAIN-SUFFIX,openai.com,AI服务
