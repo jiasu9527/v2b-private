@@ -41,9 +41,14 @@ format. Send `email`, optional `recaptcha_data`, and the purpose flag `isforget`
 - Password recovery: `isforget: 1`. An existing account may receive a recovery code
   even when its suffix is no longer in the registration whitelist. The account must
   already exist; setting this flag does not bypass registration checks.
-- Missing, invalid, or other `isforget` values do not bypass the whitelist. Clients
-  that already send `1` for password recovery require no request changes. Do not
-  apply a registration-only whitelist check in the recovery page itself.
+- Legacy clients that omit `isforget` also receive this exception for an existing
+  account. JSON `null` is treated as omitted by the common request parser. Unknown
+  accounts remain subject to the registration whitelist, and explicit `0` still
+  means registration.
+- Invalid, empty, boolean, or other explicit `isforget` values do not receive this
+  exception. Clients that omit the flag or already send `1` for password recovery
+  require no request changes. Do not apply a registration-only whitelist check in
+  the recovery page itself.
 
 JSON numbers, JSON integer strings, and form-encoded integer values are supported.
 Email format, CAPTCHA when enabled, per-IP throttling, and the per-email resend

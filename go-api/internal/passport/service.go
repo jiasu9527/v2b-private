@@ -217,7 +217,8 @@ func (s *DBService) SendEmailVerify(ctx context.Context, req SendEmailVerifyRequ
 	}
 
 	// Registration policy must not lock existing accounts out of password recovery.
-	isPasswordRecovery := req.HasIsForget && req.IsForget == 1 && exists
+	// Legacy clients omit the purpose flag; only existing accounts get that exception.
+	isPasswordRecovery := exists && (!req.HasIsForget || req.IsForget == 1)
 	if !isPasswordRecovery && cfg.EmailWhitelistEnabled && !emailSuffixAllowed(email, cfg.EmailWhitelist) {
 		return NewHTTPError(http.StatusInternalServerError, "Email suffix is not in the Whitelist")
 	}

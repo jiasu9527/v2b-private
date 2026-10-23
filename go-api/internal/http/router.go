@@ -1711,9 +1711,11 @@ func handlePassportSendEmailVerify(w http.ResponseWriter, r *http.Request, servi
 		UserAgent:     r.UserAgent(),
 	}
 	if raw, ok := inputs["isforget"]; ok {
+		// Keep malformed values distinct from a legacy client omitting the flag.
+		req.HasIsForget = true
+		req.IsForget = -1
 		if rawInt, convErr := strconv.Atoi(strings.TrimSpace(raw)); convErr == nil {
 			req.IsForget = rawInt
-			req.HasIsForget = true
 		}
 	}
 
