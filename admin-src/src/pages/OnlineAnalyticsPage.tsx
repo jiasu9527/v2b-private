@@ -3,7 +3,8 @@ import { Alert, Breadcrumb, Button, Empty, Progress, Segmented, Select, Skeleton
 import { ArrowLeftOutlined, ArrowRightOutlined, ClockCircleOutlined, GlobalOutlined, InfoCircleOutlined, ReloadOutlined, TeamOutlined } from '@ant-design/icons';
 import * as echarts from 'echarts';
 import { apiGet, getAdminPath } from '../lib/api';
-import { parseCityMap, provinceCityRows, withinProvinceShare, type CityMap, type OnlineCity, type OnlineRegion } from '../lib/onlineAnalytics';
+import { parseCityMap, provinceCityRows, withinProvinceShare, type CityMap, type OnlineCity, type OnlineRegion, type OnlineUsersSelection } from '../lib/onlineAnalytics';
+import OnlineUsersModal from './OnlineUsersModal';
 import worldMap from '../assets/maps/world.json';
 import chinaMap from '../assets/maps/china-provinces.json';
 import cityMapIndex from '../assets/maps/city-map-index.json';
@@ -84,9 +85,9 @@ function mapOption(scope: Scope, rows: Region[], labels: Record<string, string>,
       trigger: 'item', renderMode: 'richText', confine: true,
       formatter: (params: any) => {
         const code = String(params.name || '');
-        if (outlineOnly) return `${labels[code] || code}\n仅展示地区轮廓，城市人数见下方明细`;
+        if (outlineOnly) return `${labels[code] || code}\n仅展示地区轮廓，城市人数见下方明细\n点击查看本地区在线用户`;
         const row = byCode.get(code);
-        return `${labels[code] || row?.name || code}\n当前在线：${formatCount(row?.users || 0)} 人${scope === 'province' ? `\n占本省在线：${percent(withinProvinceShare(row?.users || 0, provinceUsers))}` : ''}\n占全部在线：${percent(row?.share || 0)}${scope === 'world' && code === 'CN' ? '\n点击查看中国省份' : scope === 'china' ? '\n点击查看城市分布' : ''}`;
+        return `${labels[code] || row?.name || code}\n当前在线：${formatCount(row?.users || 0)} 人${scope === 'province' ? `\n占本省在线：${percent(withinProvinceShare(row?.users || 0, provinceUsers))}` : ''}\n占全部在线：${percent(row?.share || 0)}${scope === 'world' && code === 'CN' ? '\n点击查看中国省份' : scope === 'china' ? '\n点击查看城市分布' : '\n点击查看在线用户'}`;
       },
     },
     visualMap: outlineOnly ? undefined : {
@@ -133,6 +134,7 @@ export default function OnlineAnalyticsPage() {
   const [cityMapLoading, setCityMapLoading] = useState(false);
   const [cityMapRetry, setCityMapRetry] = useState(0);
   const [mapRevision, setMapRevision] = useState(0);
+  const [usersSelection, setUsersSelection] = useState<OnlineUsersSelection | null>(null);
   const mounted = useRef(false);
   const pending = useRef(false);
 
@@ -225,9 +227,21 @@ export default function OnlineAnalyticsPage() {
   const minutes = Math.round((data?.online_window_seconds || 600) / 60);
   const updatedAt = data?.generated_at ? new Date(data.generated_at * 1000).toLocaleString('zh-CN', { hour12: false }) : '';
   const databaseStatus = data?.geo_database?.status;
+  const unknownReasonNames = useMemo(() => Object.fromEntries((data?.unknown_reasons || []).map((reason) => [reason.code, reason.name])), [data?.unknown_reasons]);
+  const openRegionUsers = (row: Region) => {
+    if (scope === 'world') setUsersSelection({ scope: 'country', country_code: row.code, title: row.name });
+    else if (scope === 'china') setUsersSelection({ scope: 'province', province_code: row.code, title: row.name });
+    else setUsersSelection({ scope: 'city', province_code: provinceCode, city: row.code, title: `${provinceName} · ${row.name}` });
+  };
+  const openMapRegion = (code: string) => {
+    if (scope === 'world' && code === 'CN') setScope('china');
+    else if (scope === 'china') openProvince(code);
+    else if (outlineOnly) setUsersSelection({ scope: 'province', province_code: provinceCode, title: provinceName });
+    else if (code && code in labels) openRegionUsers(rows.find((row) => row.code === code) || { code, name: labels[code], users: 0, share: 0 });
+  };
   const columns = [
-    { title: scope === 'world' ? '国家 / 地区' : scope === 'china' ? '省 / 自治区 / 直辖市' : '城市 / 地区', dataIndex: 'name', key: 'name', render: (name: string, row: Region) => scope === 'world' && row.code === 'CN' ? <button type="button" className="online-region-link" onClick={() => setScope('china')}>{name}<ArrowRightOutlined /></button> : scope === 'china' && mapLabels.china[row.code] ? <button type="button" className="online-region-link" onClick={() => openProvince(row.code)}>{name}<ArrowRightOutlined /></button> : <span>{name}{!row.code && <Tag className="online-unknown-tag">未知</Tag>}</span> },
-    { title: '在线人数', dataIndex: 'users', key: 'users', align: 'right' as const, sorter: (a: Region, b: Region) => a.users - b.users, render: (value: number) => <strong className="online-table-number">{formatCount(value)}</strong> },
+    { title: scope === 'world' ? '国家 / 地区' : scope === 'china' ? '省 / 自治区 / 直辖市' : '城市 / 地区', dataIndex: 'name', key: 'name', render: (name: string, row: Region) => scope === 'world' && row.code === 'CN' ? <button type="button" className="online-region-link" onClick={() => setScope('china')}>{name}<ArrowRightOutlined /></button> : scope === 'china' && mapLabels.china[row.code] ? <button type="button" className="online-region-link" onClick={() => openProvince(row.code)}>{name}<ArrowRightOutlined /></button> : <button type="button" className="online-region-link" onClick={() => openRegionUsers(row)}>{name}{!row.code && <Tag className="online-unknown-tag">未知</Tag>}<ArrowRightOutlined /></button> },
+    { title: <Tooltip title="点击人数查看该地区的在线用户账号">在线人数 <InfoCircleOutlined /></Tooltip>, dataIndex: 'users', key: 'users', align: 'right' as const, sorter: (a: Region, b: Region) => a.users - b.users, render: (value: number, row: Region) => <button type="button" className="online-region-link online-count-link" onClick={() => openRegionUsers(row)} aria-label={`查看${row.name}的${formatCount(value)}位在线用户`}>{formatCount(value)}</button> },
     ...(scope === 'province' ? [{ title: <Tooltip title="分母为所选省级地区当前在线人数，包含城市未知用户。">占本省在线 <InfoCircleOutlined /></Tooltip>, key: 'province_share', align: 'right' as const, render: (_value: unknown, row: Region) => percent(withinProvinceShare(row.users, provinceUsers)) }] : []),
     { title: <Tooltip title="分母为全部当前在线人数，包含未定位用户。">占全部在线 <InfoCircleOutlined /></Tooltip>, dataIndex: 'share', key: 'share', width: 160, render: (value: number) => <div className="online-share-cell"><Progress percent={value} showInfo={false} size="small" strokeColor="#3b82f6" /><span>{percent(value)}</span></div> },
   ];
@@ -250,7 +264,7 @@ export default function OnlineAnalyticsPage() {
       {!data && !loading && <div className="online-panel online-loading"><Empty description="统计数据暂不可用，请重试" /></div>}
       {data && <>
         <div className="online-stat-grid">
-          <Metric title="当前在线" value={data.current_online} unit="人" note={`近 ${minutes} 分钟有流量活动`} icon={<TeamOutlined />} primary />
+          <Metric title="当前在线" value={data.current_online} unit="人" note={`近 ${minutes} 分钟有流量活动 · 点击查看账号`} icon={<TeamOutlined />} primary onClick={() => setUsersSelection({ scope: 'all', title: '全部地区' })} />
           <Metric title="24 小时内在线" value={data.unique_24h} unit="人" note="过去 24 小时 · 用户去重" icon={<ClockCircleOutlined />} />
           <Metric title="7 天内在线" value={data.unique_7d} unit="人" note="过去 7 天 · 包含近 24 小时" icon={<ClockCircleOutlined />} />
           <Metric title="当前在线占比" value={percent(data.online_share)} note={`全部注册用户 ${formatCount(data.total_users)} 人`} icon={<GlobalOutlined />} />
@@ -259,36 +273,48 @@ export default function OnlineAnalyticsPage() {
         <div className="online-geography-grid">
           <section className="online-panel online-map-panel">
             <div className="online-panel-header"><div><h2>{scope === 'province' ? `${provinceName} · 城市分布` : '在线地区分布'}</h2><p>每位用户归属最新上报的一个地区</p></div><Segmented aria-label="地图范围" value={scope === 'province' ? 'china' : scope} options={[{ label: '世界', value: 'world' }, { label: '中国省份', value: 'china' }]} onChange={(value) => setScope(value as Scope)} /></div>
-            {scope !== 'world' && <div className="online-province-navigation"><Space size={8} wrap>{scope === 'province' && <Button size="small" icon={<ArrowLeftOutlined />} onClick={() => setScope('china')}>返回全国</Button>}<Select aria-label="选择省份查看城市分布" placeholder="选择省份查看城市" value={scope === 'province' ? provinceCode : undefined} options={provinceOptions} onChange={openProvince} showSearch optionFilterProp="label" className="online-province-select" /></Space><span>{scope === 'china' ? '点击地图或省份名称，查看城市分布' : '切换省份可继续查看其他地区'}</span></div>}
-            {scope === 'province' && <><div className="online-province-stats"><div><span>本省在线</span><strong>{formatCount(provinceUsers)}<small>人</small></strong></div><div><span>已识别城市</span><strong>{formatCount(Math.max(0, provinceUsers - unknownCityUsers))}<small>人 · {percent(cityCoverage)}</small></strong></div><div><span>城市未知</span><strong>{formatCount(unknownCityUsers)}<small>人</small></strong></div></div>{(!data.china_cities || unknownCityUsers > 0 || cityMapInfo?.note) && <p className="online-city-note">{cityMapInfo?.note ? `${cityMapInfo.note} ` : ''}{!data.china_cities ? '城市数据尚未返回，后端更新并收到新的节点上报后会逐步显示。' : unknownCityUsers > 0 ? '仅识别到省份或旧版上报的用户列为城市未知，新上报后会逐步更新。' : ''}</p>}</>}
+            {scope !== 'world' && <div className="online-province-navigation"><Space size={8} wrap>{scope === 'province' && <Button size="small" icon={<ArrowLeftOutlined />} onClick={() => setScope('china')}>返回全国</Button>}<Select aria-label="选择省份查看城市分布" placeholder="选择省份查看城市" value={scope === 'province' ? provinceCode : undefined} options={provinceOptions} onChange={openProvince} showSearch optionFilterProp="label" className="online-province-select" />{scope === 'province' && <Button size="small" onClick={() => setUsersSelection({ scope: 'province', province_code: provinceCode, title: provinceName })}>查看本省用户</Button>}</Space><span>{scope === 'china' ? '点击地图或省份名称，查看城市分布' : '点击城市或人数，查看在线用户账号'}</span></div>}
+            {scope === 'province' && <>
+              <div className="online-province-stats">
+                <div><span>本省在线</span><button type="button" className="online-region-link" onClick={() => setUsersSelection({ scope: 'province', province_code: provinceCode, title: provinceName })}><strong>{formatCount(provinceUsers)}<small>人</small></strong></button></div>
+                <div><span>已识别城市</span><strong>{formatCount(Math.max(0, provinceUsers - unknownCityUsers))}<small>人 · {percent(cityCoverage)}</small></strong></div>
+                <div><span>城市未知</span><button type="button" className="online-region-link" onClick={() => setUsersSelection({ scope: 'city', province_code: provinceCode, city: '', title: `${provinceName} · 城市未知` })}><strong>{formatCount(unknownCityUsers)}<small>人</small></strong></button></div>
+              </div>
+              {(!data.china_cities || unknownCityUsers > 0 || cityMapInfo?.note) && <p className="online-city-note">{cityMapInfo?.note ? `${cityMapInfo.note} ` : ''}{!data.china_cities ? '城市数据尚未返回，后端更新并收到新的节点上报后会逐步显示。' : unknownCityUsers > 0 ? '城市未知表示已识别省份，但定位库未提供城市或尚未收到含城市的新记录；可点击人数查看账号。' : ''}</p>}
+            </>}
             <div className="online-map-meta"><span><strong>{formatCount(knownRows.length)}</strong> 个{scope === 'world' ? '国家 / 地区' : scope === 'china' ? '省级地区' : '城市 / 地区'}有在线用户</span><Button size="small" type="text" onClick={() => setMapRevision((value) => value + 1)}>重置视图</Button></div>
             <div className="online-map-shell">
-              {scope === 'province' && !currentCityMap ? <div className="online-city-map-status">{cityMapLoading || !cityMapError ? <><Spin /><strong>正在加载{provinceName}城市地图</strong></> : <><GlobalOutlined /><strong>{cityMapError}</strong><span>下方城市明细和排行仍可查看</span><Button size="small" icon={<ReloadOutlined />} onClick={() => setCityMapRetry((value) => value + 1)}>重新加载地图</Button></>}</div> : <><Chart key={`${scope}-${provinceCode}-${mapRevision}`} option={map} className="online-map-chart" onRegionClick={(code) => { if (scope === 'world' && code === 'CN') setScope('china'); else if (scope === 'china') openProvince(code); }} description={`${scope === 'world' ? '世界' : scope === 'china' ? '中国省份' : `${provinceName}城市`}当前在线人数地图，详细数据见下方地区明细`} />
+              {scope === 'province' && !currentCityMap ? <div className="online-city-map-status">{cityMapLoading || !cityMapError ? <><Spin /><strong>正在加载{provinceName}城市地图</strong></> : <><GlobalOutlined /><strong>{cityMapError}</strong><span>下方城市明细和排行仍可查看</span><Button size="small" icon={<ReloadOutlined />} onClick={() => setCityMapRetry((value) => value + 1)}>重新加载地图</Button></>}</div> : <><Chart key={`${scope}-${provinceCode}-${mapRevision}`} option={map} className="online-map-chart" onRegionClick={openMapRegion} description={`${scope === 'world' ? '世界' : scope === 'china' ? '中国省份' : `${provinceName}城市`}当前在线人数地图，详细数据见下方地区明细`} />
               {!plottedRows.length && !outlineOnly && <div className="online-map-empty"><GlobalOutlined /><strong>{data.current_online === 0 ? '当前没有在线用户' : knownRows.length ? '当前在线地区请见明细表' : scope === 'china' ? '暂无可展示的中国省份数据' : scope === 'province' ? provinceUsers > 0 ? '暂无可定位的城市数据' : '该省当前没有在线用户' : '暂无可定位的在线用户'}</strong><span>{data.current_online === 0 || (scope === 'province' && !provinceUsers) ? '新的流量活动上报后会自动更新' : knownRows.length ? '底图暂未覆盖这些地区' : '缺少位置的用户仍计入在线总人数'}</span></div>}</>}
             </div>
-            <div className="online-map-footnote"><span>拖动或滚轮缩放{scope === 'world' ? ' · 点击中国查看省份' : scope === 'china' ? ' · 点击省份查看城市' : ''}</span><span>{outlineOnly ? '仅展示地区轮廓，城市人数见明细' : `灰色：未记录到在线用户${unmappedUsers > 0 ? ` · ${formatCount(unmappedUsers)} 人仅在表格中展示` : ''}`}</span></div>
+            <div className="online-map-footnote"><span>拖动或滚轮缩放{scope === 'world' ? ' · 点击中国查看省份，其他地区查看用户' : scope === 'china' ? ' · 点击省份查看城市' : ' · 点击城市查看在线用户'}</span><span>{outlineOnly ? '仅展示地区轮廓，城市人数见明细' : `灰色：未记录到在线用户${unmappedUsers > 0 ? ` · ${formatCount(unmappedUsers)} 人仅在表格中展示` : ''}`}</span></div>
           </section>
 
           <aside className="online-panel online-location-panel">
             <div className="online-panel-header"><div><h2>定位覆盖</h2><p>当前在线用户的地区识别情况</p></div></div>
             <div className="online-coverage"><div><strong>{percent(data.geo_coverage)}</strong><span>已识别国家 / 地区</span></div><Progress type="circle" percent={data.geo_coverage} size={72} showInfo={false} strokeWidth={8} strokeColor="#3b82f6" /></div>
-            <div className="online-location-counts"><div><span><i className="online-legend-dot located" />已定位</span><strong>{formatCount(data.geo_located_users)} <small>人</small></strong></div><div><span><i className="online-legend-dot" />位置未知</span><strong>{formatCount(data.geo_unknown_users)} <small>人</small></strong></div></div>
-            {data.geo_unknown_users > 0 && <div className="online-unknown-reasons"><h3>未知位置说明</h3>{(data.unknown_reasons || []).filter((item) => item.users > 0).map((item) => <div key={item.code}><span>{item.name}</span><strong>{formatCount(item.users)}</strong></div>)}<p>未知位置不分配到地图，在线总人数不受影响。</p></div>}
+            <div className="online-location-counts"><div><span><i className="online-legend-dot located" />已定位</span><strong>{formatCount(data.geo_located_users)} <small>人</small></strong></div><div><span><i className="online-legend-dot" />位置未知</span><button type="button" className="online-region-link online-count-link" onClick={() => setUsersSelection({ scope: 'unknown', title: '位置未知' })} aria-label="查看位置未知的在线用户">{formatCount(data.geo_unknown_users)} <small>人</small><ArrowRightOutlined /></button></div></div>
+            {data.geo_unknown_users > 0 && <div className="online-unknown-reasons"><h3>未知位置原因 · 点击查看账号</h3>{(data.unknown_reasons || []).filter((item) => item.users > 0).map((item) => <button type="button" key={item.code} onClick={() => setUsersSelection({ scope: 'unknown', reason: item.code, title: item.name })}><span>{item.name}</span><strong>{formatCount(item.users)}<ArrowRightOutlined /></strong></button>)}<p>已上报 IP 仍可能因地址格式、定位库或上报时效无法定位。点击人数可逐一查看账号和具体原因。</p></div>}
             <div className="online-db-status"><span>地区数据库</span><Tag color={databaseStatus === 'ready' ? 'green' : databaseStatus === 'partial' ? 'gold' : 'default'}>{databaseStatus === 'ready' ? '已就绪' : databaseStatus === 'partial' ? '部分可用' : '未就绪'}</Tag></div>
             {databaseStatus !== 'ready' && <p className="online-db-note">{databaseStatus === 'partial' ? '部分 IP 类型暂时无法定位，已单独计入未知位置。' : '地区数据库尚未就绪；准备完成并收到新的节点上报后，可刷新查看分布。'}</p>}
           </aside>
         </div>
 
         <div className="online-details-grid">
-          <section className="online-panel online-table-panel"><div className="online-panel-header"><div><h2>{scope === 'world' ? '国家与地区明细' : scope === 'china' ? '中国省份明细' : `${provinceName}城市明细`}</h2><p>{formatCount(rows.length)} 个统计地区 · 合计 {formatCount(displayedUsers)} 人{scope === 'world' && data.geo_unknown_users > 0 ? `，另有 ${formatCount(data.geo_unknown_users)} 人位置未知` : ''}</p></div></div><Table key={`${scope}-${provinceCode}`} rowKey={(row) => row.code || 'unknown'} columns={columns} dataSource={rows} size="middle" pagination={{ pageSize: 10, showSizeChanger: false, hideOnSinglePage: true }} scroll={{ x: scope === 'province' ? 580 : 480 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无地区数据" /> }} /></section>
-          <section className="online-panel online-rank-panel"><div className="online-panel-header"><div><h2>{scope === 'province' ? `${provinceName}城市排行` : '在线地区排行'}</h2><p>{scope === 'world' ? '国家 / 地区' : scope === 'china' ? '省级地区' : '城市 / 地区'} · 前 8 名{scope === 'province' ? ' · 不含城市未知' : ''}</p></div></div>{rankingRows.length > 0 ? <Chart option={ranking} className="online-rank-chart" description="在线人数前八名条形图，详细人数见地区明细表" /> : <div className="online-rank-empty"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无排行数据" /></div>}</section>
+          <section className="online-panel online-table-panel">
+            <div className="online-panel-header"><div><h2>{scope === 'world' ? '国家与地区明细' : scope === 'china' ? '中国省份明细' : `${provinceName}城市明细`}</h2><p>{formatCount(rows.length)} 个统计地区 · 合计 {formatCount(displayedUsers)} 人{scope === 'world' && data.geo_unknown_users > 0 && <>，另有 <button type="button" className="online-region-link" onClick={() => setUsersSelection({ scope: 'unknown', title: '位置未知' })}>{formatCount(data.geo_unknown_users)} 人位置未知</button></>} · 点击人数查看账号</p></div></div>
+            <Table<Region> key={`${scope}-${provinceCode}`} rowKey={(row) => row.code || 'unknown'} columns={columns} dataSource={rows} size="middle" rowClassName={scope === 'province' ? 'online-city-user-row' : ''} onRow={(row) => scope === 'province' ? { onClick: (event) => { if (!(event.target as HTMLElement).closest('button')) openRegionUsers(row); } } : {}} pagination={{ pageSize: 10, showSizeChanger: false, hideOnSinglePage: true }} scroll={{ x: scope === 'province' ? 580 : 480 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无地区数据" /> }} />
+          </section>
+          <section className="online-panel online-rank-panel"><div className="online-panel-header"><div><h2>{scope === 'province' ? `${provinceName}城市排行` : '在线地区排行'}</h2><p>{scope === 'world' ? '国家 / 地区' : scope === 'china' ? '省级地区' : '城市 / 地区'} · 前 8 名{scope === 'province' ? ' · 不含城市未知' : ''}</p></div></div>{rankingRows.length > 0 ? <Chart option={ranking} className="online-rank-chart" onRegionClick={(name) => { const row = rankingRows.find((item) => item.name === name); if (row) openRegionUsers(row); }} description="在线人数前八名条形图，点击查看在线用户" /> : <div className="online-rank-empty"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无排行数据" /></div>}</section>
         </div>
         <section className="online-method"><h3><InfoCircleOutlined /> 统计口径</h3><p>当前在线指近 {minutes} 分钟有节点流量活动的用户，不等同于客户端连接数。24 小时与 7 天人数按用户 ID 去重，7 天包含近 24 小时，同一用户连接多个节点只计一人。</p><p>地区仅统计当前在线用户，根据节点最近上报的用户 IP 推断；多设备、多地区以最新一次上报为准。未上报 IP、上报过期或无法识别的用户计入未知，不使用节点服务器所在地替代。</p><p>城市定位为 IP 近似结果，可能对应运营商出口，并非用户的实际位置。直辖市按整市统计，不继续划分区县；无法识别到城市的用户单列未知，小地区或缺少边界的城市仅在明细中显示。本省占比包含本省城市未知用户，全部在线占比包含所有未定位用户。</p><p>底图：Natural Earth / geoBoundaries（公共领域）、ChinaGeoJson（MIT）。</p></section>
       </>}
     </div>
+    {usersSelection && <OnlineUsersModal selection={usersSelection} unknownReasons={unknownReasonNames} onClose={() => setUsersSelection(null)} />}
   </div>;
 }
 
-function Metric({ title, value, unit, note, icon, primary = false }: { title: string; value: number | string; unit?: string; note: string; icon: React.ReactNode; primary?: boolean }) {
-  return <section className={`online-metric${primary ? ' is-primary' : ''}`}><div className="online-metric-title"><span>{title}</span>{icon}</div><div className="online-metric-value">{typeof value === 'number' ? formatCount(value) : value}{unit && <small>{unit}</small>}</div><p>{note}</p></section>;
+function Metric({ title, value, unit, note, icon, primary = false, onClick }: { title: string; value: number | string; unit?: string; note: string; icon: React.ReactNode; primary?: boolean; onClick?: () => void }) {
+  const content = <>{typeof value === 'number' ? formatCount(value) : value}{unit && <small>{unit}</small>}</>;
+  return <section className={`online-metric${primary ? ' is-primary' : ''}`}><div className="online-metric-title"><span>{title}</span>{icon}</div>{onClick ? <button type="button" className="online-metric-value online-region-link" onClick={onClick} aria-label="查看全部在线用户账号">{content}</button> : <div className="online-metric-value">{content}</div>}<p>{note}</p></section>;
 }

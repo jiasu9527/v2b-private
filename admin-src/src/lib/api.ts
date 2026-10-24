@@ -131,9 +131,9 @@ async function parseResponse(res: Response, options: { raw?: boolean } = {}) {
   return payload;
 }
 
-export async function apiGet(path: string, params: AnyRecord = {}) {
-  const qs = toQuery(params);
-  const res = await fetch(`/api/v1/${getAdminPath()}${path}${qs ? `?${qs}` : ''}`, { credentials: 'same-origin' });
+export async function apiGet(path: string, params: AnyRecord = {}, options: { signal?: AbortSignal; cache?: RequestCache; keepEmpty?: boolean } = {}) {
+  const qs = toQuery(params, { keepEmpty: options.keepEmpty });
+  const res = await fetch(`/api/v1/${getAdminPath()}${path}${qs ? `?${qs}` : ''}`, { credentials: 'same-origin', signal: options.signal, cache: options.cache });
   if (path.startsWith('/apple-id/')) await revalidateSupportIdentity(res);
   return parseResponse(res);
 }

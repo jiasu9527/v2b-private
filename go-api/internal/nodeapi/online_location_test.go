@@ -35,6 +35,31 @@ func (*locationTestResolver) Status() ipgeo.GeoStatus {
 	return ipgeo.GeoStatus{Status: "ready", IPv4: true, IPv6: true}
 }
 
+// Construct a single-node observation batch for the focused storage tests.
+func (s *DBService) recordOnlineLocations(ctx context.Context, users map[int64][]string, now int64) error {
+	if s.onlineGeo == nil || len(users) == 0 {
+		return nil
+	}
+	observations := make(map[int64]onlineLocationObservation, len(users))
+	for id, ips := range users {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if id > 0 && len(ips) > 0 {
+			observations[id] = onlineLocationObservation{Location: selectOnlineLocation(s.onlineGeo, ips), SeenAt: now}
+		}
+	}
+	return s.saveOnlineLocationObservations(ctx, observations)
+}
+
+func selectOnlineLocation(resolver ipgeo.Resolver, rawIPs []string) ipgeo.Location {
+	observed := make(map[string]int64, len(rawIPs))
+	for _, raw := range rawIPs {
+		observed[raw] = 1
+	}
+	return selectOnlineLocationObservation(resolver, observed).Location
+}
+
 func TestSelectOnlineLocationUsesOneKnownLocationAndDeduplicatesDevices(t *testing.T) {
 	resolver := &locationTestResolver{locations: map[string]ipgeo.Location{
 		"113.92.157.29": {Known: true, CountryCode: "CN", ProvinceCode: "440000"},
@@ -46,11 +71,51 @@ func TestSelectOnlineLocationUsesOneKnownLocationAndDeduplicatesDevices(t *testi
 	if !got.Known || got.CountryCode != "CN" || got.ProvinceCode != "440000" {
 		t.Fatalf("selected location=%+v", got)
 	}
-	if !reflect.DeepEqual(resolver.calls, []string{"1.1.1.1", "113.92.157.29"}) {
-		t.Fatalf("expected normalized unique lookups until first known location, got %v", resolver.calls)
+	if !reflect.DeepEqual(resolver.calls, []string{"1.1.1.1", "113.92.157.29", "8.8.8.8"}) {
+		t.Fatalf("expected normalized unique lookups to choose the most precise same-time location, got %v", resolver.calls)
 	}
 	if !reflect.DeepEqual(input, before) {
 		t.Fatalf("report input was mutated: %v", input)
+	}
+}
+
+func TestSelectOnlineLocationNormalizesSocketAddressesAndPrefersCity(t *testing.T) {
+	resolver := &locationTestResolver{locations: map[string]ipgeo.Location{
+		"1.1.1.1":       {Known: true, CountryCode: "CN"},
+		"113.92.157.29": {Known: true, CountryCode: "CN", ProvinceCode: "440000", CityName: "深圳市"},
+	}}
+	location := selectOnlineLocation(resolver, []string{"1.1.1.1_phone", "113.92.157.29:53151_android", "[::ffff:113.92.157.29]:53_ios", "113.92.157.29"})
+	if location.CityName != "深圳市" || !reflect.DeepEqual(resolver.calls, []string{"1.1.1.1", "113.92.157.29"}) {
+		t.Fatalf("socket normalization/precision selection failed: %+v calls=%v", location, resolver.calls)
+	}
+}
+
+func TestOnlineLocationFromAliveStateKeepsObservationTimeAndNewestEvidence(t *testing.T) {
+	const now = int64(1700000000)
+	resolver := &locationTestResolver{locations: map[string]ipgeo.Location{
+		"1.1.1.1":       {Known: true, CountryCode: "AU"},
+		"113.92.157.29": {Known: true, CountryCode: "CN", ProvinceCode: "440000", CityName: "深圳市"},
+	}}
+	state := map[string]any{
+		"alive_ip": int64(4),
+		"current":  map[string]any{"aliveips": []string{"10.0.0.1"}, "lastupdateAt": now},
+		"other":    map[string]any{"aliveips": []string{"113.92.157.29:50000_android"}, "lastupdateAt": now - 50},
+		"stale":    map[string]any{"aliveips": []string{"1.1.1.1"}, "lastupdateAt": now - 101},
+		"future":   map[string]any{"aliveips": []string{"1.1.1.1"}, "lastupdateAt": now + 1},
+	}
+	observation, ok := onlineLocationFromAliveState(resolver, state, now)
+	if !ok || observation.Location.CityName != "深圳市" || observation.SeenAt != now-50 {
+		t.Fatalf("valid other-node evidence not recovered at its original time: %+v %v", observation, ok)
+	}
+	state["current"] = map[string]any{"aliveips": []string{"1.1.1.1"}, "lastupdateAt": now}
+	observation, ok = onlineLocationFromAliveState(resolver, state, now)
+	if !ok || observation.Location.CountryCode != "AU" || observation.Location.CityName != "" || observation.SeenAt != now {
+		t.Fatalf("older city evidence overrode a newly observed country: %+v %v", observation, ok)
+	}
+	delete(state, "current")
+	delete(state, "other")
+	if observation, ok = onlineLocationFromAliveState(resolver, state, now); ok {
+		t.Fatalf("stale/future observations were revived: %+v", observation)
 	}
 }
 

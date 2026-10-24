@@ -69,8 +69,10 @@
 .online-legend-dot.located { background: #3b82f6; }
 .online-unknown-reasons { margin: 0 18px 16px; padding: 14px; border-radius: 6px; background: #f8fafc; }
 .online-unknown-reasons h3 { margin: 0 0 12px; color: #475569; font-size: 12px; font-weight: 500; }
-.online-unknown-reasons > div { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; color: #64748b; font-size: 11px; margin-bottom: 8px; }
+.online-unknown-reasons > button { display: flex; align-items: flex-start; justify-content: space-between; width: 100%; border: 0; padding: 0; background: none; text-align: left; font: inherit; gap: 12px; color: #64748b; font-size: 11px; margin-bottom: 8px; cursor: pointer; }
+.online-unknown-reasons > button:hover { color: #2563eb; }
 .online-unknown-reasons strong { color: #475569; font-weight: 500; white-space: nowrap; }
+.online-unknown-reasons strong > .anticon { margin-left: 6px; font-size: 9px; }
 .online-unknown-reasons p { margin: 8px 0 0; color: #94a3b8; font-size: 11px; line-height: 1.7; }
 .online-db-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 22px; color: #94a3b8; font-size: 11px; }
 .online-db-status .ant-tag { margin: 0; font-size: 11px; }
@@ -84,6 +86,11 @@
 .online-region-link { display: inline-flex; align-items: center; gap: 9px; border: 0; padding: 0; background: none; color: #2563eb; font: inherit; cursor: pointer; }
 .online-region-link > .anticon { font-size: 10px; }
 .online-region-link:hover { color: #1d4ed8; }
+.online-region-link:focus-visible, .online-unknown-reasons > button:focus-visible { outline: 2px solid #3b82f6; outline-offset: 3px; border-radius: 2px; }
+.online-count-link { font-weight: 600; font-variant-numeric: tabular-nums; }
+.online-city-user-row { cursor: pointer; }
+.online-metric-value.online-region-link { display: block; font-size: clamp(26px, 2.7vw, 38px); font-weight: 600; line-height: 1.1; letter-spacing: -1px; text-align: left; }
+.online-province-stats .online-region-link:hover strong { color: #2563eb; }
 .online-share-cell { display: flex; align-items: center; gap: 10px; }
 .online-share-cell > .ant-progress { flex: 1; min-width: 35px; margin: 0; }
 .online-share-cell > span { min-width: 45px; text-align: right; font-size: 12px; color: #64748b; font-variant-numeric: tabular-nums; }
@@ -95,6 +102,16 @@
 .online-method h3 > .anticon { margin-right: 5px; }
 .online-method p { margin: 0 0 5px; font-size: 11px; line-height: 1.8; }
 .online-loading { padding: 24px; }
+.online-users-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 18px 0 12px; }
+.online-users-toolbar > .ant-input-search { max-width: 360px; }
+.online-users-toolbar .ant-tag { margin: 0; white-space: nowrap; }
+.online-users-note, .online-users-updated { margin: 0 0 14px; color: #64748b; font-size: 12px; line-height: 1.7; }
+.online-users-updated { margin: 10px 0 0; color: #94a3b8; }
+.online-users-modal .ant-alert { margin-bottom: 14px; }
+.online-users-modal .ant-table { font-size: 12px; }
+.online-user-account, .online-user-location { display: flex; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
+.online-user-account strong { font-weight: 500; color: #334155; }
+.online-user-account > span, .online-user-location > small { color: #94a3b8; font-size: 11px; }
 @media (min-width: 1600px) { .online-map-chart, .online-city-map-status { height: 450px; } }
 @media (max-width: 1200px) {
   .online-geography-grid { grid-template-columns: minmax(0, 1fr) 250px; gap: 16px; }
@@ -128,6 +145,7 @@
   .online-metric { padding: 14px 12px; border-radius: 6px; }
   .online-metric-title { font-size: 12px; }
   .online-metric-value { font-size: 29px; margin-top: 13px; }
+  .online-metric-value.online-region-link { font-size: 29px; }
   .online-metric p { font-size: 10px; }
   .online-geography-grid, .online-details-grid { gap: 14px; margin-bottom: 14px; }
   .online-panel-header { padding: 16px 14px 10px; gap: 12px; }
@@ -154,4 +172,6 @@
   .online-db-status { padding-left: 14px; padding-right: 14px; }
   .online-db-note { margin-left: 14px; margin-right: 14px; }
   .online-rank-chart { height: 300px; }
+  .online-users-toolbar { flex-wrap: wrap; }
+  .online-users-toolbar > .ant-input-search { max-width: none; }
 }

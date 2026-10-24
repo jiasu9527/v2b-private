@@ -140,7 +140,9 @@ func main() {
 			WithAdminService(adminDBService).
 			WithEntryMonitorController(adminDBService)
 		adminService = adminDBService
-		nodeService = nodeapi.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithOnlineGeoResolver(onlineGeo)
+		nodeDBService := nodeapi.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithOnlineGeoResolver(onlineGeo)
+		nodeService = nodeDBService
+		adminDBService.WithOnlineLocationRefresh(nodeDBService.ReconcileOnlineLocations)
 		backgroundRunner = background.NewRunner(jobQueue, adminDBService, userDBService, adminDBService, adminDBService, appleIDService)
 	}
 

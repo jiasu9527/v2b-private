@@ -2,6 +2,7 @@
 package ipgeo
 
 import (
+	"fmt"
 	"net/netip"
 	"path/filepath"
 	"strings"
@@ -104,11 +105,10 @@ func (db *Database) Close() error {
 }
 
 func (db *Database) Resolve(rawIP string) Location {
-	ip, err := netip.ParseAddr(strings.TrimSpace(rawIP))
-	if err != nil || ip.Zone() != "" {
+	ip, err := ParseAddress(rawIP)
+	if err != nil {
 		return unknown("invalid_ip")
 	}
-	ip = ip.Unmap()
 	if !publicIP(ip) {
 		return unknown("non_public_ip")
 	}
@@ -126,6 +126,25 @@ func (db *Database) Resolve(rawIP string) Location {
 		return unknown("not_found")
 	}
 	return parseRegion(region)
+}
+
+// ParseAddress accepts a numeric IP or a socket address reported by a node.
+// It never resolves hostnames, chooses an address from a forwarded chain, or
+// treats an ambiguous unbracketed IPv6 suffix as a port.
+func ParseAddress(raw string) (netip.Addr, error) {
+	raw = strings.TrimSpace(raw)
+	ip, err := netip.ParseAddr(raw)
+	if err != nil {
+		if endpoint, endpointErr := netip.ParseAddrPort(raw); endpointErr == nil {
+			ip, err = endpoint.Addr(), nil
+		} else if strings.HasPrefix(raw, "[") && strings.HasSuffix(raw, "]") {
+			ip, err = netip.ParseAddr(raw[1 : len(raw)-1])
+		}
+	}
+	if err != nil || ip.Zone() != "" {
+		return netip.Addr{}, fmt.Errorf("invalid numeric IP address")
+	}
+	return ip.Unmap(), nil
 }
 
 func unknown(reason string) Location {

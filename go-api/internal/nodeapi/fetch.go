@@ -243,6 +243,7 @@ func (s *DBService) ReportAlive(ctx context.Context, req AliveReportRequest) err
 	now := time.Now().Unix()
 	cfg := s.currentConfig()
 	nodeKey := req.NodeType + strconv.FormatInt(req.NodeID, 10)
+	onlineStates := make(map[int64]map[string]any)
 	for userID, ips := range req.Users {
 		if userID <= 0 {
 			continue
@@ -300,8 +301,11 @@ func (s *DBService) ReportAlive(ctx context.Context, req AliveReportRequest) err
 		if err := s.setRuntimeKV(ctx, aliveUserKey(userID), string(raw), 120); err != nil {
 			return err
 		}
+		if s.onlineGeo != nil {
+			onlineStates[userID] = state
+		}
 	}
-	s.reportOnlineLocationsBestEffort(ctx, req.Users, now)
+	s.reportOnlineAliveStatesBestEffort(ctx, onlineStates, now)
 	return nil
 }
 

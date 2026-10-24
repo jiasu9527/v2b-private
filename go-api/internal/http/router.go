@@ -644,6 +644,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminStatOnline(w, r, state.session, state.admin) {
 				return
 			}
+		case r.URL.Path == adminPrefix+"/stat/online/users":
+			if handleAdminStatOnlineUsers(w, r, state.session, state.admin) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/stat/getStat":
 			if handleAdminStatGetStat(w, r, state.session, state.admin) {
 				return

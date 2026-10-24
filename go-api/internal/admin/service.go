@@ -440,6 +440,7 @@ type DBService struct {
 	runtime                   *config.RuntimeState
 	db                        *sql.DB
 	onlineGeo                 ipgeo.Resolver
+	onlineLocationRefresh     func(context.Context) error
 	orders                    orderRuntime
 	jobs                      queue.Enqueuer
 	authCache                 *session.AuthCache

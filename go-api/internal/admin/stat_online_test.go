@@ -18,7 +18,7 @@ func onlineTestRows() *sqlmock.Rows {
 }
 
 func expectOnlineStatsQuery(mock sqlmock.Sqlmock, now int64) *sqlmock.ExpectedQuery {
-	return mock.ExpectQuery(regexp.QuoteMeta(onlineStatsQuery)).WithArgs(now-600, now-86400, now-604800, now)
+	return mock.ExpectQuery(regexp.QuoteMeta(onlineStatsQuery)).WithArgs(now-600, now, now-86400, now-604800)
 }
 
 func TestOnlineStatsCountsPeopleAndAggregatesLocations(t *testing.T) {

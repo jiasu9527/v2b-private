@@ -90,14 +90,17 @@ type runtimeConfigProvider interface {
 }
 
 type DBService struct {
-	cfg                 config.Config
-	db                  *sql.DB
-	reporter            trafficReporter
-	runtime             runtimeConfigProvider
-	sensitiveSchemaOnce sync.Once
-	sensitiveSchemaErr  error
-	onlineGeo           ipgeo.Resolver
-	onlineGeoLastError  atomic.Int64
+	cfg                    config.Config
+	db                     *sql.DB
+	reporter               trafficReporter
+	runtime                runtimeConfigProvider
+	sensitiveSchemaOnce    sync.Once
+	sensitiveSchemaErr     error
+	onlineGeo              ipgeo.Resolver
+	onlineGeoLastError     atomic.Int64
+	onlineGeoRefreshMu     sync.Mutex
+	onlineGeoRefreshAt     int64
+	onlineGeoRefreshCursor int64
 }
 
 var nodeServerTables = map[string]string{

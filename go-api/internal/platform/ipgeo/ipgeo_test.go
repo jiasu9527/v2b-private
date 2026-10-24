@@ -25,15 +25,17 @@ func TestResolvePublicVersionsAndMappedAddress(t *testing.T) {
 	v4 := &testSearcher{region: "中国|广东省|深圳市|电信|CN"}
 	v6 := &testSearcher{region: "United States|California|San Jose|Provider|US"}
 	db := &Database{v4: v4, v6: v6}
-	for _, address := range []string{"113.92.157.29", "::ffff:113.92.157.29", " 113.92.157.29 "} {
+	for _, address := range []string{"113.92.157.29", "::ffff:113.92.157.29", " 113.92.157.29 ", "113.92.157.29:52982", "[::ffff:113.92.157.29]:52982"} {
 		got := db.Resolve(address)
 		if !got.Known || got.CountryCode != "CN" || got.ProvinceCode != "440000" || got.CityName != "深圳市" || v4.input != "113.92.157.29" {
 			t.Fatalf("Resolve(%q)=%+v, reader input=%v", address, got, v4.input)
 		}
 	}
-	got := db.Resolve("2604:a840:3::a04d")
-	if !got.Known || got.CountryCode != "US" || got.CountryName != "美国" || got.ProvinceCode != "" || got.CityName != "" || v6.input != "2604:a840:3::a04d" {
-		t.Fatalf("IPv6 result=%+v, reader input=%v", got, v6.input)
+	for _, address := range []string{"2604:a840:3::a04d", "[2604:a840:3::a04d]", "[2604:a840:3::a04d]:52982"} {
+		got := db.Resolve(address)
+		if !got.Known || got.CountryCode != "US" || got.CountryName != "美国" || got.ProvinceCode != "" || got.CityName != "" || v6.input != "2604:a840:3::a04d" {
+			t.Fatalf("IPv6 result=%+v, reader input=%v", got, v6.input)
+		}
 	}
 }
 
@@ -73,7 +75,7 @@ func TestNormalizeChinaCityNameRetainsEvidenceWithoutMapLookup(t *testing.T) {
 func TestInvalidAndNonPublicAddressesNeverReachDatabase(t *testing.T) {
 	s := &testSearcher{region: "中国|广东省|深圳市|电信|CN"}
 	db := &Database{v4: s, v6: s}
-	for _, address := range []string{"", "hostname.example", "8.8.8.8:53", "1.2.3.4, 8.8.8.8", "[::1]", "2001:4860::1%eth0"} {
+	for _, address := range []string{"", "hostname.example", "hostname.example:443", "8.8.8.8:http", "8.8.8.8:99999", "1.2.3.4, 8.8.8.8", "2001:4860::1%eth0", "[2001:4860::1%eth0]:443", "https://8.8.8.8"} {
 		if got := db.Resolve(address); got.Known || got.UnknownReason != "invalid_ip" {
 			t.Errorf("Resolve(%q)=%+v", address, got)
 		}
@@ -81,7 +83,7 @@ func TestInvalidAndNonPublicAddressesNeverReachDatabase(t *testing.T) {
 	for _, address := range []string{
 		"0.1.2.3", "127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.1.1",
 		"100.64.0.1", "192.0.2.1", "198.51.100.1", "203.0.113.1", "198.18.0.1", "224.0.0.1", "255.255.255.255",
-		"::", "::1", "::ffff:10.1.2.3", "fc00::1", "fe80::1", "ff02::1", "2001:db8::1", "64:ff9b::808:808", "3fff::1",
+		"::", "::1", "[::1]", "127.0.0.1:443", "[::ffff:10.1.2.3]:443", "::ffff:10.1.2.3", "fc00::1", "fe80::1", "ff02::1", "2001:db8::1", "64:ff9b::808:808", "3fff::1",
 	} {
 		if got := db.Resolve(address); got.Known || got.UnknownReason != "non_public_ip" {
 			t.Errorf("Resolve(%q)=%+v", address, got)

@@ -60,16 +60,17 @@ type OnlineStats struct {
 // PostgreSQL snapshot. A user's latest activity timestamp is already unique per
 // account; historical windows need no connection-event log. The location table
 // likewise has a primary key on user_id, preventing multi-device double counts.
-const onlineStatsQuery = `WITH live_locations AS (
+const onlineLocationsCTE = `WITH live_locations AS (
 	SELECT
-		CASE WHEN l.last_seen_at BETWEEN $1 AND $4 THEN l.country_code ELSE '' END AS country_code,
-		CASE WHEN l.last_seen_at BETWEEN $1 AND $4 THEN l.country_name ELSE '' END AS country_name,
-		CASE WHEN l.last_seen_at BETWEEN $1 AND $4 THEN l.province_code ELSE '' END AS province_code,
-		CASE WHEN l.last_seen_at BETWEEN $1 AND $4 THEN l.province_name ELSE '' END AS province_name,
-		CASE WHEN l.last_seen_at BETWEEN $1 AND $4 THEN l.city_name ELSE '' END AS city_name,
+		u.id, u.email, u.t AS last_seen_at, COALESCE(l.last_seen_at, 0) AS location_seen_at,
+		CASE WHEN l.last_seen_at BETWEEN $1 AND $2 THEN l.country_code ELSE '' END AS country_code,
+		CASE WHEN l.last_seen_at BETWEEN $1 AND $2 THEN l.country_name ELSE '' END AS country_name,
+		CASE WHEN l.last_seen_at BETWEEN $1 AND $2 THEN l.province_code ELSE '' END AS province_code,
+		CASE WHEN l.last_seen_at BETWEEN $1 AND $2 THEN l.province_name ELSE '' END AS province_name,
+		CASE WHEN l.last_seen_at BETWEEN $1 AND $2 THEN l.city_name ELSE '' END AS city_name,
 		CASE
 			WHEN l.user_id IS NULL THEN 'not_reported'
-			WHEN l.last_seen_at > $4 THEN 'invalid_timestamp'
+			WHEN l.last_seen_at > $2 THEN 'invalid_timestamp'
 			WHEN l.last_seen_at < $1 THEN 'location_stale'
 			WHEN l.country_code = '' THEN COALESCE(NULLIF(l.unknown_reason, ''), 'not_found')
 			ELSE ''
@@ -77,13 +78,15 @@ const onlineStatsQuery = `WITH live_locations AS (
 	FROM v2_user u
 	LEFT JOIN v2_user_online_location l ON l.user_id = u.id
 	WHERE u.t >= $1
-)
+)`
+
+const onlineStatsQuery = onlineLocationsCTE + `
 SELECT 'summary' AS kind, '' AS country_code, '' AS country_name,
 	'' AS province_code, '' AS province_name, '' AS city_name, '' AS unknown_reason,
 	COUNT(*) AS users,
 	COUNT(*) FILTER (WHERE t >= $1) AS current_online,
-	COUNT(*) FILTER (WHERE t >= $2) AS unique_24h,
-	COUNT(*) FILTER (WHERE t >= $3) AS unique_7d
+	COUNT(*) FILTER (WHERE t >= $3) AS unique_24h,
+	COUNT(*) FILTER (WHERE t >= $4) AS unique_7d
 FROM v2_user
 UNION ALL
 SELECT 'region', country_code, country_name, province_code, province_name, city_name, unknown_reason,
@@ -97,7 +100,21 @@ func (s *DBService) WithOnlineGeoResolver(resolver ipgeo.Resolver) *DBService {
 }
 
 func (s *DBService) GetOnlineStats(ctx context.Context) (OnlineStats, error) {
+	s.refreshOnlineLocations(ctx)
 	return s.getOnlineStatsAt(ctx, time.Now().Unix())
+}
+
+// The callback reconciles bounded recent node cache entries and applies its own
+// timeout and throttle. A cache failure must not hide database-backed statistics.
+func (s *DBService) WithOnlineLocationRefresh(refresh func(context.Context) error) *DBService {
+	s.onlineLocationRefresh = refresh
+	return s
+}
+
+func (s *DBService) refreshOnlineLocations(ctx context.Context) {
+	if s != nil && s.onlineLocationRefresh != nil {
+		_ = s.onlineLocationRefresh(ctx)
+	}
 }
 
 func (s *DBService) getOnlineStatsAt(ctx context.Context, now int64) (OnlineStats, error) {
@@ -116,7 +133,7 @@ func (s *DBService) getOnlineStatsAt(ctx context.Context, now int64) (OnlineStat
 	if s.onlineGeo != nil {
 		result.GeoDatabase = s.onlineGeo.Status()
 	}
-	rows, err := s.db.QueryContext(ctx, onlineStatsQuery, now-onlineStatsWindowSeconds, now-86400, now-7*86400, now)
+	rows, err := s.db.QueryContext(ctx, onlineStatsQuery, now-onlineStatsWindowSeconds, now, now-86400, now-7*86400)
 	if err != nil {
 		return result, fmt.Errorf("query online statistics: %w", err)
 	}
