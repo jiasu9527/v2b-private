@@ -20,6 +20,7 @@ import (
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/dnspod"
 	"forest/go-api/internal/payment"
+	"forest/go-api/internal/platform/ipgeo"
 	platformpostgres "forest/go-api/internal/platform/postgres"
 	"forest/go-api/internal/queue"
 	"forest/go-api/internal/session"
@@ -438,6 +439,7 @@ type DBService struct {
 	cfg                       config.Config
 	runtime                   *config.RuntimeState
 	db                        *sql.DB
+	onlineGeo                 ipgeo.Resolver
 	orders                    orderRuntime
 	jobs                      queue.Enqueuer
 	authCache                 *session.AuthCache

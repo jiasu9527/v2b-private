@@ -7,9 +7,11 @@ import {
   TeamOutlined,
   LineChartOutlined,
   UserOutlined,
+  RightOutlined,
 } from '@ant-design/icons';
 import * as echarts from 'echarts';
 import { apiGet, getSettings } from '../lib/api';
+import './OnlineAnalyticsPage.css';
 
 type ChartPayload = Record<string, any>[];
 
@@ -158,20 +160,25 @@ function QuickNav({ onGo }: { onGo: (path: string) => void }) {
   </div>;
 }
 
-function PrimaryStats({ stat, currency }: { stat: any; currency: string }) {
+function PrimaryStats({ stat, currency, onOnline }: { stat: any; currency: string; onOnline: () => void }) {
   const items = [
-    { label: '在线人数', value: stat.online_user || '0', icon: <TeamOutlined />, labelClass: 'text-muted mb-1', labelStyle: { width: 120 } as React.CSSProperties },
+    { label: '在线人数', value: stat.online_user || '0', icon: <TeamOutlined />, labelClass: 'text-muted mb-1', labelStyle: { width: 120 } as React.CSSProperties, onClick: onOnline },
     { label: '今日收入', value: cents(stat.day_income), unit: currency, icon: <LineChartOutlined />, labelClass: 'text-muted w-75 mb-1' },
     { label: '实时注册', value: stat.day_register_total || '0', icon: <UserOutlined />, labelClass: 'text-muted mb-1', labelStyle: { width: 120 } as React.CSSProperties },
   ];
   return <div className="block border-bottom mb-0 forest-stats-bar">
     <div className="block-content">
       <div className="d-flex align-items-center legacy-stat-row-primary">
-        {items.map((item) => <div className="pr-4 pr-sm-5 pl-0 pl-sm-3 legacy-stat-main" key={item.label}>
-          <span className="legacy-stat-icon" aria-hidden="true">{item.icon}</span>
-          <div className={item.labelClass} style={item.labelStyle}>{item.label}</div>
-          <div className="display-4 text-black font-w300 mb-2">{item.value}{item.unit && <span className="font-size-h5 font-w600 text-muted">{item.unit}</span>}</div>
-        </div>)}
+        {items.map((item) => {
+          const content = <>
+            <span className="legacy-stat-icon" aria-hidden="true">{item.icon}</span>
+            <div className={item.labelClass} style={item.labelStyle}>{item.label}{item.onClick && <RightOutlined className="online-stat-arrow" />}</div>
+            <div className="display-4 text-black font-w300 mb-2">{item.value}{item.unit && <span className="font-size-h5 font-w600 text-muted">{item.unit}</span>}</div>
+          </>;
+          return item.onClick
+            ? <button type="button" className="legacy-stat-main online-stat-link" key={item.label} onClick={item.onClick} aria-label="查看在线人数与地区分布">{content}</button>
+            : <div className="pr-4 pr-sm-5 pl-0 pl-sm-3 legacy-stat-main" key={item.label}>{content}</div>;
+        })}
       </div>
     </div>
   </div>;
@@ -272,7 +279,7 @@ export default function Dashboard() {
       {!!stat.commission_pending_total && <Alert className="legacy-alert" type="error" showIcon message={<span>有 {stat.commission_pending_total} 笔佣金等待确认 <Button type="link" className="alert-link" onClick={() => go('/order?commission_pending=1')}>立即处理</Button></span>} />}
 
       <QuickNav onGo={go} />
-      <PrimaryStats stat={stat} currency={currency} />
+      <PrimaryStats stat={stat} currency={currency} onOnline={() => go('/dashboard/online')} />
       <SecondaryStats stat={stat} currency={currency} />
 
       <div className="block border-bottom mb-0">

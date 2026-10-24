@@ -216,6 +216,7 @@ unchanged. `POST /api/v1/passport/auth/register` independently enforces the whit
 - `GET /api/v1/<admin_path>/system/getSystemLog`
 - `GET /api/v1/<admin_path>/stat/getStat`
 - `GET /api/v1/<admin_path>/stat/getOverride`
+- `GET /api/v1/<admin_path>/stat/online` — admin-only online geography and rolling 24h/7d unique users; see [online analytics](online-analytics.md).
 - `GET /api/v1/<admin_path>/stat/getOrder`
 - `GET /api/v1/<admin_path>/stat/getServerLastRank`
 - `GET /api/v1/<admin_path>/stat/getServerTodayRank`

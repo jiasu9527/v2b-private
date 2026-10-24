@@ -640,6 +640,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminStatOverride(w, r, state.session, state.admin) {
 				return
 			}
+		case r.URL.Path == adminPrefix+"/stat/online":
+			if handleAdminStatOnline(w, r, state.session, state.admin) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/stat/getStat":
 			if handleAdminStatGetStat(w, r, state.session, state.admin) {
 				return

@@ -559,3 +559,15 @@ created_at BIGINT NOT NULL,
 PRIMARY KEY (actor_id, request_id)
 );
 CREATE INDEX IF NOT EXISTS v2_support_request_receipt_created_idx ON v2_support_request_receipt (created_at, actor_id, request_id);
+
+-- One latest coarse location per user; no raw IP or connection history.
+CREATE TABLE IF NOT EXISTS v2_user_online_location (
+user_id INTEGER PRIMARY KEY REFERENCES v2_user(id) ON DELETE CASCADE,
+country_code VARCHAR(2) NOT NULL DEFAULT '',
+country_name VARCHAR(128) NOT NULL DEFAULT '',
+province_code VARCHAR(6) NOT NULL DEFAULT '',
+province_name VARCHAR(128) NOT NULL DEFAULT '',
+unknown_reason VARCHAR(32) NOT NULL DEFAULT '',
+last_seen_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_v2_user_online_location_last_seen ON v2_user_online_location(last_seen_at);

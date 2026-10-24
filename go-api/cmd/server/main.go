@@ -6,7 +6,9 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"forest/go-api/internal/admin"
@@ -18,6 +20,7 @@ import (
 	"forest/go-api/internal/nodeapi"
 	"forest/go-api/internal/passport"
 	"forest/go-api/internal/payment"
+	"forest/go-api/internal/platform/ipgeo"
 	"forest/go-api/internal/platform/postgres"
 	"forest/go-api/internal/queue"
 	"forest/go-api/internal/session"
@@ -53,6 +56,9 @@ func main() {
 		if err := postgres.EnsureSupportSchema(ctx, db); err != nil {
 			log.Fatalf("ensure support schema: %v", err)
 		}
+		if err := postgres.EnsureOnlineLocationSchema(ctx, db); err != nil {
+			log.Fatalf("ensure online location schema: %v", err)
+		}
 		report, err := postgres.MigrateLegacyServerHostEntryRules(ctx, db)
 		if err != nil {
 			var migrationErr *postgres.LegacyEntryHostMigrationError
@@ -82,6 +88,16 @@ func main() {
 		}
 	}
 
+	geoDir := os.Getenv("FOREST_IPGEO_DIR")
+	if geoDir == "" {
+		geoDir = filepath.Join(cfg.PublicDir, "..", "storage", "ipgeo")
+	}
+	onlineGeo := ipgeo.New(geoDir)
+	defer onlineGeo.Close()
+	if status := onlineGeo.Status(); status.Status != "ready" {
+		log.Printf("online geography database: %s; run scripts/prepare-ipgeo.sh to prepare IPv4/IPv6 data", status.Status)
+	}
+
 	var passportService passport.Service
 	var sessionService session.Service
 	var userService usersvc.Service
@@ -106,7 +122,7 @@ func main() {
 		appleIDService = appleid.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig)
 		migrationService = usermigration.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig)
 		paymentService = payment.NewDBService(cfg, db, userDBService).WithExternalOrderManager(appleIDService).WithRuntimeConfig(runtimeConfig)
-		adminDBService := admin.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache)
+		adminDBService := admin.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache).WithOnlineGeoResolver(onlineGeo)
 		migrationService.WithMailDispatcher(adminDBService, jobQueue)
 		if err := initializeDNSFailoverBeforeServe(ctx, adminDBService); err != nil {
 			log.Fatalf("initialize DNS failover schema: %v", err)
@@ -124,7 +140,7 @@ func main() {
 			WithAdminService(adminDBService).
 			WithEntryMonitorController(adminDBService)
 		adminService = adminDBService
-		nodeService = nodeapi.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig)
+		nodeService = nodeapi.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithOnlineGeoResolver(onlineGeo)
 		backgroundRunner = background.NewRunner(jobQueue, adminDBService, userDBService, adminDBService, adminDBService, appleIDService)
 	}
 

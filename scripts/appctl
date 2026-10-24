@@ -981,6 +981,11 @@ build() {
   GOPROXY="${GOPROXY:-https://goproxy.cn,direct}" "${GO_BIN}" mod tidy
   "${GO_BIN}" build -o "${BIN_PATH}" ./cmd/server
   build_probe
+  if [[ -f "${ROOT_DIR}/scripts/prepare-ipgeo.sh" ]]; then
+    if ! bash "${ROOT_DIR}/scripts/prepare-ipgeo.sh"; then
+      echo "地区库暂未完整准备，网站仍可正常运行；在线分析页会标注未识别地区。" >&2
+    fi
+  fi
 }
 
 build_probe() {

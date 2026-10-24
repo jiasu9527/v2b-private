@@ -301,6 +301,7 @@ func (s *DBService) ReportAlive(ctx context.Context, req AliveReportRequest) err
 			return err
 		}
 	}
+	s.reportOnlineLocationsBestEffort(ctx, req.Users, now)
 	return nil
 }
 

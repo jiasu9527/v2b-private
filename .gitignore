@@ -29,3 +29,4 @@ go-api/run/
 analysis/admin-bundle/
 /storage/probe/*
 !/storage/probe/.gitignore
+/storage/ipgeo/

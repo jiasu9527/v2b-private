@@ -8,9 +8,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"forest/go-api/internal/config"
+	"forest/go-api/internal/platform/ipgeo"
 	"forest/go-api/internal/user"
 )
 
@@ -94,6 +96,8 @@ type DBService struct {
 	runtime             runtimeConfigProvider
 	sensitiveSchemaOnce sync.Once
 	sensitiveSchemaErr  error
+	onlineGeo           ipgeo.Resolver
+	onlineGeoLastError  atomic.Int64
 }
 
 var nodeServerTables = map[string]string{

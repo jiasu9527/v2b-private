@@ -34,6 +34,7 @@ import { checkLogin, clearAuth, getAuth, getCurrentUserInfo, getSettings, pathAd
 
 const { Header, Sider, Content } = Layout;
 const MOBILE_QUERY = '(max-width: 768px)';
+const OnlineAnalyticsPage = React.lazy(() => import('./pages/OnlineAnalyticsPage'));
 
 function getIsMobileViewport() {
   if (typeof window === 'undefined' || !window.matchMedia) return false;
@@ -84,6 +85,7 @@ function normalizePath() {
 function Page({ path }: { path: string }) {
   const route = path.split('?')[0];
   if (route === '/dashboard') return <Dashboard />;
+  if (route === '/dashboard/online') return <React.Suspense fallback={<div style={{ padding: 32 }}><Spin tip="正在加载在线分析"><div style={{ height: 120 }} /></Spin></div>}><OnlineAnalyticsPage /></React.Suspense>;
   if (route === '/user') return <UserPage />;
   if (route === '/support/staff' || route === '/support/operations') return <UserPage initialTab="staff-operations" />;
   if (route === '/plan') return <PlanPage />;
@@ -183,6 +185,7 @@ export default function App() {
 
   const selected = useMemo(() => {
     const route = path.split('?')[0];
+    if (route.startsWith('/dashboard/')) return ['/dashboard'];
     if (route === '/support/staff' || route === '/support/operations') return ['/user'];
     if (route === '/server/client-entry' || route === '/server/client-entry-user-policy') return ['/server/manage'];
     return [route.startsWith('/ticket/') ? '/ticket' : route === '/apple-id/finance' ? '/apple-id' : route];
