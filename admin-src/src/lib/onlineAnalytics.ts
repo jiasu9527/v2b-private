@@ -40,7 +40,7 @@ export function onlineUsersParams(selection: OnlineUsersSelection, page: number,
 
 const onlineUnknownNames: Record<string, string> = {
   not_reported: '节点尚未上报用户地址',
-  location_stale: '位置上报已超过在线时间窗口',
+  location_stale: '旧版后端将位置判为过期，请更新后端',
   invalid_timestamp: '位置上报时间异常',
   database_unavailable: '离线定位库未就绪',
   not_found: '未匹配到地区',

@@ -38,7 +38,7 @@ func TestOnlineStatsCountsPeopleAndAggregatesLocations(t *testing.T) {
 		AddRow("region", "TW", "中国台湾", "710000", "台湾", "", "", 1, 0, 0, 0).
 		AddRow("region", "US", "美国", "", "", "", "", 2, 0, 0, 0).
 		AddRow("region", "", "", "", "", "", "not_reported", 1, 0, 0, 0).
-		AddRow("region", "", "", "", "", "", "location_stale", 1, 0, 0, 0).
+		AddRow("region", "", "", "", "", "", "invalid_ip", 1, 0, 0, 0).
 		AddRow("region", "", "", "", "", "", "database_unavailable", 1, 0, 0, 0).
 		AddRow("region", "", "", "", "", "", "non_public_ip", 1, 0, 0, 0).
 		// SQL UNION ALL does not promise summary-row ordering.
@@ -133,7 +133,7 @@ func TestOnlineStatsCitiesPreserveProvinceTotalsAndUnknowns(t *testing.T) {
 		AddRow("region", "CN", "中国", "", "", "深圳市", "", 1, 0, 0, 0).
 		AddRow("region", "CN", "中国", "invalid", "obsolete province", "深圳市", "", 1, 0, 0, 0).
 		AddRow("region", "US", "美国", "", "", "San Jose", "", 2, 0, 0, 0).
-		AddRow("region", "CN", "中国", "440000", "广东", "深圳市", "location_stale", 1, 0, 0, 0))
+		AddRow("region", "CN", "中国", "440000", "广东", "深圳市", "not_reported", 1, 0, 0, 0))
 	result, err := (&DBService{db: db}).getOnlineStatsAt(context.Background(), now)
 	if err != nil {
 		t.Fatal(err)
@@ -206,7 +206,7 @@ func TestOnlineStatsEmptyUsersReturnsFinitePercentagesAndArrays(t *testing.T) {
 	}
 }
 
-func TestOnlineStatsUnknownAndStaleDataNeverBecomesMapLocations(t *testing.T) {
+func TestOnlineStatsUnknownAndInvalidDataNeverBecomesMapLocations(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -215,7 +215,7 @@ func TestOnlineStatsUnknownAndStaleDataNeverBecomesMapLocations(t *testing.T) {
 	const now int64 = 1792830000
 	expectOnlineStatsQuery(mock, now).WillReturnRows(onlineTestRows().
 		AddRow("summary", "", "", "", "", "", "", 8, 8, 8, 8).
-		AddRow("region", "CN", "中国", "110000", "北京", "", "location_stale", 1, 0, 0, 0).
+		AddRow("region", "CN", "中国", "110000", "北京", "", "not_reported", 1, 0, 0, 0).
 		AddRow("region", "CN", "中国", "110000", "北京", "", "invalid_timestamp", 1, 0, 0, 0).
 		AddRow("region", "ZZ", "unknown", "", "", "", "", 1, 0, 0, 0).
 		AddRow("region", "", "", "", "", "", "unrecognized-value", 1, 0, 0, 0).

@@ -60,18 +60,20 @@ type OnlineStats struct {
 // PostgreSQL snapshot. A user's latest activity timestamp is already unique per
 // account; historical windows need no connection-event log. The location table
 // likewise has a primary key on user_id, preventing multi-device double counts.
+// Activity determines who is online; geography uses their last successful
+// observation without an age cutoff. Its original timestamp remains available
+// in account details and must not turn an offline account into an online one.
 const onlineLocationsCTE = `WITH live_locations AS (
 	SELECT
 		u.id, u.email, u.t AS last_seen_at, COALESCE(l.last_seen_at, 0) AS location_seen_at,
-		CASE WHEN l.last_seen_at BETWEEN $1 AND $2 THEN l.country_code ELSE '' END AS country_code,
-		CASE WHEN l.last_seen_at BETWEEN $1 AND $2 THEN l.country_name ELSE '' END AS country_name,
-		CASE WHEN l.last_seen_at BETWEEN $1 AND $2 THEN l.province_code ELSE '' END AS province_code,
-		CASE WHEN l.last_seen_at BETWEEN $1 AND $2 THEN l.province_name ELSE '' END AS province_name,
-		CASE WHEN l.last_seen_at BETWEEN $1 AND $2 THEN l.city_name ELSE '' END AS city_name,
+		CASE WHEN l.last_seen_at > 0 AND l.last_seen_at <= $2 THEN l.country_code ELSE '' END AS country_code,
+		CASE WHEN l.last_seen_at > 0 AND l.last_seen_at <= $2 THEN l.country_name ELSE '' END AS country_name,
+		CASE WHEN l.last_seen_at > 0 AND l.last_seen_at <= $2 THEN l.province_code ELSE '' END AS province_code,
+		CASE WHEN l.last_seen_at > 0 AND l.last_seen_at <= $2 THEN l.province_name ELSE '' END AS province_name,
+		CASE WHEN l.last_seen_at > 0 AND l.last_seen_at <= $2 THEN l.city_name ELSE '' END AS city_name,
 		CASE
 			WHEN l.user_id IS NULL THEN 'not_reported'
-			WHEN l.last_seen_at > $2 THEN 'invalid_timestamp'
-			WHEN l.last_seen_at < $1 THEN 'location_stale'
+			WHEN l.last_seen_at <= 0 OR l.last_seen_at > $2 THEN 'invalid_timestamp'
 			WHEN l.country_code = '' THEN COALESCE(NULLIF(l.unknown_reason, ''), 'not_found')
 			ELSE ''
 		END AS unknown_reason

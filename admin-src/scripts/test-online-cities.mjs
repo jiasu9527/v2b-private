@@ -49,13 +49,14 @@ test('online user filters preserve unknown city and province scopes without leak
   assert.deepEqual(onlineUsersParams({ title: '地址格式无法识别', scope: 'unknown', reason: 'invalid_ip' }, 1, 20), { scope: 'unknown', reason: 'invalid_ip', page: 1, page_size: 20 });
 });
 
-test('user location explains global and partial unknowns without presenting stale locations as current', () => {
+test('user location explains global and partial unknowns and retains old backend stale reasons', () => {
   const user = { id: 1, email: 'member@example.test', last_seen_at: 1000, location_seen_at: 900, country_code: 'CN', country_name: '中国', province_code: '440000', province_name: '广东', city_name: '深圳', unknown_reason: '' };
   assert.equal(onlineUserLocation(user), '中国 · 广东 · 深圳');
   assert.equal(onlineUserLocationNote(user), '');
   assert.equal(onlineUserLocationNote({ ...user, city_name: '' }), '已识别省份，城市未知');
   assert.equal(onlineUserLocationNote({ ...user, province_code: '', province_name: '', city_name: '' }), '已识别国家 / 地区，省份未知');
   assert.equal(onlineUserLocation({ ...user, unknown_reason: 'location_stale' }), '位置未知');
+  assert.equal(onlineUserLocationNote({ ...user, unknown_reason: 'location_stale' }), '旧版后端将位置判为过期，请更新后端');
   assert.equal(onlineUserLocationNote({ ...user, unknown_reason: 'invalid_ip' }), '地址格式无法识别');
   assert.equal(onlineUserLocationNote({ ...user, unknown_reason: 'not_reported' }, { not_reported: '等待节点同步' }), '等待节点同步');
   assert.equal(onlineUserLocation({ ...user, country_name: '香港', province_name: '香港', city_name: '香港' }), '香港');

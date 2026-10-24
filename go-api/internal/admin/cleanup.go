@@ -176,13 +176,8 @@ SELECT actor_id,request_id FROM v2_support_request_receipt WHERE created_at < $1
 DELETE FROM v2_support_request_receipt WHERE (actor_id,request_id) IN (SELECT actor_id,request_id FROM doomed)`, nowUnix-(supportOperationKeepDays*86400), dnsFailoverCleanupBatchSize); err != nil {
 		return fmt.Errorf("cleanup support request receipts: %w", err)
 	}
-	if err := deleteDNSFailoverRetentionRows(ctx, s.db, `WITH doomed AS (
-SELECT user_id FROM v2_user_online_location WHERE last_seen_at < $1 ORDER BY user_id LIMIT $2
-)
-DELETE FROM v2_user_online_location WHERE user_id IN (SELECT user_id FROM doomed)
-AND last_seen_at < $1`, nowUnix-7*86400, dnsFailoverCleanupBatchSize); err != nil {
-		return fmt.Errorf("cleanup online location summaries: %w", err)
-	}
+	// Online locations keep one last-known summary per user, not a history.
+	// They persist until replaced, and are cascade-deleted with the user.
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO v2_runtime_kv (k, v, expire_at, created_at, updated_at)
 VALUES ($1, $2, 0, $3, $3)
 ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = EXCLUDED.expire_at, updated_at = EXCLUDED.updated_at`,

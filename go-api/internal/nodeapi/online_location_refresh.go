@@ -9,14 +9,15 @@ import (
 const onlineLocationRefreshBatch = 500
 
 // Only still-online users with live runtime cache entries can supply missing
-// observations. A keyset cursor bounds each attempt without starving higher IDs
-// when a lower ID repeatedly reports an unresolvable IP or has no city data.
+// observations or refresh an old summary. Old summaries remain valid until a
+// new valid location replaces them. A keyset cursor bounds each attempt without
+// starving higher IDs when a lower ID has an unresolvable IP or no city data.
 const onlineLocationRefreshQuery = `SELECT u.id, kv.v
 FROM v2_user u
 JOIN v2_runtime_kv kv ON kv.k = 'ALIVE_IP_USER_' || u.id::text
 LEFT JOIN v2_user_online_location l ON l.user_id = u.id
 WHERE u.t >= $1 AND u.id > $3 AND (kv.expire_at = 0 OR kv.expire_at > $2)
-AND (l.user_id IS NULL OR l.country_code = '' OR l.last_seen_at < $1
+AND (l.user_id IS NULL OR l.country_code = '' OR l.last_seen_at < $1 OR l.last_seen_at > $2
 OR (l.country_code IN ('CN','HK','MO','TW') AND (l.province_code = '' OR l.city_name = '')))
 ORDER BY u.id LIMIT $4`
 
@@ -33,7 +34,7 @@ func (s *DBService) reconcileOnlineLocationsAt(ctx context.Context, now int64) e
 		return nil
 	}
 	defer s.onlineGeoRefreshMu.Unlock()
-	if s.onlineGeoRefreshAt > 0 && now-s.onlineGeoRefreshAt < 30 {
+	if s.onlineGeoRefreshAt > 0 && now >= s.onlineGeoRefreshAt && now-s.onlineGeoRefreshAt < 30 {
 		return nil
 	}
 	s.onlineGeoRefreshAt = now

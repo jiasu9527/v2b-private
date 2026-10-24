@@ -133,3 +133,26 @@ func TestReconcileOnlineLocationsDoesNotBlockConcurrentRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestReconcileOnlineLocationsRecoversAfterClockMovesBackward(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewDBService(config.Config{}, db, nil).WithOnlineGeoResolver(&locationTestResolver{})
+	const now = int64(1700000000)
+	s.onlineGeoRefreshAt = now + 3600
+	mock.ExpectQuery(regexp.QuoteMeta(onlineLocationRefreshQuery)).
+		WithArgs(now-600, now, int64(0), onlineLocationRefreshBatch).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "v"}))
+	if err := s.reconcileOnlineLocationsAt(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	if s.onlineGeoRefreshAt != now {
+		t.Fatalf("future refresh timestamp blocked reconciliation: %d", s.onlineGeoRefreshAt)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

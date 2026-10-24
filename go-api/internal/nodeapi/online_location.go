@@ -48,25 +48,31 @@ func (s *DBService) saveOnlineLocationObservations(ctx context.Context, observat
 			values = append(values, fmt.Sprintf("($%d::integer,$%d::text,$%d::text,$%d::text,$%d::text,$%d::text,$%d::text,$%d::bigint)", base, base+1, base+2, base+3, base+4, base+5, base+6, base+7))
 			args = append(args, id, location.CountryCode, location.CountryName, location.ProvinceCode, location.ProvinceName, location.CityName, location.UnknownReason, observation.SeenAt)
 		}
+		// This is one durable last-known location per user. An unresolved report
+		// must neither erase a valid location nor renew its observation timestamp.
+		// A valid observation also repairs an unknown row or an invalid future
+		// timestamp, while ordinary out-of-order observations remain ignored.
 		_, err := s.db.ExecContext(ctx, `WITH incoming(user_id,country_code,country_name,province_code,province_name,city_name,unknown_reason,last_seen_at) AS (VALUES `+strings.Join(values, ",")+`)
 INSERT INTO v2_user_online_location AS current (user_id,country_code,country_name,province_code,province_name,city_name,unknown_reason,last_seen_at)
 SELECT incoming.* FROM incoming JOIN v2_user u ON u.id = incoming.user_id
+WHERE incoming.last_seen_at > 0
+AND incoming.last_seen_at <= FLOOR(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP))::bigint
 ORDER BY incoming.user_id
 ON CONFLICT (user_id) DO UPDATE SET
 country_code = EXCLUDED.country_code, country_name = EXCLUDED.country_name,
 province_code = EXCLUDED.province_code, province_name = EXCLUDED.province_name,
 city_name = EXCLUDED.city_name,
 unknown_reason = EXCLUDED.unknown_reason, last_seen_at = EXCLUDED.last_seen_at
-WHERE (
+WHERE (EXCLUDED.country_code <> '' OR current.country_code = '')
+AND (
 EXCLUDED.last_seen_at > current.last_seen_at OR
-(current.country_code = '' AND EXCLUDED.country_code <> ''
-AND EXCLUDED.last_seen_at >= current.last_seen_at - 100) OR
+(EXCLUDED.country_code <> '' AND current.last_seen_at > FLOOR(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP))::bigint) OR
+(current.country_code = '' AND EXCLUDED.country_code <> '') OR
 (EXCLUDED.last_seen_at = current.last_seen_at AND current.country_code = EXCLUDED.country_code AND (
 (current.province_code = '' AND EXCLUDED.province_code <> '') OR
 (current.province_code = EXCLUDED.province_code AND current.city_name = '' AND EXCLUDED.city_name <> ''))))
-AND NOT (EXCLUDED.country_code = '' AND current.country_code <> ''
-AND EXCLUDED.last_seen_at - current.last_seen_at <= 600)
 AND (
+(EXCLUDED.country_code <> '' AND current.last_seen_at > FLOOR(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP))::bigint) OR
 EXCLUDED.last_seen_at - current.last_seen_at >= 60 OR
 (current.country_code,current.country_name,current.province_code,current.province_name,current.city_name,current.unknown_reason)
 IS DISTINCT FROM (EXCLUDED.country_code,EXCLUDED.country_name,EXCLUDED.province_code,EXCLUDED.province_name,EXCLUDED.city_name,EXCLUDED.unknown_reason))`, args...)

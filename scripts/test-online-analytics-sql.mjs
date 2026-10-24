@@ -18,13 +18,12 @@ let checks = 0
 const checked = () => { checks += 1 }
 
 try {
-  const [installSQL, updateSQL, schemaGo, statsGo, collectorGo, cleanupGo, usersGo, refreshGo] = await Promise.all([
+  const [installSQL, updateSQL, schemaGo, statsGo, collectorGo, usersGo, refreshGo] = await Promise.all([
     read('database/install.pgsql.sql'),
     read('database/update.pgsql.sql'),
     read('go-api/internal/platform/postgres/online_location_schema.go'),
     read('go-api/internal/admin/stat_online.go'),
     read('go-api/internal/nodeapi/online_location.go'),
-    read('go-api/internal/admin/cleanup.go'),
     read('go-api/internal/admin/stat_online_users.go'),
     read('go-api/internal/nodeapi/online_location_refresh.go'),
   ])
@@ -40,8 +39,6 @@ try {
   assert.equal(schemaSQL.length, 4, 'expected lock, table, city migration and index DDL')
   const upsertParts = collectorGo.match(/`(WITH incoming[\s\S]*?VALUES )`\+strings.Join\(values, ","\)\+`([\s\S]*?)`, args\.\.\./)
   assert.ok(upsertParts, 'failed to extract production collector SQL')
-  const cleanupSQL = [...cleanupGo.matchAll(/`([\s\S]*?)`/g)].map((match) => match[1]).find((sql) => sql.includes('DELETE FROM v2_user_online_location'))
-  assert.ok(cleanupSQL, 'failed to extract production cleanup SQL')
 
   // Run the actual complete install/update scripts, not duplicated test DDL.
   await db.exec(installSQL)
@@ -76,7 +73,7 @@ try {
   await insertLocation(1, now, 'CN', '440000', '', '深圳市')
   await insertLocation(2, now - 600)
   await insertLocation(3, now) // Recent location alone cannot make a user online.
-  await insertLocation(10, now - 601)
+  await insertLocation(10, now - 60 * 86400, 'CN', '440000', '', '深圳市')
   await insertLocation(11, now + 1)
   await insertLocation(12, now, '', '', 'database_unavailable')
   const statistics = (await db.query(statsSQL, [now - 600, now, now - 86400, now - 604800])).rows
@@ -89,17 +86,19 @@ try {
     return { total: Number(result[0].total), rows: result.filter((row) => Number(row.id) > 0) }
   }
   assert.equal((await users()).total, summary.current_online)
-  assert.deepEqual((await users('city', { province: '440000', city: '深圳' })).rows.map((row) => row.id), [1])
+  assert.deepEqual((await users('city', { province: '440000', city: '深圳' })).rows.map((row) => row.id), [1, 10])
   assert.deepEqual((await users('city', { province: '440000' })).rows.map((row) => row.id), [2])
-  assert.equal((await users('province', { province: '440000' })).total, 2)
-  assert.equal((await users('country', { country: 'CN' })).total, 2)
-  for (const reason of ['not_reported', 'location_stale', 'invalid_timestamp', 'database_unavailable']) {
+  assert.equal((await users('province', { province: '440000' })).total, 3)
+  assert.equal((await users('country', { country: 'CN' })).total, 3)
+  for (const reason of ['not_reported', 'invalid_timestamp', 'database_unavailable']) {
     const unknown = await users('unknown', { reason })
     assert.equal(unknown.total, 1)
     assert.equal(unknown.rows[0].unknown_reason, reason)
     assert.equal(unknown.rows[0].country_code, '')
   }
-  assert.equal((await users('unknown')).total, 4)
+  assert.equal((await users('unknown')).total, 3)
+  assert.equal((await users('unknown', { reason: 'location_stale' })).total, 0)
+  assert.equal((await users('city', { province: '440000', city: '深圳' })).rows.find((row) => row.id === 10).location_seen_at, now - 60 * 86400)
   assert.deepEqual((await users('all', { limit: 2 })).rows.map((row) => row.id), [1, 9])
   assert.deepEqual((await users('all', { limit: 2, offset: 2 })).rows.map((row) => row.id), [10, 11])
   assert.deepEqual(await users('all', { limit: 2, offset: 20 }), { total: 6, rows: [] })
@@ -116,9 +115,9 @@ try {
   await insertLocation(14, now, 'CN', '320000', '', '深圳市')
   await insertLocation(15, now, 'US', '440000', '', '深圳市')
   await insertLocation(16, now, 'ZZ', '440000', '', '深圳市')
-  assert.deepEqual((await users('city', { province: '440000', city: '深圳' })).rows.map((row) => row.id), [1, 13])
+  assert.deepEqual((await users('city', { province: '440000', city: '深圳' })).rows.map((row) => row.id), [1, 10, 13])
   assert.equal((await users('city', { province: '320000', city: '深圳' })).total, 1)
-  assert.equal((await users('province', { province: '440000' })).total, 3)
+  assert.equal((await users('province', { province: '440000' })).total, 4)
   assert.equal((await users('unknown', { reason: 'not_found' })).total, 1)
   assert.equal((await users('country', { country: 'US' })).rows[0].city_name, '')
   await db.query("UPDATE v2_user_online_location SET city_name='unknown' WHERE user_id=2")
@@ -140,13 +139,13 @@ try {
   checked() // Cache repair only scans online users with live keys, bounded by cursor and page size.
   const regions = statistics.filter((row) => row.kind === 'region')
   assert.equal(regions.reduce((sum, row) => sum + Number(row.users), 0), 6)
-  assert.equal(regions.filter((row) => row.country_code === 'CN').reduce((sum, row) => sum + Number(row.users), 0), 2)
-  assert.equal(regions.find((row) => row.city_name === '深圳市')?.users, 1)
+  assert.equal(regions.filter((row) => row.country_code === 'CN').reduce((sum, row) => sum + Number(row.users), 0), 3)
+  assert.equal(regions.find((row) => row.city_name === '深圳市')?.users, 2)
   assert.equal(regions.find((row) => row.country_code === 'CN' && row.city_name === '')?.users, 1)
-  for (const reason of ['not_reported', 'location_stale', 'invalid_timestamp', 'database_unavailable']) {
+  for (const reason of ['not_reported', 'invalid_timestamp', 'database_unavailable']) {
     const row = regions.find((item) => item.unknown_reason === reason)
     assert.equal(row?.users, 1, `missing expected unknown bucket ${reason}`)
-    assert.equal(row?.country_code, '', `stale/unknown location must not be on the map: ${reason}`)
+    assert.equal(row?.country_code, '', `unknown location must not be on the map: ${reason}`)
   }
   checked()
 
@@ -185,9 +184,17 @@ try {
   assert.equal((await location(1)).country_code, 'CN')
   assert.equal((await location(1)).last_seen_at, now + 62)
   await upsert([unknownRecord(1, now + 663)])
-  assert.equal((await location(1)).country_code, '')
-  assert.equal((await location(1)).last_seen_at, now + 663)
-  checked() // Failed reports cannot replace or renew a location still within 600 seconds.
+  assert.equal((await location(1)).country_code, 'CN')
+  assert.equal((await location(1)).province_code, '110000')
+  assert.equal((await location(1)).last_seen_at, now + 62)
+  await upsert([record(7, now - 60 * 86400)])
+  await upsert([unknownRecord(7, now)])
+  assert.equal((await location(7)).city_name, '深圳市')
+  assert.equal((await location(7)).last_seen_at, now - 60 * 86400)
+  checked() // Failed reports never erase or renew a last-known region, even months later.
+  await upsert([unknownRecord(9, now + 663)])
+  await upsert([record(9, now + 663, '440000')])
+  assert.equal((await location(9)).province_code, '440000')
   await upsert([record(1, now + 663, '440000')])
   assert.equal((await location(1)).province_code, '440000')
   await upsert([record(1, now + 663, '110000')])
@@ -209,25 +216,43 @@ try {
   assert.equal((await location(2)).city_name, '深圳市')
   assert.equal((await location(2)).last_seen_at, now + 701)
   checked() // Same-second reports can fill a missing province and city, without replacing a known city.
-  await upsert([unknownRecord(1, now + 1400)])
-  await upsert([record(1, now + 1349)])
-  assert.equal((await location(1)).country_code, 'CN')
-  assert.equal((await location(1)).last_seen_at, now + 1349)
-  await upsert([unknownRecord(1, now + 2000)])
-  await upsert([record(1, now + 1899)])
-  assert.equal((await location(1)).country_code, '')
-  assert.equal((await location(1)).last_seen_at, now + 2000)
-  checked() // A still-live cached observation can repair unknown without pretending its time is newer.
+  await upsert([unknownRecord(11, now + 1400)])
+  await upsert([record(11, now + 1349)])
+  assert.equal((await location(11)).country_code, 'CN')
+  assert.equal((await location(11)).last_seen_at, now + 1349)
+  await upsert([unknownRecord(12, now + 2000)])
+  await upsert([record(12, now + 1899)])
+  assert.equal((await location(12)).country_code, 'CN')
+  assert.equal((await location(12)).last_seen_at, now + 1899)
+  checked() // An effective observation can repair unknown without pretending its time is newer.
+  const futureAt = Number((await db.query('SELECT FLOOR(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP))::bigint + 3600 AS ts')).rows[0].ts)
+  await db.query('UPDATE v2_user_online_location SET last_seen_at=$1 WHERE user_id=12', [futureAt])
+  await upsert([unknownRecord(12, now)])
+  assert.equal((await location(12)).country_code, 'CN')
+  assert.equal((await location(12)).last_seen_at, futureAt)
+  await upsert([record(12, now)])
+  assert.equal((await location(12)).last_seen_at, now)
+  await upsert([record(12, futureAt, '110000'), record(9, 0, '110000')])
+  assert.equal((await location(12)).province_code, '440000')
+  assert.equal((await location(9)).province_code, '440000')
+  checked() // A valid report repairs a future record; zero/future reports cannot overwrite valid geography.
   await db.query('DELETE FROM v2_user WHERE id=$1', [2])
   assert.equal(await location(2), undefined)
   checked() // Deleting an account also deletes its summary.
 
-  await insertLocation(7, now - 604801)
-  await insertLocation(8, now - 604800)
-  await db.query(cleanupSQL, [now - 604800, 100])
-  assert.equal(await location(7), undefined)
-  assert.ok(await location(8))
-  checked() // Cleanup excludes the inclusive seven-day boundary.
+  await upsert([record(7, now - 60 * 86400 + 1, '440000', '广州市')])
+  assert.equal((await users('all', { search: '7', id: 7 })).total, 0)
+  await db.query('UPDATE v2_user SET t=$1 WHERE id=7', [now])
+  const returning = await users('city', { province: '440000', city: '广州' })
+  assert.deepEqual(returning.rows.map((row) => row.id), [7])
+  assert.equal(returning.rows[0].location_seen_at, now - 60 * 86400 + 1)
+  await db.query('UPDATE v2_user SET t=$1 WHERE id=7', [now - 601])
+  assert.equal((await users('city', { province: '440000', city: '广州' })).total, 0)
+  checked() // Old geography survives a user's return but never keeps an offline account online.
+  await insertLocation(8, 0)
+  await db.query('UPDATE v2_user SET t=$1 WHERE id=8', [now])
+  assert.equal((await users('unknown', { reason: 'invalid_timestamp', search: '8', id: 8 })).total, 1)
+  checked() // Invalid timestamps remain unknown despite removal of the location age cutoff.
 
   await db.exec('DELETE FROM v2_user')
   const empty = (await db.query(statsSQL, [now - 600, now, now - 86400, now - 604800])).rows

@@ -48,8 +48,8 @@ type OnlineUsers struct {
 }
 
 // Normalization mirrors the statistics aggregator and NormalizeChinaCityName.
-// The shared live_locations CTE keeps activity and location freshness identical
-// to the map. Count and page come from the same PostgreSQL statement snapshot;
+// The shared live_locations CTE keeps the activity window and last-known
+// geography identical to the map. Count and page share one SQL snapshot;
 // even a page beyond the last result returns the real count and an empty list.
 const onlineUsersQuery = onlineLocationsCTE + `,
 checked_locations AS (
