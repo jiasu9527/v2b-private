@@ -10,6 +10,7 @@ import zhCN from 'antd/locale/zh_CN';
 import Login from './pages/Login';
 import SupportWorkbenchPage from './pages/SupportWorkbenchPage';
 import Dashboard from './pages/Dashboard';
+import OnlineAnalyticsPage from './pages/OnlineAnalyticsPage';
 import UserPage from './pages/UserPage';
 import OrderPage from './pages/OrderPage';
 import AppleIDPage from './pages/AppleIDPage';
@@ -34,7 +35,6 @@ import { checkLogin, clearAuth, getAuth, getCurrentUserInfo, getSettings, pathAd
 
 const { Header, Sider, Content } = Layout;
 const MOBILE_QUERY = '(max-width: 768px)';
-const OnlineAnalyticsPage = React.lazy(() => import('./pages/OnlineAnalyticsPage'));
 
 function getIsMobileViewport() {
   if (typeof window === 'undefined' || !window.matchMedia) return false;
@@ -85,7 +85,7 @@ function normalizePath() {
 function Page({ path }: { path: string }) {
   const route = path.split('?')[0];
   if (route === '/dashboard') return <Dashboard />;
-  if (route === '/dashboard/online') return <React.Suspense fallback={<div style={{ padding: 32 }}><Spin tip="正在加载在线分析"><div style={{ height: 120 }} /></Spin></div>}><OnlineAnalyticsPage /></React.Suspense>;
+  if (route === '/dashboard/online') return <OnlineAnalyticsPage />;
   if (route === '/user') return <UserPage />;
   if (route === '/support/staff' || route === '/support/operations') return <UserPage initialTab="staff-operations" />;
   if (route === '/plan') return <PlanPage />;
