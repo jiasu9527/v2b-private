@@ -19,6 +19,7 @@ type Location struct {
 	CountryName   string `json:"country_name"`
 	ProvinceCode  string `json:"province_code"`
 	ProvinceName  string `json:"province_name"`
+	CityName      string `json:"city_name"`
 	Known         bool   `json:"known"`
 	UnknownReason string `json:"unknown_reason,omitempty"`
 }
@@ -189,5 +190,35 @@ func parseRegion(raw string) Location {
 		location.CountryName = "中国台湾"
 		location.ProvinceCode, location.ProvinceName = "710000", "台湾"
 	}
+	if location.ProvinceCode != "" {
+		location.CityName = normalizeCityName(parts[2])
+	}
 	return location
+}
+
+// Keep the database's city evidence separate from map-boundary matching. An
+// absent city must not turn into the province capital or a fabricated district.
+func normalizeCityName(raw string) string {
+	name := strings.TrimSpace(raw)
+	switch strings.ToLower(name) {
+	case "", "0", "未知", "未知城市", "城市未知", "unknown", "null", "n/a", "-":
+		return ""
+	}
+	if len([]rune(name)) > 128 {
+		return ""
+	}
+	return name
+}
+
+// NormalizeChinaCityName provides a stable province-local key without claiming
+// a match against a particular map edition. Real city evidence stays visible in
+// the ranking even when that city's polygon is missing from the map.
+func NormalizeChinaCityName(raw string) string {
+	name := normalizeCityName(raw)
+	for _, suffix := range []string{"地区", "市"} {
+		if strings.HasSuffix(name, suffix) && len([]rune(name)) > len([]rune(suffix)) {
+			return strings.TrimSuffix(name, suffix)
+		}
+	}
+	return name
 }

@@ -29,7 +29,7 @@ try {
   const statsSQL = statsGo.match(/const onlineStatsQuery = `([\s\S]*?)`/)?.[1]
   assert.ok(statsSQL, 'failed to extract production statistics SQL')
   const schemaSQL = [...schemaGo.matchAll(/`([\s\S]*?)`/g)].map((match) => match[1])
-  assert.equal(schemaSQL.length, 3, 'expected lock, table and index DDL')
+  assert.equal(schemaSQL.length, 4, 'expected lock, table, city migration and index DDL')
   const upsertParts = collectorGo.match(/`(WITH incoming[\s\S]*?VALUES )`\+strings.Join\(values, ","\)\+`([\s\S]*?)`, args\.\.\./)
   assert.ok(upsertParts, 'failed to extract production collector SQL')
   const cleanupSQL = [...cleanupGo.matchAll(/`([\s\S]*?)`/g)].map((match) => match[1]).find((sql) => sql.includes('DELETE FROM v2_user_online_location'))
@@ -37,8 +37,14 @@ try {
 
   // Run the actual complete install/update scripts, not duplicated test DDL.
   await db.exec(installSQL)
+  await db.exec('ALTER TABLE v2_user_online_location DROP COLUMN city_name')
+  await db.query('INSERT INTO v2_user(id,email,password,uuid,token,t,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$6,$6)', [900, 'legacy@example.test', 'unused-test-hash', 'legacy-user', 'legacy-token', now])
+  await db.query("INSERT INTO v2_user_online_location(user_id,country_code,country_name,province_code,province_name,last_seen_at) VALUES (900,'CN','中国','440000','广东',$1)", [now])
   await db.exec(updateSQL)
   await db.exec(updateSQL)
+  assert.deepEqual((await db.query('SELECT province_code,city_name,last_seen_at FROM v2_user_online_location WHERE user_id=900')).rows, [{ province_code: '440000', city_name: '', last_seen_at: now }])
+  checked() // SQL update upgrades old rows without inventing a city or deleting data.
+  await db.exec('ALTER TABLE v2_user_online_location DROP COLUMN city_name')
   for (let attempt = 0; attempt < 2; attempt += 1) {
     await db.transaction(async (transaction) => {
       for (const statement of schemaSQL) await transaction.exec(statement)
@@ -46,7 +52,9 @@ try {
   }
   checked()
   const columns = await db.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'v2_user_online_location' ORDER BY ordinal_position")
-  assert.deepEqual(columns.rows.map((row) => row.column_name), ['user_id', 'country_code', 'country_name', 'province_code', 'province_name', 'unknown_reason', 'last_seen_at'])
+  assert.deepEqual(columns.rows.map((row) => row.column_name).sort(), ['user_id', 'country_code', 'country_name', 'province_code', 'province_name', 'city_name', 'unknown_reason', 'last_seen_at'].sort())
+  assert.deepEqual((await db.query('SELECT province_code,city_name,last_seen_at FROM v2_user_online_location WHERE user_id=900')).rows, [{ province_code: '440000', city_name: '', last_seen_at: now }])
+  await db.exec('DELETE FROM v2_user WHERE id=900')
   checked()
 
   const activities = [now, now - 600, now - 601, now - 86400, now - 86401, now - 604800, now - 604801, 0, now, now, now, now]
@@ -54,10 +62,10 @@ try {
     const id = index + 1
     await db.query('INSERT INTO v2_user(id,email,password,uuid,token,t,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$7)', [id, `user-${id}@example.test`, 'unused-test-hash', `fixture-user-${id}`, `fixture-token-${id}`, activity, now])
   }
-  const insertLocation = async (id, at, country = 'CN', province = '440000', reason = '') => {
-    await db.query('INSERT INTO v2_user_online_location(user_id,country_code,country_name,province_code,province_name,unknown_reason,last_seen_at) VALUES ($1,$2,$3,$4,$5,$6,$7)', [id, country, country === 'CN' ? '中国' : '', province, province ? '广东' : '', reason, at])
+  const insertLocation = async (id, at, country = 'CN', province = '440000', reason = '', city = '') => {
+    await db.query('INSERT INTO v2_user_online_location(user_id,country_code,country_name,province_code,province_name,city_name,unknown_reason,last_seen_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)', [id, country, country === 'CN' ? '中国' : '', province, province ? '广东' : '', city, reason, at])
   }
-  await insertLocation(1, now)
+  await insertLocation(1, now, 'CN', '440000', '', '深圳市')
   await insertLocation(2, now - 600)
   await insertLocation(3, now) // Recent location alone cannot make a user online.
   await insertLocation(10, now - 601)
@@ -69,7 +77,9 @@ try {
   checked()
   const regions = statistics.filter((row) => row.kind === 'region')
   assert.equal(regions.reduce((sum, row) => sum + Number(row.users), 0), 6)
-  assert.equal(regions.find((row) => row.country_code === 'CN')?.users, 2)
+  assert.equal(regions.filter((row) => row.country_code === 'CN').reduce((sum, row) => sum + Number(row.users), 0), 2)
+  assert.equal(regions.find((row) => row.city_name === '深圳市')?.users, 1)
+  assert.equal(regions.find((row) => row.country_code === 'CN' && row.city_name === '')?.users, 1)
   for (const reason of ['not_reported', 'location_stale', 'invalid_timestamp', 'database_unavailable']) {
     const row = regions.find((item) => item.unknown_reason === reason)
     assert.equal(row?.users, 1, `missing expected unknown bucket ${reason}`)
@@ -79,11 +89,11 @@ try {
 
   const upsert = async (records) => {
     const parameters = records.flat()
-    const values = records.map((_, index) => `(${Array.from({ length: 7 }, (unused, field) => `$${index * 7 + field + 1}::${field === 0 ? 'integer' : field === 6 ? 'bigint' : 'text'}`).join(',')})`).join(',')
+    const values = records.map((_, index) => `(${Array.from({ length: 8 }, (unused, field) => `$${index * 8 + field + 1}::${field === 0 ? 'integer' : field === 7 ? 'bigint' : 'text'}`).join(',')})`).join(',')
     return db.query(upsertParts[1] + values + upsertParts[2], parameters)
   }
   const location = async (id) => (await db.query('SELECT * FROM v2_user_online_location WHERE user_id=$1', [id])).rows[0]
-  const record = (id, at, province = '440000') => [id, 'CN', '中国', province, province === '440000' ? '广东' : '北京', '', at]
+  const record = (id, at, province = '440000', city = province === '440000' ? '深圳市' : '北京市') => [id, 'CN', '中国', province, province === '440000' ? '广东' : '北京', city, '', at]
   await db.exec('TRUNCATE v2_user_online_location')
   await upsert([record(2, now), record(1, now), record(99999, now)])
   assert.equal((await db.query('SELECT COUNT(*) AS count FROM v2_user_online_location')).rows[0].count, 2)
@@ -98,8 +108,12 @@ try {
   await upsert([record(1, now + 60)])
   assert.equal((await location(1)).last_seen_at, now + 60)
   checked() // Unchanged locations refresh at the 60-second boundary.
-  await upsert([record(1, now + 61, '110000')])
+  await upsert([record(1, now + 61, '440000', '广州市')])
+  assert.equal((await location(1)).city_name, '广州市')
   assert.equal((await location(1)).last_seen_at, now + 61)
+  checked() // Moving cities within one province refreshes without waiting a minute.
+  await upsert([record(1, now + 62, '110000')])
+  assert.equal((await location(1)).last_seen_at, now + 62)
   assert.equal((await location(1)).province_code, '110000')
   checked() // A newer changed location updates without waiting a minute.
   await db.query('DELETE FROM v2_user WHERE id=$1', [2])

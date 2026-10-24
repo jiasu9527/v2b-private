@@ -37,7 +37,7 @@ func (s *DBService) recordOnlineLocations(ctx context.Context, users map[int64][
 			return err
 		}
 		end := min(offset+batchSize, len(userIDs))
-		args := make([]any, 0, (end-offset)*7)
+		args := make([]any, 0, (end-offset)*8)
 		values := make([]string, 0, end-offset)
 		for _, id := range userIDs[offset:end] {
 			if err := ctx.Err(); err != nil {
@@ -45,21 +45,22 @@ func (s *DBService) recordOnlineLocations(ctx context.Context, users map[int64][
 			}
 			location := selectOnlineLocation(s.onlineGeo, users[id])
 			base := len(args) + 1
-			values = append(values, fmt.Sprintf("($%d::integer,$%d::text,$%d::text,$%d::text,$%d::text,$%d::text,$%d::bigint)", base, base+1, base+2, base+3, base+4, base+5, base+6))
-			args = append(args, id, location.CountryCode, location.CountryName, location.ProvinceCode, location.ProvinceName, location.UnknownReason, now)
+			values = append(values, fmt.Sprintf("($%d::integer,$%d::text,$%d::text,$%d::text,$%d::text,$%d::text,$%d::text,$%d::bigint)", base, base+1, base+2, base+3, base+4, base+5, base+6, base+7))
+			args = append(args, id, location.CountryCode, location.CountryName, location.ProvinceCode, location.ProvinceName, location.CityName, location.UnknownReason, now)
 		}
-		_, err := s.db.ExecContext(ctx, `WITH incoming(user_id,country_code,country_name,province_code,province_name,unknown_reason,last_seen_at) AS (VALUES `+strings.Join(values, ",")+`)
-INSERT INTO v2_user_online_location AS current (user_id,country_code,country_name,province_code,province_name,unknown_reason,last_seen_at)
+		_, err := s.db.ExecContext(ctx, `WITH incoming(user_id,country_code,country_name,province_code,province_name,city_name,unknown_reason,last_seen_at) AS (VALUES `+strings.Join(values, ",")+`)
+INSERT INTO v2_user_online_location AS current (user_id,country_code,country_name,province_code,province_name,city_name,unknown_reason,last_seen_at)
 SELECT incoming.* FROM incoming JOIN v2_user u ON u.id = incoming.user_id
 ORDER BY incoming.user_id
 ON CONFLICT (user_id) DO UPDATE SET
 country_code = EXCLUDED.country_code, country_name = EXCLUDED.country_name,
 province_code = EXCLUDED.province_code, province_name = EXCLUDED.province_name,
+city_name = EXCLUDED.city_name,
 unknown_reason = EXCLUDED.unknown_reason, last_seen_at = EXCLUDED.last_seen_at
 WHERE EXCLUDED.last_seen_at > current.last_seen_at AND (
 EXCLUDED.last_seen_at - current.last_seen_at >= 60 OR
-(current.country_code,current.country_name,current.province_code,current.province_name,current.unknown_reason)
-IS DISTINCT FROM (EXCLUDED.country_code,EXCLUDED.country_name,EXCLUDED.province_code,EXCLUDED.province_name,EXCLUDED.unknown_reason))`, args...)
+(current.country_code,current.country_name,current.province_code,current.province_name,current.city_name,current.unknown_reason)
+IS DISTINCT FROM (EXCLUDED.country_code,EXCLUDED.country_name,EXCLUDED.province_code,EXCLUDED.province_name,EXCLUDED.city_name,EXCLUDED.unknown_reason))`, args...)
 		if err != nil {
 			return fmt.Errorf("save online location summary: %w", err)
 		}

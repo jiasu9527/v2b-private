@@ -88,7 +88,7 @@ func TestRecordOnlineLocationsBatchesUsersAndStoresNoRawIP(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	location := ipgeo.Location{Known: true, CountryCode: "CN", CountryName: "中国", ProvinceCode: "440000", ProvinceName: "广东"}
+	location := ipgeo.Location{Known: true, CountryCode: "CN", CountryName: "中国", ProvinceCode: "440000", ProvinceName: "广东", CityName: "深圳市"}
 	resolver := &locationTestResolver{locations: map[string]ipgeo.Location{"113.92.157.29": location}}
 	s := (&DBService{db: db}).WithOnlineGeoResolver(resolver)
 	const now = int64(1700000000)
@@ -98,13 +98,13 @@ func TestRecordOnlineLocationsBatchesUsersAndStoresNoRawIP(t *testing.T) {
 	}
 	for start := int64(1); start <= 501; start += 250 {
 		end := min(start+250, int64(502))
-		args := make([]driver.Value, 0, (end-start)*7)
+		args := make([]driver.Value, 0, (end-start)*8)
 		for id := start; id < end; id++ {
 			// Exact arguments assert one aggregate row per user; no original IP or
 			// device label may be passed into this analytics table.
-			args = append(args, id, "CN", "中国", "440000", "广东", "", now)
+			args = append(args, id, "CN", "中国", "440000", "广东", "深圳市", "", now)
 		}
-		mock.ExpectExec(`(?s)WITH incoming\(user_id,country_code,country_name,province_code,province_name,unknown_reason,last_seen_at\).*INSERT INTO v2_user_online_location.*JOIN v2_user.*ON CONFLICT \(user_id\) DO UPDATE`).
+		mock.ExpectExec(`(?s)WITH incoming\(user_id,country_code,country_name,province_code,province_name,city_name,unknown_reason,last_seen_at\).*INSERT INTO v2_user_online_location.*JOIN v2_user.*ON CONFLICT \(user_id\) DO UPDATE`).
 			WithArgs(args...).WillReturnResult(sqlmock.NewResult(0, end-start))
 	}
 	if err := s.recordOnlineLocations(context.Background(), users, now); err != nil {
@@ -144,7 +144,7 @@ func TestReportAliveAcceptsReportWhenLocationStorageFails(t *testing.T) {
 	}
 	defer db.Close()
 	resolver := &locationTestResolver{locations: map[string]ipgeo.Location{
-		"113.92.157.29": {Known: true, CountryCode: "CN", CountryName: "中国", ProvinceCode: "440000", ProvinceName: "广东"},
+		"113.92.157.29": {Known: true, CountryCode: "CN", CountryName: "中国", ProvinceCode: "440000", ProvinceName: "广东", CityName: "深圳市"},
 	}}
 	s := NewDBService(config.Config{DeviceLimitMode: 1}, db, nil).WithOnlineGeoResolver(resolver)
 	mock.ExpectQuery(`SELECT v, expire_at FROM v2_runtime_kv WHERE k = \$1 LIMIT 1`).
@@ -153,7 +153,7 @@ func TestReportAliveAcceptsReportWhenLocationStorageFails(t *testing.T) {
 		WithArgs("ALIVE_IP_USER_9", aliveStateMatcher{wantAliveIP: 1}, sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`(?s)WITH incoming.*INSERT INTO v2_user_online_location`).
-		WithArgs(int64(9), "CN", "中国", "440000", "广东", "", sqlmock.AnyArg()).
+		WithArgs(int64(9), "CN", "中国", "440000", "广东", "深圳市", "", sqlmock.AnyArg()).
 		WillReturnError(errors.New("analytics table unavailable"))
 	err = s.ReportAlive(context.Background(), AliveReportRequest{NodeID: 2, NodeType: "v2node", Users: map[int64][]string{9: {"113.92.157.29_android", "113.92.157.29_ios"}}})
 	if err != nil {

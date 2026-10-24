@@ -30,3 +30,10 @@ download maps from a third-party CDN or send user data to a map service.
 Maps communicate approximate IP-derived regional statistics, not precise user
 positions or a statement about boundary status. Unknown locations are never
 assigned to a map polygon.
+# City drill-down maps
+
+Province drill-down resources are loaded individually from
+`admin-src/public/online-maps/`. See that directory's `README.md` for provenance,
+MIT attribution, whole-region exceptions and reproducible generation.
+`city-map-index.json` is the small importable index; map geometry is not imported
+into the React bundle. `city-map-sources.json` pins every upstream input checksum.

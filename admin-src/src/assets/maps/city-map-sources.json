@@ -1,0 +1,170 @@
+{
+  "source": "https://github.com/zhChuXiao/ChinaGeoJson",
+  "revision": "7aa2c5fabc6a892015625898c3482874b233f9de",
+  "license_sha256": "df8936918b4bd265e3823db2e385c3ad2d449f889c1f62821d7a2c4534266f61",
+  "provinces": {
+    "130000": {
+      "name": "河北省",
+      "source_path": "province/河北省.json",
+      "sha256": "ff01b6203016a203b77da2e4d2553196e2de06a0899b7ba6db992ff492c14689",
+      "features": 11
+    },
+    "140000": {
+      "name": "山西省",
+      "source_path": "province/山西省.json",
+      "sha256": "af9d195c8de9230718b2d1add45209cd02b46409ed61a735595263182ef0f59d",
+      "features": 11
+    },
+    "150000": {
+      "name": "内蒙古自治区",
+      "source_path": "province/内蒙古自治区.json",
+      "sha256": "9a4a3b95d903b064c8e815b78d4f80f391b4bdafd3b52dabd854755457385660",
+      "features": 12
+    },
+    "210000": {
+      "name": "辽宁省",
+      "source_path": "province/辽宁省.json",
+      "sha256": "26dd493472600bcb263311cda20436d4f9211f1f558951e61abd274486b9edac",
+      "features": 14
+    },
+    "220000": {
+      "name": "吉林省",
+      "source_path": "province/吉林省.json",
+      "sha256": "72261a56d64a6ab6836004a1741ec8a0428694577dbd0aced6d37c40ef1facac",
+      "features": 9
+    },
+    "230000": {
+      "name": "黑龙江省",
+      "source_path": "province/黑龙江省.json",
+      "sha256": "a551516ef955d121dc3a8f82937a69d68e334bef0d79e48fe36e4b18405e7962",
+      "features": 13
+    },
+    "320000": {
+      "name": "江苏省",
+      "source_path": "province/江苏省.json",
+      "sha256": "20f14df1bf684160a0837037573609b08fc6ae3b1523e9eaa6db213cb15a80fa",
+      "features": 13
+    },
+    "330000": {
+      "name": "浙江省",
+      "source_path": "province/浙江省.json",
+      "sha256": "3d7659e4dcc04ebe7c93564baddfac2ef015067164113ff69c71f42cab68ffdb",
+      "features": 11
+    },
+    "340000": {
+      "name": "安徽省",
+      "source_path": "province/安徽省.json",
+      "sha256": "7ca3290e0458f34086df4d61fa9804e2c624d55dfe5f8f6a841844b5dcd43207",
+      "features": 16
+    },
+    "350000": {
+      "name": "福建省",
+      "source_path": "province/福建省.json",
+      "sha256": "05a1991040c84da2a6768aacdc60b67394e736b0a6b4ab4645a44295f30552f6",
+      "features": 9
+    },
+    "360000": {
+      "name": "江西省",
+      "source_path": "province/江西省.json",
+      "sha256": "707d96517f21b1a0778bdcde4c6da7a27a15675700bdab41cf784ef540c75bc3",
+      "features": 11
+    },
+    "370000": {
+      "name": "山东省",
+      "source_path": "province/山东省.json",
+      "sha256": "b082d44958d513bca6062a077f3fcdef3c3c0506b6e787e07229cfe41cab5fbe",
+      "features": 16
+    },
+    "410000": {
+      "name": "河南省",
+      "source_path": "province/河南省.json",
+      "sha256": "68a5fd28c74a2a3dafb3c8d1563240b50326909baa4e5ed4d587f5bf1e5f9a45",
+      "features": 18
+    },
+    "420000": {
+      "name": "湖北省",
+      "source_path": "province/湖北省.json",
+      "sha256": "5d184feb1c548b78ac3db3c0147ec6e2bff66ca81b9ddbcccb7666bd329d2b9e",
+      "features": 17
+    },
+    "430000": {
+      "name": "湖南省",
+      "source_path": "province/湖南省.json",
+      "sha256": "7bf0017502325405e6e47917bf1949f17d97fd37257e8990f2eb552062f37f5a",
+      "features": 14
+    },
+    "440000": {
+      "name": "广东省",
+      "source_path": "province/广东省.json",
+      "sha256": "67ba423f5b30f288f8bbef631514e5e9a601d8b791b58a966c46cc34013218fa",
+      "features": 21
+    },
+    "450000": {
+      "name": "广西壮族自治区",
+      "source_path": "province/广西壮族自治区.json",
+      "sha256": "f1ba9c7d6cd34dc468e09ca0454d258416d4dd0db646736cf37ca67be3e65aa1",
+      "features": 14
+    },
+    "460000": {
+      "name": "海南省",
+      "source_path": "province/海南省.json",
+      "sha256": "76fa43f20019821c87cae25d28893d508900764403f09c41b4d2c76bd6523900",
+      "features": 19
+    },
+    "510000": {
+      "name": "四川省",
+      "source_path": "province/四川省.json",
+      "sha256": "a07cdafe069d6248d2cbdefa4f1cdbdaee0094282a6823617278522bedc55098",
+      "features": 21
+    },
+    "520000": {
+      "name": "贵州省",
+      "source_path": "province/贵州省.json",
+      "sha256": "01682b408750bbc0bdcff49c77be53814d63eb031734d61e93ae24618e908370",
+      "features": 9
+    },
+    "530000": {
+      "name": "云南省",
+      "source_path": "province/云南省.json",
+      "sha256": "6124593ea63df6e9a918497824ea01bffb19552caa82fb3613d2979d31ae31f8",
+      "features": 16
+    },
+    "540000": {
+      "name": "西藏自治区",
+      "source_path": "province/西藏自治区.json",
+      "sha256": "b46ea534c4d025a6c9f9df72af6bac8e82f56600edd38942cdd7850a5924cd9c",
+      "features": 7
+    },
+    "610000": {
+      "name": "陕西省",
+      "source_path": "province/陕西省.json",
+      "sha256": "be2040c2d3862bced050052fec5534bb8f0831aa49ccfce43a10a191ca696e07",
+      "features": 10
+    },
+    "620000": {
+      "name": "甘肃省",
+      "source_path": "province/甘肃省.json",
+      "sha256": "1b2661136a6e3e21667c4d5e2312ad2a39f262440fe788403d671aefa183a423",
+      "features": 14
+    },
+    "630000": {
+      "name": "青海省",
+      "source_path": "province/青海省.json",
+      "sha256": "2636b269e4d62cfd9dcff9db65aa0d0d418632e0bc3da628b7f1d34ea8a351c2",
+      "features": 8
+    },
+    "640000": {
+      "name": "宁夏回族自治区",
+      "source_path": "province/宁夏回族自治区.json",
+      "sha256": "6b076c8f70e723acf2a1ad33f742a0c9a5fc350e109c285133381bbfcce6b706",
+      "features": 5
+    },
+    "650000": {
+      "name": "新疆维吾尔自治区",
+      "source_path": "province/新疆维吾尔自治区.json",
+      "sha256": "b2eae26e32c60b681b9e6351f59006eee8d082124fd2dab650a45f920b8ccca7",
+      "features": 24
+    }
+  },
+  "single_region_geometry_sha256": "cc291d5cab39be644f3f56bafa6bf5f9558ca74cdaa9dfe6e788eb7e0544c3bc"
+}

@@ -32,6 +32,10 @@ func TestRouterOnlineStatsAdministratorResponse(t *testing.T) {
 			GeneratedAt: 1792830000, OnlineWindowSeconds: 600, CurrentOnline: 9, Unique24h: 25, Unique7d: 90, TotalUsers: 100,
 			GeoLocatedUsers: 7, GeoUnknownUsers: 2, Countries: []admin.OnlineRegion{{Code: "CN", Name: "中国", Users: 7, Share: 77.78}},
 			ChinaProvinces: []admin.OnlineRegion{{Code: "440000", Name: "广东", Users: 7, Share: 77.78}},
+			ChinaCities: []admin.OnlineCity{
+				{ProvinceCode: "440000", Code: "深圳", Name: "深圳", Users: 5, Share: 55.56},
+				{ProvinceCode: "440000", Code: "", Name: "城市未知", Users: 2, Share: 22.22},
+			},
 			UnknownReasons: []admin.OnlineUnknownReason{{Code: "not_reported", Name: "节点尚未上报用户地址", Users: 2}},
 		}}
 		sessions := &fakeSessionService{user: identity}
@@ -54,6 +58,9 @@ func TestRouterOnlineStatsAdministratorResponse(t *testing.T) {
 		}
 		if response.Data.CurrentOnline != 9 || response.Data.Unique24h != 25 || response.Data.Unique7d != 90 || len(response.Data.Countries) != 1 || response.Data.Countries[0].Code != "CN" || len(response.Data.ChinaProvinces) != 1 || response.Data.ChinaProvinces[0].Code != "440000" {
 			t.Fatalf("response mismatch: %+v", response.Data)
+		}
+		if len(response.Data.ChinaCities) != 2 || response.Data.ChinaCities[0].ProvinceCode != "440000" || response.Data.ChinaCities[0].Code != "深圳" || response.Data.ChinaCities[0].Users != 5 || response.Data.ChinaCities[0].Share != 55.56 || response.Data.ChinaCities[1].Code != "" || response.Data.ChinaCities[1].Name != "城市未知" {
+			t.Fatalf("city response mismatch: %+v", response.Data.ChinaCities)
 		}
 	}
 }

@@ -2,7 +2,7 @@
 
 This package uses the official ip2region Go reader and pinned public IPv4 / IPv6
 xdb files. It never sends client IP addresses to an external service. Only
-country / province aggregates need to be persisted by callers; the resolver does
+country / province / city aggregates need to be persisted by callers; the resolver does
 not retain addresses or log lookups.
 
 `scripts/prepare-ipgeo.sh` installs the two data files under `storage/ipgeo` (or
@@ -23,6 +23,14 @@ The data format is `country|province|city|ISP|ISO country code`. Location is an 
 network estimate, not a GPS location: VPN, proxy, mobile-network and provider
 egress can differ from where the user physically is. Missing province information
 does not invent a province and does not discard a valid country.
+
+For China and its regional buckets, `CityName` preserves the city's actual name
+from the database only when a province is known. Empty, zero and unknown city
+values remain unknown. `NormalizeChinaCityName` removes a trailing 市 or 地区 to
+join equivalent names, while retaining full autonomous-prefecture names. It is
+a province-local name key, not an official administrative code. Map availability
+does not determine whether a city is counted; unmatched names stay in the table.
+Municipalities are not extrapolated into districts from city-level evidence.
 
 Country / region codes are ISO 3166-1 alpha-2; China province codes are six-digit
 administrative codes. Hong Kong, Macao and Taiwan retain `HK`, `MO`, `TW` in world

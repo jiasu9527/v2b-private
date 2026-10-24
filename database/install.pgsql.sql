@@ -270,6 +270,7 @@ country_code VARCHAR(2) NOT NULL DEFAULT '',
 country_name VARCHAR(128) NOT NULL DEFAULT '',
 province_code VARCHAR(6) NOT NULL DEFAULT '',
 province_name VARCHAR(128) NOT NULL DEFAULT '',
+city_name VARCHAR(128) NOT NULL DEFAULT '',
 unknown_reason VARCHAR(32) NOT NULL DEFAULT '',
 last_seen_at BIGINT NOT NULL
 );

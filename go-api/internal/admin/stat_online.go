@@ -28,6 +28,16 @@ type OnlineUnknownReason struct {
 	Users int64  `json:"users"`
 }
 
+// Code is a normalized city name within ProvinceCode, not an administrative
+// district code. No map polygon is required to retain a known city's users.
+type OnlineCity struct {
+	ProvinceCode string  `json:"province_code"`
+	Code         string  `json:"code"`
+	Name         string  `json:"name"`
+	Users        int64   `json:"users"`
+	Share        float64 `json:"share"`
+}
+
 type OnlineStats struct {
 	GeneratedAt         int64                 `json:"generated_at"`
 	OnlineWindowSeconds int64                 `json:"online_window_seconds"`
@@ -41,6 +51,7 @@ type OnlineStats struct {
 	GeoCoverage         float64               `json:"geo_coverage"`
 	Countries           []OnlineRegion        `json:"countries"`
 	ChinaProvinces      []OnlineRegion        `json:"china_provinces"`
+	ChinaCities         []OnlineCity          `json:"china_cities"`
 	UnknownReasons      []OnlineUnknownReason `json:"unknown_reasons"`
 	GeoDatabase         ipgeo.GeoStatus       `json:"geo_database"`
 }
@@ -55,6 +66,7 @@ const onlineStatsQuery = `WITH live_locations AS (
 		CASE WHEN l.last_seen_at BETWEEN $1 AND $4 THEN l.country_name ELSE '' END AS country_name,
 		CASE WHEN l.last_seen_at BETWEEN $1 AND $4 THEN l.province_code ELSE '' END AS province_code,
 		CASE WHEN l.last_seen_at BETWEEN $1 AND $4 THEN l.province_name ELSE '' END AS province_name,
+		CASE WHEN l.last_seen_at BETWEEN $1 AND $4 THEN l.city_name ELSE '' END AS city_name,
 		CASE
 			WHEN l.user_id IS NULL THEN 'not_reported'
 			WHEN l.last_seen_at > $4 THEN 'invalid_timestamp'
@@ -67,17 +79,17 @@ const onlineStatsQuery = `WITH live_locations AS (
 	WHERE u.t >= $1
 )
 SELECT 'summary' AS kind, '' AS country_code, '' AS country_name,
-	'' AS province_code, '' AS province_name, '' AS unknown_reason,
+	'' AS province_code, '' AS province_name, '' AS city_name, '' AS unknown_reason,
 	COUNT(*) AS users,
 	COUNT(*) FILTER (WHERE t >= $1) AS current_online,
 	COUNT(*) FILTER (WHERE t >= $2) AS unique_24h,
 	COUNT(*) FILTER (WHERE t >= $3) AS unique_7d
 FROM v2_user
 UNION ALL
-SELECT 'region', country_code, country_name, province_code, province_name, unknown_reason,
+SELECT 'region', country_code, country_name, province_code, province_name, city_name, unknown_reason,
 	COUNT(*), 0, 0, 0
 FROM live_locations
-GROUP BY country_code, country_name, province_code, province_name, unknown_reason`
+GROUP BY country_code, country_name, province_code, province_name, city_name, unknown_reason`
 
 func (s *DBService) WithOnlineGeoResolver(resolver ipgeo.Resolver) *DBService {
 	s.onlineGeo = resolver
@@ -94,6 +106,7 @@ func (s *DBService) getOnlineStatsAt(ctx context.Context, now int64) (OnlineStat
 		OnlineWindowSeconds: onlineStatsWindowSeconds,
 		Countries:           make([]OnlineRegion, 0),
 		ChinaProvinces:      make([]OnlineRegion, 0),
+		ChinaCities:         make([]OnlineCity, 0),
 		UnknownReasons:      make([]OnlineUnknownReason, 0),
 		GeoDatabase:         ipgeo.GeoStatus{Status: "unavailable"},
 	}
@@ -111,12 +124,13 @@ func (s *DBService) getOnlineStatsAt(ctx context.Context, now int64) (OnlineStat
 
 	countries := make(map[string]*OnlineRegion)
 	provinces := make(map[string]*OnlineRegion)
+	cities := make(map[string]*OnlineCity)
 	unknown := make(map[string]int64)
 	hasSummary := false
 	for rows.Next() {
-		var kind, countryCode, countryName, provinceCode, provinceName, reason string
+		var kind, countryCode, countryName, provinceCode, provinceName, cityName, reason string
 		var users, current, daily, weekly int64
-		if err := rows.Scan(&kind, &countryCode, &countryName, &provinceCode, &provinceName, &reason, &users, &current, &daily, &weekly); err != nil {
+		if err := rows.Scan(&kind, &countryCode, &countryName, &provinceCode, &provinceName, &cityName, &reason, &users, &current, &daily, &weekly); err != nil {
 			return result, fmt.Errorf("scan online statistics: %w", err)
 		}
 		if kind == "summary" {
@@ -142,8 +156,10 @@ func (s *DBService) getOnlineStatsAt(ctx context.Context, now int64) (OnlineStat
 			provinceCode, provinceName = strings.TrimSpace(provinceCode), strings.TrimSpace(provinceName)
 			if !onlineProvinceCodeValid(provinceCode) {
 				provinceCode, provinceName = "", "省份未知"
+				cityName = ""
 			}
 			addOnlineRegion(provinces, provinceCode, provinceName, users)
+			addOnlineCity(cities, provinceCode, cityName, users)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -156,6 +172,7 @@ func (s *DBService) getOnlineStatsAt(ctx context.Context, now int64) (OnlineStat
 	result.GeoCoverage = onlinePercentage(result.GeoLocatedUsers, result.CurrentOnline)
 	result.Countries = sortedOnlineRegions(countries, result.CurrentOnline)
 	result.ChinaProvinces = sortedOnlineRegions(provinces, result.CurrentOnline)
+	result.ChinaCities = sortedOnlineCities(cities, result.CurrentOnline)
 	for code, users := range unknown {
 		result.UnknownReasons = append(result.UnknownReasons, OnlineUnknownReason{Code: code, Name: onlineUnknownNames[code], Users: users})
 	}
@@ -166,6 +183,38 @@ func (s *DBService) getOnlineStatsAt(ctx context.Context, now int64) (OnlineStat
 		return result.UnknownReasons[i].Code < result.UnknownReasons[j].Code
 	})
 	return result, nil
+}
+
+func addOnlineCity(cities map[string]*OnlineCity, province, rawName string, users int64) {
+	code := ipgeo.NormalizeChinaCityName(rawName)
+	key := province + ":" + code
+	if city, ok := cities[key]; ok {
+		city.Users += users
+		return
+	}
+	name := code
+	if name == "" {
+		name = "城市未知"
+	}
+	cities[key] = &OnlineCity{ProvinceCode: province, Code: code, Name: name, Users: users}
+}
+
+func sortedOnlineCities(cities map[string]*OnlineCity, total int64) []OnlineCity {
+	result := make([]OnlineCity, 0, len(cities))
+	for _, city := range cities {
+		city.Share = onlinePercentage(city.Users, total)
+		result = append(result, *city)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Users != result[j].Users {
+			return result[i].Users > result[j].Users
+		}
+		if result[i].ProvinceCode != result[j].ProvinceCode {
+			return result[i].ProvinceCode < result[j].ProvinceCode
+		}
+		return result[i].Code < result[j].Code
+	})
+	return result
 }
 
 var onlineUnknownNames = map[string]string{

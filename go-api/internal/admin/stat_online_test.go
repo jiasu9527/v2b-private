@@ -14,7 +14,7 @@ import (
 )
 
 func onlineTestRows() *sqlmock.Rows {
-	return sqlmock.NewRows([]string{"kind", "country_code", "country_name", "province_code", "province_name", "unknown_reason", "users", "current_online", "unique_24h", "unique_7d"})
+	return sqlmock.NewRows([]string{"kind", "country_code", "country_name", "province_code", "province_name", "city_name", "unknown_reason", "users", "current_online", "unique_24h", "unique_7d"})
 }
 
 func expectOnlineStatsQuery(mock sqlmock.Sqlmock, now int64) *sqlmock.ExpectedQuery {
@@ -29,20 +29,20 @@ func TestOnlineStatsCountsPeopleAndAggregatesLocations(t *testing.T) {
 	defer db.Close()
 	const now int64 = 1792830000
 	rows := onlineTestRows().
-		AddRow("region", "CN", "中国", "440000", "广东", "", 4, 0, 0, 0).
-		AddRow("region", "CN", "中国", "110000", "北京", "", 2, 0, 0, 0).
-		AddRow("region", "CN", "中国", "440000", "广东省", "", 1, 0, 0, 0).
-		AddRow("region", "CN", "中国", "", "", "", 1, 0, 0, 0).
-		AddRow("region", "HK", "中国香港", "810000", "香港", "", 1, 0, 0, 0).
-		AddRow("region", "MO", "中国澳门", "820000", "澳门", "", 1, 0, 0, 0).
-		AddRow("region", "TW", "中国台湾", "710000", "台湾", "", 1, 0, 0, 0).
-		AddRow("region", "US", "美国", "", "", "", 2, 0, 0, 0).
-		AddRow("region", "", "", "", "", "not_reported", 1, 0, 0, 0).
-		AddRow("region", "", "", "", "", "location_stale", 1, 0, 0, 0).
-		AddRow("region", "", "", "", "", "database_unavailable", 1, 0, 0, 0).
-		AddRow("region", "", "", "", "", "non_public_ip", 1, 0, 0, 0).
+		AddRow("region", "CN", "中国", "440000", "广东", "", "", 4, 0, 0, 0).
+		AddRow("region", "CN", "中国", "110000", "北京", "", "", 2, 0, 0, 0).
+		AddRow("region", "CN", "中国", "440000", "广东省", "", "", 1, 0, 0, 0).
+		AddRow("region", "CN", "中国", "", "", "", "", 1, 0, 0, 0).
+		AddRow("region", "HK", "中国香港", "810000", "香港", "", "", 1, 0, 0, 0).
+		AddRow("region", "MO", "中国澳门", "820000", "澳门", "", "", 1, 0, 0, 0).
+		AddRow("region", "TW", "中国台湾", "710000", "台湾", "", "", 1, 0, 0, 0).
+		AddRow("region", "US", "美国", "", "", "", "", 2, 0, 0, 0).
+		AddRow("region", "", "", "", "", "", "not_reported", 1, 0, 0, 0).
+		AddRow("region", "", "", "", "", "", "location_stale", 1, 0, 0, 0).
+		AddRow("region", "", "", "", "", "", "database_unavailable", 1, 0, 0, 0).
+		AddRow("region", "", "", "", "", "", "non_public_ip", 1, 0, 0, 0).
 		// SQL UNION ALL does not promise summary-row ordering.
-		AddRow("summary", "", "", "", "", "", 100, 17, 30, 50)
+		AddRow("summary", "", "", "", "", "", "", 100, 17, 30, 50)
 	expectOnlineStatsQuery(mock, now).WillReturnRows(rows)
 	service := (&DBService{db: db}).WithOnlineGeoResolver(onlineTestGeoResolver{status: ipgeo.GeoStatus{Status: "ready", IPv4: true, IPv6: true, Source: "ip2region", Version: "test"}})
 	result, err := service.getOnlineStatsAt(context.Background(), now)
@@ -93,9 +93,9 @@ func TestOnlineStatsNoLocationStillCountsOnlineUsers(t *testing.T) {
 	defer db.Close()
 	const now int64 = 1792830000
 	expectOnlineStatsQuery(mock, now).WillReturnRows(onlineTestRows().
-		AddRow("summary", "", "", "", "", "", 20, 7, 10, 15).
-		AddRow("region", "", "", "", "", "not_reported", 4, 0, 0, 0).
-		AddRow("region", "", "", "", "", "database_unavailable", 3, 0, 0, 0))
+		AddRow("summary", "", "", "", "", "", "", 20, 7, 10, 15).
+		AddRow("region", "", "", "", "", "", "not_reported", 4, 0, 0, 0).
+		AddRow("region", "", "", "", "", "", "database_unavailable", 3, 0, 0, 0))
 	result, err := (&DBService{db: db}).getOnlineStatsAt(context.Background(), now)
 	if err != nil {
 		t.Fatal(err)
@@ -111,6 +111,75 @@ func TestOnlineStatsNoLocationStillCountsOnlineUsers(t *testing.T) {
 	}
 }
 
+func TestOnlineStatsCitiesPreserveProvinceTotalsAndUnknowns(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	const now int64 = 1792830000
+	expectOnlineStatsQuery(mock, now).WillReturnRows(onlineTestRows().
+		AddRow("summary", "", "", "", "", "", "", 40, 20, 25, 30).
+		AddRow("region", "CN", "中国", "440000", "广东", "深圳市", "", 4, 0, 0, 0).
+		AddRow("region", "CN", "中国", "440000", "广东", "深圳", "", 2, 0, 0, 0).
+		AddRow("region", "CN", "中国", "440000", "广东", "广州市", "", 1, 0, 0, 0).
+		AddRow("region", "CN", "中国", "440000", "广东", "", "", 2, 0, 0, 0).
+		AddRow("region", "CN", "中国", "320000", "江苏", "苏州市", "", 1, 0, 0, 0).
+		AddRow("region", "CN", "中国", "510000", "四川", "阿坝藏族羌族自治州", "", 1, 0, 0, 0).
+		AddRow("region", "CN", "中国", "110000", "北京", "北京市", "", 1, 0, 0, 0).
+		AddRow("region", "HK", "中国香港", "810000", "香港", "香港", "", 1, 0, 0, 0).
+		AddRow("region", "MO", "中国澳门", "820000", "澳门", "0", "", 1, 0, 0, 0).
+		AddRow("region", "TW", "中国台湾", "710000", "台湾", "台北市", "", 1, 0, 0, 0).
+		AddRow("region", "CN", "中国", "", "", "深圳市", "", 1, 0, 0, 0).
+		AddRow("region", "CN", "中国", "invalid", "obsolete province", "深圳市", "", 1, 0, 0, 0).
+		AddRow("region", "US", "美国", "", "", "San Jose", "", 2, 0, 0, 0).
+		AddRow("region", "CN", "中国", "440000", "广东", "深圳市", "location_stale", 1, 0, 0, 0))
+	result, err := (&DBService{db: db}).getOnlineStatsAt(context.Background(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.GeoLocatedUsers != 19 || result.GeoUnknownUsers != 1 || result.Countries[0].Users != 14 {
+		t.Fatalf("city grouping changed overall counts: %+v", result)
+	}
+	provinceTotals := make(map[string]int64)
+	var unknownProvince, unknownGuangdong, shenzhen *OnlineCity
+	for i := range result.ChinaCities {
+		city := &result.ChinaCities[i]
+		provinceTotals[city.ProvinceCode] += city.Users
+		if city.Code == "" && city.Name != "城市未知" {
+			t.Fatalf("missing unknown city label: %+v", city)
+		}
+		if city.ProvinceCode == "" {
+			unknownProvince = city
+		}
+		if city.ProvinceCode == "440000" {
+			switch city.Code {
+			case "":
+				unknownGuangdong = city
+			case "深圳":
+				shenzhen = city
+			}
+		}
+		if city.Code == "San Jose" {
+			t.Fatalf("foreign city in china_cities: %+v", city)
+		}
+	}
+	for _, province := range result.ChinaProvinces {
+		if provinceTotals[province.Code] != province.Users {
+			t.Fatalf("province %s users=%d does not equal city sum=%d", province.Code, province.Users, provinceTotals[province.Code])
+		}
+	}
+	if shenzhen == nil || shenzhen.Users != 6 || shenzhen.Share != 30 || shenzhen.Name != "深圳" {
+		t.Fatalf("city aliases were not combined correctly: %+v", shenzhen)
+	}
+	if unknownGuangdong == nil || unknownGuangdong.Users != 2 || unknownProvince == nil || unknownProvince.Code != "" || unknownProvince.Users != 2 {
+		t.Fatalf("unknown cities missing: province=%+v Guangdong=%+v", unknownProvince, unknownGuangdong)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestOnlineStatsEmptyUsersReturnsFinitePercentagesAndArrays(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -118,7 +187,7 @@ func TestOnlineStatsEmptyUsersReturnsFinitePercentagesAndArrays(t *testing.T) {
 	}
 	defer db.Close()
 	const now int64 = 1792830000
-	expectOnlineStatsQuery(mock, now).WillReturnRows(onlineTestRows().AddRow("summary", "", "", "", "", "", 0, 0, 0, 0))
+	expectOnlineStatsQuery(mock, now).WillReturnRows(onlineTestRows().AddRow("summary", "", "", "", "", "", "", 0, 0, 0, 0))
 	result, err := (&DBService{db: db}).getOnlineStatsAt(context.Background(), now)
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +196,7 @@ func TestOnlineStatsEmptyUsersReturnsFinitePercentagesAndArrays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("empty statistics should serialize without NaN: %v", err)
 	}
-	for _, field := range []string{`"countries":[]`, `"china_provinces":[]`, `"unknown_reasons":[]`, `"online_share":0`, `"geo_coverage":0`} {
+	for _, field := range []string{`"countries":[]`, `"china_provinces":[]`, `"china_cities":[]`, `"unknown_reasons":[]`, `"online_share":0`, `"geo_coverage":0`} {
 		if !strings.Contains(string(raw), field) {
 			t.Errorf("missing %s in %s", field, raw)
 		}
@@ -145,14 +214,14 @@ func TestOnlineStatsUnknownAndStaleDataNeverBecomesMapLocations(t *testing.T) {
 	defer db.Close()
 	const now int64 = 1792830000
 	expectOnlineStatsQuery(mock, now).WillReturnRows(onlineTestRows().
-		AddRow("summary", "", "", "", "", "", 8, 8, 8, 8).
-		AddRow("region", "CN", "中国", "110000", "北京", "location_stale", 1, 0, 0, 0).
-		AddRow("region", "CN", "中国", "110000", "北京", "invalid_timestamp", 1, 0, 0, 0).
-		AddRow("region", "ZZ", "unknown", "", "", "", 1, 0, 0, 0).
-		AddRow("region", "", "", "", "", "unrecognized-value", 1, 0, 0, 0).
-		AddRow("region", "", "", "", "", "invalid_ip", 1, 0, 0, 0).
-		AddRow("region", "CN", "中国", "invalid", "obsolete province", "", 1, 0, 0, 0).
-		AddRow("region", "CN", "中国", "", "", "", 2, 0, 0, 0))
+		AddRow("summary", "", "", "", "", "", "", 8, 8, 8, 8).
+		AddRow("region", "CN", "中国", "110000", "北京", "", "location_stale", 1, 0, 0, 0).
+		AddRow("region", "CN", "中国", "110000", "北京", "", "invalid_timestamp", 1, 0, 0, 0).
+		AddRow("region", "ZZ", "unknown", "", "", "", "", 1, 0, 0, 0).
+		AddRow("region", "", "", "", "", "", "unrecognized-value", 1, 0, 0, 0).
+		AddRow("region", "", "", "", "", "", "invalid_ip", 1, 0, 0, 0).
+		AddRow("region", "CN", "中国", "invalid", "obsolete province", "", "", 1, 0, 0, 0).
+		AddRow("region", "CN", "中国", "", "", "", "", 2, 0, 0, 0))
 	result, err := (&DBService{db: db}).getOnlineStatsAt(context.Background(), now)
 	if err != nil {
 		t.Fatal(err)
@@ -182,9 +251,9 @@ func TestOnlineStatsReportsDatabaseFailures(t *testing.T) {
 			case "query":
 				expected.WillReturnError(errors.New("database down"))
 			case "scan":
-				expected.WillReturnRows(onlineTestRows().AddRow("summary", "", "", "", "", "", "invalid-count", 0, 0, 0))
+				expected.WillReturnRows(onlineTestRows().AddRow("summary", "", "", "", "", "", "", "invalid-count", 0, 0, 0))
 			case "iterate":
-				expected.WillReturnRows(onlineTestRows().AddRow("summary", "", "", "", "", "", 0, 0, 0, 0).RowError(0, errors.New("stream interrupted")))
+				expected.WillReturnRows(onlineTestRows().AddRow("summary", "", "", "", "", "", "", 0, 0, 0, 0).RowError(0, errors.New("stream interrupted")))
 			case "missing_summary":
 				expected.WillReturnRows(onlineTestRows())
 			}

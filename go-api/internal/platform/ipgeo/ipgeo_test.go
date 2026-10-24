@@ -27,13 +27,46 @@ func TestResolvePublicVersionsAndMappedAddress(t *testing.T) {
 	db := &Database{v4: v4, v6: v6}
 	for _, address := range []string{"113.92.157.29", "::ffff:113.92.157.29", " 113.92.157.29 "} {
 		got := db.Resolve(address)
-		if !got.Known || got.CountryCode != "CN" || got.ProvinceCode != "440000" || v4.input != "113.92.157.29" {
+		if !got.Known || got.CountryCode != "CN" || got.ProvinceCode != "440000" || got.CityName != "深圳市" || v4.input != "113.92.157.29" {
 			t.Fatalf("Resolve(%q)=%+v, reader input=%v", address, got, v4.input)
 		}
 	}
 	got := db.Resolve("2604:a840:3::a04d")
-	if !got.Known || got.CountryCode != "US" || got.CountryName != "美国" || got.ProvinceCode != "" || v6.input != "2604:a840:3::a04d" {
+	if !got.Known || got.CountryCode != "US" || got.CountryName != "美国" || got.ProvinceCode != "" || got.CityName != "" || v6.input != "2604:a840:3::a04d" {
 		t.Fatalf("IPv6 result=%+v, reader input=%v", got, v6.input)
+	}
+}
+
+func TestCityEvidenceRequiresKnownProvinceAndDoesNotInventDistricts(t *testing.T) {
+	for _, tc := range []struct{ raw, city string }{
+		{"中国|广东省| 深圳市 |电信|CN", "深圳市"},
+		{"中国|四川省|阿坝藏族羌族自治州|电信|CN", "阿坝藏族羌族自治州"},
+		{"中国|北京市|北京市|移动|CN", "北京市"},
+		{"中国|广东省|0|移动|CN", ""},
+		{"中国|广东省|未知|移动|CN", ""},
+		{"中国|广东省| unknown |移动|CN", ""},
+		{"中国|广东省||移动|CN", ""},
+		{"中国|0|深圳市|移动|CN", ""},
+		{"China|0|台北市|Provider|TW", "台北市"},
+		{"China|0|香港|Provider|HK", "香港"},
+		{"China|0|0|Provider|MO", ""},
+		{"United States|California|San Jose|Provider|US", ""},
+	} {
+		if got := parseRegion(tc.raw); got.CityName != tc.city {
+			t.Errorf("parseRegion(%q) city=%q, want %q", tc.raw, got.CityName, tc.city)
+		}
+	}
+}
+
+func TestNormalizeChinaCityNameRetainsEvidenceWithoutMapLookup(t *testing.T) {
+	for _, tc := range []struct{ raw, expected string }{
+		{"深圳市", "深圳"}, {" 深圳 ", "深圳"}, {"阿里地区", "阿里"},
+		{"阿坝藏族羌族自治州", "阿坝藏族羌族自治州"}, {"锡林郭勒盟", "锡林郭勒盟"},
+		{"台北市", "台北"}, {"香港", "香港"}, {"0", ""}, {"unknown", ""}, {"未知", ""},
+	} {
+		if got := NormalizeChinaCityName(tc.raw); got != tc.expected {
+			t.Errorf("NormalizeChinaCityName(%q)=%q, want %q", tc.raw, got, tc.expected)
+		}
 	}
 }
 
@@ -157,5 +190,9 @@ func TestPreparedDatabases(t *testing.T) {
 		if !got.Known || got.CountryCode != tc.country || got.ProvinceCode != tc.province {
 			t.Errorf("real data for %s=%+v, want %s/%s", tc.ip, got, tc.country, tc.province)
 		}
+		if tc.country == "CN" && got.CityName == "" {
+			t.Errorf("real-data Chinese fixture should resolve its city: %+v", got)
+		}
+		t.Logf("real data geography: %s/%s/%s", got.CountryCode, got.ProvinceCode, got.CityName)
 	}
 }

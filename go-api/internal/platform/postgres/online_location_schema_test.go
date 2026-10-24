@@ -19,6 +19,7 @@ func TestOnlineLocationSchemaUsesAtomicDDL(t *testing.T) {
 			mock.ExpectBegin()
 			mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 			mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_user_online_location`).WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectExec(`ALTER TABLE v2_user_online_location ADD COLUMN IF NOT EXISTS city_name`).WillReturnResult(sqlmock.NewResult(0, 0))
 			index := mock.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_v2_user_online_location_last_seen`)
 			if fail {
 				index.WillReturnError(errors.New("index unavailable"))
