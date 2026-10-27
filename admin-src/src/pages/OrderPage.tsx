@@ -17,7 +17,7 @@ const filterDefs = [
   { key: 'trade_no', title: '订单号', condition: ['模糊', '='] },
   { key: 'status', title: '订单状态', condition: ['='], type: 'select', options: [{ label: '未支付', value: 0 }, { label: '已支付', value: 1 }, { label: '已取消', value: 2 }, { label: '已完成', value: 3 }, { label: '已折抵', value: 4 }] },
   { key: 'commission_status', title: '佣金状态', condition: ['='], type: 'select', options: [{ label: '待确认', value: 0 }, { label: '发放中', value: 1 }, { label: '已发放', value: 2 }, { label: '无效', value: 3 }] },
-  { key: 'user_id', title: '用户ID', condition: ['='] },
+  { key: 'user_id', title: '用户ID', condition: ['=', '>', '<'] },
   { key: 'invite_user_id', title: '邀请人ID', condition: ['=', '!='] },
   { key: 'email', title: '邮箱', condition: ['模糊'] },
   { key: 'callback_no', title: '回调单号', condition: ['模糊'] },
