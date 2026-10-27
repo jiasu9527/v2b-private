@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Col, Form, Input, InputNumber, Modal, Popconfirm, Row, Segmented, Space, Spin, Statistic, Switch, Table, Tag, Typography, message } from 'antd';
-import { SearchOutlined } from '@ant-design/icons';
+import SubscribeGuardSearch from './SubscribeGuardSearch';
 import { apiGet, apiPost, bytes, money, unwrapData } from '../lib/api';
 
 const textListFields = [
@@ -203,32 +203,6 @@ function userExpiryText(value: any) {
   return timestamp > 0 ? dateText(timestamp) : '长期有效';
 }
 
-function entryPolicyCell(row: any) {
-  const policy = row?.entry_policy;
-  if (!policy) return <Tag>未命中入口规则</Tag>;
-  const name = String(policy.name || `规则 #${policy.id || '-'}`).trim();
-  const mode = String(policy.mode || 'standard').toLowerCase();
-  const action = String(policy.action || 'override').toLowerCase();
-  const entryHost = String(policy.entry_host || '').trim();
-  const evaluatedUA = String(policy.evaluated_ua || '').trim();
-  const actionDetail = action === 'hide'
-    ? <Tag color="red">命中后隐藏节点</Tag>
-    : action === 'original'
-      ? <Tag color="cyan">下发原入口地址</Tag>
-      : entryHost
-        ? <Typography.Text code copyable={{ text: entryHost }} ellipsis={{ tooltip: entryHost }}>{entryHost}</Typography.Text>
-        : <Typography.Text type="secondary">未配置入口地址</Typography.Text>;
-  return <Space direction="vertical" size={2} style={{ width: '100%' }}>
-    <Space size={4} wrap>
-      <Tag color={mode === 'split' ? 'purple' : 'blue'} title={evaluatedUA ? `按最近匹配的 UA 计算：${evaluatedUA}` : undefined}>
-        {mode === 'split' ? '固定分组' : '普通规则'}
-      </Tag>
-      <Typography.Text strong ellipsis={{ tooltip: name }}>{name}</Typography.Text>
-    </Space>
-    {actionDetail}
-  </Space>;
-}
-
 export default function SubscribeGuardPage() {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
@@ -237,20 +211,9 @@ export default function SubscribeGuardPage() {
   const [statsLoading, setStatsLoading] = useState(false);
   const [userRankSort, setUserRankSort] = useState<SubscribeUserRankSort>('count');
   const [detailModal, setDetailModal] = useState<any>(null);
-  const [userSearch, setUserSearch] = useState('');
-  const [userSearching, setUserSearching] = useState(false);
-  const [userSearchRows, setUserSearchRows] = useState<any[]>([]);
-  const [uaSearch, setUASearch] = useState('');
-  const [uaAppliedSearch, setUAAppliedSearch] = useState('');
-  const [uaSearching, setUASearching] = useState(false);
-  const [uaSearchRows, setUASearchRows] = useState<any[]>([]);
-  const [uaSearchPage, setUASearchPage] = useState({ current: 1, pageSize: 20, total: 0 });
-  const [uaSearchMatchedEvents, setUASearchMatchedEvents] = useState(0);
-  const [uaSearchUnresolvedEvents, setUASearchUnresolvedEvents] = useState(0);
+  const [userStatusChange, setUserStatusChange] = useState<{ id: number; banned: number; revision: number }>();
   const [userDetail, setUserDetail] = useState<any>(null);
   const [userDetailLoading, setUserDetailLoading] = useState(false);
-  const userSearchSequence = useRef(0);
-  const uaSearchSequence = useRef(0);
   const userDetailSequence = useRef(0);
   const statsSequence = useRef(0);
   const userRankSortRef = useRef<SubscribeUserRankSort>('count');
@@ -331,91 +294,15 @@ export default function SubscribeGuardPage() {
     try {
       await apiPost('/subscribe-guard/set-user-banned', { id: userID, banned }, { form: true });
       message.success(banned ? '已封禁用户' : '已恢复正常');
-      await loadStats();
-      setUserSearchRows((current) => current.map((item) => Number(item.id) === userID ? { ...item, banned } : item));
-      setUASearchRows((current) => current.map((item) => Number(item.user_id) === userID ? { ...item, banned } : item));
+      setUserStatusChange((previous) => ({ id: userID, banned, revision: (previous?.revision || 0) + 1 }));
       setUserDetail((current: any) => current && Number(current.user?.id) === userID
         ? { ...current, user: { ...current.user, banned } }
         : current);
+      await loadStats();
     } catch (e: any) {
       message.error(e.message || '操作失败');
     } finally {
       setSaving(false);
-    }
-  };
-
-  const searchUsers = async (keyword = userSearch) => {
-    const value = String(keyword || '').trim();
-    const sequence = ++userSearchSequence.current;
-    setUserSearch(value);
-    if (!value) {
-      setUserSearchRows([]);
-      setUserSearching(false);
-      return;
-    }
-    setUserSearching(true);
-    try {
-      const response = await apiGet('/subscribe-guard/user-search', { keyword: value });
-      if (sequence === userSearchSequence.current) {
-        const rows = Array.isArray(response.data) ? response.data.slice() : [];
-        const normalized = value.toLowerCase();
-        rows.sort((left: any, right: any) => {
-          const leftEmail = String(left?.email || '').trim().toLowerCase();
-          const rightEmail = String(right?.email || '').trim().toLowerCase();
-          const rank = (email: string) => email === normalized ? 0 : email.startsWith(normalized) ? 1 : 2;
-          return rank(leftEmail) - rank(rightEmail) || Number(left?.id || 0) - Number(right?.id || 0);
-        });
-        setUserSearchRows(rows);
-      }
-    } catch (e: any) {
-      if (sequence === userSearchSequence.current) message.error(e.message || '用户搜索失败');
-    } finally {
-      if (sequence === userSearchSequence.current) setUserSearching(false);
-    }
-  };
-
-  const searchUsersByUA = async (keyword = uaSearch, current = 1, pageSize = uaSearchPage.pageSize) => {
-    const value = String(keyword || '').trim();
-    const sequence = ++uaSearchSequence.current;
-    setUASearch(value);
-    if (!value) {
-      setUASearchRows([]);
-      setUAAppliedSearch('');
-      setUASearchPage({ current: 1, pageSize, total: 0 });
-      setUASearchMatchedEvents(0);
-      setUASearchUnresolvedEvents(0);
-      setUASearching(false);
-      return;
-    }
-    setUASearching(true);
-    try {
-      const response = await apiGet('/subscribe-guard/ua-search', {
-        keyword: value,
-        current,
-        page_size: pageSize,
-      });
-      if (sequence !== uaSearchSequence.current) return;
-      const rows = Array.isArray(response?.data) ? response.data : [];
-      setUASearchRows(rows);
-      setUAAppliedSearch(value);
-      setUASearchPage({
-        current: Number(response?.current || current),
-        pageSize: Number(response?.page_size || pageSize),
-        total: Number(response?.total || 0),
-      });
-      setUASearchMatchedEvents(Number(response?.matched_events || 0));
-      setUASearchUnresolvedEvents(Number(response?.unresolved_events || 0));
-    } catch (e: any) {
-      if (sequence === uaSearchSequence.current) {
-        setUASearchRows([]);
-        setUAAppliedSearch('');
-        setUASearchPage((previous) => ({ ...previous, current, pageSize, total: 0 }));
-        setUASearchMatchedEvents(0);
-        setUASearchUnresolvedEvents(0);
-        message.error(e.message || 'UA 用户搜索失败');
-      }
-    } finally {
-      if (sequence === uaSearchSequence.current) setUASearching(false);
     }
   };
 
@@ -559,53 +446,6 @@ export default function SubscribeGuardPage() {
     </Space> },
   ];
 
-  const userSearchColumns: any[] = [
-    { title: 'ID', dataIndex: 'id', width: 85 },
-    { title: '邮箱', dataIndex: 'email', width: 250, ellipsis: true, render: (value: any, row: any) => <a onClick={() => showUserDetail(row)}>{value || `用户 #${row.id}`}</a> },
-    { title: '状态', dataIndex: 'banned', width: 95, render: (_: any, row: any) => userStatus(row) },
-    { title: '当前入口分组', dataIndex: 'entry_policy', width: 310, render: (_: any, row: any) => entryPolicyCell(row) },
-    { title: '套餐', dataIndex: 'plan_name', width: 150, ellipsis: true, render: (value: any) => value || '-' },
-    { title: '已用 / 总流量', width: 190, render: (_: any, row: any) => `${bytes(Number(row.u || 0) + Number(row.d || 0))} / ${bytes(row.transfer_enable)}` },
-    { title: '到期时间', dataIndex: 'expired_at', width: 175, render: userExpiryText },
-    { title: '操作', width: 100, fixed: 'right', render: (_: any, row: any) => <Button size="small" onClick={() => showUserDetail(row)}>查看详细</Button> },
-  ];
-
-  const uaSearchColumns: any[] = [
-    { title: 'ID', dataIndex: 'user_id', width: 85 },
-    { title: '邮箱', dataIndex: 'email', width: 250, ellipsis: true, render: (value: any, row: any) => <a onClick={() => showUserDetail(row)}>{value || `用户 #${row.user_id}`}</a> },
-    { title: '状态', dataIndex: 'banned', width: 100, render: (_: any, row: any) => userStatus(row) },
-    { title: '当前入口分组', dataIndex: 'entry_policy', width: 310, render: (_: any, row: any) => entryPolicyCell(row) },
-    { title: '匹配请求', dataIndex: 'count', width: 105 },
-    { title: '已放行', dataIndex: 'allowed', width: 90, render: (value: any) => <Tag color="green">{Number(value || 0)}</Tag> },
-    { title: '已拦截', dataIndex: 'blocked', width: 90, render: (value: any) => <Tag color={Number(value || 0) ? 'red' : 'default'}>{Number(value || 0)}</Tag> },
-    { title: 'IP 数', dataIndex: 'ip_count', width: 80, render: (value: any) => Number(value || 0) },
-    { title: 'UA 数', dataIndex: 'ua_count', width: 80, render: (value: any) => Number(value || 0) },
-    { title: '最近请求', dataIndex: 'last_at', width: 175, render: dateText },
-    { title: '操作', width: 185, fixed: 'right', render: (_: any, row: any) => <Space size="small">
-      <Button size="small" onClick={() => showUserDetail(row)}>查看用户</Button>
-      <Button size="small" disabled={!Array.isArray(row.recent) || row.recent.length === 0} onClick={() => {
-        const events = Array.isArray(row.recent) ? row.recent : [];
-        showListDetail({
-          title: 'UA 匹配请求',
-          owner: row.email || `用户 #${row.user_id}`,
-          summary: `匹配 ${row.count || 0} 次，当前结果展示最近 ${events.length} 条请求`,
-          copyText: events.map((event: any) => `${dateText(event.time)}\t${event.blocked ? '已拦截' : '已放行'}\t${event.ip || '-'}\t${event.ua || '-'}`).join('\n'),
-          sections: [{
-            title: '最近匹配请求',
-            count: events.length,
-            columns: [
-              { title: '时间', dataIndex: 'time', width: 170, render: dateText },
-              { title: '状态', dataIndex: 'blocked', width: 95, render: (blocked: any, event: any) => <Tag color={blocked ? 'red' : 'green'}>{reasonText(event.reason)}</Tag> },
-              { title: 'IP', dataIndex: 'ip', width: 150, render: (value: any) => <Typography.Text copyable={{ text: String(value || '') }}>{value || '-'}</Typography.Text> },
-              { title: 'UA', dataIndex: 'ua', ellipsis: true, render: (value: any) => <Typography.Text copyable={{ text: String(value || '') }} ellipsis>{value || '-'}</Typography.Text> },
-            ],
-            items: events.map((event: any, index: number) => ({ ...event, key: `${row.user_id}-${event.time || 0}-${index}` })),
-          }],
-        });
-      }}>匹配记录</Button>
-    </Space> },
-  ];
-
   const sensitiveDomainColumns: any[] = [
     { title: '域名', dataIndex: 'domain', ellipsis: true, render: (value: any) => <Typography.Text copyable={{ text: String(value || '') }} ellipsis>{value || '-'}</Typography.Text> },
     { title: '次数', dataIndex: 'count', width: 90 },
@@ -740,84 +580,7 @@ export default function SubscribeGuardPage() {
             <Col xs={24} lg={8}><Card size="small" title="Top Token"><Table size="small" rowKey="token" pagination={false} columns={compactColumns('token', 'Token')} dataSource={stats.top_tokens || []} /></Card></Col>
             <Col xs={24} lg={8}><Card size="small" title="Top UA"><Table size="small" rowKey="ua" pagination={false} columns={compactColumns('ua', 'UA')} dataSource={stats.top_uas || []} /></Card></Col>
           </Row>
-          <Card className="mt-4" size="small" title="搜索用户">
-            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-              <Input.Search
-                allowClear
-                enterButton={<><SearchOutlined /> 搜索</>}
-                value={userSearch}
-                loading={userSearching}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setUserSearch(value);
-                  if (!value) {
-                    userSearchSequence.current += 1;
-                    setUserSearchRows([]);
-                    setUserSearching(false);
-                  }
-                }}
-                onSearch={searchUsers}
-                placeholder="输入用户 ID 或邮箱，支持邮箱模糊搜索"
-                style={{ maxWidth: 620 }}
-              />
-              <Table
-                size="small"
-                rowKey="id"
-                loading={userSearching}
-                pagination={false}
-                columns={userSearchColumns}
-                dataSource={userSearchRows}
-                scroll={{ x: 1420 }}
-                locale={{ emptyText: userSearch ? '未找到匹配用户' : '输入用户 ID 或邮箱后搜索' }}
-              />
-            </Space>
-          </Card>
-          <Card className="mt-4" size="small" title="按 UA 搜索用户">
-            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-              <Input.Search
-                allowClear
-                enterButton={<><SearchOutlined /> 搜索</>}
-                value={uaSearch}
-                loading={uaSearching}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setUASearch(value);
-                  uaSearchSequence.current += 1;
-                  setUAAppliedSearch('');
-                  setUASearchRows([]);
-                  setUASearchPage((previous) => ({ ...previous, current: 1, total: 0 }));
-                  setUASearchMatchedEvents(0);
-                  setUASearchUnresolvedEvents(0);
-                  setUASearching(false);
-                }}
-                onSearch={(keyword) => searchUsersByUA(keyword, 1, uaSearchPage.pageSize)}
-                placeholder="输入 UA 关键词，例如 curl；大小写不敏感"
-                style={{ maxWidth: 620 }}
-              />
-              {uaAppliedSearch && uaAppliedSearch === uaSearch ? <Typography.Text type="secondary">
-                保留期内命中 {uaSearchMatchedEvents} 条请求，已关联 {uaSearchPage.total} 位用户
-                {uaSearchUnresolvedEvents > 0 ? `；${uaSearchUnresolvedEvents} 条历史记录无法关联到当前用户` : ''}。
-              </Typography.Text> : null}
-              <Table
-                size="small"
-                rowKey="user_id"
-                loading={uaSearching}
-                columns={uaSearchColumns}
-                dataSource={uaSearchRows}
-                pagination={{
-                  current: uaSearchPage.current,
-                  pageSize: uaSearchPage.pageSize,
-                  total: uaSearchPage.total,
-                  size: 'small',
-                  showSizeChanger: true,
-                  pageSizeOptions: [10, 20, 50, 100],
-                }}
-                onChange={(pagination: any) => searchUsersByUA(uaSearch, pagination.current, pagination.pageSize)}
-                scroll={{ x: 1620 }}
-                locale={{ emptyText: uaAppliedSearch && uaAppliedSearch === uaSearch ? '保留期内未找到使用该 UA 的用户' : uaSearch ? '点击“搜索”查看结果' : '输入 UA 关键词后搜索，例如 curl' }}
-              />
-            </Space>
-          </Card>
+          <SubscribeGuardSearch onUserDetail={showUserDetail} onMatchDetail={showListDetail} statusChange={userStatusChange} />
           <Card
             className="mt-4"
             size="small"

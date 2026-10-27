@@ -932,6 +932,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminSubscribeGuardStats(w, r, cfg, state.session, state.node, state.user, state.admin) {
 				return
 			}
+		case r.URL.Path == adminPrefix+"/subscribe-guard/search":
+			if handleAdminSubscribeGuardSearch(w, r, cfg, state.session, state.user, state.admin) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/subscribe-guard/user-search":
 			if handleAdminSubscribeGuardUserSearch(w, r, cfg, state.session, state.admin) {
 				return

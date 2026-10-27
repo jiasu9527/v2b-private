@@ -23,7 +23,11 @@ func (s *DBService) ListClientEntryUserPolicies(ctx context.Context) ([]ClientEn
 	if err := s.ensureClientEntrySchema(ctx); err != nil {
 		return nil, err
 	}
+	return s.listClientEntryUserPolicies(ctx, true)
+}
 
+// Search uses this read-only loader without schema initialization or UI counts.
+func (s *DBService) listClientEntryUserPolicies(ctx context.Context, includeRangeCounts bool) ([]ClientEntryUserPolicyRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.name, p.sort, p.mode, p.snapshot_from, p.snapshot_to, p.action, p.conditions, p.entry_host, p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at
 FROM v2_client_entry_user_policy p
 ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
@@ -131,8 +135,10 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 		result[index].SplitGroups = groups[result[index].ID]
 		result[index].SnapshotUserCount = counts[result[index].ID]
 	}
-	if err := s.attachClientEntryUserPolicyIDRangeCounts(ctx, result); err != nil {
-		return nil, err
+	if includeRangeCounts {
+		if err := s.attachClientEntryUserPolicyIDRangeCounts(ctx, result); err != nil {
+			return nil, err
+		}
 	}
 	return result, nil
 }
