@@ -46,7 +46,7 @@ export function filterEntryRows<T = any>(rows: T[], filters: EntryRowFilters): T
     const split = isSplitRow(row);
     if (filters.kind === 'standard' && split) return false;
     if (filters.kind === 'split' && !split) return false;
-    if (['email', 'user_id', 'ua'].includes(filters.kind) && (split || !conditionFields(row?.conditions).has(filters.kind))) return false;
+    if (['email', 'user_id', 'ua'].includes(filters.kind) && ((split && filters.kind !== 'ua') || !conditionFields(row?.conditions).has(filters.kind))) return false;
     const grouped = Boolean(row?.__entry_collection);
     if (filters.membership === 'grouped' && !grouped) return false;
     if (filters.membership === 'ungrouped' && grouped) return false;

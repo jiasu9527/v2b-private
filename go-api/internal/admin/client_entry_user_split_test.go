@@ -164,6 +164,20 @@ func TestCreateClientEntryUserPolicySplitReportsDatabaseStage(t *testing.T) {
 }
 
 func TestConvertClientEntryUserPolicyToSplitKeepsOnePolicyAndBalancesCurrentUsers(t *testing.T) {
+	for _, tc := range []struct {
+		name, conditions string
+		count            int
+	}{
+		{"range only", `[{"field":"user_id","operator":"between","min":100,"max":200}]`, 1},
+		{"range and UA", `[{"field":"user_id","operator":"between","min":100,"max":200},{"field":"ua","operator":"contains_any","values":["Clash"]}]`, 2},
+		{"UA before range and second UA", `[{"field":"ua","operator":"not_empty"},{"field":"user_id","operator":"between","min":100,"max":200},{"field":"ua","operator":"excludes_any","values":["curl"]}]`, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) { testConvertClientEntryUserPolicySnapshot(t, tc.conditions, tc.count) })
+	}
+}
+
+func testConvertClientEntryUserPolicySnapshot(t *testing.T, conditionsRaw string, conditionCount int) {
+	t.Helper()
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -177,7 +191,7 @@ func TestConvertClientEntryUserPolicyToSplitKeepsOnePolicyAndBalancesCurrentUser
 	mock.ExpectQuery(`SELECT action, conditions, extra_nodes, sort\s+FROM v2_client_entry_user_policy\s+WHERE id = \$1 AND mode = 'standard'\s+FOR UPDATE`).
 		WithArgs(int64(9)).
 		WillReturnRows(sqlmock.NewRows([]string{"action", "conditions", "extra_nodes", "sort"}).
-			AddRow("override", `[{"field":"user_id","operator":"between","min":100,"max":200}]`, `[]`, int64(30)))
+			AddRow("override", conditionsRaw, `[]`, int64(30)))
 	expectShiftClientEntryVisibleSortsAfter(mock, 30, 10)
 	mock.ExpectQuery(`INSERT INTO v2_client_entry_user_policy_split_group`).
 		WithArgs(int64(9), nil, "A", "A", "a.example.com", int64(10), int64(30), sqlmock.AnyArg(), nil).
@@ -198,7 +212,7 @@ func TestConvertClientEntryUserPolicyToSplitKeepsOnePolicyAndBalancesCurrentUser
 	record, err := service.ConvertClientEntryUserPolicyToSplit(context.Background(), ClientEntryUserPolicySplitConvertRequest{
 		PolicyID: 9, EntryHostA: "A.EXAMPLE.COM", EntryHostB: "B.EXAMPLE.COM",
 	})
-	if err != nil || record.ID != 9 || record.Mode != ClientEntryUserPolicyModeSplit || record.SnapshotUserCount != 5 || len(record.Conditions) != 1 || len(record.SplitGroups) != 2 || record.SplitGroups[0].UserCount != 3 || record.SplitGroups[1].UserCount != 2 {
+	if err != nil || record.ID != 9 || record.Mode != ClientEntryUserPolicyModeSplit || record.SnapshotUserCount != 5 || len(record.Conditions) != conditionCount || len(record.SplitGroups) != 2 || record.SplitGroups[0].UserCount != 3 || record.SplitGroups[1].UserCount != 2 {
 		t.Fatalf("convert split: record=%#v err=%v", record, err)
 	}
 	if record.SplitGroups[0].GlobalSort == nil || *record.SplitGroups[0].GlobalSort != 30 || record.SplitGroups[1].GlobalSort == nil || *record.SplitGroups[1].GlobalSort != 40 {
@@ -209,29 +223,34 @@ func TestConvertClientEntryUserPolicyToSplitKeepsOnePolicyAndBalancesCurrentUser
 	}
 }
 
-func TestConvertClientEntryUserPolicyToSplitRejectsAdditionalCondition(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock: %v", err)
-	}
-	defer db.Close()
-	service := &DBService{db: db}
-	readyClientEntrySchemaForPolicyTest(service)
-	mock.ExpectBegin()
-	expectClientEntryVisibleOrderLock(mock)
-	mock.ExpectQuery(`SELECT action, conditions, extra_nodes, sort`).
-		WithArgs(int64(9)).
-		WillReturnRows(sqlmock.NewRows([]string{"action", "conditions", "extra_nodes", "sort"}).
-			AddRow("override", `[{"field":"user_id","operator":"between","min":100,"max":200},{"field":"ua","operator":"contains_any","values":["Clash"]}]`, `[]`, int64(30)))
-	mock.ExpectRollback()
-
-	if _, err := service.ConvertClientEntryUserPolicyToSplit(context.Background(), ClientEntryUserPolicySplitConvertRequest{
-		PolicyID: 9, EntryHostA: "a.example.com", EntryHostB: "b.example.com",
-	}); err == nil {
-		t.Fatal("expected rule with an additional condition to be rejected")
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("expectations: %v", err)
+func TestConvertClientEntryUserPolicyToSplitRejectsNonRangeOrNonUAConditions(t *testing.T) {
+	for _, raw := range []string{
+		`[]`,
+		`[{"field":"ua","operator":"contains_any","values":["Clash"]}]`,
+		`[{"field":"user_id","operator":"between","min":100,"max":200},{"field":"plan_id","operator":"eq","value":1}]`,
+		`[{"field":"user_id","operator":"between","min":100,"max":200},{"field":"user_id","operator":"between","min":100,"max":300}]`,
+		`[{"field":"user_id","operator":"gt","value":100},{"field":"ua","operator":"not_empty"}]`,
+		`[{"field":"user_id","operator":"between","min":100,"max":200},{"field":"ua","operator":"contains_any","values":[]}]`,
+	} {
+		t.Run(raw, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			service := &DBService{db: db}
+			readyClientEntrySchemaForPolicyTest(service)
+			mock.ExpectBegin()
+			expectClientEntryVisibleOrderLock(mock)
+			mock.ExpectQuery(`SELECT action, conditions, extra_nodes, sort`).WithArgs(int64(9)).WillReturnRows(sqlmock.NewRows([]string{"action", "conditions", "extra_nodes", "sort"}).AddRow("override", raw, `[]`, int64(30)))
+			mock.ExpectRollback()
+			if _, err := service.ConvertClientEntryUserPolicyToSplit(context.Background(), ClientEntryUserPolicySplitConvertRequest{PolicyID: 9, EntryHostA: "a.example.com", EntryHostB: "b.example.com"}); err == nil {
+				t.Fatal("unsupported condition set was converted")
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

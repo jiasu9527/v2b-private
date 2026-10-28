@@ -58,6 +58,15 @@ test('combined filters retain global order without mutating the original rows', 
   assert.deepEqual(filterEntryRows([{ id: 1, enabled: false, conditions: '{broken' }], { ...filters, kind: 'email' }), []);
 });
 
+test('UA filter includes fixed split leaves with retained UA guards but ID filter stays dynamic only', () => {
+  const split = { ...rows[1], conditions: [{ field: 'user_id', operator: 'between', min: 1, max: 100 }, { field: 'ua', operator: 'contains_any', values: ['Forest'] }] };
+  const source = [split, rows[3], rows[2]];
+  assert.deepEqual(filterEntryRows(source, { ...filters, kind: 'ua' }).map(key), ['split_group:17', 'policy:4']);
+  assert.deepEqual(filterEntryRows(source, { ...filters, kind: 'user_id' }).map(key), ['policy:3']);
+  assert.deepEqual(filterEntryRows(source, { ...filters, kind: 'split' }).map(key), ['split_group:17']);
+  assert.deepEqual(filterEntryRows(source, { ...filters, kind: 'ua', membership: 'grouped' }).map(key), ['split_group:17']);
+});
+
 test('moving one full-list row keeps every rule including folded members and uses final positions', () => {
   const original = rows.map(key);
   const moved = moveEntryRow(rows, 'split_group:17', 4);

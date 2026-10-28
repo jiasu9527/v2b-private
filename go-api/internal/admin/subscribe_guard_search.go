@@ -260,21 +260,21 @@ func (snapshot *SubscribeGuardSearchSnapshot) Match(userID int64, ua string, uaK
 			if !found {
 				continue
 			}
-		} else {
-			conditions := p.Conditions
-			if !uaKnown {
-				conditions = make([]cliententry.Condition, 0, len(p.Conditions))
-				for _, condition := range p.Conditions {
-					if condition.Field == "ua" {
-						c.uncertain = true
-					} else {
-						conditions = append(conditions, condition)
-					}
+		}
+		conditions := cliententry.RuntimeConditions(p.Mode, p.Conditions)
+		if !uaKnown {
+			knownConditions := make([]cliententry.Condition, 0, len(conditions))
+			for _, condition := range conditions {
+				if condition.Field == "ua" {
+					c.uncertain = true
+				} else {
+					knownConditions = append(knownConditions, condition)
 				}
 			}
-			if !cliententry.MatchAll(conditions, subject) {
-				continue
-			}
+			conditions = knownConditions
+		}
+		if !cliententry.MatchAll(conditions, subject) {
+			continue
 		}
 		candidates = append(candidates, c)
 	}

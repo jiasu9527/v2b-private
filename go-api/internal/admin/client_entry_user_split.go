@@ -182,10 +182,10 @@ func clientEntryUserPolicySplitCreateFailure(stage string, err error) error {
 	return fmt.Errorf("创建二分规则失败（%s）：%w", stage, err)
 }
 
-// ConvertClientEntryUserPolicyToSplit turns one existing, pure user-ID range
-// rule into a fixed two-way snapshot without creating another policy row. The
-// original condition is intentionally retained as conversion provenance; at
-// subscription time split assignments, rather than conditions, decide matches.
+// ConvertClientEntryUserPolicyToSplit turns a user-ID range (optionally gated
+// by UA) into a fixed two-way snapshot without creating another policy row.
+// All conditions are retained: the ID range records the snapshot's origin,
+// while UA constraints continue to apply to every subscription request.
 func (s *DBService) ConvertClientEntryUserPolicyToSplit(ctx context.Context, req ClientEntryUserPolicySplitConvertRequest) (ClientEntryUserPolicyRecord, error) {
 	if s.db == nil {
 		return ClientEntryUserPolicyRecord{}, ErrUnavailable
@@ -228,11 +228,22 @@ FOR UPDATE`, req.PolicyID).Scan(&action, &conditionsRaw, &extraNodesRaw, &policy
 	if err != nil {
 		return ClientEntryUserPolicyRecord{}, errors.New("规则匹配条件无效，无法转换")
 	}
-	if len(conditions) != 1 || conditions[0].Field != "user_id" || conditions[0].Operator != "between" {
-		return ClientEntryUserPolicyRecord{}, errors.New("只能转换仅包含一个用户 ID 范围条件的规则")
+	var idRange *cliententry.Condition
+	for index := range conditions {
+		condition := &conditions[index]
+		if condition.Field == "ua" {
+			continue
+		}
+		if condition.Field != "user_id" || condition.Operator != "between" || idRange != nil {
+			return ClientEntryUserPolicyRecord{}, errors.New("只能转换包含一个用户 ID 范围、可附加 UA 条件的规则")
+		}
+		idRange = condition
 	}
-	minimum, minErr := clientEntryRuleRawInt64(conditions[0].Min)
-	maximum, maxErr := clientEntryRuleRawInt64(conditions[0].Max)
+	if idRange == nil {
+		return ClientEntryUserPolicyRecord{}, errors.New("只能转换包含一个用户 ID 范围、可附加 UA 条件的规则")
+	}
+	minimum, minErr := clientEntryRuleRawInt64(idRange.Min)
+	maximum, maxErr := clientEntryRuleRawInt64(idRange.Max)
 	if minErr != nil || maxErr != nil || minimum <= 0 || maximum < minimum {
 		return ClientEntryUserPolicyRecord{}, errors.New("用户 ID 范围无效，无法转换")
 	}

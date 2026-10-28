@@ -139,9 +139,9 @@ func applyClientEntryUserPoliciesWithResolver(ctx context.Context, servers []map
 			if !clientEntryPolicyHasMember(policy.Members, ClientEntryGroupMember{ServerType: serverType, ServerID: serverID}) {
 				continue
 			}
-			matched := cliententry.MatchAll(policy.Conditions, subject)
+			matched := cliententry.MatchAll(cliententry.RuntimeConditions(policy.Mode, policy.Conditions), subject)
 			if policy.Mode == "split" {
-				matched = policy.AssignedEntryHost != ""
+				matched = matched && policy.AssignedEntryHost != ""
 			}
 			if !matched {
 				continue

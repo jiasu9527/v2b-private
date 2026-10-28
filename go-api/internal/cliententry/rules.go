@@ -142,6 +142,23 @@ func MatchAll(values []Condition, subject Subject) bool {
 	return true
 }
 
+// RuntimeConditions separates fixed membership from per-request constraints.
+// A split policy's user-ID condition records the snapshot's origin, not a
+// dynamic membership rule. Its UA conditions still apply to every request.
+// Existing split policies without UA constraints retain their prior behavior.
+func RuntimeConditions(mode string, values []Condition) []Condition {
+	if mode != "split" {
+		return values
+	}
+	result := make([]Condition, 0, len(values))
+	for _, condition := range values {
+		if condition.Field == "ua" {
+			result = append(result, condition)
+		}
+	}
+	return result
+}
+
 func normalizeCondition(value Condition) (Condition, error) {
 	value.Field = strings.ToLower(strings.TrimSpace(value.Field))
 	value.Operator = normalizeOperator(value.Operator)

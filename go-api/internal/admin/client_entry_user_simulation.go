@@ -248,6 +248,9 @@ func selectClientEntryUserPolicySimulation(policies []ClientEntryUserPolicyRecor
 		if policy.Enabled == 0 || !clientEntrySimulationHasMember(policy.Members, memberType, memberID) {
 			continue
 		}
+		if !cliententry.MatchAll(cliententry.RuntimeConditions(policy.Mode, policy.Conditions), subject) {
+			continue
+		}
 		candidate := policy
 		visibleSort := policy.Sort
 		if policy.Mode == ClientEntryUserPolicyModeSplit {
@@ -276,8 +279,6 @@ func selectClientEntryUserPolicySimulation(policies []ClientEntryUserPolicyRecor
 			if group.GlobalSort != nil {
 				visibleSort = *group.GlobalSort
 			}
-		} else if !cliententry.MatchAll(policy.Conditions, subject) {
-			continue
 		}
 		candidates = append(candidates, clientEntrySimulationCandidate{policy: candidate, visibleSort: visibleSort})
 	}

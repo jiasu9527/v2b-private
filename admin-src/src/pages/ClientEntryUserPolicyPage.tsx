@@ -41,6 +41,7 @@ import { hasConfiguredEmailCondition } from './entryUserEmails';
 import { filterEntryRows, entryRuleName, entryRuleHost, moveEntryRow } from './clientEntryLayout';
 import { attachEntryCollections, effectiveEntryResolveHost, entryCollectionResolveLabel, parseEntryCollections, canJoinEntryCollection, entryCollectionMember, entryCollectionMemberKey, type EntryCollection, type EntryCollectionOption } from './clientEntryCollections';
 import { buildVisibleServerOptions, memberKey, splitMemberKey, type ClientEntryServerOption } from './clientEntryHelpers';
+import { splitUserIDRange as singleUserIDRange, splitUAConditions } from './clientEntrySplitConditions';
 
 type ConditionField = 'user_id' | 'email' | 'registration_days' | 'ua' | 'plan_id';
 
@@ -282,22 +283,11 @@ function parseConditions(value: any): EntryCondition[] {
     .filter((item) => fieldOptions.some((option) => option.value === item.field) && item.operator) as EntryCondition[];
 }
 
-function singleUserIDRange(value: any): { min: number; max: number } | undefined {
-  const conditions = parseConditions(value);
-  if (conditions.length !== 1) return undefined;
-  const condition = conditions[0];
-  if (condition.field !== 'user_id' || condition.operator !== 'between') return undefined;
-  const min = finiteNumber(condition.min);
-  const max = finiteNumber(condition.max);
-  if (min === undefined || max === undefined || min > max) return undefined;
-  return { min, max };
-}
-
 function canConvertRangeToSplit(row: any) {
   if (String(row?.mode || 'standard').toLowerCase() !== 'standard') return false;
   if (normalizePolicyAction(row?.action) !== 'override') return false;
   if (parseExtraNodes(row?.extra_nodes).length !== 0) return false;
-  return Boolean(singleUserIDRange(row?.conditions));
+  return Boolean(singleUserIDRange(row?.__split_conversion_conditions ?? row?.conditions));
 }
 
 function finiteNumber(value: any) {
@@ -795,6 +785,16 @@ function conditionSummary(condition: EntryCondition) {
   return `${condition.field} ${condition.operator}`;
 }
 
+function SplitUAConditions({ conditions }: { conditions: any }) {
+  const guards = splitUAConditions(conditions);
+  if (!guards.length) return null;
+  return <div style={{ marginBottom: 16 }}>
+    <Typography.Text strong>保留的 UA 条件（整套共享，全部满足）</Typography.Text>
+    <div style={{ margin: '8px 0' }}>{guards.map((condition, index) => <Tag key={index} className="client-entry-condition-tag">{conditionSummary(condition)}</Tag>)}</div>
+    <Typography.Text type="secondary">每次订阅请求仍检查这些 UA 条件；不匹配时继续后续规则。固定人数是用户名单人数，不代表当前使用该 UA 的人数。编辑入口或继续二分不会清除这些条件。</Typography.Text>
+  </div>;
+}
+
 function EmailConditionSummary({ condition }: { condition: EntryCondition }) {
   const emails = (condition.values || []).map((item) => String(item).trim()).filter(Boolean);
   const summary = `指定邮箱：${emails.length} 个`;
@@ -1000,7 +1000,7 @@ function RangePolicySplitConverter({ row, onDone, children }: { row: any; onDone
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
-  const range = singleUserIDRange(row?.conditions);
+  const range = singleUserIDRange(row?.__split_conversion_conditions ?? row?.conditions);
   if (!range) return null;
 
   const show = () => {
@@ -1043,9 +1043,10 @@ function RangePolicySplitConverter({ row, onDone, children }: { row: any; onDone
         type="info"
         showIcon
         message={`固定用户 ID #${range.min} ～ #${range.max} 范围内当前实际存在的用户`}
-        description={`转换后仍沿用原规则的名称、${Array.isArray(row?.members) ? row.members.length : 0} 个生效节点、规则顺序、启停状态和${effectiveEntryResolveHost(row) ? '已开启的' : '未开启的'}域名解析设置。用户名单会固定为静态快照；只要当前叶子组仍有至少 2 人，就可以继续逐层二分。这里只需填写 A、B 两组入口。`}
+        description={`转换后仍沿用原规则的名称、${Array.isArray(row?.members) ? row.members.length : 0} 个生效节点、规则顺序、启停状态和${effectiveEntryResolveHost(row) ? '已开启的' : '未开启的'}域名解析设置。按 ID 范围内当前实际用户平均分成 A、B 静态名单，不按历史 UA 筛选名单；原有 UA 条件会继续限制每次请求。只要当前叶子组仍有至少 2 人，就可以继续逐层二分。`}
         style={{ marginBottom: 18 }}
       />
+      <SplitUAConditions conditions={row.conditions} />
       {row?.__entry_collection && <Alert type="warning" showIcon message="二分后将自动退出当前入口合集" description="新的 A、B 组作为独立规则显示，分别使用下方填写的入口，不再由合集统一覆盖。" style={{ marginBottom: 18 }} />}
       <Form form={form} layout="vertical">
         <Space align="start" wrap style={{ width: '100%' }}>
@@ -1247,10 +1248,11 @@ function SplitGroupUsersModal({ row, group, open, onClose }: { row: any; group: 
     <Alert
       type="info"
       showIcon
-      message={`当前固定 ${Number(group.user_count || 0)} 个有效用户`}
+      message={`当前固定 ${Number(group.user_count || 0)} 个现存用户`}
       description="名单是创建或继续二分时保存的固定快照，不会因用户后续订阅而自动换组。"
       style={{ marginBottom: 16 }}
     />
+    <SplitUAConditions conditions={row.conditions} />
     <Input.Search
       allowClear
       enterButton="搜索"
@@ -1486,9 +1488,10 @@ function SplitGroupRowActions({
         type="info"
         showIcon
         message={`当前固定 ${Number(group.user_count || 0)} 人`}
-        description="当前行会被两个新叶子组原地替换；节点、解析设置和全局优先级都会继承。"
+        description="当前行会被两个新叶子组原地替换；节点、解析设置、全局优先级和原有 UA 条件都会继承。"
         style={{ marginBottom: 16 }}
       />
+      <SplitUAConditions conditions={row.conditions} />
       {row.__entry_collection && <Alert type="warning" showIcon message="继续二分后将自动退出入口合集" description="两个新叶子组独立显示，使用各自的新入口；其他合集成员不受影响。" style={{ marginBottom: 16 }} />}
       <Form form={splitForm} layout="vertical" onValuesChange={() => setUseBackupIPPool(false)}>
         <Space style={{ marginBottom: 16 }} wrap>
@@ -1558,6 +1561,7 @@ function SplitGroupRowActions({
             <Button type="link" size="small" onClick={() => setUsersOpen(true)}>查看用户详情</Button>
           </Space>
         </Form.Item>
+        <SplitUAConditions conditions={row.conditions} />
         <div className="entry-editor-section-title entry-editor-section-title--shared">整套共享设置 <Typography.Text type="secondary">影响同套 {sortSplitLeaves(row.split_groups || []).length} 个分组</Typography.Text></div>
         <Alert type="warning" showIcon message="以下生效节点、状态和备注会同步影响同套的全部固定分组，包括其他合集中的分组。" style={{ marginBottom: 16 }} />
         <Form.Item name="members" label="整套生效节点" rules={[{ required: true, message: '请选择生效节点' }]} tooltip="固定二分出来的规则共同使用同一批生效节点。">
@@ -1627,7 +1631,7 @@ function SimulationModal({
       type="info"
       showIcon
       message="按当前列表从上到下匹配，第一条满足全部条件的启用规则生效。模拟不会保存或修改任何数据。"
-      description="普通规则按用户条件匹配；固定二分规则会读取服务端保存的真实用户分组，因此结果与实际订阅使用同一份名单。"
+      description="普通规则按用户条件匹配；固定二分规则会读取服务端保存的真实用户分组，并继续检查转换时保留的 UA 条件，因此结果与实际订阅使用同一份名单和 UA 限制。"
       style={{ marginBottom: 16 }}
     />
     <Form form={form} layout="vertical">
@@ -1748,6 +1752,9 @@ export default function ClientEntryUserPolicyPage({ embedded = false }: { embedd
           global_sort: group.global_sort === undefined || group.global_sort === null ? undefined : Number(group.global_sort),
           is_leaf: group.is_leaf === true || Number(group.is_leaf) !== 0,
         })) : [],
+        // Preserve raw conditions for strict split-conversion eligibility;
+        // display normalization must not hide unsupported conditions.
+        __split_conversion_conditions: row.conditions,
         conditions: parseConditions(row.conditions),
         extra_nodes: parseExtraNodes(row.extra_nodes),
         extra_nodes_position: normalizeExtraNodePosition(row.extra_nodes_position),
@@ -1903,7 +1910,14 @@ export default function ClientEntryUserPolicyPage({ embedded = false }: { embedd
   };
 
   const renderConditions = (row: any, detailed = false) => {
-    if (isSplitGroupDisplayRow(row)) return <Space size={4} wrap><Tag icon={<TeamOutlined />}>固定名单</Tag><Tag color="cyan">{Number(row.__split_group.user_count || 0)} 人</Tag></Space>;
+    if (isSplitGroupDisplayRow(row)) {
+      const guards = splitUAConditions(row.conditions);
+      return <div className="client-entry-condition-list">
+        <Space size={4} wrap><Tag icon={<TeamOutlined />}>固定名单</Tag><Tag color="cyan">{Number(row.__split_group.user_count || 0)} 人</Tag></Space>
+        {guards.map((condition, index) => <Tag key={index} className="client-entry-condition-tag">{conditionSummary(condition)}</Tag>)}
+        {detailed && guards.length > 0 && <Typography.Text type="secondary">UA 条件整套共享，每次请求检查；不匹配时继续后续规则。人数仅统计固定名单。</Typography.Text>}
+      </div>;
+    }
     const conditions = parseConditions(row.conditions);
     if (!conditions.length) return <Tag>全部用户</Tag>;
     const hasIDRange = conditions.some((condition) => condition.field === 'user_id' && condition.operator === 'between');
