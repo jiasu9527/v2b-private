@@ -15,6 +15,7 @@ import (
 )
 
 const (
+	defaultClientEntryMonitorPort             int64 = 54101
 	defaultClientEntryMonitorIntervalSec      int64 = 30
 	defaultClientEntryMonitorTimeoutMS        int64 = 5000
 	defaultClientEntryMonitorFailureThreshold int64 = 3
@@ -242,7 +243,7 @@ func (s *DBService) resolveClientEntryMonitorPolicies(ctx context.Context) ([]Cl
 						SourceKey:     fmt.Sprintf("policy:%d:split-group:%d", policy.ID, group.ID),
 						Name:          truncateClientEntryMonitorReportText(name+" · "+path+" 组入口", 255),
 						Host:          host,
-						SuggestedPort: 443,
+						SuggestedPort: defaultClientEntryMonitorPort,
 					})
 				}
 				break
@@ -252,7 +253,7 @@ func (s *DBService) resolveClientEntryMonitorPolicies(ctx context.Context) ([]Cl
 					SourceKey:     fmt.Sprintf("policy:%d", policy.ID),
 					Name:          truncateClientEntryMonitorReportText(policy.Name+" · 独立入口", 255),
 					Host:          host,
-					SuggestedPort: 443,
+					SuggestedPort: defaultClientEntryMonitorPort,
 				})
 			}
 		case cliententry.ActionOriginal:
@@ -264,7 +265,7 @@ func (s *DBService) resolveClientEntryMonitorPolicies(ctx context.Context) ([]Cl
 				}
 				port := node.Port
 				if port <= 0 || port > 65535 {
-					port = 443
+					port = defaultClientEntryMonitorPort
 				}
 				item.Targets = append(item.Targets, ClientEntryMonitorCandidateTarget{
 					SourceKey:     fmt.Sprintf("policy:%d:%s:%d", policy.ID, node.ServerType, node.ServerID),

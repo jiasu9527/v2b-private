@@ -28,6 +28,7 @@ import './DNSFailoverEntryMonitorTab.css';
 
 const ENTRY_MONITOR_PATH = '/dns-failover/entry-monitors';
 const BACKUP_IP_PATH = `${ENTRY_MONITOR_PATH}/backup-ips`;
+const DEFAULT_ENTRY_MONITOR_PORT = 54101;
 const DEFAULT_ENTRY_MONITOR_TIMEOUT_MS = 5000;
 const DEFAULT_ENTRY_MONITOR_FAILURE_THRESHOLD = 3;
 const DEFAULT_ENTRY_MONITOR_SUCCESS_THRESHOLD = 2;
@@ -402,7 +403,7 @@ function derivedPolicyTargets(policy: EntryPolicy): EntryTarget[] {
       ...target,
       source_key: String(target?.source_key || `target:${index + 1}`).trim(),
       host: String(target?.host || '').trim(),
-      port: numberValue(target?.port ?? target?.suggested_port, 443),
+      port: numberValue(target?.port ?? target?.suggested_port ?? DEFAULT_ENTRY_MONITOR_PORT, DEFAULT_ENTRY_MONITOR_PORT),
       sort: numberValue(target?.sort, index),
       auto_split_enabled: boolValue(target?.auto_split_enabled),
       states: [],
@@ -413,7 +414,7 @@ function derivedPolicyTargets(policy: EntryPolicy): EntryTarget[] {
     return host ? [{
       source_key: 'entry_host',
       host,
-      port: 443,
+      port: DEFAULT_ENTRY_MONITOR_PORT,
       sort: 0,
       auto_split_enabled: false,
       states: [],
@@ -422,7 +423,7 @@ function derivedPolicyTargets(policy: EntryPolicy): EntryTarget[] {
   return policy.members.map((member, index) => ({
     source_key: memberSourceKey(member, index),
     host: memberHost(member),
-    port: numberValue(member.port || member.server_port, 443),
+    port: numberValue(member.port || member.server_port || DEFAULT_ENTRY_MONITOR_PORT, DEFAULT_ENTRY_MONITOR_PORT),
     sort: index,
     auto_split_enabled: false,
     states: [],
@@ -435,7 +436,7 @@ function normalizeTarget(raw: any, index: number): EntryTarget {
     id: numberValue(raw?.id) || undefined,
     source_key: String(raw?.source_key || `target:${numberValue(raw?.id) || index + 1}`).trim(),
     host: String(raw?.host || '').trim(),
-    port: numberValue(raw?.port, 443),
+    port: numberValue(raw?.port ?? DEFAULT_ENTRY_MONITOR_PORT, DEFAULT_ENTRY_MONITOR_PORT),
     sort: numberValue(raw?.sort, index),
     auto_split_enabled: boolValue(raw?.auto_split_enabled),
     states: list(raw?.states).map((state) => ({

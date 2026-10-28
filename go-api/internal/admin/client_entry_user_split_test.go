@@ -576,6 +576,11 @@ func TestResolveClientEntryMonitorPoliciesIncludesEverySplitLeaf(t *testing.T) {
 	if policies[0].Targets[0].SourceKey != "policy:9:split-group:201" || policies[0].Targets[0].Name != "内鬼入口一 · A.1 组入口" || policies[0].Targets[0].Host != "a1.example.com" || policies[0].Targets[1].SourceKey != "policy:9:split-group:202" || policies[0].Targets[1].Host != "a2.example.com" {
 		t.Fatalf("unexpected split targets: %#v", policies[0].Targets)
 	}
+	for _, target := range policies[0].Targets {
+		if target.SuggestedPort != 54101 {
+			t.Fatalf("split leaf default TCP port = %d, want 54101", target.SuggestedPort)
+		}
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
 	}
