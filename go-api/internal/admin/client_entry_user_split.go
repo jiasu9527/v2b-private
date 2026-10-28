@@ -196,9 +196,17 @@ func (s *DBService) ConvertClientEntryUserPolicyToSplit(ctx context.Context, req
 	if req.PolicyID <= 0 {
 		return ClientEntryUserPolicyRecord{}, errors.New("规则不存在")
 	}
-	hostA, hostB, err := normalizeClientEntryUserPolicySplitHosts(req.EntryHostA, req.EntryHostB)
-	if err != nil {
-		return ClientEntryUserPolicyRecord{}, err
+	var hostA, hostB string
+	if req.UseBackupIPPool {
+		if err := s.ensureDNSFailoverSchema(ctx); err != nil {
+			return ClientEntryUserPolicyRecord{}, err
+		}
+	} else {
+		var err error
+		hostA, hostB, err = normalizeClientEntryUserPolicySplitHosts(req.EntryHostA, req.EntryHostB)
+		if err != nil {
+			return ClientEntryUserPolicyRecord{}, err
+		}
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -256,6 +264,18 @@ FOR UPDATE`, req.PolicyID).Scan(&action, &conditionsRaw, &extraNodesRaw, &policy
 	}
 
 	now := time.Now().Unix()
+	if req.UseBackupIPPool {
+		// The browser only previews candidates. Claim them again while holding
+		// the conversion transaction, so concurrent users cannot reuse an IP.
+		backupIPs, err := claimHealthyClientEntryBackupIPs(ctx, tx, 2, now)
+		if err != nil {
+			return ClientEntryUserPolicyRecord{}, fmt.Errorf("从备用 IP 池自动填入失败: %w", err)
+		}
+		if len(backupIPs) != 2 {
+			return ClientEntryUserPolicyRecord{}, errors.New("从备用 IP 池自动填入失败：领取结果无效")
+		}
+		hostA, hostB = backupIPs[0].IP, backupIPs[1].IP
+	}
 	if err := shiftClientEntryVisibleSortsAfter(ctx, tx, policySort, clientEntryRuleSortStep); err != nil {
 		return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
 	}

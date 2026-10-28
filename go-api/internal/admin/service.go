@@ -1358,9 +1358,10 @@ type ClientEntryUserPolicySplitCreateRequest struct {
 }
 
 type ClientEntryUserPolicySplitConvertRequest struct {
-	PolicyID   int64
-	EntryHostA string
-	EntryHostB string
+	PolicyID        int64
+	EntryHostA      string
+	EntryHostB      string
+	UseBackupIPPool bool
 }
 
 type ClientEntryUserPolicyGroupSplitRequest struct {

@@ -42,6 +42,7 @@ import { filterEntryRows, entryRuleName, entryRuleHost, moveEntryRow } from './c
 import { attachEntryCollections, effectiveEntryResolveHost, entryCollectionResolveLabel, parseEntryCollections, canJoinEntryCollection, entryCollectionMember, entryCollectionMemberKey, type EntryCollection, type EntryCollectionOption } from './clientEntryCollections';
 import { buildVisibleServerOptions, memberKey, splitMemberKey, type ClientEntryServerOption } from './clientEntryHelpers';
 import { splitUserIDRange as singleUserIDRange, splitUAConditions } from './clientEntrySplitConditions';
+import { useSplitBackupIPPool } from './clientEntryBackupPool';
 
 type ConditionField = 'user_id' | 'email' | 'registration_days' | 'ua' | 'plan_id';
 
@@ -1000,22 +1001,26 @@ function RangePolicySplitConverter({ row, onDone, children }: { row: any; onDone
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
+  const backupPool = useSplitBackupIPPool(form);
   const range = singleUserIDRange(row?.__split_conversion_conditions ?? row?.conditions);
   if (!range) return null;
 
   const show = () => {
     form.resetFields();
+    backupPool.reset();
     setOpen(true);
   };
 
   const convert = async () => {
+    if (saving || backupPool.isFilling()) return;
+    setSaving(true);
     try {
       const values = await form.validateFields();
-      setSaving(true);
       await apiPost('/server/client-entry-user-policy/split-convert', {
         policy_id: row.id,
         entry_host_a: String(values.entry_host_a || '').trim(),
         entry_host_b: String(values.entry_host_b || '').trim(),
+        use_backup_ip_pool: backupPool.usePool,
       });
       message.success('已将 ID 范围规则转换为固定二分');
       setOpen(false);
@@ -1032,10 +1037,11 @@ function RangePolicySplitConverter({ row, onDone, children }: { row: any; onDone
     <Modal
       title={`将“${String(row?.name || `规则 #${row?.id}`)}”转换为固定二分`}
       open={open}
-      onCancel={() => setOpen(false)}
+      onCancel={() => { backupPool.reset(); setOpen(false); }}
       onOk={convert}
       okText="确认转换并固定"
       confirmLoading={saving}
+      okButtonProps={{ disabled: backupPool.filling }}
       destroyOnHidden
       width={680}
     >
@@ -1048,7 +1054,15 @@ function RangePolicySplitConverter({ row, onDone, children }: { row: any; onDone
       />
       <SplitUAConditions conditions={row.conditions} />
       {row?.__entry_collection && <Alert type="warning" showIcon message="二分后将自动退出当前入口合集" description="新的 A、B 组作为独立规则显示，分别使用下方填写的入口，不再由合集统一覆盖。" style={{ marginBottom: 18 }} />}
-      <Form form={form} layout="vertical">
+      <Form form={form} layout="vertical" disabled={saving} onValuesChange={backupPool.reset}>
+        <Space style={{ marginBottom: 16 }} wrap>
+          <Button icon={<BranchesOutlined />} loading={backupPool.filling} disabled={saving} onClick={backupPool.fill}>
+            从备用 IP 池自动填入
+          </Button>
+          <Typography.Text type="secondary">
+            {backupPool.usePool ? '已预填；确认转换时在事务内重新领取，最终 IP 以确认结果为准，避免重复占用' : '自动选择前两个健康且未使用的 IP'}
+          </Typography.Text>
+        </Space>
         <Space align="start" wrap style={{ width: '100%' }}>
           <Form.Item name="entry_host_a" label="A 组入口" rules={[{ required: true, whitespace: true, message: '请输入 A 组入口' }]} style={{ minWidth: 290, flex: 1 }}>
             <Input placeholder="a.example.com 或 IP" />
@@ -1352,14 +1366,13 @@ function SplitGroupRowActions({
   const [editOpen, setEditOpen] = useState(false);
   const [usersOpen, setUsersOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [backupIPFilling, setBackupIPFilling] = useState(false);
-  const [useBackupIPPool, setUseBackupIPPool] = useState(false);
   const [splitForm] = Form.useForm();
   const [editForm] = Form.useForm();
+  const backupPool = useSplitBackupIPPool(splitForm);
 
   const openSplit = () => {
     splitForm.resetFields();
-    setUseBackupIPPool(false);
+    backupPool.reset();
     setSplitOpen(true);
   };
   const openEdit = () => {
@@ -1374,46 +1387,8 @@ function SplitGroupRowActions({
     });
     setEditOpen(true);
   };
-  const fillSplitHostsFromBackupPool = async () => {
-    if (backupIPFilling) return;
-    setBackupIPFilling(true);
-    try {
-      const response = await apiGet('/dns-failover/entry-monitors/backup-ips');
-      const payload = response?.data ?? response;
-      const rawItems = Array.isArray(payload)
-        ? payload
-        : Array.isArray(payload?.items)
-          ? payload.items
-          : Array.isArray(payload?.backup_ips)
-            ? payload.backup_ips
-            : [];
-      const seen = new Set<string>();
-      const available = rawItems.filter((item: any) => {
-        const ip = String(item?.ip || '').trim();
-        const key = ip.toLowerCase();
-        if (!ip || seen.has(key) || item?.enabled === false || item?.used === true) return false;
-        const status = String(item?.status || '').trim().toLowerCase();
-        const healthy = item?.available === true || status === 'available';
-        if (!healthy) return false;
-        seen.add(key);
-        return true;
-      });
-      if (available.length < 2) {
-        message.warning(`健康且未使用的备用 IP 不足 2 个，当前只有 ${available.length} 个`);
-        return;
-      }
-      const hostA = String(available[0].ip).trim();
-      const hostB = String(available[1].ip).trim();
-      splitForm.setFieldsValue({ entry_host_a: hostA, entry_host_b: hostB });
-      setUseBackupIPPool(true);
-      message.success(`已自动填入备用 IP：${hostA}、${hostB}`);
-    } catch (error: any) {
-      message.error(error?.message || '读取备用 IP 池失败');
-    } finally {
-      setBackupIPFilling(false);
-    }
-  };
   const submitSplit = async () => {
+    if (saving || backupPool.isFilling()) return;
     setSaving(true);
     try {
       const values = await splitForm.validateFields();
@@ -1422,7 +1397,7 @@ function SplitGroupRowActions({
         group_id: group.id,
         entry_host_a: String(values.entry_host_a || '').trim(),
         entry_host_b: String(values.entry_host_b || '').trim(),
-        use_backup_ip_pool: useBackupIPPool,
+        use_backup_ip_pool: backupPool.usePool,
       });
       message.success(`“${splitGroupDisplayName(group)}”已继续二分，新规则已在原位置展开`);
       setSplitOpen(false);
@@ -1478,9 +1453,10 @@ function SplitGroupRowActions({
     <Modal
       title={`继续二分“${splitGroupDisplayName(group)}”`}
       open={splitOpen}
-      onCancel={() => setSplitOpen(false)}
+      onCancel={() => { backupPool.reset(); setSplitOpen(false); }}
       onOk={submitSplit}
       confirmLoading={saving}
+      okButtonProps={{ disabled: backupPool.filling }}
       okText="确认二分"
       destroyOnHidden
     >
@@ -1493,17 +1469,18 @@ function SplitGroupRowActions({
       />
       <SplitUAConditions conditions={row.conditions} />
       {row.__entry_collection && <Alert type="warning" showIcon message="继续二分后将自动退出入口合集" description="两个新叶子组独立显示，使用各自的新入口；其他合集成员不受影响。" style={{ marginBottom: 16 }} />}
-      <Form form={splitForm} layout="vertical" onValuesChange={() => setUseBackupIPPool(false)}>
+      <Form form={splitForm} layout="vertical" disabled={saving} onValuesChange={backupPool.reset}>
         <Space style={{ marginBottom: 16 }} wrap>
           <Button
             icon={<BranchesOutlined />}
-            loading={backupIPFilling}
-            onClick={fillSplitHostsFromBackupPool}
+            loading={backupPool.filling}
+            disabled={saving}
+            onClick={backupPool.fill}
           >
             从备用 IP 池自动填入
           </Button>
           <Typography.Text type="secondary">
-            {useBackupIPPool ? '已选择；确认二分时会在事务内重新领取，避免重复占用' : '自动选择前两个健康且未使用的 IP'}
+            {backupPool.usePool ? '已预填；确认二分时在事务内重新领取，最终 IP 以确认结果为准，避免重复占用' : '自动选择前两个健康且未使用的 IP'}
           </Typography.Text>
         </Space>
         <Form.Item name="entry_host_a" label="第一个子规则入口" rules={[{ required: true, whitespace: true, message: '请输入第一个子规则入口' }]}>
