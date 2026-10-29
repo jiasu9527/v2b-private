@@ -423,6 +423,7 @@ func (s *Service) finishTurn(sessionID, turnID int64, status, errText string) {
 }
 func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64, model string) {
 	ctx = context.WithValue(ctx, knowledgeTurnContextKey{}, turnID)
+	ctx = context.WithValue(ctx, knowledgeWriteConflictsKey{}, map[string]bool{})
 	status, errText := "failed", "AI 处理失败，请查看状态后重试"
 	defer func() {
 		if recover() != nil {

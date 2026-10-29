@@ -134,6 +134,7 @@ type ToolFunctionDefinition struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Parameters  json.RawMessage `json:"parameters"`
+	Strict      *bool           `json:"strict,omitempty"`
 }
 type ToolDefinition struct {
 	Type     string                 `json:"type"`

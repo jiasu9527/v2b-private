@@ -106,7 +106,7 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 		return ToolOutcome{}, ErrValidation
 	}
 	switch call.Function.Name {
-	case "knowledge_search", "knowledge_get", "knowledge_save":
+	case "knowledge_search", "knowledge_get", "knowledge_save", "knowledge_create":
 		return s.callKnowledgeTool(ctx, actorID, sessionID, call)
 	}
 	if s.panel == nil {
@@ -443,6 +443,12 @@ func toolErrorContent(err error) string {
 		code, message = "conflict", "入口配置或名单已变化，请读取最新状态后重新判断"
 	case errors.Is(err, ErrKnowledgeCredential):
 		code, message = "knowledge_contains_credentials", "知识库不能保存密码、Token、API Key 或私钥，请删除凭据后再保存"
+	case errors.Is(err, errKnowledgeWriteIdentity):
+		code, message = "knowledge_write_identity", "新建请用 knowledge_create，不能传 id 或 expected_version；knowledge_save 新建须同时省略两者，更新须同时传入真实正整数 ID 和最新版本，不能用 0、null 或猜测的值"
+	case errors.Is(err, errKnowledgeRepeatedConflict):
+		code, message = "knowledge_conflict_repeated", "同一更新请求本轮已发生版本冲突，本次未重新提交。若任务是新建，请用 knowledge_create；若确需修改原条目，先读取并核对最新内容，不能只替换版本号重试旧正文"
+	case errors.Is(err, errKnowledgeVersionConflict):
+		code, message = "knowledge_version_conflict", "这是已有知识的更新版本冲突，原条目未被修改，并非新建接口故障。不要原样重试；若原任务是新建，请用 knowledge_create，不能把旧条目版本改成最新值来覆盖。只有确需更新原条目时，才读取最新内容并重新核对修改"
 	case errors.Is(err, ErrValidation):
 		code, message = "invalid_arguments", "工具参数无效，请按声明字段检查参数和分页范围"
 	case errors.Is(err, ErrForbidden):

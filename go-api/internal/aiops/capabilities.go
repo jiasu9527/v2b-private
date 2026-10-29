@@ -27,6 +27,7 @@ var toolCapabilities = map[string]toolCapability{
 	"knowledge_search":           {domainKnowledge, ""},
 	"knowledge_get":              {domainKnowledge, ""},
 	"knowledge_save":             {domainKnowledge, ""},
+	"knowledge_create":           {domainKnowledge, ""},
 	"panel_operations_list":      {domainPanelOperations, ""},
 	"panel_operation_describe":   {domainPanelOperations, ""},
 	"panel_query":                {domainPanelOperations, ""},
