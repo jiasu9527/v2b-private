@@ -82,7 +82,7 @@ func TestAIProviderExactModelRedirectAndSafeErrors(t *testing.T) {
 			defer db.Close()
 			s := NewService(config.Config{AppKey: "test"}, db, nil)
 			cipher, _ := s.encryptSecret("test-secret")
-			mock.ExpectQuery(`SELECT enabled,base_url,models::TEXT,api_key_cipher`).WillReturnRows(sqlmock.NewRows([]string{"enabled", "base_url", "models", "key", "reasoning_efforts"}).AddRow(true, srv.URL+"/v1", `["claude-fable-5-1"]`, cipher, `{}`))
+			mock.ExpectQuery(`SELECT enabled,base_url,models::TEXT,api_key_cipher`).WillReturnRows(sqlmock.NewRows([]string{"enabled", "base_url", "models", "key", "reasoning_efforts", "fallback_relays", "failover_enabled", "failover_timeout_seconds"}).AddRow(true, srv.URL+"/v1", `["claude-fable-5-1"]`, cipher, `{}`, `[]`, false, 30))
 			msg, err := s.complete(context.Background(), "claude-fable-5-1", []providerMessage{{Role: "user", Content: "hello"}})
 			if mode == "ok" && (err != nil || msg.Content != "ok") {
 				t.Fatal(err)

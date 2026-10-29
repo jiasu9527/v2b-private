@@ -442,13 +442,18 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 		}
 		lastWrite := time.Time{}
 		assistant, err := s.completeStreamWithReasoning(ctx, model, reasoningEffort, messages, func(content string) error {
-			if time.Since(lastWrite) < 600*time.Millisecond {
+			// A relay switch discards its incomplete reply before starting the
+			// next provider. Never throttle this reset or its first replacement.
+			if content != "" && time.Since(lastWrite) < 600*time.Millisecond {
 				return nil
 			}
 			if err := s.updateDraft(ctx, actorID, sessionID, turnID, round+1, redactSSHOutput(content, knownPanelSecrets, false)); err != nil {
 				return err
 			}
 			lastWrite = time.Now()
+			if content == "" {
+				lastWrite = time.Time{}
+			}
 			return nil
 		})
 		if err != nil {

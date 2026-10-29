@@ -20,6 +20,7 @@ type fakeAIOps struct {
 	accessMode       string
 	reasoningEffort  string
 	reasoningEfforts *map[string]string
+	configRequest    aiops.ConfigSaveRequest
 }
 
 func (f *fakeAIOps) called(id int64) { f.calls++; f.actor = id }
@@ -30,6 +31,7 @@ func (f *fakeAIOps) GetConfig(_ context.Context, id int64) (aiops.Config, error)
 func (f *fakeAIOps) SaveConfig(_ context.Context, id int64, r aiops.ConfigSaveRequest) (aiops.Config, error) {
 	f.called(id)
 	f.reasoningEfforts = r.ReasoningEfforts
+	f.configRequest = r
 	return aiops.Config{Enabled: r.Enabled, BaseURL: r.BaseURL, HasAPIKey: true, Models: r.Models}, f.err
 }
 func (f *fakeAIOps) ListSessions(_ context.Context, id int64) ([]aiops.Session, error) {
@@ -301,6 +303,35 @@ func TestAIOpsDataManagementRemainsAdminOnly(t *testing.T) {
 		w := aiOpsTestRequest(t, f, &session.Identity{ID: 7, IsStaff: 1}, "GET", action, "")
 		if w.Code != 200 || f.actor != 7 {
 			t.Fatalf("staff operational route blocked %s: status=%d", action, w.Code)
+		}
+	}
+}
+
+func TestAIOpsFailoverConfigurationHTTP(t *testing.T) {
+	body := `{"enabled":true,"base_url":"https://primary.example.test","models":["gpt-6.1-sol"],"failover_enabled":true,"failover_timeout_seconds":25,"fallback_relays":[{"name":"backup","base_url":"https://backup.example.test","api_key":"fixture-backup-secret","models":["gpt-6.1-sol"],"enabled":true}]}`
+	f := &fakeAIOps{}
+	w := aiOpsTestRequest(t, f, &session.Identity{ID: 7, IsAdmin: 1}, "POST", "config/save", body)
+	r := f.configRequest
+	if w.Code != 200 || r.FailoverEnabled == nil || !*r.FailoverEnabled || r.FailoverTimeoutSeconds == nil || *r.FailoverTimeoutSeconds != 25 || r.FallbackRelays == nil || len(*r.FallbackRelays) != 1 || (*r.FallbackRelays)[0].APIKey != "fixture-backup-secret" {
+		t.Fatalf("failover JSON did not reach service: %d", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "fixture-backup-secret") || !strings.Contains(w.Header().Get("Cache-Control"), "no-store") {
+		t.Fatal("unsafe response")
+	}
+	f = &fakeAIOps{}
+	w = aiOpsTestRequest(t, f, &session.Identity{ID: 8, IsStaff: 1}, "POST", "config/save", body)
+	if w.Code != 403 || f.calls != 0 {
+		t.Fatal("staff changed relay configuration", w.Code)
+	}
+	for _, payload := range []string{`{"models":["gpt-6.1-sol"]}`, `{"models":["gpt-6.1-sol"],"fallback_relays":[]}`} {
+		f = &fakeAIOps{}
+		w = aiOpsTestRequest(t, f, &session.Identity{ID: 7, IsAdmin: 1}, "POST", "config/save", payload)
+		if w.Code != 200 {
+			t.Fatal(w.Code)
+		}
+		omitted := !strings.Contains(payload, "fallback_relays")
+		if (f.configRequest.FallbackRelays == nil) != omitted {
+			t.Fatal("omitted list and empty list must remain distinct")
 		}
 	}
 }

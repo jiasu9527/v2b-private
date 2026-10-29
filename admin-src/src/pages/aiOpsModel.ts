@@ -5,7 +5,33 @@ export type AIReasoningEffort = 'auto' | 'none' | 'minimal' | 'low' | 'medium' |
 export type AIReasoningChoice = 'default' | AIReasoningEffort;
 export const AI_REASONING_LABELS: Record<AIReasoningEffort, string> = { auto: '中转默认', none: '不启用推理', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '极高' };
 export const AI_REASONING_OPTIONS = Object.entries(AI_REASONING_LABELS).map(([value, label]) => ({ value: value as AIReasoningEffort, label }));
-export type AIConfig = { enabled: boolean; base_url?: string; models: string[]; has_api_key: boolean; reasoning_efforts?: Record<string, string> };
+export type AIFallbackRelay = { id: string; name: string; base_url: string; models: string[]; enabled: boolean; has_api_key: boolean };
+export type AIFallbackRelayForm = { id?: string; name: string; base_url: string; models: string[]; enabled: boolean; api_key: string; clear_api_key: boolean };
+export type AIConfig = { enabled: boolean; base_url?: string; models: string[]; has_api_key: boolean; reasoning_efforts?: Record<string, string>; failover_enabled?: boolean; failover_timeout_seconds?: number; fallback_relays?: AIFallbackRelay[] };
+export const AI_MAX_FALLBACK_RELAYS = 4;
+export const AI_DEFAULT_FAILOVER_TIMEOUT = 30;
+export function aiFallbackRelayForms(relays: AIFallbackRelay[] = []): AIFallbackRelayForm[] {
+  return relays.map((relay) => ({ id: relay.id, name: relay.name, base_url: relay.base_url, models: [...relay.models], enabled: relay.enabled, api_key: '', clear_api_key: false }));
+}
+export function aiPrepareFallbackRelays(values: AIFallbackRelayForm[] = [], previous: AIFallbackRelay[] = [], models: string[] = []): AIFallbackRelayForm[] {
+  if (values.length > AI_MAX_FALLBACK_RELAYS) throw new Error('最多配置 4 个备用中转');
+  const ids = new Set<string>();
+  return values.map((relay, index) => {
+    const id = relay.id || '';
+    const saved = id ? previous.find((item) => item.id === id) : undefined;
+    if (id && (!saved || ids.has(id))) throw new Error(`备用中转 ${index + 1} 的配置已变化，请刷新后重试`);
+    if (id) ids.add(id);
+    const apiKey = String(relay.api_key || '').trim();
+    const clear = !!relay.clear_api_key;
+    if (clear && apiKey) throw new Error(`备用中转 ${index + 1}：清除 Key 和填写新 Key 不能同时使用`);
+    const baseURL = String(relay.base_url || '').trim();
+    if (saved?.has_api_key && baseURL !== saved.base_url && !apiKey && !clear) throw new Error(`备用中转 ${index + 1}：修改地址后请重新输入 API Key 或明确清除旧 Key`);
+    if (relay.enabled && !apiKey && (!saved?.has_api_key || clear)) throw new Error(`备用中转 ${index + 1}：启用前请填写 API Key，或先停用该中转`);
+    const supportedModels = [...new Set((relay.models || []).map((model) => model.trim()).filter(Boolean))];
+    if (supportedModels.some((model) => !models.includes(model))) throw new Error(`备用中转 ${index + 1}：请选择当前全局模型列表中的模型，或清空以继承全部模型`);
+    return { ...(id ? { id } : {}), name: String(relay.name || '').trim(), base_url: baseURL, models: supportedModels, enabled: !!relay.enabled, api_key: apiKey, clear_api_key: clear };
+  });
+}
 export type AISession = { id: number; title: string; model: string; created_by: number; status: string; created_at: number; updated_at: number; access_mode?: AIAccessMode; access_version?: number; full_access_by?: number; reasoning_effort?: AIReasoningChoice };
 export type AIMessage = { id: number; session_id: number; turn_id: number; role: string; content: string; tool_calls?: { id: string; function: { name: string; arguments: string } }[]; tool_call_id?: string; created_at: number };
 export type AITurn = { id: number; status: string; error: string; created_at: number; completed_at: number; draft_content?: string; draft_round?: number; draft_version?: number; access_mode?: AIAccessMode; stop_requested?: boolean; reasoning_effort?: AIReasoningEffort };

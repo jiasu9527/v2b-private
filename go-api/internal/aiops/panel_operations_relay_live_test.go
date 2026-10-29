@@ -42,7 +42,7 @@ func TestAIPanelOperationsRelayLive(t *testing.T) {
 	}
 	listed, described := false, false
 	for round := 0; round < 5; round++ {
-		mock.ExpectQuery(`SELECT enabled,base_url,models::TEXT,api_key_cipher`).WillReturnRows(sqlmock.NewRows([]string{"enabled", "base_url", "models", "key", "reasoning_efforts"}).AddRow(true, base, string(models), cipher, `{}`))
+		mock.ExpectQuery(`SELECT enabled,base_url,models::TEXT,api_key_cipher`).WillReturnRows(sqlmock.NewRows([]string{"enabled", "base_url", "models", "key", "reasoning_efforts", "fallback_relays", "failover_enabled", "failover_timeout_seconds"}).AddRow(true, base, string(models), cipher, `{}`, `[]`, false, 30))
 		ctx, cancel := context.WithTimeout(context.Background(), 95*time.Second)
 		started := time.Now()
 		response, err := s.complete(ctx, DefaultModels[0], messages)

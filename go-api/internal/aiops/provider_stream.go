@@ -130,7 +130,7 @@ func readCompletionStream(ctx context.Context, reader io.Reader, onContent func(
 		}
 		if changed && onContent != nil {
 			if err := onContent(out.Content); err != nil {
-				return errors.New("AI 回复更新已中止")
+				return errProviderContentUpdate
 			}
 		}
 		return nil

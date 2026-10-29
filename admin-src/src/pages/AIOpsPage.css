@@ -27,6 +27,20 @@
 .ai-ops-reasoning-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px;min-width:0}
 .ai-ops-reasoning-grid .ant-form-item-label>label{height:auto;overflow-wrap:anywhere}
 .ai-ops-reasoning-grid .ant-select{width:100%;min-width:0}
+.ai-ops-relay-settings{margin:8px 0 24px;padding-top:20px;border-top:1px solid #e8edf2;min-width:0}
+.ai-ops-relay-settings>.ant-typography-secondary{margin:6px 0 16px;font-size:12px}
+.ai-ops-failover-controls{display:grid;grid-template-columns:minmax(160px,1fr) minmax(0,2fr);gap:0 20px}
+.ai-ops-failover-controls .ant-input-number{width:140px;max-width:100%}
+.ai-ops-relay{border:1px solid #e5e7eb;border-radius:6px;padding:16px;margin-bottom:12px;min-width:0}
+.ai-ops-relay-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.ai-ops-relay-head>.ant-typography{flex-shrink:0}
+.ai-ops-relay-identity{display:grid;grid-template-columns:minmax(0,1fr) 110px;gap:0 16px}
+.ai-ops-relay .ant-select{width:100%;min-width:0}
+.ai-ops-relay .ant-select-selection-overflow-item{max-width:100%}
+.ai-ops-relay .ant-select-selection-item-content{overflow:hidden;text-overflow:ellipsis}
+.ai-ops-relay .ant-form-item:last-child{margin-bottom:0}
+.ai-ops-relay-add{max-width:100%}
+@media(max-width:575.98px){.ai-ops-failover-controls{grid-template-columns:minmax(0,1fr)}.ai-ops-relay{padding:12px}.ai-ops-relay-identity{grid-template-columns:minmax(0,1fr) 90px;gap:0 10px}.ai-ops-relay-head>.ant-space{margin-left:auto}.ai-ops-relay-head .ant-btn{padding-inline:4px;font-size:12px}}
 @media(min-width:1400px){.ai-ops-conversation-head{flex-direction:row;align-items:center;justify-content:space-between;gap:16px}.ai-ops-conversation-title{flex:1}.ai-ops-conversation-controls{width:540px;flex-shrink:0}}
 @media(max-width:991.98px){
   .ai-ops-page-chat{display:flex;flex-direction:column;height:calc(100dvh - 60px);min-height:520px;box-sizing:border-box;padding-bottom:8px}

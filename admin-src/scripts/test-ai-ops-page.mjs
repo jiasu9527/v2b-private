@@ -125,7 +125,7 @@ test('staff only see their own conversations and all conversation deletion and g
 test('explicit server form credentials clear on save/close and chat sends only its content envelope', () => {
   const send = page.slice(page.indexOf('const send ='), page.indexOf('const saveConfig'));
   assert.doesNotMatch(send, /password|private_key|api_key:/);
-  assert.match(page, /configForm\.setFieldsValue\(\{ api_key: '', clear_api_key: false \}\)/);
+  assert.match(page, /configForm\.setFieldsValue\(\{ api_key: '', clear_api_key: false, fallback_relays: fallbackRelays\.map\(\(relay\) => \(\{ \.\.\.relay, api_key: '', clear_api_key: false \}\)\)/);
   assert.match(page, /setServerOpen\(false\); setFingerprint\(null\); serverForm\.resetFields\(\)/);
   assert.match(page, /setServerOpen\(false\); serverForm\.resetFields\(\)/);
   assert.match(page, /api_key: values\.api_key \|\| ''/);

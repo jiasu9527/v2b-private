@@ -2,10 +2,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Descriptions, Drawer, Form, Grid, Input, InputNumber, Modal, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
 import { DeleteOutlined, HistoryOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
 import { apiGet, apiJsonPost, getAdminUserInfo } from '../lib/api';
-import { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, AI_REASONING_OPTIONS, aiReasoningDefaults, aiReasoningDefaultLabel, aiSessionReasoning, aiAccessMode, aiCanReadSession, aiOwnsFullAccess, aiMergeSessionAccess, aiActionStatus, aiApplyDraft, aiCanApprove, aiConversationTurns, aiFingerprintMatches, aiLatestTurn, aiToolResultName, aiMergeSnapshot, aiNearBottom, aiParseModels, aiRequestID, aiSessionBusy, aiShouldSendKey, aiVisibleDraft, type AIAccessMode, type AIReasoningChoice, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
+import { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, AI_DEFAULT_FAILOVER_TIMEOUT, AI_REASONING_OPTIONS, aiFallbackRelayForms, aiPrepareFallbackRelays, aiReasoningDefaults, aiReasoningDefaultLabel, aiSessionReasoning, aiAccessMode, aiCanReadSession, aiOwnsFullAccess, aiMergeSessionAccess, aiActionStatus, aiApplyDraft, aiCanApprove, aiConversationTurns, aiFingerprintMatches, aiLatestTurn, aiToolResultName, aiMergeSnapshot, aiNearBottom, aiParseModels, aiRequestID, aiSessionBusy, aiShouldSendKey, aiVisibleDraft, type AIAccessMode, type AIReasoningChoice, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
 import { aiReadSessionStream } from './aiOpsStream';
 import AIOpsMarkdown from './AIOpsMarkdown';
 import AIOpsActionSummary, { aiActionNames } from './AIOpsActionSummary';
+import AIOpsRelaySettings from './AIOpsRelaySettings';
 import './AIOpsPage.css';
 
 const { Text, Paragraph } = Typography;
@@ -126,6 +127,12 @@ export default function AIOpsPage() {
     if (!alive.current) return;
     setSessions((items) => responseList(sessionResult).filter((session) => aiCanReadSession(session, actorID, isAdmin)).map((session) => aiMergeSessionAccess(items.find((item) => item.id === session.id), session)));
   };
+  const applyConfig = (next: AIConfig) => {
+    if (!next || !Array.isArray(next.models)) throw new Error('AI 配置数据格式不正确');
+    setConfig(next);
+    if (isAdmin) configForm.setFieldsValue({ ...next, reasoning_efforts: aiReasoningDefaults(next.models, next.reasoning_efforts), models_text: next.models.join('\n'), api_key: '', clear_api_key: false, failover_enabled: !!next.failover_enabled, failover_timeout_seconds: next.failover_timeout_seconds ?? AI_DEFAULT_FAILOVER_TIMEOUT, fallback_relays: aiFallbackRelayForms(next.fallback_relays) });
+    setModel((current) => next.models.includes(current) ? current : next.models[0] || AI_DEFAULT_MODELS[0]);
+  };
   const load = async (refreshConfig = true) => {
     setLoading(true);
     try {
@@ -133,11 +140,7 @@ export default function AIOpsPage() {
       if (refreshConfig) {
         const response = await apiGet('/ai-ops/config', {}, { cache: 'no-store' });
         if (!alive.current) return;
-        const next = response?.data as AIConfig;
-        if (!next || !Array.isArray(next.models)) throw new Error('AI 配置数据格式不正确');
-        setConfig(next);
-        if (isAdmin) configForm.setFieldsValue({ ...next, reasoning_efforts: aiReasoningDefaults(next.models, next.reasoning_efforts), models_text: next.models.join('\n'), api_key: '', clear_api_key: false });
-        setModel((current) => next.models.includes(current) ? current : next.models[0] || AI_DEFAULT_MODELS[0]);
+        applyConfig(response?.data as AIConfig);
       }
       if (selectedRef.current) await loadDetail(selectedRef.current);
       if (alive.current) { setLoaded(true); setError(''); }
@@ -284,9 +287,12 @@ export default function AIOpsPage() {
       const values = await configForm.validateFields();
       if (config.has_api_key && String(values.base_url || '').trim() !== config.base_url && !values.api_key && !values.clear_api_key) throw new Error('修改中转地址后必须重新输入 API Key 或明确清除旧 Key，不能自动沿用');
       const models = aiParseModels(values.models_text || '');
-      await apiJsonPost('/ai-ops/config/save', { enabled: !!values.enabled, base_url: String(values.base_url || '').trim(), models, reasoning_efforts: aiReasoningDefaults(models, values.reasoning_efforts), api_key: values.api_key || '', clear_api_key: !!values.clear_api_key });
+      const fallbackRelays = aiPrepareFallbackRelays(values.fallback_relays, config.fallback_relays, models);
+      const response = await apiJsonPost('/ai-ops/config/save', { enabled: !!values.enabled, base_url: String(values.base_url || '').trim(), models, reasoning_efforts: aiReasoningDefaults(models, values.reasoning_efforts), api_key: values.api_key || '', clear_api_key: !!values.clear_api_key, failover_enabled: !!values.failover_enabled, failover_timeout_seconds: values.failover_timeout_seconds ?? AI_DEFAULT_FAILOVER_TIMEOUT, fallback_relays: fallbackRelays });
       if (!alive.current) return;
-      configForm.setFieldsValue({ api_key: '', clear_api_key: false }); message.success('AI 配置已保存'); await load();
+      configForm.setFieldsValue({ api_key: '', clear_api_key: false, fallback_relays: fallbackRelays.map((relay) => ({ ...relay, api_key: '', clear_api_key: false })) });
+      applyConfig(response?.data as AIConfig);
+      message.success('AI 配置已保存'); await load(false);
     } catch (e) { fail(e, '保存配置失败'); }
     finally { finish(); }
   };
@@ -431,6 +437,7 @@ export default function AIOpsPage() {
     <Form.Item name="clear_api_key" valuePropName="checked"><Checkbox>清除已有 API Key</Checkbox></Form.Item>
     <Form.Item name="models_text" label="模型 ID（每行一个）" rules={[{ validator: (_, value) => aiParseModels(value || '').length ? Promise.resolve() : Promise.reject(new Error('至少填写一个模型 ID')) }]} extra="默认提供四个模型 ID；可以按中转支持的实际 ID 修改，不会自动替换模型。"><Input.TextArea rows={4} /></Form.Item>
     <div className="ai-ops-reasoning-settings"><Text strong>各模型默认推理强度</Text><Paragraph type="secondary">具体等级取决于中转站和模型支持情况；不支持时请选择“中转默认”，请求中不传推理参数。</Paragraph><div className="ai-ops-reasoning-grid">{aiParseModels(configuredModelsText ?? config.models.join('\n')).map((id) => <Form.Item key={id} name={['reasoning_efforts', id]} label={id} initialValue="auto"><Select aria-label={`${id} 默认推理强度`} options={AI_REASONING_OPTIONS} /></Form.Item>)}</div></div>
+    <AIOpsRelaySettings config={config} form={configForm} models={aiParseModels(configuredModelsText ?? config.models.join('\n'))} busy={!!busy} />
     <Button type="primary" htmlType="submit" loading={busy === 'config'}>保存设置</Button>
   </Form></Card><Card title="数据清理" size="small"><Paragraph>清空会话只删除聊天、消息及相关操作记录，保留中转配置和服务器凭据。重置全部 AI 数据会同时清除这三类数据并停止进行中的 AI 任务；已经在远程服务器启动的命令不能保证撤回或回滚。有远程操作正在执行时，删除、清空和重置会被拒绝，需等操作完成或进入“结果待核对”状态后再处理。</Paragraph><Space wrap><Button danger disabled={!!busy} onClick={() => setConfirmation({ kind: 'clear' })}>清空全部会话</Button><Button danger type="primary" disabled={!!busy} onClick={() => { setResetText(''); setConfirmation({ kind: 'reset' }); }}>重置全部 AI 数据</Button></Space></Card></Space> : null;
   const titles = { delete: '删除当前会话', clear: '清空全部会话', reset: '重置全部 AI 数据', 'server-delete': '删除服务器配置' };

@@ -29,6 +29,8 @@ type Service struct {
 	wg              sync.WaitGroup
 	slots           chan struct{}
 	httpClient      providerHTTPClient
+	relayHealthMu   sync.Mutex
+	relayCooldowns  map[[32]byte]time.Time
 }
 
 func NewService(cfg config.Config, db *sql.DB, panel Panel) *Service {

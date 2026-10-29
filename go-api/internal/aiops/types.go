@@ -16,19 +16,42 @@ var (
 var DefaultModels = []string{"gpt-6.1-sol", "claude-fable-5-1", "deepseek-v4.1-flash", "glm-5.3"}
 
 type Config struct {
-	ReasoningEfforts map[string]string `json:"reasoning_efforts"`
-	Enabled          bool              `json:"enabled"`
-	BaseURL          string            `json:"base_url"`
-	Models           []string          `json:"models"`
-	HasAPIKey        bool              `json:"has_api_key"`
+	FallbackRelays         []RelayConfig     `json:"fallback_relays"`
+	FailoverEnabled        bool              `json:"failover_enabled"`
+	FailoverTimeoutSeconds int               `json:"failover_timeout_seconds"`
+	ReasoningEfforts       map[string]string `json:"reasoning_efforts"`
+	Enabled                bool              `json:"enabled"`
+	BaseURL                string            `json:"base_url"`
+	Models                 []string          `json:"models"`
+	HasAPIKey              bool              `json:"has_api_key"`
 }
 type ConfigSaveRequest struct {
-	ReasoningEfforts *map[string]string `json:"reasoning_efforts,omitempty"`
-	Enabled          bool               `json:"enabled"`
-	BaseURL          string             `json:"base_url"`
-	Models           []string           `json:"models"`
-	APIKey           string             `json:"api_key"`
-	ClearAPIKey      bool               `json:"clear_api_key"`
+	FallbackRelays         *[]RelaySaveRequest `json:"fallback_relays,omitempty"`
+	FailoverEnabled        *bool               `json:"failover_enabled,omitempty"`
+	FailoverTimeoutSeconds *int                `json:"failover_timeout_seconds,omitempty"`
+	ReasoningEfforts       *map[string]string  `json:"reasoning_efforts,omitempty"`
+	Enabled                bool                `json:"enabled"`
+	BaseURL                string              `json:"base_url"`
+	Models                 []string            `json:"models"`
+	APIKey                 string              `json:"api_key"`
+	ClearAPIKey            bool                `json:"clear_api_key"`
+}
+type RelayConfig struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	BaseURL   string   `json:"base_url"`
+	Models    []string `json:"models"`
+	Enabled   bool     `json:"enabled"`
+	HasAPIKey bool     `json:"has_api_key"`
+}
+type RelaySaveRequest struct {
+	ID          string   `json:"id,omitempty"`
+	Name        string   `json:"name"`
+	BaseURL     string   `json:"base_url"`
+	Models      []string `json:"models"`
+	Enabled     bool     `json:"enabled"`
+	APIKey      string   `json:"api_key"`
+	ClearAPIKey bool     `json:"clear_api_key"`
 }
 type CreateSessionRequest struct {
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
