@@ -49,7 +49,7 @@ func (s *Service) toolDefinitions() []ToolDefinition {
 		out = append(out, ToolDefinition{Type: "function", Function: ToolFunctionDefinition{Name: n, Description: d, Parameters: raw}})
 	}
 	page := func() map[string]any {
-		return map[string]any{"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "最大记录数；输出较大时会返回更少记录，按 next_offset 继续，不要使用 offset+limit"}, "offset": map[string]any{"type": "integer", "minimum": 0, "maximum": 10000}}
+		return map[string]any{"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "default": 20, "description": "每页默认20条，最多50条，不要传100。输出较大时会返回更少记录，按 next_offset 继续，不要使用 offset+limit"}, "offset": map[string]any{"type": "integer", "minimum": 0, "maximum": 10000, "default": 0, "description": "第一页为0，后续使用结果的next_offset；truncated=true表示尚未读完"}}
 	}
 	add("panel_status", "读取调度器与队列健康，不读取凭据或原始日志。", nil)
 	add("user_lookup", "完整邮箱或ID精确查询普通用户套餐和用量，不含凭据。", map[string]any{"query": str("完整邮箱或正整数ID")}, "query")
@@ -97,7 +97,13 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 	if a.Limit == 0 {
 		a.Limit = 20
 	}
-	if a.Limit < 1 || a.Limit > 50 || a.Offset < 0 || a.Offset > 10000 {
+	// Only read-only list tools declare limit. Keep the server cap even when a
+	// model ignores maximum in the schema, without wasting a tool round. The
+	// returned page reports the effective limit and actual continuation offset.
+	if a.Limit > 50 {
+		a.Limit = 50
+	}
+	if a.Limit < 1 || a.Offset < 0 || a.Offset > 10000 {
 		return ToolOutcome{}, ErrValidation
 	}
 	var result any
