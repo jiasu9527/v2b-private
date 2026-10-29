@@ -328,8 +328,7 @@ export default function AIOpsPage() {
   const remove = async () => {
     if (!confirmation || (confirmation.kind === 'reset' && resetText !== 'RESET_AI_DATA') || !begin('remove')) return;
     try {
-      if ((confirmation.kind === 'clear' || confirmation.kind === 'reset') && !isAdmin) throw new Error('仅管理员可清理全部数据');
-      if (confirmation.kind === 'delete' && !aiCanReadSession(confirmation.session!, actorID, isAdmin)) throw new Error('只能删除本人创建的会话');
+      if ((confirmation.kind === 'delete' || confirmation.kind === 'clear' || confirmation.kind === 'reset') && !isAdmin) throw new Error('仅管理员可删除会话或清理数据');
       if (confirmation.kind === 'delete') await apiJsonPost('/ai-ops/session/delete', { id: confirmation.session!.id, confirm: true });
       if (confirmation.kind === 'clear') await apiJsonPost('/ai-ops/session/clear', { confirm: true });
       if (confirmation.kind === 'reset') await apiJsonPost('/ai-ops/reset', { confirm: true, confirm_text: 'RESET_AI_DATA' });
@@ -348,7 +347,7 @@ export default function AIOpsPage() {
   const sessionHistory = <div className="ai-ops-session-history">
     <Space wrap><Button ref={historyNewButton} icon={<PlusOutlined />} onClick={() => { newSession(); setHistoryOpen(false); }}>新对话</Button>{isAdmin && <Button danger type="text" disabled={!sessions.length || !!busy} onClick={() => setConfirmation({ kind: 'clear' })}>清空全部会话</Button>}</Space>
     <Paragraph type="secondary">{isAdmin ? '全部操作人的会话' : '我的会话'} · 最近 200 个</Paragraph>
-    <div className="ai-ops-session-list">{sessions.map((session) => <div className={`ai-ops-session ${selectedID === session.id ? 'is-active' : ''}`} key={session.id}><button onClick={() => { selectSession(session); setHistoryOpen(false); }}><strong>{session.title || `会话 #${session.id}`}</strong><span>{session.model}</span><span>{time(session.updated_at)} · 操作人 #{session.created_by} {session.status === 'running' ? '· 处理中' : ''}</span></button><Button type="text" danger aria-label={`删除会话 ${session.id}`} icon={<DeleteOutlined />} disabled={!!busy} onClick={() => setConfirmation({ kind: 'delete', session })} /></div>)}</div>
+    <div className="ai-ops-session-list">{sessions.map((session) => <div className={`ai-ops-session ${selectedID === session.id ? 'is-active' : ''}`} key={session.id}><button onClick={() => { selectSession(session); setHistoryOpen(false); }}><strong>{session.title || `会话 #${session.id}`}</strong><span>{session.model}</span><span>{time(session.updated_at)} · 操作人 #{session.created_by} {session.status === 'running' ? '· 处理中' : ''}</span></button>{isAdmin && <Button type="text" danger aria-label={`删除会话 ${session.id}`} icon={<DeleteOutlined />} disabled={!!busy} onClick={() => setConfirmation({ kind: 'delete', session })} />}</div>)}</div>
     {!sessions.length && <Text type="secondary">暂无历史会话</Text>}
   </div>;
   const chat = <div className="ai-ops-chat-layout">

@@ -220,13 +220,8 @@ func (s *Service) ResetData(ctx context.Context, actorID int64) error {
 	return s.deleteData(ctx, actorID, 0, true)
 }
 func (s *Service) deleteData(ctx context.Context, actorID, id int64, reset bool) error {
-	if err := s.requireOperator(ctx, actorID); err != nil {
+	if err := s.requireAdmin(ctx, actorID); err != nil {
 		return err
-	}
-	if id == 0 || reset {
-		if err := s.requireAdmin(ctx, actorID); err != nil {
-			return err
-		}
 	}
 	if err := s.ensureSchema(ctx); err != nil {
 		return err
@@ -256,13 +251,8 @@ func (s *Service) deleteData(ctx context.Context, actorID, id int64, reset bool)
 	if err = lockAIStateExclusive(ctx, tx); err != nil {
 		return err
 	}
-	if err = s.requireOperatorTx(ctx, tx, actorID); err != nil {
+	if err = s.requireAdminTx(ctx, tx, actorID); err != nil {
 		return err
-	}
-	if id == 0 || reset {
-		if err = s.requireAdminTx(ctx, tx, actorID); err != nil {
-			return err
-		}
 	}
 	if id > 0 {
 		if err = s.requireSessionAccessTx(ctx, tx, actorID, id); err != nil {

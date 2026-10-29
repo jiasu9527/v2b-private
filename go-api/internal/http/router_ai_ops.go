@@ -44,7 +44,7 @@ func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Servic
 		handleAIOpsError(w, aiops.ErrForbidden)
 		return
 	}
-	if actor.IsAdmin == 0 && (action == "config/save" || action == "session/clear" || action == "reset") {
+	if actor.IsAdmin == 0 && (action == "config/save" || action == "session/delete" || action == "session/clear" || action == "reset") {
 		handleAIOpsError(w, aiops.ErrForbidden)
 		return
 	}

@@ -58,7 +58,7 @@ test('administrators and staff can reach AI operations while ordinary users cann
   assert.doesNotMatch(app, /MCPPage|config\/mcp/);
 });
 
-test('staff only see their own conversations and global settings and cleanup remain administrator-only', () => {
+test('staff only see their own conversations and all conversation deletion and global settings remain administrator-only', () => {
   const own = { id: 1, created_by: 7 };
   assert.equal(aiCanReadSession(own, 7, false), true);
   for (const actorID of [0, 8, NaN]) assert.equal(aiCanReadSession(own, actorID, false), false);
@@ -68,7 +68,11 @@ test('staff only see their own conversations and global settings and cleanup rem
   assert.match(page, /const settings = isAdmin \?/);
   assert.match(page, /\.\.\.\(isAdmin \? \[\{ key: 'settings'/);
   assert.match(page, /if \(!isAdmin \|\| !begin\('config'\)\) return/);
-  assert.match(page, /\(confirmation.kind === 'clear' \|\| confirmation.kind === 'reset'\) && !isAdmin/);
+  assert.match(page, /\(confirmation.kind === 'delete' \|\| confirmation.kind === 'clear' \|\| confirmation.kind === 'reset'\) && !isAdmin/);
+  assert.match(page, /\{isAdmin && <Button type="text" danger aria-label=\{`删除会话 \$\{session.id\}`\}/);
+  const remove = page.slice(page.indexOf('const remove ='), page.indexOf('const checkServer ='));
+  assert.doesNotMatch(remove, /aiCanReadSession/);
+  assert.match(remove, /if \(confirmation.kind === 'server-delete'\) await apiJsonPost\('\/ai-ops\/server\/delete'/);
   const accessOwner = page.slice(page.indexOf('{foreignFullAccess &&'), page.indexOf('<div className="ai-ops-messages"'));
   assert.match(accessOwner, /onClick=\{\(\) => void changeAccess\('full'\)\}>由我启用完全访问/);
   assert.doesNotMatch(accessOwner, /isAdmin/);

@@ -224,12 +224,16 @@ func TestAIOpsAccessAndStopRequireRealOperatorAndStrictPayload(t *testing.T) {
 	}
 }
 
-func TestAIOpsGlobalManagementRemainsAdminOnly(t *testing.T) {
-	for _, action := range []string{"config/save", "session/clear", "reset"} {
+func TestAIOpsDataManagementRemainsAdminOnly(t *testing.T) {
+	for _, action := range []string{"config/save", "session/delete", "session/clear", "reset"} {
 		f := &fakeAIOps{}
-		w := aiOpsTestRequest(t, f, &session.Identity{ID: 7, IsStaff: 1}, "POST", action, `{"confirm":true,"confirm_text":"RESET_AI_DATA"}`)
+		body := `{"confirm":true,"confirm_text":"RESET_AI_DATA"}`
+		if action == "session/delete" {
+			body = `{"id":1,"confirm":true}`
+		}
+		w := aiOpsTestRequest(t, f, &session.Identity{ID: 7, IsStaff: 1}, "POST", action, body)
 		if w.Code != 403 || f.calls != 0 {
-			t.Fatalf("staff reached global management %s: status=%d calls=%d", action, w.Code, f.calls)
+			t.Fatalf("staff reached admin-only management %s: status=%d calls=%d", action, w.Code, f.calls)
 		}
 	}
 	for _, action := range []string{"config", "sessions", "servers", "session?id=1"} {

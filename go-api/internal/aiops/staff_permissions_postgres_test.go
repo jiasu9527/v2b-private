@@ -96,10 +96,11 @@ func TestAIStaffPostgresOwnershipAndManagementBoundaries(t *testing.T) {
 		t.Fatal("staff safe configuration", cfg, err)
 	}
 	for name, fn := range map[string]func() error{
-		"save config":   func() error { _, e := f.s.SaveConfig(ctx, f.staff, ConfigSaveRequest{}); return e },
-		"clear all":     func() error { return f.s.ClearSessions(ctx, f.staff) },
-		"reset all":     func() error { return f.s.ResetData(ctx, f.staff) },
-		"ordinary user": func() error { _, e := f.s.ListSessions(ctx, f.user); return e },
+		"save config":             func() error { _, e := f.s.SaveConfig(ctx, f.staff, ConfigSaveRequest{}); return e },
+		"clear all":               func() error { return f.s.ClearSessions(ctx, f.staff) },
+		"reset all":               func() error { return f.s.ResetData(ctx, f.staff) },
+		"delete own full session": func() error { return f.s.DeleteSession(ctx, f.staff, staffSession.ID) },
+		"ordinary user":           func() error { _, e := f.s.ListSessions(ctx, f.user); return e },
 	} {
 		t.Run(name, func(t *testing.T) {
 			if e := fn(); !errors.Is(e, ErrForbidden) {
@@ -108,6 +109,9 @@ func TestAIStaffPostgresOwnershipAndManagementBoundaries(t *testing.T) {
 		})
 	}
 	for _, foreign := range []Session{adminSession, otherSession} {
+		if err = f.s.DeleteSession(ctx, f.staff, foreign.ID); !errors.Is(err, ErrForbidden) {
+			t.Fatal("staff deletion of foreign session not forbidden", err)
+		}
 		for name, fn := range map[string]func() error{
 			"detail":  func() error { _, e := f.s.GetSession(ctx, f.staff, foreign.ID); return e },
 			"draft":   func() error { _, e := f.s.GetDraft(ctx, f.staff, foreign.ID); return e },
@@ -123,7 +127,6 @@ func TestAIStaffPostgresOwnershipAndManagementBoundaries(t *testing.T) {
 			"stop":    func() error { return f.s.StopSession(ctx, f.staff, foreign.ID) },
 			"approve": func() error { _, e := f.s.ApproveAction(ctx, f.staff, foreign.ID, 999); return e },
 			"reject":  func() error { _, e := f.s.RejectAction(ctx, f.staff, foreign.ID, 999); return e },
-			"delete":  func() error { return f.s.DeleteSession(ctx, f.staff, foreign.ID) },
 			"query tool": func() error {
 				_, e := f.s.callTool(ctx, f.staff, foreign.ID, ToolCall{ID: "cross-session", Function: ToolFunction{Name: "plans_list", Arguments: `{}`}})
 				return e
@@ -177,11 +180,39 @@ func TestAIStaffPostgresOwnershipAndManagementBoundaries(t *testing.T) {
 		t.Fatal("banned staff remained authorized", err)
 	}
 	f.db.Exec(`UPDATE v2_user SET banned=0 WHERE id=$1`, f.staff)
-	if err = f.s.DeleteSession(ctx, f.staff, staffSession.ID); err != nil {
-		t.Fatal("cannot delete own session", err)
+	if _, err = f.db.Exec(`WITH turn AS (
+		INSERT INTO v2_ai_turn(session_id,actor_id,request_id,request_hash,model,status,created_at,expires_at)
+		VALUES($1,$2,'retained-message','fixture',$3,'completed',1,1) RETURNING id
+	) INSERT INTO v2_ai_message(session_id,turn_id,role,content,created_at)
+		SELECT $1,id,'user','staff conversation retained',1 FROM turn`, staffSession.ID, f.staff, DefaultModels[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.s.DeleteSession(ctx, f.staff, staffSession.ID); !errors.Is(err, ErrForbidden) {
+		t.Fatal("staff can delete own standard session", err)
+	}
+	detail, err := f.s.GetSession(ctx, f.admin, staffSession.ID)
+	if err != nil || len(detail.Messages) != 1 || detail.Messages[0].Content != "staff conversation retained" || len(detail.Turns) != 1 {
+		t.Fatal("admin cannot inspect retained staff conversation", detail, err)
+	}
+	actions, err := f.s.ListActions(ctx, f.admin, staffSession.ID)
+	if err != nil || len(actions) != 1 || actions[0].ID != action.ID {
+		t.Fatal("staff operation record not retained", actions, err)
+	}
+	if err = f.s.DeleteSession(ctx, f.admin, staffSession.ID); err != nil {
+		t.Fatal("admin cannot delete staff conversation", err)
+	}
+	if _, err = f.s.GetSession(ctx, f.admin, staffSession.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatal("deleted staff session remains accessible", err)
+	}
+	var remaining int
+	if err = f.db.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM v2_ai_message WHERE session_id=$1) +
+		(SELECT COUNT(*) FROM v2_ai_turn WHERE session_id=$1) +
+		(SELECT COUNT(*) FROM v2_ai_action WHERE session_id=$1)`, staffSession.ID).Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatal("admin deletion left staff conversation data behind", remaining, err)
 	}
 	if _, err = f.s.GetSession(ctx, f.admin, adminSession.ID); err != nil {
-		t.Fatal("staff deletion damaged admin session", err)
+		t.Fatal("deleting staff conversation damaged admin session", err)
 	}
 	if err = f.s.DeleteSession(ctx, f.admin, otherSession.ID); err != nil {
 		t.Fatal("admin cannot delete staff session", err)
