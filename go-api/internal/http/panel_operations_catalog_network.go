@@ -35,7 +35,7 @@ func panelNetworkOperations() []aiops.PanelOperation {
 			description += "protocol是V2node使用的底层协议，先查询目标或参考模板节点，不能由V2node名称猜测；disable_sni和zero_rtt_handshake必须从该模板或用户明确设置取得，不能遗漏或擅自填默认值。"
 		}
 		add("nodes."+protocol+".save", "nodes", description, "POST", prefix+"/save", true, false, fields, required...)
-		add("nodes."+protocol+".update", "nodes", "修改节点显示状态或入口归属", "POST", prefix+"/update", true, false, poFields("id:i show:i client_entry_only:i entry_group_id:i"), "id")
+		add("nodes."+protocol+".update", "nodes", "修改节点显示状态或入口归属；show=0完全不下发；show=1且client_entry_only=1时仅匹配入口放行规则的有权限用户获得订阅节点，不改变节点端鉴权", "POST", prefix+"/update", true, false, poFields("id:i show:i client_entry_only:i entry_group_id:i"), "id")
 		add("nodes."+protocol+".copy", "nodes", "复制现有节点配置", "POST", prefix+"/copy", true, false, panelSchema{"id": poID()}, "id")
 		add("nodes."+protocol+".delete", "nodes", "删除指定协议节点", "POST", prefix+"/drop", true, false, panelSchema{"id": poID()}, "id")
 	}
@@ -56,8 +56,8 @@ func panelNetworkOperations() []aiops.PanelOperation {
 	base := "/server/client-entry-user-policy"
 	add("entry_rules.list", "entries", "查询全部入口分配规则、条件、二分组和成员", "GET", base+"/fetch", false, false, panelSchema{})
 	add("entry_rules.simulate", "entries", "按邮箱及UA模拟当前命中的入口规则；member可指定协议:节点ID", "GET", base+"/simulate", false, false, poFields("email ua member"), "email")
-	condition := poObj(panelSchema{"field": poEnum("规则字段", "user_id", "registration_days", "plan_id", "email", "ua"), "operator": poEnum("数值eq/gte/lte/gt/lt/in/between；邮箱in；UA contains_any/excludes_any/empty/not_empty", "eq", "gte", "lte", "gt", "lt", "in", "between", "contains_any", "excludes_any", "empty", "not_empty"), "value": panelSchema{"description": "单个匹配值，保持既有规则JSON类型"}, "values": poArray(panelSchema{}), "min": panelSchema{"description": "范围下界，沿用条件数据类型"}, "max": panelSchema{"description": "范围上界，沿用条件数据类型"}}, "field", "operator")
-	add("entry_rules.save", "entries", "新建或完整保存入口分配规则；先查现有规则的conditions结构，保留未修改条件；members为生效节点", "POST", base+"/save", true, false, poMerge(poFields("id:i name action entry_host resolve_entry_host:i extra_nodes_position enabled:i remarks"), panelSchema{"conditions": poArray(condition), "members": members, "extra_nodes": poArray(poText("附加节点订阅链接；先读取现有格式"))}), "name", "conditions")
+	condition := poObj(panelSchema{"field": poEnum("规则字段", "user_id", "registration_days", "plan_id", "email", "ua"), "operator": poEnum("数值eq等于/gte大于等于/lte小于等于/gt大于/lt小于/in指定值/between含两端；用户ID十万以内可用lte value=100000；邮箱in；UA contains_any/excludes_any/empty/not_empty", "eq", "gte", "lte", "gt", "lt", "in", "between", "contains_any", "excludes_any", "empty", "not_empty"), "value": panelSchema{"description": "eq/gt/gte/lt/lte填写单个整数；between填写min/max，in填写values"}, "values": poArray(panelSchema{}), "min": panelSchema{"description": "范围下界，含边界"}, "max": panelSchema{"description": "范围上界，含边界"}}, "field", "operator")
+	add("entry_rules.save", "entries", "新建或完整保存入口分配规则；先查现有规则，保留未修改条件；conditions是AND，members仅含目标节点，逐节点首条命中生效。ID≤100000用一条lte或between范围条件；新节点client_entry_only=1配original/override白名单即可限制订阅下发，不必再建反向hide；同时检查目标是否被其他规则放行。original沿用原地址，override替换入口，hide不下发；不改变节点端鉴权", "POST", base+"/save", true, false, poMerge(poFields("id:i name action entry_host resolve_entry_host:i extra_nodes_position enabled:i remarks"), panelSchema{"conditions": poArray(condition), "members": members, "extra_nodes": poArray(poText("附加节点订阅链接；先读取现有格式"))}), "name", "conditions")
 	add("entry_rules.enabled", "entries", "启用或停用指定入口规则，enabled=0或1", "POST", base+"/enabled", true, false, poFields("id:i enabled:i"), "id", "enabled")
 	add("entry_rules.sort", "entries", "排序入口规则或二分组，items逐项kind/id", "POST", base+"/sort", true, false, panelSchema{"items": poArray(poObj(poFields("kind id:i"), "kind", "id"))}, "items")
 	add("entry_rules.delete", "entries", "删除入口分配规则", "POST", base+"/drop", true, false, panelSchema{"id": poID()}, "id")
@@ -132,6 +132,8 @@ func panelNetworkOperations() []aiops.PanelOperation {
 
 func panelNodeFields(protocol string) panelSchema {
 	p := poFields("id:i group_id:a route_id:a name parent_id:i host port server_port:i tags:a rate:n show:i client_entry_only:i sort:i")
+	p["show"] = poInt("0完全不下发；1开启订阅可见，仍需满足权限组及入口规则")
+	p["client_entry_only"] = poInt("1仅入口分配可见：默认不下发，命中original/override才下发；0允许默认下发；不改变节点端鉴权")
 	extra := map[string]string{
 		"vmess":       "tls:i network rules:a networkSettings tlsSettings ruleSettings dnsSettings",
 		"trojan":      "network network_settings allow_insecure:i server_name",

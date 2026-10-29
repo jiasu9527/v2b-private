@@ -235,6 +235,11 @@ const operatorOptions: Record<ConditionField, Array<{ label: string; value: stri
   user_id: [
     { label: '指定用户', value: 'in' },
     { label: 'ID 范围（含边界）', value: 'between' },
+    { label: '等于', value: 'eq' },
+    { label: '大于', value: 'gt' },
+    { label: '大于等于', value: 'gte' },
+    { label: '小于', value: 'lt' },
+    { label: '小于等于', value: 'lte' },
   ],
   email: [{ label: '指定邮箱', value: 'in' }],
   registration_days: [
@@ -769,6 +774,13 @@ function conditionSummary(condition: EntryCondition) {
   if (condition.field === 'user_id' && condition.operator === 'in') return `指定用户：${values.map((item) => `#${item}`).join('、') || '未选择'}`;
   if (condition.field === 'email' && condition.operator === 'in') return `指定邮箱：${values.length} 个`;
   if (condition.field === 'user_id' && condition.operator === 'between') return `用户 ID：${condition.min} ～ ${condition.max}`;
+  if (condition.field === 'user_id') {
+    if (condition.operator === 'eq') return `用户 ID = ${condition.value}`;
+    if (condition.operator === 'gt') return `用户 ID > ${condition.value}`;
+    if (condition.operator === 'gte') return `用户 ID ≥ ${condition.value}`;
+    if (condition.operator === 'lt') return `用户 ID < ${condition.value}`;
+    if (condition.operator === 'lte') return `用户 ID ≤ ${condition.value}`;
+  }
   if (condition.field === 'registration_days') {
     if (condition.operator === 'between') return `注册天数：${condition.min} ～ ${condition.max} 天`;
     if (condition.operator === 'gt') return `注册天数 > ${condition.value} 天`;

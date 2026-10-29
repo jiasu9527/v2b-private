@@ -460,7 +460,7 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 	}
 	for i := range messages {
 		if messages[i].Role == "system" {
-			messages[i].Content += "\n" + modePrompt + "\n" + paymentConfigurationBoundaryPrompt + "\n" + ticketWorkflowPrompt + "\n" + panelOperationsPrompt + "\n" + sharedKnowledgePrompt
+			messages[i].Content += "\n" + modePrompt + "\n" + paymentConfigurationBoundaryPrompt + "\n" + ticketWorkflowPrompt + "\n" + panelOperationsPrompt + "\n" + entryRuleDeliveryPrompt + "\n" + sharedKnowledgePrompt
 			break
 		}
 	}
