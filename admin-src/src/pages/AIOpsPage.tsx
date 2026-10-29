@@ -269,16 +269,17 @@ export default function AIOpsPage() {
     finally { finish(); }
   };
   const checkServer = (server: AIServer) => { newSession(); setDraft(`请检查已登记服务器 #${server.id}（${server.name}）的状态，仅使用固定只读诊断，不执行其他命令。`); };
+  const deployServer = (server: AIServer) => { newSession(); setDraft(`我要在已登记服务器 #${server.id}（${server.name}，${server.host}）上部署或调整节点／中转服务。先检查系统、现有服务和端口，再按我补充的安装脚本与目标配置生成完整非交互命令，逐项确认后执行。安装任务请设置足够的执行时间，完成后检查服务与连通性。\n\n部署需求：`); };
   const actions = detail?.actions || [];
   const latestTurn = aiLatestTurn(detail?.turns || []);
   const unavailable = !config.enabled || !config.has_api_key;
   const chat = <div className="ai-ops-chat-layout">
     <aside className="ai-ops-sessions"><Space wrap><Button icon={<PlusOutlined />} onClick={newSession}>新对话</Button><Button danger type="text" disabled={!sessions.length || !!busy} onClick={() => setConfirmation({ kind: 'clear' })}>清空全部会话</Button></Space><Paragraph type="secondary">所有管理员共享会话，可查看与删除；列出最近 200 个会话。</Paragraph><div className="ai-ops-session-list">{sessions.map((session) => <div className={`ai-ops-session ${selectedID === session.id ? 'is-active' : ''}`} key={session.id}><button onClick={() => selectSession(session)}><strong>{session.title || `会话 #${session.id}`}</strong><span>{session.model}</span><span>{time(session.updated_at)} · 管理员 #{session.created_by} {session.status === 'running' ? '· 处理中' : ''}</span></button><Button type="text" danger aria-label={`删除会话 ${session.id}`} icon={<DeleteOutlined />} disabled={!!busy} onClick={() => setConfirmation({ kind: 'delete', session })} /></div>)}</div></aside>
     <section className="ai-ops-conversation">
-      <div className="ai-ops-conversation-head"><div><Text strong>{detail?.session.title || (selectedID ? '读取会话中…' : '新的运维对话')}</Text><div><Text type="secondary">可查询和管理用户、工单、节点及入口检测；修改和主动检测需逐项确认。</Text></div></div><Select aria-label="选择 AI 模型" value={model} onChange={setModel} disabled={!!busy || aiSessionBusy(detail)} options={config.models.map((value) => ({ value, label: value }))} style={{ minWidth: 210 }} /></div>
+      <div className="ai-ops-conversation-head"><div><Text strong>{detail?.session.title || (selectedID ? '读取会话中…' : '新的运维对话')}</Text><div><Text type="secondary">可管理用户、工单、入口规则、节点配置，通过 SSH 部署落地和中转服务；操作逐项确认。</Text></div></div><Select aria-label="选择 AI 模型" value={model} onChange={setModel} disabled={!!busy || aiSessionBusy(detail)} options={config.models.map((value) => ({ value, label: value }))} style={{ minWidth: 210 }} /></div>
       <Alert type="info" showIcon message="对话、查询结果及命令输出会发送到你配置的中转模型" description="不要在聊天中输入服务器密码、私钥、订阅 Token 或私人数据。服务器凭据只在“服务器”选项卡录入；AI 返回内容与工具输出均作为业务数据展示。" />
       <div className="ai-ops-messages" ref={messageViewport} onScroll={() => { const pane = messageViewport.current; if (pane) followOutput.current = aiNearBottom(pane.scrollTop, pane.clientHeight, pane.scrollHeight); }}>
-        {!detail && !selectedID && <div className="ai-ops-empty"><MessageOutlined /><h3>告诉 AI 需要排查什么</h3><p>例如：给用户调整套餐、处理待回复工单、用指定探针检测入口、检查服务器状态。</p></div>}
+        {!detail && !selectedID && <div className="ai-ops-empty"><MessageOutlined /><h3>告诉 AI 需要处理什么</h3><p>例如：调整入口规则的 UA 和用户范围、修改节点连接端口、检测指定入口，或在已登记服务器上安装落地／中转服务。</p></div>}
         {selectedID > 0 && !detail && <Spin />}
         {detail?.messages.map((item) => {
           const ordinaryText = item.role === 'user' || item.role === 'assistant';
@@ -294,6 +295,7 @@ export default function AIOpsPage() {
         {actions.map((action) => { const state = aiActionStatus(action, now); return <Card size="small" key={action.id} className="ai-ops-action" title={<Space wrap><span>操作确认 #{action.id}</span><Tag color={statusColor(state)}>{statusLabels[state] || state}</Tag>{(action.approved_by ?? 0) > 0 && <Text type="secondary"><small>人工批准：管理员 #{action.approved_by}</small></Text>}{(action.rejected_by ?? 0) > 0 && <Text type="secondary"><small>人工拒绝：管理员 #{action.rejected_by}</small></Text>}</Space>}>
           <Collapse size="small" className="ai-ops-action-details" items={[{ key: 'details', label: `操作详情 · ${action.server_label || aiActionNames[action.kind] || action.kind}`, children: <Space direction="vertical" style={{ width: '100%' }}><ActionDetails action={action} />{action.output && <><Text strong>执行输出（会进入模型上下文）</Text><pre className="ai-ops-pre">{action.output}</pre></>}{action.error && <Alert type="error" showIcon message={action.error} />}</Space> }]} />
           {state === 'pending' && <Space wrap style={{ marginTop: 12 }}><Button type="primary" disabled={!!busy || !aiCanApprove(action, config.enabled, now)} onClick={() => { setConfirmedOutput(false); setReview({ action, decision: 'approve' }); }}>审核执行</Button><Button danger disabled={!!busy} onClick={() => { setConfirmedOutput(false); setReview({ action, decision: 'reject' }); }}>拒绝</Button><Text type="secondary">尚未执行，审核时会展开完整操作。</Text></Space>}
+          {state === 'running' && action.kind === 'ssh_command' && <Text type="secondary">SSH 正在执行，最长 {Number(action.payload.timeout_seconds || 120)} 秒；展开操作详情可查看实时输出。</Text>}
         </Card>; })}
         {latestTurn?.error && <Alert type="error" showIcon message={`本轮${statusLabels[latestTurn.status] || latestTurn.status}`} description={latestTurn.error} />}
         {aiSessionBusy(detail) && <Space><Spin size="small" /><Text type="secondary">{streamConnected ? '实时接收中…' : '正在处理，自动同步中…'} 可切换会话，不影响后台处理。</Text></Space>}
@@ -309,7 +311,7 @@ export default function AIOpsPage() {
     { title: '连接', width: 240, render: (_, server) => <Text code>{server.username}@{server.host}:{server.port}</Text> },
     { title: '主机指纹', dataIndex: 'host_key_sha256', width: 300, render: (value) => <span className="ai-ops-wrap">{value}</span> },
     { title: '凭据 / 状态', width: 170, render: (_, server) => <Space size={4} wrap>{server.has_password && <Tag>密码已保存</Tag>}{server.has_private_key && <Tag>私钥已保存</Tag>}<Tag color={server.enabled ? 'success' : 'default'}>{server.enabled ? '启用' : '停用'}</Tag></Space> },
-    { title: '操作', fixed: 'right', width: 230, render: (_, server) => <Space size={0}><Button type="link" disabled={!!busy} onClick={() => openServer(server)}>编辑</Button><Button type="link" disabled={!!busy || !server.enabled || unavailable} onClick={() => checkServer(server)}>在聊天中检查</Button><Button type="link" danger disabled={!!busy} onClick={() => setConfirmation({ kind: 'server-delete', server })}>删除</Button></Space> },
+    { title: '操作', fixed: 'right', width: 330, render: (_, server) => <Space size={0} wrap><Button type="link" disabled={!!busy} onClick={() => openServer(server)}>编辑</Button><Button type="link" disabled={!!busy || !server.enabled || unavailable} onClick={() => checkServer(server)}>在聊天中检查</Button><Button type="link" disabled={!!busy || !server.enabled || unavailable} onClick={() => deployServer(server)}>部署／配置</Button><Button type="link" danger disabled={!!busy} onClick={() => setConfirmation({ kind: 'server-delete', server })}>删除</Button></Space> },
   ]} pagination={{ pageSize: 10 }} locale={{ emptyText: '暂无登记的服务器' }} /></Space>;
   const settings = <Space direction="vertical" size="middle" style={{ width: '100%' }}><Card title="模型中转设置" size="small"><Form form={configForm} layout="vertical" disabled={!!busy} onFinish={saveConfig}>
     <Form.Item name="enabled" label="启用 AI 运维" valuePropName="checked"><Switch /></Form.Item>

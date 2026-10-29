@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -259,7 +260,7 @@ func (s *Service) rejectBusySSHServer(ctx context.Context, id int64) error {
 		return err
 	}
 	var running bool
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_ai_action WHERE kind='ssh_command' AND target_id=$1 AND status='running' AND claimed_at>$2)`, id, time.Now().Unix()-180).Scan(&running)
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_ai_action WHERE kind='ssh_command' AND target_id=$1 AND status='running')`, id).Scan(&running)
 	if err != nil {
 		return err
 	}
@@ -376,13 +377,102 @@ func (w *cappedSSHOutput) Write(p []byte) (int, error) {
 	return n, nil
 }
 func (w *cappedSSHOutput) String() string {
+	return w.safeString(nil, true)
+}
+
+// A credential may arrive in separate SSH writes. Do not publish an unfinished
+// suffix that is a prefix of a known secret while more output can still arrive.
+func (w *cappedSSHOutput) safeString(secrets []string, final bool) string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	out := strings.ToValidUTF8(w.bytes.String(), "�")
-	if w.truncated {
+	out := redactSSHOutput(w.bytes.String(), secrets, final)
+	out = strings.ToValidUTF8(out, "�")
+	truncated := w.truncated
+	if len(out) > 32<<10 {
+		out = strings.ToValidUTF8(out[:32<<10], "")
+		truncated = true
+	}
+	if truncated {
 		out += "\n[输出已截断为 32 KiB]"
 	}
 	return out
+}
+
+type sshSecretSpan struct {
+	start, end int
+	complete   bool
+}
+
+// Find overlapping credentials against the original bytes, then render the
+// union once. Replacing a short secret first would otherwise expose the rest
+// of a longer secret containing it, including a private key.
+func redactSSHOutput(raw string, secrets []string, final bool) string {
+	spans := []sshSecretSpan{}
+	for _, secret := range secrets {
+		if secret == "" || raw == "" {
+			continue
+		}
+		// KMP bounds work by the captured output plus the secret length. Both
+		// are already capped (32 KiB), unlike repeated suffix comparisons.
+		prefix := make([]int, len(secret))
+		for i, j := 1, 0; i < len(secret); i++ {
+			for j > 0 && secret[i] != secret[j] {
+				j = prefix[j-1]
+			}
+			if secret[i] == secret[j] {
+				j++
+			}
+			prefix[i] = j
+		}
+		matched := 0
+		for i := 0; i < len(raw); i++ {
+			for matched > 0 && raw[i] != secret[matched] {
+				matched = prefix[matched-1]
+			}
+			if raw[i] == secret[matched] {
+				matched++
+			}
+			if matched == len(secret) {
+				spans = append(spans, sshSecretSpan{start: i + 1 - len(secret), end: i + 1, complete: true})
+				matched = prefix[matched-1]
+			}
+		}
+		if matched > 0 {
+			spans = append(spans, sshSecretSpan{start: len(raw) - matched, end: len(raw)})
+		}
+	}
+	if len(spans) == 0 {
+		return raw
+	}
+	sort.Slice(spans, func(i, j int) bool {
+		if spans[i].start == spans[j].start {
+			return spans[i].end < spans[j].end
+		}
+		return spans[i].start < spans[j].start
+	})
+	merged := spans[:0]
+	for _, span := range spans {
+		if len(merged) > 0 && span.start <= merged[len(merged)-1].end {
+			last := &merged[len(merged)-1]
+			last.end = max(last.end, span.end)
+			last.complete = last.complete || span.complete
+		} else {
+			merged = append(merged, span)
+		}
+	}
+	var out strings.Builder
+	start := 0
+	for _, span := range merged {
+		out.WriteString(raw[start:span.start])
+		if span.complete {
+			out.WriteString("[已隐藏凭据]")
+		} else if final {
+			out.WriteString("[已隐藏凭据片段]")
+		}
+		start = span.end
+	}
+	out.WriteString(raw[start:])
+	return out.String()
 }
 
 type sshRunResult struct {
@@ -392,6 +482,10 @@ type sshRunResult struct {
 }
 
 func (s *Service) runSSH(ctx context.Context, v sshSecretServer, command string) sshRunResult {
+	return s.runSSHWithProgress(ctx, v, command, nil)
+}
+
+func (s *Service) runSSHWithProgress(ctx context.Context, v sshSecretServer, command string, progress func(string)) sshRunResult {
 	if !takeSSHSlot(ctx) {
 		return sshRunResult{Err: ErrBusy}
 	}
@@ -458,13 +552,10 @@ func (s *Service) runSSH(ctx context.Context, v sshSecretServer, command string)
 	session.Stdout = out
 	session.Stderr = out
 	session.Stdin = nil
+	stopProgress := streamSSHOutput(ctx, out, secrets, progress, time.Second)
 	err = session.Run(command)
-	output := out.String()
-	for _, secret := range secrets {
-		if secret != "" {
-			output = strings.ReplaceAll(output, secret, "[已隐藏凭据]")
-		}
-	}
+	stopProgress()
+	output := out.safeString(secrets, true)
 	if err == nil {
 		return sshRunResult{Output: output}
 	}

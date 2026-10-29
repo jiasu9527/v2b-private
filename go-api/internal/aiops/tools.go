@@ -13,25 +13,26 @@ import (
 )
 
 type aiToolArgs struct {
-	Query     string     `json:"query,omitempty"`
-	Limit     int        `json:"limit,omitempty"`
-	Offset    int        `json:"offset,omitempty"`
-	UserID    int64      `json:"user_id,omitempty"`
-	TradeNo   string     `json:"trade_no,omitempty"`
-	Status    *int64     `json:"status,omitempty"`
-	PolicyID  int64      `json:"policy_id,omitempty"`
-	Email     string     `json:"email,omitempty"`
-	UA        string     `json:"ua,omitempty"`
-	ServerID  int64      `json:"server_id,omitempty"`
-	Command   string     `json:"command,omitempty"`
-	Reason    string     `json:"reason,omitempty"`
-	Kind      string     `json:"kind,omitempty"`
-	TargetID  int64      `json:"target_id,omitempty"`
-	Host      string     `json:"host,omitempty"`
-	PolicyIDs []int64    `json:"policy_ids,omitempty"`
-	NodeType  string     `json:"node_type,omitempty"`
-	NodeID    int64      `json:"node_id,omitempty"`
-	Changes   *nodePatch `json:"changes,omitempty"`
+	Query          string     `json:"query,omitempty"`
+	Limit          int        `json:"limit,omitempty"`
+	Offset         int        `json:"offset,omitempty"`
+	UserID         int64      `json:"user_id,omitempty"`
+	TradeNo        string     `json:"trade_no,omitempty"`
+	Status         *int64     `json:"status,omitempty"`
+	PolicyID       int64      `json:"policy_id,omitempty"`
+	Email          string     `json:"email,omitempty"`
+	UA             string     `json:"ua,omitempty"`
+	ServerID       int64      `json:"server_id,omitempty"`
+	Command        string     `json:"command,omitempty"`
+	TimeoutSeconds int        `json:"timeout_seconds,omitempty"`
+	Reason         string     `json:"reason,omitempty"`
+	Kind           string     `json:"kind,omitempty"`
+	TargetID       int64      `json:"target_id,omitempty"`
+	Host           string     `json:"host,omitempty"`
+	PolicyIDs      []int64    `json:"policy_ids,omitempty"`
+	NodeType       string     `json:"node_type,omitempty"`
+	NodeID         int64      `json:"node_id,omitempty"`
+	Changes        *nodePatch `json:"changes,omitempty"`
 }
 
 func (s *Service) toolDefinitions() []ToolDefinition {
@@ -67,13 +68,15 @@ func (s *Service) toolDefinitions() []ToolDefinition {
 	add("backup_ips_list", "读取备用IP健康及占用，不清检测状态不领取IP。", page())
 	add("servers_list", "分页读取管理员登记SSH服务器，不返回密码/私钥；按next_offset继续。", page())
 	add("ssh_status", "创建固定只读系统诊断命令的待审批卡片；不立即执行，必须管理员逐次确认。", map[string]any{"server_id": num("已登记SSH服务器ID"), "reason": str("检查原因")}, "server_id", "reason")
-	add("propose_ssh_command", "提议在已登记且固定指纹的SSH服务器执行完整命令，任何命令必须逐次人工审批；不可把密码私钥放入命令。命令与输出可能包含敏感数据。", map[string]any{"server_id": num("已登记服务器ID"), "command": str("完整原命令，最多16000字节"), "reason": str("原因、风险与可回滚性，最多500字")}, "server_id", "command", "reason")
+	add("propose_ssh_command", "提议通过SSH在已登记落地机或中转机执行完整命令，可安装节点、运行非交互安装脚本、修改配置、重启服务；须逐次人工审批。先检查目标系统并确认脚本来源和参数，不猜测安装地址；不可在命令中放SSH密码私钥。执行输出实时更新，失败或断线不自动重试。", map[string]any{"server_id": num("已登记服务器ID"), "command": str("完整非交互命令，最多16000字节；没有终端和键盘输入，安装脚本须明确非交互参数"), "timeout_seconds": map[string]any{"type": "integer", "minimum": 30, "maximum": 1800, "default": 120, "description": "最长执行秒数，默认120；安装可选较长时间，最长1800秒"}, "reason": str("原因、风险与可回滚性，最多500字")}, "server_id", "command", "reason")
 	add("propose_entry_host", "创建入口host变更待审批卡，不执行；保留UA与固定名单，合集成员不支持单独改。", map[string]any{"kind": map[string]any{"type": "string", "enum": []string{"policy", "split_group"}}, "target_id": num("规则/叶子ID"), "host": str("单个域名或IP"), "reason": str("原因与影响")}, "kind", "target_id", "host", "reason")
 	add("propose_node_change", "仅提议指定节点host/port/show改变，必须后台确认，不支持其他配置或任意API透传。", map[string]any{"node_type": str("协议"), "node_id": num("节点ID"), "changes": map[string]any{"type": "object", "properties": map[string]any{"host": str("域名或IP"), "port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535}, "show": map[string]any{"type": "integer", "enum": []int{0, 1}}}, "additionalProperties": false}, "reason": str("原因与影响")}, "node_type", "node_id", "changes", "reason")
 	add("monitor_run", "创建指定1-10条规则检测审批卡。检测不直接修改入口，结果仍遵循后台既有自动化配置。", map[string]any{"policy_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer", "minimum": 1}, "minItems": 1, "maxItems": 10, "uniqueItems": true}, "reason": str("检测原因")}, "policy_ids", "reason")
 	out = append(out, userToolDefinitions()...)
 	out = append(out, ticketToolDefinitions()...)
 	out = append(out, probeToolDefinitions()...)
+	out = append(out, entryRuleToolDefinitions()...)
+	out = append(out, nodeToolDefinitions()...)
 	return out
 }
 func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call ToolCall) (ToolOutcome, error) {
@@ -98,6 +101,10 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 		return s.callTicketTool(ctx, actorID, sessionID, call)
 	case "entry_probe_targets", "entry_probe_run", "entry_probe_result":
 		return s.callProbeTool(ctx, actorID, sessionID, call)
+	case "entry_rule_detail", "propose_entry_rule_update":
+		return s.callEntryRuleTool(ctx, actorID, sessionID, call)
+	case "node_detail", "propose_node_update":
+		return s.callNodeTool(ctx, actorID, sessionID, call)
 	}
 	var a aiToolArgs
 	d := json.NewDecoder(strings.NewReader(call.Function.Arguments))
@@ -276,7 +283,7 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 			}
 			spec.Kind = "ssh_command"
 			spec.TargetID = a.ServerID
-			spec.Payload, _ = json.Marshal(sshPayload{ServerID: a.ServerID, Command: command})
+			spec.Payload, _ = json.Marshal(sshPayload{ServerID: a.ServerID, Command: command, TimeoutSeconds: a.TimeoutSeconds})
 		case "propose_entry_host":
 			spec.Kind = "entry_host"
 			spec.TargetID = a.TargetID

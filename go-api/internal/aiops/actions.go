@@ -74,7 +74,7 @@ func (s *Service) ListActions(ctx context.Context, actorID, sessionID int64) ([]
 // running record permanently blocking reset or server maintenance.
 func (s *Service) reconcileExpiredActions(ctx context.Context) error {
 	now := time.Now().Unix()
-	_, err := s.db.ExecContext(ctx, `UPDATE v2_ai_action SET status=CASE WHEN status='pending' THEN 'expired' ELSE 'unknown' END,error=CASE WHEN status='running' THEN '执行连接已中断或进程已重启，结果未知，可能已部分执行；禁止自动重试' ELSE error END,completed_at=$1,updated_at=$1 WHERE (status='pending' AND expires_at<=$1) OR(status='running' AND claimed_at<$2)`, now, now-180)
+	_, err := s.db.ExecContext(ctx, `UPDATE v2_ai_action SET status=CASE WHEN status='pending' THEN 'expired' ELSE 'unknown' END,error=CASE WHEN status='running' THEN '执行连接已中断或进程已重启，结果未知，可能已部分执行；禁止自动重试' ELSE error END,completed_at=$1,updated_at=$1 WHERE (status='pending' AND expires_at<=$1) OR(status='running' AND claimed_at<$1-`+actionStaleSecondsSQL+`)`, now)
 	return err
 }
 func (s *Service) proposeAction(ctx context.Context, actorID, sessionID int64, callID string, spec actionSpec) (Action, error) {
@@ -136,12 +136,13 @@ func (s *Service) proposeAction(ctx context.Context, actorID, sessionID int64, c
 }
 
 type sshPayload struct {
-	ServerID      int64  `json:"server_id"`
-	Command       string `json:"command"`
-	Host          string `json:"host"`
-	Port          int    `json:"port"`
-	Username      string `json:"username"`
-	HostKeySHA256 string `json:"host_key_sha256"`
+	ServerID       int64  `json:"server_id"`
+	Command        string `json:"command"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+	Host           string `json:"host"`
+	Port           int    `json:"port"`
+	Username       string `json:"username"`
+	HostKeySHA256  string `json:"host_key_sha256"`
 }
 type entryPayload struct {
 	Kind       string `json:"kind"`
@@ -180,11 +181,20 @@ func (s *Service) captureActionTarget(ctx context.Context, tx *sql.Tx, spec acti
 		return s.captureTicketAction(ctx, tx, spec)
 	case "entry_probe_run":
 		return s.captureProbeAction(ctx, tx, spec)
+	case "entry_rule_update":
+		return s.captureEntryRuleAction(ctx, tx, spec)
+	case "node_update":
+		return s.captureNodeUpdateAction(ctx, tx, spec)
 	case "ssh_command":
 		var p sshPayload
 		if json.Unmarshal(spec.Payload, &p) != nil || p.ServerID <= 0 || len(p.Command) == 0 || len(p.Command) > 16000 || strings.ContainsRune(p.Command, 0) {
 			return nil, "", "", ErrValidation
 		}
+		timeoutSeconds, err := normalizeSSHTimeout(p.TimeoutSeconds)
+		if err != nil {
+			return nil, "", "", err
+		}
+		p.TimeoutSeconds = timeoutSeconds
 		v, err := s.loadSSHServer(ctx, tx, p.ServerID, true)
 		if err != nil {
 			return nil, "", "", err
@@ -445,6 +455,16 @@ func (s *Service) changeAction(ctx context.Context, actorID, sessionID, id int64
 		a.RejectedBy = actorID
 		return a, tx.Commit()
 	}
+	// Long SSH commands no longer hold the session row lock while executing.
+	// Keep approvals serialized explicitly while allowing the model to save
+	// its final reply and the browser to receive ongoing output.
+	var actionRunning bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_ai_action WHERE session_id=$1 AND status='running')`, sessionID).Scan(&actionRunning); err != nil {
+		return empty, err
+	}
+	if actionRunning {
+		return empty, ErrBusy
+	}
 	// Disabling AI prevents new approvals, not only new model requests. Lock the
 	// config row until the action is claimed so a concurrent disable is ordered.
 	var enabled bool
@@ -468,7 +488,7 @@ func (s *Service) changeAction(ctx context.Context, actorID, sessionID, id int64
 	if snapshot != current {
 		return a, ErrConflict
 	}
-	if a.Kind == "entry_host" || a.Kind == "node_change" || a.Kind == "user_update" || a.Kind == "ticket_update" {
+	if a.Kind == "entry_host" || a.Kind == "node_change" || a.Kind == "node_update" || a.Kind == "entry_rule_update" || a.Kind == "user_update" || a.Kind == "ticket_update" {
 		a.ApprovedBy = actorID
 		if err = applyPanelAction(ctx, tx, a); err != nil {
 			return empty, err
@@ -486,7 +506,7 @@ func (s *Service) changeAction(ctx context.Context, actorID, sessionID, id int64
 		a.ApprovedBy = actorID
 		a.Output = "已执行经人工批准的配置变更"
 		if invalidator, ok := s.panel.(interface{ InvalidateAIEntryTargets() }); ok {
-			if a.Kind == "entry_host" || a.Kind == "node_change" {
+			if a.Kind == "entry_host" || a.Kind == "node_change" || a.Kind == "node_update" || a.Kind == "entry_rule_update" {
 				invalidator.InvalidateAIEntryTargets()
 			}
 		}
@@ -507,7 +527,7 @@ func (s *Service) changeAction(ctx context.Context, actorID, sessionID, id int64
 		s.mu.Unlock()
 		return empty, ErrUnavailable
 	}
-	workerCtx, cancel := context.WithTimeout(context.Background(), executionLifetime)
+	workerCtx, cancel := context.WithTimeout(context.Background(), actionExecutionLifetime(a))
 	workerKey := -a.ID
 	if _, exists := s.workers[workerKey]; exists {
 		s.mu.Unlock()
@@ -535,6 +555,12 @@ func (s *Service) changeAction(ctx context.Context, actorID, sessionID, id int64
 	return a, nil
 }
 func applyPanelAction(ctx context.Context, tx *sql.Tx, a Action) error {
+	if a.Kind == "entry_rule_update" {
+		return applyEntryRuleAction(ctx, tx, a)
+	}
+	if a.Kind == "node_update" {
+		return applyNodeUpdateAction(ctx, tx, a)
+	}
 	if a.Kind == "user_update" {
 		return applyUserAction(ctx, tx, a)
 	}
@@ -605,7 +631,14 @@ func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, 
 			if err == nil {
 				defer tx.Rollback()
 				if err = lockAIState(ctx, tx); err == nil {
-					err = s.requireSessionTx(ctx, tx, a.SessionID)
+					// Cleanup requires the exclusive AI state lock, so this shared
+					// lock already preserves the session. Do not hold its row lock
+					// for a long installation: the model must still finish its reply.
+					var sessionID int64
+					err = tx.QueryRowContext(ctx, `SELECT id FROM v2_ai_session WHERE id=$1`, a.SessionID).Scan(&sessionID)
+				}
+				if err == nil {
+					err = s.requireAdminTx(ctx, tx, a.ApprovedBy)
 				}
 				var v sshSecretServer
 				if err == nil {
@@ -618,7 +651,7 @@ func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, 
 					}
 				}
 				if err == nil {
-					result := s.runSSH(ctx, v, p.Command)
+					result := s.runSSHWithProgress(ctx, v, p.Command, func(output string) { s.persistSSHProgress(ctx, a.ID, output) })
 					output = result.Output
 					if result.Err == nil {
 						status = "succeeded"
