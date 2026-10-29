@@ -9,7 +9,6 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
-	"forest/go-api/internal/admin"
 	"forest/go-api/internal/config"
 	"io"
 	"sync"
@@ -19,7 +18,7 @@ import (
 type Service struct {
 	cfg         config.Config
 	db          *sql.DB
-	panel       admin.Service
+	panel       Panel
 	schemaMu    sync.Mutex
 	schemaOK    bool
 	mu          sync.Mutex
@@ -31,7 +30,7 @@ type Service struct {
 	httpClient  providerHTTPClient
 }
 
-func NewService(cfg config.Config, db *sql.DB, panel admin.Service) *Service {
+func NewService(cfg config.Config, db *sql.DB, panel Panel) *Service {
 	return &Service{cfg: cfg, db: db, panel: panel, workers: map[int64]context.CancelFunc{}, workerTurns: map[int64]int64{}, slots: make(chan struct{}, 4), httpClient: newProviderHTTPClient()}
 }
 func (s *Service) Close() {

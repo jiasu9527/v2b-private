@@ -62,23 +62,14 @@ func validateTicketUpdate(p ticketUpdatePayload) error {
 	return nil
 }
 func (s *Service) readTicketSetting(ctx context.Context) (int64, error) {
-	if s.panel == nil {
-		return 0, ErrUnavailable
-	}
-	v, err := s.panel.FetchConfig(ctx, "ticket")
-	if err != nil {
-		return 0, ErrUnavailable
-	}
-	section, ok := v["ticket"].(map[string]any)
+	reader, ok := s.panel.(interface {
+		GetAITicketStatus(context.Context) (int64, error)
+	})
 	if !ok {
 		return 0, ErrUnavailable
 	}
-	raw, err := json.Marshal(section["ticket_status"])
-	if err != nil {
-		return 0, ErrUnavailable
-	}
-	var status int64
-	if string(raw) == "null" || json.Unmarshal(raw, &status) != nil || !oneOfInt(status, 0, 1, 2) {
+	status, err := reader.GetAITicketStatus(ctx)
+	if err != nil || !oneOfInt(status, 0, 1, 2) {
 		return 0, ErrUnavailable
 	}
 	return status, nil

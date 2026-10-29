@@ -54,6 +54,30 @@ func TestAITicketSettingCompareAndSwapPreservesOtherConfig(t *testing.T) {
 	}
 }
 
+func TestAITicketStatusReadIsNarrowAndValidates(t *testing.T) {
+	root := t.TempDir()
+	old := adminProjectRoot
+	adminProjectRoot = root
+	defer func() { adminProjectRoot = old }()
+	s := &DBService{}
+	for _, status := range []int64{0, 1, 2, 3} {
+		writeAdminJSONFixture(t, root, map[string]any{"ticket_status": status, "merchant_key": "fixture-secret"})
+		got, err := s.GetAITicketStatus(context.Background())
+		if status > 2 {
+			if !errors.Is(err, ErrUnavailable) {
+				t.Fatal("invalid setting accepted", got, err)
+			}
+		} else if err != nil || got != status {
+			t.Fatal("wrong ticket status", got, err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := s.GetAITicketStatus(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal("cancelled read accepted", err)
+	}
+}
+
 func TestAITicketSettingReloadsRuntime(t *testing.T) {
 	root := t.TempDir()
 	writeAdminJSONFixture(t, root, map[string]any{"ticket_status": 0})

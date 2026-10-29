@@ -84,6 +84,9 @@ func (s *Service) reconcileExpiredActions(ctx context.Context) error {
 }
 func (s *Service) proposeAction(ctx context.Context, actorID, sessionID int64, callID string, spec actionSpec) (Action, error) {
 	var empty Action
+	if !actionCapabilityAllowed(spec.Kind) {
+		return empty, ErrForbidden
+	}
 	if actorID <= 0 || sessionID <= 0 || len(callID) < 1 || len(callID) > 255 || len(spec.Payload) > 32768 || strings.TrimSpace(spec.Reason) == "" || len([]rune(spec.Reason)) > 500 {
 		return empty, ErrValidation
 	}
@@ -190,6 +193,9 @@ type monitorTarget struct {
 }
 
 func (s *Service) captureActionTarget(ctx context.Context, tx *sql.Tx, spec actionSpec) (json.RawMessage, string, string, error) {
+	if !actionCapabilityAllowed(spec.Kind) {
+		return nil, "", "", ErrForbidden
+	}
 	switch spec.Kind {
 	case "server_register":
 		return s.captureServerRegisterAction(ctx, tx, spec)
@@ -464,6 +470,9 @@ func (s *Service) changeActionAuthorized(ctx context.Context, actorID, sessionID
 	if err != nil {
 		return empty, err
 	}
+	if approve && !actionCapabilityAllowed(a.Kind) {
+		return empty, ErrForbidden
+	}
 	if a.Status != "pending" {
 		return a, ErrConflict
 	}
@@ -610,6 +619,9 @@ func (s *Service) changeActionAuthorized(ctx context.Context, actorID, sessionID
 	return a, nil
 }
 func applyPanelAction(ctx context.Context, tx *sql.Tx, a Action) error {
+	if !actionCapabilityAllowed(a.Kind) {
+		return ErrForbidden
+	}
 	if a.Kind == "entry_rule_update" {
 		return applyEntryRuleAction(ctx, tx, a)
 	}
@@ -670,6 +682,12 @@ func applyPanelAction(ctx context.Context, tx *sql.Tx, a Action) error {
 }
 func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, a Action, snapshot string) {
 	defer func() { cancel(); s.mu.Lock(); delete(s.workers, -a.ID); s.mu.Unlock(); s.wg.Done() }()
+	if !actionCapabilityAllowed(a.Kind) {
+		finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer finishCancel()
+		_, _ = s.db.ExecContext(finishCtx, `UPDATE v2_ai_action SET status='failed',error='AI 无此业务操作权限，未执行操作',completed_at=$2,updated_at=$2 WHERE id=$1 AND status='running'`, a.ID, time.Now().Unix())
+		return
+	}
 	go s.watchAction(ctx, cancel, a.ID)
 	status, output, problem := "failed", "", "操作执行失败，可能已部分执行；请人工检查"
 	if s.requireOperator(ctx, a.ApprovedBy) != nil || s.requireSessionAccess(ctx, a.ApprovedBy, a.SessionID) != nil {

@@ -23,10 +23,10 @@ type ticketTestPanel struct {
 	notifications int
 }
 
-func (p *ticketTestPanel) FetchConfig(context.Context, string) (map[string]any, error) {
+func (p *ticketTestPanel) GetAITicketStatus(context.Context) (int64, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return map[string]any{"ticket": map[string]any{"ticket_status": p.status}, "email": map[string]any{"password": "MUST_NOT_LEAK"}}, nil
+	return p.status, nil
 }
 func (p *ticketTestPanel) CompareAndSetAITicketStatus(_ context.Context, expected, status int64) error {
 	p.mu.Lock()

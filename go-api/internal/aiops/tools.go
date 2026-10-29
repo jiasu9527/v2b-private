@@ -36,6 +36,10 @@ type aiToolArgs struct {
 }
 
 func (s *Service) toolDefinitions() []ToolDefinition {
+	return permittedToolDefinitions(s.declaredToolDefinitions())
+}
+
+func (s *Service) declaredToolDefinitions() []ToolDefinition {
 	str := func(d string) map[string]any { return map[string]any{"type": "string", "description": d} }
 	num := func(d string) map[string]any { return map[string]any{"type": "integer", "description": d} }
 	out := []ToolDefinition{}
@@ -82,6 +86,9 @@ func (s *Service) toolDefinitions() []ToolDefinition {
 	return out
 }
 func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call ToolCall) (ToolOutcome, error) {
+	if !toolCapabilityAllowed(call.Function.Name) {
+		return ToolOutcome{}, ErrForbidden
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if err := s.requireOperator(ctx, actorID); err != nil {

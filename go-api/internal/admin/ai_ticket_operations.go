@@ -8,6 +8,23 @@ import (
 
 var ErrAITicketConfigConflict = errors.New("工单提交设置已变化")
 
+// GetAITicketStatus exposes only this setting to AI operations. It does not
+// return a generic config map or accept an arbitrary configuration section.
+func (s *DBService) GetAITicketStatus(ctx context.Context) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	cfg, err := loadAdminConfigStore(adminConfigPath())
+	if err != nil {
+		return 0, err
+	}
+	status := cfg.int64Value("ticket_status", 0)
+	if status < 0 || status > 2 {
+		return 0, ErrUnavailable
+	}
+	return status, nil
+}
+
 // CompareAndSetAITicketStatus uses the same locked, atomic config store as
 // SaveConfig. Only this known setting is exposed; no other secret config is
 // accepted or returned to the AI tool layer.
