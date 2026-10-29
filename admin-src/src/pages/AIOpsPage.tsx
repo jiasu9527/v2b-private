@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Form, Input, InputNumber, Modal, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Checkbox, Descriptions, Form, Input, InputNumber, Modal, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
 import { DeleteOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
 import { apiGet, apiJsonPost, getAdminUserInfo } from '../lib/api';
-import { AI_DEFAULT_MODELS, aiAccessMode, aiOwnsFullAccess, aiMergeSessionAccess, aiActionStatus, aiApplyDraft, aiCanApprove, aiFingerprintMatches, aiLatestTurn, aiToolResultName, aiMergeSnapshot, aiNearBottom, aiParseModels, aiRequestID, aiSessionBusy, aiShouldSendKey, aiVisibleDraft, type AIAccessMode, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
+import { AI_DEFAULT_MODELS, aiAccessMode, aiOwnsFullAccess, aiMergeSessionAccess, aiActionStatus, aiApplyDraft, aiCanApprove, aiConversationTurns, aiFingerprintMatches, aiLatestTurn, aiToolResultName, aiMergeSnapshot, aiNearBottom, aiParseModels, aiRequestID, aiSessionBusy, aiShouldSendKey, aiVisibleDraft, type AIAccessMode, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
 import { aiReadSessionStream } from './aiOpsStream';
 import AIOpsMarkdown from './AIOpsMarkdown';
 import AIOpsActionSummary, { aiActionNames } from './AIOpsActionSummary';
@@ -308,7 +308,7 @@ export default function AIOpsPage() {
   };
   const checkServer = (server: AIServer) => { newSession(); setDraft(`请检查已登记服务器 #${server.id}（${server.name}）的状态，仅使用固定只读诊断，不执行其他命令。`); };
   const deployServer = (server: AIServer) => { newSession(); setDraft(`我要在已登记服务器 #${server.id}（${server.name}，${server.host}）上部署或调整节点／中转服务。先检查系统、现有服务和端口，再按我补充的安装脚本与目标配置生成完整非交互命令，按本会话选择的权限模式执行。安装任务请设置足够的执行时间，完成后检查服务与连通性。\n\n部署需求：`); };
-  const actions = detail?.actions || [];
+  const conversationTurns = aiConversationTurns(detail);
   const latestTurn = aiLatestTurn(detail?.turns || []);
   const unavailable = !config.enabled || !config.has_api_key;
   const chat = <div className="ai-ops-chat-layout">
@@ -322,22 +322,44 @@ export default function AIOpsPage() {
         {!detail && !selectedID && <div className="ai-ops-empty"><MessageOutlined /><h3>告诉 AI 需要处理什么</h3><p>例如：调整入口规则的 UA 和用户范围、修改节点连接端口、检测指定入口，或在已登记服务器上安装落地／中转服务。</p></div>}
         {selectedID > 0 && !detail && <Spin />}
         {detail?.messages_truncated && <Text type="secondary">当前显示最近 400 条消息，较早记录仍保留；AI 会自动整理发送给模型的上下文。</Text>}
-        {detail?.messages.map((item, index) => {
-          const ordinaryText = item.role === 'user' || item.role === 'assistant';
-          const toolName = aiToolResultName(detail.messages, index);
-          if (!ordinaryText) return <Collapse key={item.id} className="ai-ops-tool-result" size="small" items={[{ key: String(item.id), label: <Space wrap><span>{item.role === 'tool' ? `工具结果${toolName ? ` · ${toolName}` : ''}` : '系统详情'}</span><Text type="secondary">{time(item.created_at)}</Text></Space>, children: <pre className="ai-ops-pre">{item.content}</pre> }]} />;
-          return <article key={item.id} className={`ai-ops-message ai-ops-message-${item.role}`}>
-            <div><Tag>{item.role === 'user' ? '管理员' : 'AI'}</Tag><Text type="secondary">{time(item.created_at)}</Text></div>
-            {item.content && (item.role === 'assistant' ? <AIOpsMarkdown content={item.content} /> : <pre className="ai-ops-text">{item.content}</pre>)}
-            {!!item.tool_calls?.length && <Collapse size="small" className="ai-ops-tool-calls" items={[{ key: 'calls', label: `工具调用 · ${item.tool_calls.map((call) => call.function.name).join('、')}`, children: <Space direction="vertical" style={{ width: '100%' }}>{item.tool_calls.map((call) => <div key={call.id}><Text strong>{call.function.name}</Text><pre className="ai-ops-pre">{call.function.arguments}</pre></div>)}</Space> }]} />}
-          </article>;
+        {conversationTurns.map((group) => {
+          const processCount = group.messages.reduce((count, item) => count + (item.tool_calls?.length || 0) + (item.role === 'user' || item.role === 'assistant' ? 0 : 1), group.actions.length);
+          const pendingActions = group.actions.filter((action) => aiActionStatus(action, now) === 'pending');
+          const processState = pendingActions.length ? 'pending' : group.turn?.status === 'running' || group.actions.some((action) => action.status === 'running') ? 'running' : group.turn?.error || group.actions.some((action) => ['failed', 'unknown', 'interrupted'].includes(action.status)) ? 'failed' : '';
+          const process = processCount > 0 ? <details className="ai-ops-process" key="process">
+              <summary>
+                <span>处理过程 · {processCount} 项</span>
+                {processState && <span className={`ai-ops-process-status is-${processState}`}>{processState === 'failed' ? '有异常' : statusLabels[processState]}</span>}
+                {pendingActions.map((action) => <button key={action.id} type="button" className="ai-ops-process-review" aria-label={`审核操作 #${action.id}`} disabled={!!busy || aiSessionBusy(detail) || !aiCanApprove(action, config.enabled, now)} onClick={(event) => { event.preventDefault(); event.stopPropagation(); setConfirmedOutput(false); setReview({ action, decision: 'approve' }); }}>审核操作{pendingActions.length > 1 ? ` #${action.id}` : ''}</button>)}
+              </summary>
+              <div className="ai-ops-process-content">
+                {group.messages.map((item, index) => {
+                  const toolName = aiToolResultName(group.messages, index);
+                  return <React.Fragment key={item.id}>
+                    {item.tool_calls?.map((call) => <section key={call.id} className="ai-ops-process-item ai-ops-tool-call"><div className="ai-ops-process-item-head"><Text strong>工具调用 · {call.function.name}</Text><Text type="secondary">{time(item.created_at)}</Text></div><pre className="ai-ops-pre">{call.function.arguments}</pre></section>)}
+                    {item.role !== 'user' && item.role !== 'assistant' && <section className="ai-ops-process-item ai-ops-tool-result"><div className="ai-ops-process-item-head"><Text strong>{item.role === 'tool' ? `工具结果${toolName ? ` · ${toolName}` : ''}` : '系统详情'}</Text><Text type="secondary">{time(item.created_at)}</Text></div><pre className="ai-ops-pre">{item.content}</pre></section>}
+                  </React.Fragment>;
+                })}
+                {group.actions.map((action) => { const state = aiActionStatus(action, now); return <section key={action.id} className="ai-ops-process-item ai-ops-action">
+                  <div className="ai-ops-process-item-head"><Text strong>{action.approval_mode === 'full_access' ? '执行记录' : '操作确认'} #{action.id}</Text><Tag color={statusColor(state)}>{statusLabels[state] || state}</Tag>{(action.approved_by ?? 0) > 0 && <Text type="secondary">{action.approval_mode === 'full_access' ? '完全访问授权：' : '人工批准：'}管理员 #{action.approved_by}</Text>}{(action.rejected_by ?? 0) > 0 && <Text type="secondary">人工拒绝：管理员 #{action.rejected_by}</Text>}</div>
+                  <ActionDetails action={action} />
+                  {action.output && <><Text strong>执行输出（会进入模型上下文）</Text><pre className="ai-ops-pre">{action.output}</pre></>}
+                  {action.error && <Alert type="error" showIcon message={action.error} />}
+                  {state === 'pending' && <Space wrap><Button type="primary" disabled={!!busy || aiSessionBusy(detail) || !aiCanApprove(action, config.enabled, now)} onClick={() => { setConfirmedOutput(false); setReview({ action, decision: 'approve' }); }}>审核执行</Button><Button danger disabled={!!busy} onClick={() => { setConfirmedOutput(false); setReview({ action, decision: 'reject' }); }}>拒绝</Button><Text type="secondary">尚未执行，审核时会展开完整操作。</Text></Space>}
+                  {state === 'running' && action.kind === 'ssh_command' && <Text type="secondary">SSH 正在执行，最长 {Number(action.payload.timeout_seconds || 120)} 秒；执行输出会实时更新。</Text>}
+                </section>; })}
+              </div>
+            </details> : null;
+          const content: React.ReactNode[] = [];
+          let processAdded = false;
+          for (const item of group.messages) {
+            if (!processAdded && item.role !== 'user') { if (process) content.push(process); processAdded = true; }
+            if ((item.role === 'user' || item.role === 'assistant') && item.content.trim()) content.push(<article key={item.id} className={`ai-ops-message ai-ops-message-${item.role}`}><div className="ai-ops-message-meta"><span>{item.role === 'user' ? '管理员' : 'AI'}</span><time>{time(item.created_at)}</time></div>{item.role === 'assistant' ? <AIOpsMarkdown content={item.content} /> : <pre className="ai-ops-text">{item.content}</pre>}</article>);
+          }
+          if (!processAdded && process) content.push(process);
+          if (visibleDraft?.id === group.turnID) content.push(<article key="draft" className="ai-ops-message ai-ops-message-assistant ai-ops-live-draft" aria-label="AI 实时回复"><div className="ai-ops-message-meta">AI · 正在回复</div><AIOpsMarkdown content={visibleDraft.draft_content || ''} /><span className="ai-ops-stream-cursor" aria-hidden="true" /></article>);
+          return <section className="ai-ops-turn" key={group.key} data-turn-id={group.turnID}>{content}</section>;
         })}
-        {visibleDraft && <article className="ai-ops-message ai-ops-message-assistant ai-ops-live-draft" aria-label="AI 实时回复"><Tag color="processing">AI · 正在回复</Tag><AIOpsMarkdown content={visibleDraft.draft_content || ''} /><span className="ai-ops-stream-cursor" aria-hidden="true" /></article>}
-        {actions.map((action) => { const state = aiActionStatus(action, now); return <Card size="small" key={action.id} className="ai-ops-action" title={<Space wrap><span>{action.approval_mode === 'full_access' ? '执行记录' : '操作确认'} #{action.id}</span><Tag color={statusColor(state)}>{statusLabels[state] || state}</Tag>{(action.approved_by ?? 0) > 0 && <Text type="secondary"><small>{action.approval_mode === 'full_access' ? '完全访问授权：' : '人工批准：'}管理员 #{action.approved_by}</small></Text>}{(action.rejected_by ?? 0) > 0 && <Text type="secondary"><small>人工拒绝：管理员 #{action.rejected_by}</small></Text>}</Space>}>
-          <Collapse size="small" className="ai-ops-action-details" items={[{ key: 'details', label: `操作详情 · ${action.server_label || aiActionNames[action.kind] || action.kind}`, children: <Space direction="vertical" style={{ width: '100%' }}><ActionDetails action={action} />{action.output && <><Text strong>执行输出（会进入模型上下文）</Text><pre className="ai-ops-pre">{action.output}</pre></>}{action.error && <Alert type="error" showIcon message={action.error} />}</Space> }]} />
-          {state === 'pending' && <Space wrap style={{ marginTop: 12 }}><Button type="primary" disabled={!!busy || aiSessionBusy(detail) || !aiCanApprove(action, config.enabled, now)} onClick={() => { setConfirmedOutput(false); setReview({ action, decision: 'approve' }); }}>审核执行</Button><Button danger disabled={!!busy} onClick={() => { setConfirmedOutput(false); setReview({ action, decision: 'reject' }); }}>拒绝</Button><Text type="secondary">尚未执行，审核时会展开完整操作。</Text></Space>}
-          {state === 'running' && action.kind === 'ssh_command' && <Text type="secondary">SSH 正在执行，最长 {Number(action.payload.timeout_seconds || 120)} 秒；展开操作详情可查看实时输出。</Text>}
-        </Card>; })}
         {latestTurn?.error && <Alert type="error" showIcon message={`本轮${statusLabels[latestTurn.status] || latestTurn.status}`} description={latestTurn.error} />}
         {aiSessionBusy(detail) && <Space><Spin size="small" /><Text type="secondary">{streamConnected ? '实时接收中…' : '正在处理，自动同步中…'} 可切换会话，不影响后台处理。</Text></Space>}
       </div>

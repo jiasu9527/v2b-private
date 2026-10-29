@@ -40,6 +40,50 @@ export function aiToolResultName(messages: AIMessage[], index: number): string {
   }
   return '';
 }
+export type AIConversationTurn = { key: string; turnID: number; messages: AIMessage[]; actions: AIAction[]; turn?: AITurn };
+export function aiConversationTurns(detail: AISessionDetail | null): AIConversationTurn[] {
+  if (!detail) return [];
+  const groups = new Map<number, AIConversationTurn>();
+  const turns = new Map(detail.turns.map((turn) => [turn.id, turn]));
+  const callTurns = new Map<string, Set<number>>();
+  const group = (turnID: number) => {
+    let value = groups.get(turnID);
+    if (!value) {
+      value = { key: `${detail.session.id}:${turnID}`, turnID, messages: [], actions: [], turn: turns.get(turnID) };
+      groups.set(turnID, value);
+    }
+    return value;
+  };
+  for (const message of detail.messages) {
+    if (message.session_id !== detail.session.id) continue;
+    group(message.turn_id).messages.push(message);
+    for (const call of message.tool_calls || []) {
+      const ids = callTurns.get(call.id) || new Set<number>();
+      ids.add(message.turn_id);
+      callTurns.set(call.id, ids);
+    }
+  }
+  for (const action of detail.actions) {
+    if (action.session_id !== detail.session.id) continue;
+    const namespacedTurn = Number(/^turn:(\d+):/.exec(action.tool_call_id)?.[1] || 0);
+    const authorizedTurn = action.authorization_turn_id || 0;
+    const matchingTurns = callTurns.get(action.tool_call_id);
+    // Old actions may predate turn IDs. Keep ambiguous or truncated history
+    // visible in its own group rather than attaching it to an unrelated reply.
+    const turnID = Number.isSafeInteger(authorizedTurn) && authorizedTurn > 0 ? authorizedTurn
+      : Number.isSafeInteger(namespacedTurn) && namespacedTurn > 0 ? namespacedTurn
+        : !detail.messages_truncated && matchingTurns?.size === 1 ? [...matchingTurns][0] : 0;
+    group(turnID).actions.push(action);
+  }
+  for (const turn of detail.turns) {
+    if (turn.status === 'running') group(turn.id);
+  }
+  return [...groups.values()].sort((a, b) => a.turnID - b.turnID).map((value) => ({
+    ...value,
+    messages: value.messages.sort((a, b) => a.id - b.id),
+    actions: value.actions.sort((a, b) => a.id - b.id),
+  }));
+}
 export function aiParseModels(value: string): string[] {
   return [...new Set(value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean))];
 }

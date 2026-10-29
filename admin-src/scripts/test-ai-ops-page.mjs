@@ -128,11 +128,13 @@ test('Enter sends only once; Shift+Enter, IME composition and held keys never se
   assert.match(page,/onCompositionStart/); assert.match(page,/onCompositionEnd/);
 });
 
-test('tools and commands are collapsed by default but approval dialog always shows full command', () => {
-  assert.match(page,/if \(!ordinaryText\) return <Collapse/);
-  assert.match(page,/className="ai-ops-tool-calls"/);
-  assert.match(page,/className="ai-ops-action-details"/);
-  assert.doesNotMatch(page,/defaultActiveKey|activeKey=\{\[/);
+test('each conversation turn has one collapsed activity group and approval still shows the full command', () => {
+  assert.match(page,/conversationTurns\.map/);
+  assert.equal((page.match(/<details\b/g) || []).length,1);
+  assert.match(page,/<details className="ai-ops-process" key="process">/);
+  assert.doesNotMatch(page,/<Collapse|defaultActiveKey|activeKey=\{\[|<details[^>]*\bopen[=>\s]/);
+  assert.match(page,/\(item\.role === 'user' \|\| item\.role === 'assistant'\) && item\.content\.trim\(\)/);
+  assert.match(page,/className="ai-ops-process-review"/);
   const modal=page.slice(page.indexOf('<Modal title={review?.decision'));
   assert.match(modal,/<ActionDetails action=\{review.action\}/);
 });
@@ -231,4 +233,43 @@ test('tool result labels use their preceding batch within the same turn when pro
   assert.equal(extra.aiToolResultName([assistant(1, 'foreign_turn'), result(2)], 1), '');
   assert.equal(extra.aiToolResultName([{ ...assistant(2, 'foreign_session'), session_id: 2 }, result(2)], 1), '');
   assert.equal(extra.aiToolResultName([assistant(2, 'old_batch'), assistant(2, 'new_batch', 'new-id'), result(2)], 2), '');
+});
+
+test('conversation activity groups all tools and actions by turn, including in-flight actions and truncated history', () => {
+  const messages = [
+    { id: 4, session_id: 1, turn_id: 12, role: 'tool', tool_call_id: 'lookup', content: 'output' },
+    { id: 2, session_id: 1, turn_id: 11, role: 'assistant', tool_calls: [{ id: 'legacy-call', function: { name: 'ssh_status', arguments: '{}' } }] },
+    { id: 1, session_id: 1, turn_id: 11, role: 'user', content: 'check port' },
+    { id: 3, session_id: 1, turn_id: 12, role: 'assistant', tool_calls: [{ id: 'lookup', function: { name: 'nodes_list', arguments: '{}' } }] },
+    { id: 5, session_id: 2, turn_id: 90, role: 'user', content: 'other session' },
+  ];
+  const actions = [
+    { id: 6, session_id: 1, tool_call_id: 'legacy-call' },
+    { id: 7, session_id: 1, tool_call_id: 'turn:12:round:1:lookup' },
+    { id: 8, session_id: 1, tool_call_id: 'turn:13:round:1:deploy', authorization_turn_id: 13 },
+    { id: 9, session_id: 1, tool_call_id: 'turn:10:old-call' },
+    { id: 10, session_id: 2, tool_call_id: 'turn:90:foreign' },
+  ];
+  const detail = { session: { id: 1 }, messages, actions, turns: [{ id: 13, status: 'running', draft_content: 'checking' }, { id: 12, status: 'completed' }] };
+  const original = JSON.stringify(detail);
+  const groups = extra.aiConversationTurns(detail);
+  assert.deepEqual(groups.map((group) => group.turnID), [10, 11, 12, 13]);
+  assert.deepEqual(groups.map((group) => group.actions.map((action) => action.id)), [[9], [6], [7], [8]]);
+  assert.deepEqual(groups[1].messages.map((message) => message.id), [1, 2]);
+  assert.equal(groups[3].turn.draft_content, 'checking');
+  assert.equal(JSON.stringify(detail), original);
+  assert.deepEqual(extra.aiConversationTurns(null), []);
+});
+
+test('ambiguous legacy execution records remain visible without being assigned to the wrong reply', () => {
+  const call = (turn) => ({ id: turn, session_id: 1, turn_id: turn, role: 'assistant', tool_calls: [{ id: 'reused', function: { name: 'ssh_status', arguments: '{}' } }] });
+  const detail = { session: { id: 1 }, messages: [call(2), call(3)], turns: [{ id: 4, status: 'running' }], actions: [{ id: 5, session_id: 1, tool_call_id: 'reused' }, { id: 6, session_id: 1, tool_call_id: 'missing-history' }] };
+  const groups = extra.aiConversationTurns(detail);
+  assert.deepEqual(groups.map((group) => group.turnID), [0, 2, 3, 4]);
+  assert.deepEqual(groups[0].actions.map((action) => action.id), [5, 6]);
+  assert.equal(groups[1].actions.length, 0);
+  assert.deepEqual(groups.map((group) => group.key), ['1:0', '1:2', '1:3', '1:4']);
+  const truncated = extra.aiConversationTurns({ ...detail, messages: [call(3)], messages_truncated: true });
+  assert.deepEqual(truncated[0].actions.map((action) => action.id), [5, 6], 'a reused ID in the visible window cannot identify a truncated old turn');
+  assert.equal(truncated.find((group) => group.turnID === 3).actions.length, 0);
 });
