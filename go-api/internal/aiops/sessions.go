@@ -10,12 +10,12 @@ import (
 	"unicode/utf8"
 )
 
-const sessionColumns = `id,title,model,created_by,status,created_at,updated_at,access_mode,full_access_by,access_version`
-const turnColumns = `id,session_id,request_id,status,error,created_at,completed_at,draft_content,draft_round,draft_version,access_mode,stop_requested`
+const sessionColumns = `id,title,model,created_by,status,created_at,updated_at,access_mode,full_access_by,access_version,reasoning_effort`
+const turnColumns = `id,session_id,request_id,status,error,created_at,completed_at,draft_content,draft_round,draft_version,access_mode,stop_requested,reasoning_effort`
 
 func scanSession(row interface{ Scan(...any) error }) (Session, error) {
 	var v Session
-	err := row.Scan(&v.ID, &v.Title, &v.Model, &v.CreatedBy, &v.Status, &v.CreatedAt, &v.UpdatedAt, &v.AccessMode, &v.FullAccessBy, &v.AccessVersion)
+	err := row.Scan(&v.ID, &v.Title, &v.Model, &v.CreatedBy, &v.Status, &v.CreatedAt, &v.UpdatedAt, &v.AccessMode, &v.FullAccessBy, &v.AccessVersion, &v.ReasoningEffort)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, ErrNotFound
 	}
@@ -23,7 +23,7 @@ func scanSession(row interface{ Scan(...any) error }) (Session, error) {
 }
 func scanTurn(row interface{ Scan(...any) error }) (Turn, error) {
 	var v Turn
-	err := row.Scan(&v.ID, &v.SessionID, &v.RequestID, &v.Status, &v.Error, &v.CreatedAt, &v.CompletedAt, &v.DraftContent, &v.DraftRound, &v.DraftVersion, &v.AccessMode, &v.StopRequested)
+	err := row.Scan(&v.ID, &v.SessionID, &v.RequestID, &v.Status, &v.Error, &v.CreatedAt, &v.CompletedAt, &v.DraftContent, &v.DraftRound, &v.DraftVersion, &v.AccessMode, &v.StopRequested, &v.ReasoningEffort)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, ErrNotFound
 	}
@@ -159,6 +159,9 @@ func (s *Service) validateModel(ctx context.Context, model string) error {
 }
 func (s *Service) CreateSession(ctx context.Context, actorID int64, req CreateSessionRequest) (Session, error) {
 	var empty Session
+	if req.ReasoningEffort != "" && !validReasoningSelection(req.ReasoningEffort) {
+		return empty, ErrValidation
+	}
 	if err := s.requireOperator(ctx, actorID); err != nil {
 		return empty, err
 	}
@@ -189,6 +192,12 @@ func (s *Service) CreateSession(ctx context.Context, actorID int64, req CreateSe
 	v, err := insertSession(ctx, tx, actorID, title, req.Model)
 	if err != nil {
 		return empty, err
+	}
+	if req.ReasoningEffort != "" {
+		v, err = scanSession(tx.QueryRowContext(ctx, `UPDATE v2_ai_session SET reasoning_effort=$2 WHERE id=$1 RETURNING `+sessionColumns, v.ID, req.ReasoningEffort))
+		if err != nil {
+			return empty, err
+		}
 	}
 	return v, tx.Commit()
 }

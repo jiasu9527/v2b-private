@@ -32,6 +32,9 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 	// Preserve original bytes for idempotency and SSH password parsing. In
 	// particular, trailing whitespace on a credential line is significant.
 	fingerprint := requestHash(req)
+	if req.ReasoningEffort != "" && !validReasoningSelection(req.ReasoningEffort) {
+		return out, ErrValidation
+	}
 	// New conversations use full access unless the operator explicitly selects
 	// standard. Existing conversations keep their stored authorization.
 	if req.SessionID == 0 && req.AccessMode == "" {
@@ -179,6 +182,20 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 		lifetime = fullAccessLifetime + 30*time.Second
 		workerLifetime = fullAccessLifetime
 	}
+	selection := req.ReasoningEffort
+	if selection == "" {
+		selection = out.Session.ReasoningEffort
+	}
+	if selection == "" {
+		selection = "default"
+	}
+	if !validReasoningSelection(selection) {
+		return out, ErrValidation
+	}
+	reasoningEffort, err := resolveReasoningEffort(selection, req.Model, cfg)
+	if err != nil {
+		return out, err
+	}
 
 	var messageCount int
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_ai_message WHERE session_id=$1`, out.Session.ID).Scan(&messageCount); err != nil {
@@ -192,7 +209,7 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 		return out, fmt.Errorf("%w: 会话消息已达上限，请新建会话", ErrValidation)
 	}
 	now := time.Now().Unix()
-	out.Turn, err = scanTurn(tx.QueryRowContext(ctx, `INSERT INTO v2_ai_turn(session_id,actor_id,request_id,request_hash,model,status,created_at,expires_at,access_mode) VALUES($1,$2,$3,$4,$5,'running',$6,$7,$8) RETURNING `+turnColumns, out.Session.ID, actorID, req.RequestID, fingerprint, req.Model, now, now+int64(lifetime/time.Second), mode))
+	out.Turn, err = scanTurn(tx.QueryRowContext(ctx, `INSERT INTO v2_ai_turn(session_id,actor_id,request_id,request_hash,model,status,created_at,expires_at,access_mode,reasoning_effort) VALUES($1,$2,$3,$4,$5,'running',$6,$7,$8,$9) RETURNING `+turnColumns, out.Session.ID, actorID, req.RequestID, fingerprint, req.Model, now, now+int64(lifetime/time.Second), mode, reasoningEffort))
 	if err != nil {
 		return out, err
 	}
@@ -206,7 +223,7 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 	if _, err = tx.ExecContext(ctx, `INSERT INTO v2_ai_message(session_id,turn_id,role,content,created_at) VALUES($1,$2,'user',$3,$4)`, out.Session.ID, out.Turn.ID, req.Content, now); err != nil {
 		return out, err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE v2_ai_session SET status='running',model=$2,updated_at=$3 WHERE id=$1`, out.Session.ID, req.Model, now); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE v2_ai_session SET status='running',model=$2,updated_at=$3,reasoning_effort=$4 WHERE id=$1`, out.Session.ID, req.Model, now, selection); err != nil {
 		return out, err
 	}
 	s.mu.Lock()
@@ -219,6 +236,7 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 	}
 	out.Session.Status = "running"
 	out.Session.Model = req.Model
+	out.Session.ReasoningEffort = selection
 	out.Session.UpdatedAt = now
 	workerCtx, cancel := context.WithTimeout(context.Background(), workerLifetime)
 	s.workers[out.Session.ID] = cancel
@@ -364,8 +382,8 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 		}
 		s.finishTurn(sessionID, turnID, status, errText)
 	}()
-	var mode string
-	if err := s.db.QueryRowContext(ctx, `SELECT access_mode FROM v2_ai_turn WHERE id=$1 AND session_id=$2 AND actor_id=$3`, turnID, sessionID, actorID).Scan(&mode); err != nil {
+	var mode, reasoningEffort string
+	if err := s.db.QueryRowContext(ctx, `SELECT access_mode,reasoning_effort FROM v2_ai_turn WHERE id=$1 AND session_id=$2 AND actor_id=$3`, turnID, sessionID, actorID).Scan(&mode, &reasoningEffort); err != nil {
 		return
 	}
 	full := mode == "full"
@@ -411,7 +429,7 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 			}
 		}
 		lastWrite := time.Time{}
-		assistant, err := s.completeStream(ctx, model, messages, func(content string) error {
+		assistant, err := s.completeStreamWithReasoning(ctx, model, reasoningEffort, messages, func(content string) error {
 			if time.Since(lastWrite) < 600*time.Millisecond {
 				return nil
 			}

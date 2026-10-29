@@ -67,7 +67,7 @@ func TestAIRelayLiveCompatibility(t *testing.T) {
 			}
 			invoke := func(t *testing.T, stage string, messages []providerMessage) (providerMessage, bool) {
 				t.Helper()
-				mock.ExpectQuery(`SELECT enabled,base_url,models::TEXT,api_key_cipher`).WillReturnRows(sqlmock.NewRows([]string{"enabled", "base_url", "models", "key"}).AddRow(true, base, string(models), cipher))
+				mock.ExpectQuery(`SELECT enabled,base_url,models::TEXT,api_key_cipher`).WillReturnRows(sqlmock.NewRows([]string{"enabled", "base_url", "models", "key", "reasoning_efforts"}).AddRow(true, base, string(models), cipher, `{}`))
 				transport.status, transport.model, transport.toolCount = 0, "", 0
 				ctx, cancel := context.WithTimeout(context.Background(), 95*time.Second)
 				defer cancel()

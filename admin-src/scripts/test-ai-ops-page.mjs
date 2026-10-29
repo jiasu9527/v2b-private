@@ -6,7 +6,7 @@ const source = await readFile(new URL('../src/pages/aiOpsModel.ts', import.meta.
 const page = await readFile(new URL('../src/pages/AIOpsPage.tsx', import.meta.url), 'utf8');
 const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 } });
-const { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, aiActionStatus, aiCanApprove, aiCanReadSession, aiSessionBusy, aiLatestTurn, aiParseModels, aiFingerprintMatches, aiRequestID, aiAccessMode, aiOwnsFullAccess, aiMergeSessionAccess } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
+const { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, AI_REASONING_OPTIONS, aiReasoningEffort, aiSessionReasoning, aiReasoningDefaults, aiReasoningDefaultLabel, aiActionStatus, aiCanApprove, aiCanReadSession, aiSessionBusy, aiLatestTurn, aiParseModels, aiFingerprintMatches, aiRequestID, aiAccessMode, aiOwnsFullAccess, aiMergeSessionAccess } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
 const now = 1900000000000;
 const action = { status: 'pending', expires_at: now / 1000 + 60 };
 
@@ -34,6 +34,40 @@ test('sending stays blocked while any session turn or action is running', () => 
 test('four requested IDs are preserved and model list editing trims and deduplicates only', () => {
   assert.deepEqual(AI_DEFAULT_MODELS, ['gpt-6.1-sol', 'claude-fable-5-1', 'deepseek-v4.1-flash', 'glm-5.3']);
   assert.deepEqual(aiParseModels(' gpt-6.1-sol \n\nCustom-Model\r\nCustom-Model\ncustom-model'), ['gpt-6.1-sol', 'Custom-Model', 'custom-model']);
+});
+
+test('reasoning preserves each relay option without assuming model capability and legacy values default safely', () => {
+  assert.deepEqual(AI_REASONING_OPTIONS.map((item) => item.value), ['auto', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+  for (const {value} of AI_REASONING_OPTIONS) {
+    assert.equal(aiReasoningEffort(value), value);
+    assert.equal(aiSessionReasoning({reasoning_effort:value}), value);
+  }
+  for (const invalid of [undefined, null, '', 'ultra', 'default']) assert.equal(aiReasoningEffort(invalid), 'auto');
+  for (const session of [undefined, {}, {reasoning_effort:'default'}, {reasoning_effort:'ultra'}]) assert.equal(aiSessionReasoning(session), 'default');
+});
+
+test('per-model reasoning defaults track active model IDs and distinguish inherited defaults from explicit auto', () => {
+  const original = { 'gpt-6.1-sol': 'high', 'claude-fable-5-1': 'auto', removed: 'xhigh' };
+  assert.deepEqual(aiReasoningDefaults(['gpt-6.1-sol', 'claude-fable-5-1', 'new-model'], original), {'gpt-6.1-sol':'high','claude-fable-5-1':'auto','new-model':'auto'});
+  assert.equal(original.removed, 'xhigh');
+  assert.deepEqual(aiReasoningDefaults(['missing'], {}), {missing:'auto'});
+  assert.equal(aiReasoningDefaults(['__proto__'], JSON.parse('{"__proto__":"low"}')).__proto__, 'low');
+  assert.equal(aiReasoningDefaultLabel({reasoning_efforts:original}, 'gpt-6.1-sol'), '跟随设置（高）');
+  assert.equal(aiReasoningDefaultLabel({reasoning_efforts:original}, 'claude-fable-5-1'), '跟随设置（中转默认）');
+  assert.equal(aiReasoningDefaultLabel({}, 'new-model'), '跟随设置（中转默认）');
+  assert.match(page, /aiParseModels\(configuredModelsText \?\? config.models.join/);
+  assert.match(page, /reasoning_efforts: aiReasoningDefaults\(models, values.reasoning_efforts\)/);
+});
+
+test('reasoning choices restore per session, survive incoming snapshots while edited and participate in retry identity', () => {
+  assert.match(page, /if \(!reasoningEdited.current\) setReasoningEffort\(aiSessionReasoning\(value.session\)\)/);
+  const select = page.slice(page.indexOf('const selectSession ='), page.indexOf('const accessMode ='));
+  assert.match(select, /setReasoningEffort\(aiSessionReasoning\(session\)\)/);
+  assert.match(select, /reasoningEdited.current = false; setReasoningEffort\('default'\)/);
+  assert.match(page, /sendRetry.reasoningEffort === reasoningEffort/);
+  assert.match(page, /reasoning_effort: retry.reasoningEffort/);
+  assert.match(page, /aria-label="推理强度"[\s\S]*reasoningEdited.current = true; setReasoningEffort\(value\)/);
+  assert.match(page, /value: 'default', label: aiReasoningDefaultLabel\(config, model\)/);
 });
 
 test('observed fingerprint is scoped to exact current host and port, never auto-trusted', () => {

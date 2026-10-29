@@ -25,6 +25,7 @@ func (s *Service) ensureSchema(ctx context.Context) error {
 	}
 	for _, q := range []string{
 		`CREATE TABLE IF NOT EXISTS v2_ai_config(id SMALLINT PRIMARY KEY CHECK(id=1),enabled BOOLEAN NOT NULL DEFAULT FALSE,base_url TEXT NOT NULL DEFAULT '',models JSONB NOT NULL,api_key_cipher TEXT NOT NULL DEFAULT '',updated_by BIGINT NOT NULL,updated_at BIGINT NOT NULL)`,
+		`ALTER TABLE v2_ai_config ADD COLUMN IF NOT EXISTS reasoning_efforts JSONB NOT NULL DEFAULT '{}'::JSONB`,
 		`CREATE TABLE IF NOT EXISTS v2_ai_session(id BIGSERIAL PRIMARY KEY,title VARCHAR(200) NOT NULL,model VARCHAR(120) NOT NULL,created_by BIGINT NOT NULL,status VARCHAR(16) NOT NULL DEFAULT 'idle',created_at BIGINT NOT NULL,updated_at BIGINT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS v2_ai_turn(id BIGSERIAL PRIMARY KEY,session_id BIGINT NOT NULL REFERENCES v2_ai_session(id) ON DELETE CASCADE,actor_id BIGINT NOT NULL,request_id VARCHAR(80) NOT NULL,request_hash VARCHAR(64) NOT NULL,model VARCHAR(120) NOT NULL,status VARCHAR(16) NOT NULL,error TEXT NOT NULL DEFAULT '',created_at BIGINT NOT NULL,expires_at BIGINT NOT NULL,completed_at BIGINT NOT NULL DEFAULT 0,UNIQUE(actor_id,request_id))`,
 		`CREATE TABLE IF NOT EXISTS v2_ai_message(id BIGSERIAL PRIMARY KEY,session_id BIGINT NOT NULL REFERENCES v2_ai_session(id) ON DELETE CASCADE,turn_id BIGINT NOT NULL REFERENCES v2_ai_turn(id) ON DELETE CASCADE,role VARCHAR(16) NOT NULL,content TEXT NOT NULL DEFAULT '',tool_calls JSONB NOT NULL DEFAULT '[]',tool_call_id VARCHAR(200) NOT NULL DEFAULT '',created_at BIGINT NOT NULL)`,
@@ -33,7 +34,9 @@ func (s *Service) ensureSchema(ctx context.Context) error {
 		`ALTER TABLE v2_ai_session ADD COLUMN IF NOT EXISTS access_mode TEXT NOT NULL DEFAULT 'standard'`,
 		`ALTER TABLE v2_ai_session ADD COLUMN IF NOT EXISTS access_version BIGINT NOT NULL DEFAULT 1`,
 		`ALTER TABLE v2_ai_session ADD COLUMN IF NOT EXISTS full_access_by BIGINT NOT NULL DEFAULT 0`,
+		`ALTER TABLE v2_ai_session ADD COLUMN IF NOT EXISTS reasoning_effort TEXT NOT NULL DEFAULT 'default'`,
 		`ALTER TABLE v2_ai_turn ADD COLUMN IF NOT EXISTS access_mode TEXT NOT NULL DEFAULT 'standard'`,
+		`ALTER TABLE v2_ai_turn ADD COLUMN IF NOT EXISTS reasoning_effort TEXT NOT NULL DEFAULT 'auto'`,
 		`ALTER TABLE v2_ai_turn ADD COLUMN IF NOT EXISTS stop_requested BOOLEAN NOT NULL DEFAULT FALSE`,
 		`ALTER TABLE v2_ai_turn ADD COLUMN IF NOT EXISTS draft_content TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE v2_ai_turn ADD COLUMN IF NOT EXISTS draft_round INTEGER NOT NULL DEFAULT 0`,

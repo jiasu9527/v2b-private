@@ -29,12 +29,13 @@ type providerMessage struct {
 	contextKind string
 }
 type completionRequest struct {
-	Model      string            `json:"model"`
-	Messages   []providerMessage `json:"messages"`
-	Tools      []ToolDefinition  `json:"tools,omitempty"`
-	ToolChoice string            `json:"tool_choice,omitempty"`
-	Stream     bool              `json:"stream"`
-	MaxTokens  int               `json:"max_tokens"`
+	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
+	Model           string            `json:"model"`
+	Messages        []providerMessage `json:"messages"`
+	Tools           []ToolDefinition  `json:"tools,omitempty"`
+	ToolChoice      string            `json:"tool_choice,omitempty"`
+	Stream          bool              `json:"stream"`
+	MaxTokens       int               `json:"max_tokens"`
 }
 type completionResponse struct {
 	Choices []struct {
@@ -54,7 +55,16 @@ func (s *Service) complete(ctx context.Context, model string, messages []provide
 // onContent receives the accumulated public answer, never reasoning or tool
 // arguments. Tool requests are returned only after a complete valid response.
 func (s *Service) completeStream(ctx context.Context, model string, messages []providerMessage, onContent func(string) error) (providerMessage, error) {
+	return s.completeStreamWithReasoning(ctx, model, "auto", messages, onContent)
+}
+
+// reasoningEffort is already resolved and persisted on the turn. Reloading
+// connection settings below must never alter it between tool rounds.
+func (s *Service) completeStreamWithReasoning(ctx context.Context, model, reasoningEffort string, messages []providerMessage, onContent func(string) error) (providerMessage, error) {
 	var empty providerMessage
+	if !validReasoningEffort(reasoningEffort) {
+		return empty, ErrValidation
+	}
 	cfg, cipher, err := s.loadConfig(ctx)
 	if err != nil || !cfg.Enabled {
 		return empty, errors.New("AI 运维未启用")
@@ -77,6 +87,9 @@ func (s *Service) completeStream(ctx context.Context, model string, messages []p
 		return empty, errors.New("AI 中转地址无效")
 	}
 	request := completionRequest{Model: model, Messages: []providerMessage{}, Tools: s.toolDefinitions(), ToolChoice: "auto", Stream: true, MaxTokens: 4096}
+	if reasoningEffort != "auto" {
+		request.ReasoningEffort = reasoningEffort
+	}
 	overhead, err := json.Marshal(request)
 	if err != nil {
 		return empty, errors.New("无法编码 AI 请求")
@@ -161,8 +174,10 @@ func providerResponseError(status int, body io.Reader) error {
 	raw, _ := io.ReadAll(io.LimitReader(body, 8193))
 	var envelope struct {
 		Error struct {
-			Code string `json:"code"`
-			Type string `json:"type"`
+			Code    string `json:"code"`
+			Type    string `json:"type"`
+			Param   string `json:"param"`
+			Message string `json:"message"`
 		} `json:"error"`
 	}
 	if len(raw) <= 8192 {
@@ -186,6 +201,8 @@ func providerResponseError(status int, body io.Reader) error {
 		return errors.New("AI 中转要求重定向，已拒绝转发 Key；请填写最终 API 地址")
 	case status >= 500:
 		return fmt.Errorf("AI 中转或上游模型暂时异常（HTTP %d），请稍后核对中转服务状态", status)
+	case (status == http.StatusBadRequest || status == http.StatusUnprocessableEntity) && (envelope.Error.Param == "reasoning_effort" || strings.Contains(strings.ToLower(envelope.Error.Message), "reasoning_effort") || strings.Contains(code, "reasoning_effort")):
+		return errors.New("AI 中转或当前模型不支持所选推理强度，请将推理强度切换为中转默认（auto）后重试；本轮未自动降级或重发请求")
 	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity:
 		return errors.New("AI 中转不接受请求参数，请确认模型支持 Chat Completions 和工具调用")
 	default:

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Descriptions, Drawer, Form, Grid, Input, InputNumber, Modal, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
 import { DeleteOutlined, HistoryOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
 import { apiGet, apiJsonPost, getAdminUserInfo } from '../lib/api';
-import { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, aiAccessMode, aiCanReadSession, aiOwnsFullAccess, aiMergeSessionAccess, aiActionStatus, aiApplyDraft, aiCanApprove, aiConversationTurns, aiFingerprintMatches, aiLatestTurn, aiToolResultName, aiMergeSnapshot, aiNearBottom, aiParseModels, aiRequestID, aiSessionBusy, aiShouldSendKey, aiVisibleDraft, type AIAccessMode, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
+import { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, AI_REASONING_OPTIONS, aiReasoningDefaults, aiReasoningDefaultLabel, aiSessionReasoning, aiAccessMode, aiCanReadSession, aiOwnsFullAccess, aiMergeSessionAccess, aiActionStatus, aiApplyDraft, aiCanApprove, aiConversationTurns, aiFingerprintMatches, aiLatestTurn, aiToolResultName, aiMergeSnapshot, aiNearBottom, aiParseModels, aiRequestID, aiSessionBusy, aiShouldSendKey, aiVisibleDraft, type AIAccessMode, type AIReasoningChoice, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
 import { aiReadSessionStream } from './aiOpsStream';
 import AIOpsMarkdown from './AIOpsMarkdown';
 import AIOpsActionSummary, { aiActionNames } from './AIOpsActionSummary';
@@ -49,6 +49,8 @@ export default function AIOpsPage() {
   const selectionSequence = useRef(0);
   const [detail, setDetail] = useState<AISessionDetail | null>(null);
   const [model, setModel] = useState(AI_DEFAULT_MODELS[0]);
+  const [reasoningEffort, setReasoningEffort] = useState<AIReasoningChoice>('default');
+  const reasoningEdited = useRef(false);
   const [newAccessMode, setNewAccessMode] = useState<AIAccessMode>(AI_DEFAULT_ACCESS_MODE);
   const actor = getAdminUserInfo();
   const actorID = Number(actor.id || 0);
@@ -61,6 +63,7 @@ export default function AIOpsPage() {
   const [error, setError] = useState('');
   const [now, setNow] = useState(Date.now());
   const [configForm] = Form.useForm();
+  const configuredModelsText = Form.useWatch('models_text', { form: configForm, preserve: true });
   const [serverForm] = Form.useForm();
   const [serverOpen, setServerOpen] = useState(false);
   const [editing, setEditing] = useState<AIServer | null>(null);
@@ -70,7 +73,7 @@ export default function AIOpsPage() {
   const [confirmedOutput, setConfirmedOutput] = useState(false);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [resetText, setResetText] = useState('');
-  const [sendRetry, setSendRetry] = useState<{ sessionID: number; model: string; content: string; requestID: string; accessMode: AIAccessMode; accessVersion?: number } | null>(null);
+  const [sendRetry, setSendRetry] = useState<{ sessionID: number; model: string; content: string; requestID: string; accessMode: AIAccessMode; accessVersion?: number; reasoningEffort: AIReasoningChoice } | null>(null);
   const [streamConnected, setStreamConnected] = useState(false);
   const alive = useRef(true);
   const detailSequence = useRef(0);
@@ -87,6 +90,7 @@ export default function AIOpsPage() {
 
   const applySnapshot = (value: AISessionDetail) => {
     if (!alive.current || selectedRef.current !== value.session.id || !aiCanReadSession(value.session, actorID, isAdmin)) return;
+    if (!reasoningEdited.current) setReasoningEffort(aiSessionReasoning(value.session));
     setDetail((previous) => aiMergeSnapshot(previous, { ...value, turns: value.turns || [], actions: value.actions || [] }));
     setSessions((items) => items.map((item) => item.id === value.session.id ? aiMergeSessionAccess(item, value.session) : item));
   };
@@ -131,7 +135,7 @@ export default function AIOpsPage() {
         const next = response?.data as AIConfig;
         if (!next || !Array.isArray(next.models)) throw new Error('AI 配置数据格式不正确');
         setConfig(next);
-        if (isAdmin) configForm.setFieldsValue({ ...next, models_text: next.models.join('\n'), api_key: '', clear_api_key: false });
+        if (isAdmin) configForm.setFieldsValue({ ...next, reasoning_efforts: aiReasoningDefaults(next.models, next.reasoning_efforts), models_text: next.models.join('\n'), api_key: '', clear_api_key: false });
         setModel((current) => next.models.includes(current) ? current : next.models[0] || AI_DEFAULT_MODELS[0]);
       }
       if (selectedRef.current) await loadDetail(selectedRef.current);
@@ -212,11 +216,12 @@ export default function AIOpsPage() {
   }, [detail?.messages.length, detail?.actions.length, visibleDraft?.draft_content]);
   const selectSession = (session: AISession) => {
     if (!aiCanReadSession(session, actorID, isAdmin)) return;
+    reasoningEdited.current = false; setReasoningEffort(aiSessionReasoning(session));
     followOutput.current = true;
     selectionSequence.current += 1; selectedRef.current = session.id; setSelectedID(session.id); setDetail(null); setDraft(''); setSendRetry(null); setNewAccessMode(AI_DEFAULT_ACCESS_MODE); setModel(session.model); setTab('chat');
     void loadDetail(session.id).catch((e) => fail(e, '读取会话失败'));
   };
-  const newSession = () => { followOutput.current = true; selectionSequence.current += 1; selectedRef.current = 0; detailSequence.current += 1; setSelectedID(0); setDetail(null); setNewAccessMode(AI_DEFAULT_ACCESS_MODE); setDraft(''); setSendRetry(null); setTab('chat'); };
+  const newSession = () => { followOutput.current = true; reasoningEdited.current = false; setReasoningEffort('default'); selectionSequence.current += 1; selectedRef.current = 0; detailSequence.current += 1; setSelectedID(0); setDetail(null); setNewAccessMode(AI_DEFAULT_ACCESS_MODE); setDraft(''); setSendRetry(null); setTab('chat'); };
   const accessMode = selectedID ? aiAccessMode(detail?.session) : newAccessMode;
   const foreignFullAccess = !!detail && aiAccessMode(detail.session) === 'full' && !aiOwnsFullAccess(detail.session, actorID);
   const changeAccess = async (mode: AIAccessMode) => {
@@ -259,15 +264,15 @@ export default function AIOpsPage() {
     const originalID = selectedRef.current;
     const selection = selectionSequence.current;
     const accessVersion = detail?.session.access_version;
-    const retry = sendRetry && sendRetry.sessionID === originalID && sendRetry.model === model && sendRetry.content === content && sendRetry.accessMode === accessMode && sendRetry.accessVersion === accessVersion ? sendRetry : { sessionID: originalID, model, content, requestID: aiRequestID(), accessMode, accessVersion };
+    const retry = sendRetry && sendRetry.sessionID === originalID && sendRetry.model === model && sendRetry.content === content && sendRetry.accessMode === accessMode && sendRetry.accessVersion === accessVersion && sendRetry.reasoningEffort === reasoningEffort ? sendRetry : { sessionID: originalID, model, content, requestID: aiRequestID(), accessMode, accessVersion, reasoningEffort };
     setSendRetry(retry);
     try {
-      const response = await apiJsonPost('/ai-ops/chat/send', { session_id: originalID, model, content, request_id: retry.requestID, access_mode: retry.accessMode, access_version: retry.accessVersion });
+      const response = await apiJsonPost('/ai-ops/chat/send', { session_id: originalID, model, content, request_id: retry.requestID, access_mode: retry.accessMode, access_version: retry.accessVersion, reasoning_effort: retry.reasoningEffort });
       if (!alive.current) return;
       const session = response?.data?.session as AISession;
       if (!session?.id) throw new Error('发送状态未确认，请刷新后重试同一消息');
       setSendRetry(null);
-      if (selectedRef.current === originalID && selectionSequence.current === selection) { selectedRef.current = session.id; setSelectedID(session.id); setDraft(''); setTab('chat'); await loadDetail(session.id); }
+      if (selectedRef.current === originalID && selectionSequence.current === selection) { reasoningEdited.current = false; setReasoningEffort(aiSessionReasoning(session)); selectedRef.current = session.id; setSelectedID(session.id); setDraft(''); setTab('chat'); await loadDetail(session.id); }
       await loadLists();
     } catch (e) { fail(e, '发送失败，可刷新后重试同一消息'); }
     finally { finish(); }
@@ -277,7 +282,8 @@ export default function AIOpsPage() {
     try {
       const values = await configForm.validateFields();
       if (config.has_api_key && String(values.base_url || '').trim() !== config.base_url && !values.api_key && !values.clear_api_key) throw new Error('修改中转地址后必须重新输入 API Key 或明确清除旧 Key，不能自动沿用');
-      await apiJsonPost('/ai-ops/config/save', { enabled: !!values.enabled, base_url: String(values.base_url || '').trim(), models: aiParseModels(values.models_text || ''), api_key: values.api_key || '', clear_api_key: !!values.clear_api_key });
+      const models = aiParseModels(values.models_text || '');
+      await apiJsonPost('/ai-ops/config/save', { enabled: !!values.enabled, base_url: String(values.base_url || '').trim(), models, reasoning_efforts: aiReasoningDefaults(models, values.reasoning_efforts), api_key: values.api_key || '', clear_api_key: !!values.clear_api_key });
       if (!alive.current) return;
       configForm.setFieldsValue({ api_key: '', clear_api_key: false }); message.success('AI 配置已保存'); await load();
     } catch (e) { fail(e, '保存配置失败'); }
@@ -355,7 +361,7 @@ export default function AIOpsPage() {
     <section className="ai-ops-conversation">
       <div className="ai-ops-conversation-head">
         <div className="ai-ops-conversation-title"><Text strong ellipsis>{detail?.session.title || (selectedID ? '读取会话中…' : '新的运维对话')}</Text>{compact && <div className="ai-ops-mobile-actions"><Button type="text" size="small" aria-label="历史会话" icon={<HistoryOutlined />} onClick={() => setHistoryOpen(true)}>历史</Button><Button type="text" size="small" icon={<PlusOutlined />} onClick={newSession}>新对话</Button></div>}</div>
-        <div className="ai-ops-conversation-controls"><Select aria-label="选择 AI 模型" value={model} onChange={setModel} disabled={!!busy || aiSessionBusy(detail)} options={config.models.map((value) => ({ value, label: value }))} /><Select<AIAccessMode> aria-label="AI 访问权限" value={accessMode} onChange={(mode) => void changeAccess(mode)} loading={busy === 'access'} disabled={!!busy || (selectedID > 0 && !detail)} options={[{ value: 'standard', label: '逐次确认' }, { value: 'full', label: '完全访问', disabled: aiSessionBusy(detail) && accessMode !== 'full' }]} /></div>
+        <div className="ai-ops-conversation-controls"><Select className="ai-ops-model-select" aria-label="选择 AI 模型" value={model} onChange={setModel} disabled={!!busy || aiSessionBusy(detail)} options={config.models.map((value) => ({ value, label: value }))} /><Select<AIReasoningChoice> className="ai-ops-reasoning-select" aria-label="推理强度" value={reasoningEffort} onChange={(value) => { reasoningEdited.current = true; setReasoningEffort(value); }} disabled={!!busy || aiSessionBusy(detail) || (selectedID > 0 && !detail)} options={[{ value: 'default', label: aiReasoningDefaultLabel(config, model) }, ...AI_REASONING_OPTIONS]} /><Select<AIAccessMode> className="ai-ops-access-select" aria-label="AI 访问权限" value={accessMode} onChange={(mode) => void changeAccess(mode)} loading={busy === 'access'} disabled={!!busy || (selectedID > 0 && !detail)} options={[{ value: 'standard', label: '逐次确认' }, { value: 'full', label: '完全访问', disabled: aiSessionBusy(detail) && accessMode !== 'full' }]} /></div>
       </div>
       {foreignFullAccess && <div className="ai-ops-access-owner"><Text type="secondary">操作人 #{detail?.session.full_access_by || '未知'} 的授权不可沿用；请切换权限或由你启用。</Text><Button size="small" disabled={!!busy || aiSessionBusy(detail)} onClick={() => void changeAccess('full')}>由我启用完全访问</Button></div>}
       <div className="ai-ops-messages" ref={messageViewport} onScroll={() => { const pane = messageViewport.current; if (pane) followOutput.current = aiNearBottom(pane.scrollTop, pane.clientHeight, pane.scrollHeight); }}>
@@ -423,6 +429,7 @@ export default function AIOpsPage() {
     <Form.Item name="api_key" label={`API Key · ${config.has_api_key ? '已保存（留空保持不变）' : '未配置'}`} extra="保存后不会回显。不要放在 URL 中或写进聊天。"><Input.Password autoComplete="new-password" placeholder={config.has_api_key ? '留空保留已有 API Key' : '输入 API Key'} /></Form.Item>
     <Form.Item name="clear_api_key" valuePropName="checked"><Checkbox>清除已有 API Key</Checkbox></Form.Item>
     <Form.Item name="models_text" label="模型 ID（每行一个）" rules={[{ validator: (_, value) => aiParseModels(value || '').length ? Promise.resolve() : Promise.reject(new Error('至少填写一个模型 ID')) }]} extra="默认提供四个模型 ID；可以按中转支持的实际 ID 修改，不会自动替换模型。"><Input.TextArea rows={4} /></Form.Item>
+    <div className="ai-ops-reasoning-settings"><Text strong>各模型默认推理强度</Text><Paragraph type="secondary">具体等级取决于中转站和模型支持情况；不支持时请选择“中转默认”，请求中不传推理参数。</Paragraph><div className="ai-ops-reasoning-grid">{aiParseModels(configuredModelsText ?? config.models.join('\n')).map((id) => <Form.Item key={id} name={['reasoning_efforts', id]} label={id} initialValue="auto"><Select aria-label={`${id} 默认推理强度`} options={AI_REASONING_OPTIONS} /></Form.Item>)}</div></div>
     <Button type="primary" htmlType="submit" loading={busy === 'config'}>保存设置</Button>
   </Form></Card><Card title="数据清理" size="small"><Paragraph>清空会话只删除聊天、消息及相关操作记录，保留中转配置和服务器凭据。重置全部 AI 数据会同时清除这三类数据并停止进行中的 AI 任务；已经在远程服务器启动的命令不能保证撤回或回滚。有远程操作正在执行时，删除、清空和重置会被拒绝，需等操作完成或进入“结果待核对”状态后再处理。</Paragraph><Space wrap><Button danger disabled={!!busy} onClick={() => setConfirmation({ kind: 'clear' })}>清空全部会话</Button><Button danger type="primary" disabled={!!busy} onClick={() => { setResetText(''); setConfirmation({ kind: 'reset' }); }}>重置全部 AI 数据</Button></Space></Card></Space> : null;
   const titles = { delete: '删除当前会话', clear: '清空全部会话', reset: '重置全部 AI 数据', 'server-delete': '删除服务器配置' };

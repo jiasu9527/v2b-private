@@ -14,10 +14,12 @@ import (
 )
 
 type fakeAIOps struct {
-	calls      int
-	actor, id  int64
-	err        error
-	accessMode string
+	calls            int
+	actor, id        int64
+	err              error
+	accessMode       string
+	reasoningEffort  string
+	reasoningEfforts *map[string]string
 }
 
 func (f *fakeAIOps) called(id int64) { f.calls++; f.actor = id }
@@ -27,6 +29,7 @@ func (f *fakeAIOps) GetConfig(_ context.Context, id int64) (aiops.Config, error)
 }
 func (f *fakeAIOps) SaveConfig(_ context.Context, id int64, r aiops.ConfigSaveRequest) (aiops.Config, error) {
 	f.called(id)
+	f.reasoningEfforts = r.ReasoningEfforts
 	return aiops.Config{Enabled: r.Enabled, BaseURL: r.BaseURL, HasAPIKey: true, Models: r.Models}, f.err
 }
 func (f *fakeAIOps) ListSessions(_ context.Context, id int64) ([]aiops.Session, error) {
@@ -40,10 +43,12 @@ func (f *fakeAIOps) GetSession(_ context.Context, actor, id int64) (aiops.Sessio
 }
 func (f *fakeAIOps) CreateSession(_ context.Context, actor int64, r aiops.CreateSessionRequest) (aiops.Session, error) {
 	f.called(actor)
+	f.reasoningEffort = r.ReasoningEffort
 	return aiops.Session{ID: 1, Model: r.Model}, f.err
 }
 func (f *fakeAIOps) SendMessage(_ context.Context, actor int64, r aiops.SendMessageRequest) (aiops.SendMessageResult, error) {
 	f.called(actor)
+	f.reasoningEffort = r.ReasoningEffort
 	return aiops.SendMessageResult{Session: aiops.Session{ID: r.SessionID}, Turn: aiops.Turn{ID: 1, Status: "running"}}, f.err
 }
 func (f *fakeAIOps) SetAccessMode(_ context.Context, actor int64, r aiops.AccessModeRequest) (aiops.Session, error) {
@@ -166,6 +171,27 @@ func TestAIOpsManagementSecretsErrorsAndSessionActions(t *testing.T) {
 	w = aiOpsTestRequest(t, f, identity, "GET", "reset", "")
 	if w.Code != 405 {
 		t.Fatal("wrong method accepted")
+	}
+}
+
+func TestAIOpsReasoningFieldsReachServices(t *testing.T) {
+	for _, tc := range []struct {
+		action, body, effort string
+		status               int
+	}{
+		{"chat/send", `{"model":"gpt-6.1-sol","content":"fixture","request_id":"fixture-reasoning","reasoning_effort":"high"}`, "high", 202},
+		{"session/create", `{"model":"gpt-6.1-sol","reasoning_effort":"default"}`, "default", 200},
+	} {
+		f := &fakeAIOps{}
+		w := aiOpsTestRequest(t, f, &session.Identity{ID: 7, IsAdmin: 1}, "POST", tc.action, tc.body)
+		if w.Code != tc.status || f.reasoningEffort != tc.effort {
+			t.Fatalf("%s: %d %s effort=%s", tc.action, w.Code, w.Body.String(), f.reasoningEffort)
+		}
+	}
+	f := &fakeAIOps{}
+	w := aiOpsTestRequest(t, f, &session.Identity{ID: 7, IsAdmin: 1}, "POST", "config/save", `{"models":["gpt-6.1-sol"],"reasoning_efforts":{"gpt-6.1-sol":"xhigh"}}`)
+	if w.Code != 200 || f.reasoningEfforts == nil || (*f.reasoningEfforts)["gpt-6.1-sol"] != "xhigh" {
+		t.Fatalf("config reasoning: %d %s", w.Code, w.Body.String())
 	}
 }
 

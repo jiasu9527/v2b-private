@@ -51,8 +51,9 @@ func normalizeModels(models []string) ([]string, error) {
 }
 func (s *Service) loadConfig(ctx context.Context) (Config, string, error) {
 	result := Config{Models: append([]string{}, DefaultModels...)}
-	var raw, cipher string
-	err := s.db.QueryRowContext(ctx, `SELECT enabled,base_url,models::TEXT,api_key_cipher FROM v2_ai_config WHERE id=1`).Scan(&result.Enabled, &result.BaseURL, &raw, &cipher)
+	result.ReasoningEfforts, _ = normalizeReasoningEfforts(result.Models, nil)
+	var raw, cipher, reasoningRaw string
+	err := s.db.QueryRowContext(ctx, `SELECT enabled,base_url,models::TEXT,api_key_cipher,reasoning_efforts::TEXT FROM v2_ai_config WHERE id=1`).Scan(&result.Enabled, &result.BaseURL, &raw, &cipher, &reasoningRaw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return result, "", nil
 	}
@@ -60,6 +61,14 @@ func (s *Service) loadConfig(ctx context.Context) (Config, string, error) {
 		return result, "", err
 	}
 	if json.Unmarshal([]byte(raw), &result.Models) != nil {
+		return result, "", ErrUnavailable
+	}
+	var stored map[string]string
+	if json.Unmarshal([]byte(reasoningRaw), &stored) != nil {
+		return result, "", ErrUnavailable
+	}
+	result.ReasoningEfforts, err = normalizeReasoningEfforts(result.Models, stored)
+	if err != nil {
 		return result, "", ErrUnavailable
 	}
 	result.HasAPIKey = cipher != ""
@@ -95,6 +104,13 @@ func (s *Service) SaveConfig(ctx context.Context, actorID int64, req ConfigSaveR
 	if err != nil {
 		return empty, err
 	}
+	var efforts map[string]string
+	if req.ReasoningEfforts != nil {
+		efforts, err = normalizeReasoningEfforts(models, *req.ReasoningEfforts)
+		if err != nil {
+			return empty, err
+		}
+	}
 	if len(req.APIKey) > 8192 || strings.ContainsAny(req.APIKey, "\r\n") || (req.APIKey != "" && req.ClearAPIKey) {
 		return empty, ErrValidation
 	}
@@ -115,10 +131,26 @@ func (s *Service) SaveConfig(ctx context.Context, actorID int64, req ConfigSaveR
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(2026102903)`); err != nil {
 		return empty, err
 	}
-	var cipher, oldBase string
-	err = tx.QueryRowContext(ctx, `SELECT api_key_cipher,base_url FROM v2_ai_config WHERE id=1 FOR UPDATE`).Scan(&cipher, &oldBase)
+	var cipher, oldBase, oldEfforts string
+	err = tx.QueryRowContext(ctx, `SELECT api_key_cipher,base_url,reasoning_efforts::TEXT FROM v2_ai_config WHERE id=1 FOR UPDATE`).Scan(&cipher, &oldBase, &oldEfforts)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return empty, err
+	}
+	if req.ReasoningEfforts == nil {
+		stored := map[string]string{}
+		if oldEfforts != "" && json.Unmarshal([]byte(oldEfforts), &stored) != nil {
+			return empty, ErrUnavailable
+		}
+		retained := map[string]string{}
+		for _, model := range models {
+			if value, exists := stored[model]; exists {
+				retained[model] = value
+			}
+		}
+		efforts, err = normalizeReasoningEfforts(models, retained)
+		if err != nil {
+			return empty, ErrUnavailable
+		}
 	}
 	if cipher != "" && oldBase != base && req.APIKey == "" && !req.ClearAPIKey {
 		return empty, ErrValidation
@@ -136,7 +168,8 @@ func (s *Service) SaveConfig(ctx context.Context, actorID int64, req ConfigSaveR
 		return empty, ErrValidation
 	}
 	raw, _ := json.Marshal(models)
-	_, err = tx.ExecContext(ctx, `INSERT INTO v2_ai_config(id,enabled,base_url,models,api_key_cipher,updated_by,updated_at) VALUES(1,$1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET enabled=EXCLUDED.enabled,base_url=EXCLUDED.base_url,models=EXCLUDED.models,api_key_cipher=EXCLUDED.api_key_cipher,updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at`, req.Enabled, base, string(raw), cipher, actorID, time.Now().Unix())
+	reasoningRaw, _ := json.Marshal(efforts)
+	_, err = tx.ExecContext(ctx, `INSERT INTO v2_ai_config(id,enabled,base_url,models,api_key_cipher,updated_by,updated_at,reasoning_efforts) VALUES(1,$1,$2,$3,$4,$5,$6,$7::JSONB) ON CONFLICT(id) DO UPDATE SET enabled=EXCLUDED.enabled,base_url=EXCLUDED.base_url,models=EXCLUDED.models,api_key_cipher=EXCLUDED.api_key_cipher,updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at,reasoning_efforts=EXCLUDED.reasoning_efforts`, req.Enabled, base, string(raw), cipher, actorID, time.Now().Unix(), string(reasoningRaw))
 	if err != nil {
 		return empty, err
 	}
@@ -146,5 +179,5 @@ func (s *Service) SaveConfig(ctx context.Context, actorID int64, req ConfigSaveR
 	if !req.Enabled {
 		s.cancelWorker(0)
 	}
-	return Config{Enabled: req.Enabled, BaseURL: base, Models: models, HasAPIKey: cipher != ""}, nil
+	return Config{Enabled: req.Enabled, BaseURL: base, Models: models, HasAPIKey: cipher != "", ReasoningEfforts: efforts}, nil
 }

@@ -16,21 +16,24 @@ var (
 var DefaultModels = []string{"gpt-6.1-sol", "claude-fable-5-1", "deepseek-v4.1-flash", "glm-5.3"}
 
 type Config struct {
-	Enabled   bool     `json:"enabled"`
-	BaseURL   string   `json:"base_url"`
-	Models    []string `json:"models"`
-	HasAPIKey bool     `json:"has_api_key"`
+	ReasoningEfforts map[string]string `json:"reasoning_efforts"`
+	Enabled          bool              `json:"enabled"`
+	BaseURL          string            `json:"base_url"`
+	Models           []string          `json:"models"`
+	HasAPIKey        bool              `json:"has_api_key"`
 }
 type ConfigSaveRequest struct {
-	Enabled     bool     `json:"enabled"`
-	BaseURL     string   `json:"base_url"`
-	Models      []string `json:"models"`
-	APIKey      string   `json:"api_key"`
-	ClearAPIKey bool     `json:"clear_api_key"`
+	ReasoningEfforts *map[string]string `json:"reasoning_efforts,omitempty"`
+	Enabled          bool               `json:"enabled"`
+	BaseURL          string             `json:"base_url"`
+	Models           []string           `json:"models"`
+	APIKey           string             `json:"api_key"`
+	ClearAPIKey      bool               `json:"clear_api_key"`
 }
 type CreateSessionRequest struct {
-	Title string `json:"title"`
-	Model string `json:"model"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	Title           string `json:"title"`
+	Model           string `json:"model"`
 }
 type AccessModeRequest struct {
 	ExpectedVersion *int64 `json:"expected_version,omitempty"`
@@ -38,30 +41,32 @@ type AccessModeRequest struct {
 	Mode            string `json:"mode"`
 }
 type Session struct {
-	AccessVersion int64  `json:"access_version"`
-	AccessMode    string `json:"access_mode"`
-	FullAccessBy  int64  `json:"full_access_by"`
-	ID            int64  `json:"id"`
-	Title         string `json:"title"`
-	Model         string `json:"model"`
-	CreatedBy     int64  `json:"created_by"`
-	Status        string `json:"status"`
-	CreatedAt     int64  `json:"created_at"`
-	UpdatedAt     int64  `json:"updated_at"`
+	ReasoningEffort string `json:"reasoning_effort"`
+	AccessVersion   int64  `json:"access_version"`
+	AccessMode      string `json:"access_mode"`
+	FullAccessBy    int64  `json:"full_access_by"`
+	ID              int64  `json:"id"`
+	Title           string `json:"title"`
+	Model           string `json:"model"`
+	CreatedBy       int64  `json:"created_by"`
+	Status          string `json:"status"`
+	CreatedAt       int64  `json:"created_at"`
+	UpdatedAt       int64  `json:"updated_at"`
 }
 type Turn struct {
-	AccessMode    string `json:"access_mode"`
-	StopRequested bool   `json:"stop_requested"`
-	ID            int64  `json:"id"`
-	SessionID     int64  `json:"session_id"`
-	RequestID     string `json:"request_id"`
-	Status        string `json:"status"`
-	Error         string `json:"error"`
-	CreatedAt     int64  `json:"created_at"`
-	CompletedAt   int64  `json:"completed_at"`
-	DraftContent  string `json:"draft_content"`
-	DraftRound    int    `json:"draft_round"`
-	DraftVersion  int64  `json:"draft_version"`
+	ReasoningEffort string `json:"reasoning_effort"`
+	AccessMode      string `json:"access_mode"`
+	StopRequested   bool   `json:"stop_requested"`
+	ID              int64  `json:"id"`
+	SessionID       int64  `json:"session_id"`
+	RequestID       string `json:"request_id"`
+	Status          string `json:"status"`
+	Error           string `json:"error"`
+	CreatedAt       int64  `json:"created_at"`
+	CompletedAt     int64  `json:"completed_at"`
+	DraftContent    string `json:"draft_content"`
+	DraftRound      int    `json:"draft_round"`
+	DraftVersion    int64  `json:"draft_version"`
 }
 type Message struct {
 	ID         int64      `json:"id"`
@@ -80,12 +85,13 @@ type SessionDetail struct {
 	Turns             []Turn    `json:"turns"`
 }
 type SendMessageRequest struct {
-	AccessVersion *int64 `json:"access_version,omitempty"`
-	AccessMode    string `json:"access_mode,omitempty"`
-	SessionID     int64  `json:"session_id,omitempty"`
-	Model         string `json:"model"`
-	Content       string `json:"content"`
-	RequestID     string `json:"request_id"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	AccessVersion   *int64 `json:"access_version,omitempty"`
+	AccessMode      string `json:"access_mode,omitempty"`
+	SessionID       int64  `json:"session_id,omitempty"`
+	Model           string `json:"model"`
+	Content         string `json:"content"`
+	RequestID       string `json:"request_id"`
 }
 type SendMessageResult struct {
 	Session Session `json:"session"`

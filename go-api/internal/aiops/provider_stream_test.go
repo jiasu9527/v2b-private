@@ -33,7 +33,7 @@ func streamTestService(t *testing.T, url string) (*Service, sqlmock.Sqlmock) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mock.ExpectQuery(`SELECT enabled,base_url,models::TEXT,api_key_cipher`).WillReturnRows(sqlmock.NewRows([]string{"enabled", "base_url", "models", "key"}).AddRow(true, url+"/v1", `["gpt-6.1-sol"]`, cipher))
+	mock.ExpectQuery(`SELECT enabled,base_url,models::TEXT,api_key_cipher`).WillReturnRows(sqlmock.NewRows([]string{"enabled", "base_url", "models", "key", "reasoning_efforts"}).AddRow(true, url+"/v1", `["gpt-6.1-sol"]`, cipher, `{}`))
 	t.Cleanup(func() {
 		s.Close()
 		db.Close()

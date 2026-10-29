@@ -1,14 +1,30 @@
 export const AI_DEFAULT_MODELS = ['gpt-6.1-sol', 'claude-fable-5-1', 'deepseek-v4.1-flash', 'glm-5.3'];
 export type AIAccessMode = 'standard' | 'full';
 export const AI_DEFAULT_ACCESS_MODE: AIAccessMode = 'full';
-export type AIConfig = { enabled: boolean; base_url?: string; models: string[]; has_api_key: boolean };
-export type AISession = { id: number; title: string; model: string; created_by: number; status: string; created_at: number; updated_at: number; access_mode?: AIAccessMode; access_version?: number; full_access_by?: number };
+export type AIReasoningEffort = 'auto' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type AIReasoningChoice = 'default' | AIReasoningEffort;
+export const AI_REASONING_LABELS: Record<AIReasoningEffort, string> = { auto: '中转默认', none: '不启用推理', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '极高' };
+export const AI_REASONING_OPTIONS = Object.entries(AI_REASONING_LABELS).map(([value, label]) => ({ value: value as AIReasoningEffort, label }));
+export type AIConfig = { enabled: boolean; base_url?: string; models: string[]; has_api_key: boolean; reasoning_efforts?: Record<string, string> };
+export type AISession = { id: number; title: string; model: string; created_by: number; status: string; created_at: number; updated_at: number; access_mode?: AIAccessMode; access_version?: number; full_access_by?: number; reasoning_effort?: AIReasoningChoice };
 export type AIMessage = { id: number; session_id: number; turn_id: number; role: string; content: string; tool_calls?: { id: string; function: { name: string; arguments: string } }[]; tool_call_id?: string; created_at: number };
-export type AITurn = { id: number; status: string; error: string; created_at: number; completed_at: number; draft_content?: string; draft_round?: number; draft_version?: number; access_mode?: AIAccessMode; stop_requested?: boolean };
+export type AITurn = { id: number; status: string; error: string; created_at: number; completed_at: number; draft_content?: string; draft_round?: number; draft_version?: number; access_mode?: AIAccessMode; stop_requested?: boolean; reasoning_effort?: AIReasoningEffort };
 export type AIAction = { id: number; session_id: number; actor_id: number; approved_by?: number; rejected_by?: number; approval_mode?: 'manual' | 'full_access'; authorization_turn_id?: number; tool_call_id: string; kind: string; target_id: number; target_type: string; server_label: string; payload: Record<string, unknown>; reason: string; status: string; expires_at: number; claimed_at: number; completed_at: number; output: string; error: string; created_at: number; updated_at: number };
 export type AISessionDetail = { session: AISession; messages: AIMessage[]; turns: AITurn[]; actions: AIAction[]; messages_truncated?: boolean };
 export type AIServer = { id: number; name: string; host: string; port: number; username: string; host_key_sha256: string; enabled: boolean; version: number; has_password: boolean; has_private_key: boolean; has_key_passphrase: boolean; created_at: number; updated_at: number };
 export type AIFingerprint = { host: string; port: number; fingerprint: string; key_type: string };
+export function aiReasoningEffort(value: unknown): AIReasoningEffort {
+  return AI_REASONING_OPTIONS.some((option) => option.value === value) ? value as AIReasoningEffort : 'auto';
+}
+export function aiSessionReasoning(session?: AISession | null): AIReasoningChoice {
+  return AI_REASONING_OPTIONS.some((option) => option.value === session?.reasoning_effort) ? session!.reasoning_effort as AIReasoningEffort : 'default';
+}
+export function aiReasoningDefaults(models: string[], values?: Record<string, unknown> | null): Record<string, AIReasoningEffort> {
+  return Object.fromEntries(models.map((model) => [model, aiReasoningEffort(values && Object.prototype.hasOwnProperty.call(values, model) ? values[model] : undefined)]));
+}
+export function aiReasoningDefaultLabel(config: AIConfig, model: string): string {
+  return `跟随设置（${AI_REASONING_LABELS[aiReasoningDefaults([model], config.reasoning_efforts)[model]]}）`;
+}
 export function aiActionStatus(action: AIAction, now = Date.now()): string {
   return action.status === 'pending' && action.expires_at * 1000 <= now ? 'expired' : action.status;
 }

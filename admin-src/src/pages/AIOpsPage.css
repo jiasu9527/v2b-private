@@ -6,7 +6,7 @@
 .ai-ops-page-stack{display:flex;flex-direction:column;gap:16px;min-width:0}
 .ai-ops-conversation-title{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
 .ai-ops-conversation-title>.ant-typography{min-width:0;flex:1}
-.ai-ops-conversation-controls{display:grid;grid-template-columns:minmax(0,1fr) minmax(112px,.65fr);gap:8px;min-width:0;max-width:500px}
+.ai-ops-conversation-controls{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr) 112px;gap:8px;min-width:0;max-width:650px}
 .ai-ops-conversation-controls>.ant-select{width:100%;min-width:0;max-width:100%}
 .ai-ops-conversation-controls .ant-select-selection-item{min-width:0}
 .ai-ops-mobile-actions,.ai-ops-send-controls{display:flex;align-items:center;gap:6px;flex-shrink:0}
@@ -22,7 +22,12 @@
 .ai-ops-history-drawer .ai-ops-session-history{height:100%;min-height:0}
 .ai-ops-history-drawer .ai-ops-session-history>.ant-space,.ai-ops-history-drawer .ai-ops-session-history>.ant-typography{flex-shrink:0}
 .ai-ops-history-drawer .ai-ops-session-list{max-height:none;min-height:0;flex:1;overflow:auto;overscroll-behavior:contain}
-@media(min-width:1400px){.ai-ops-conversation-head{flex-direction:row;align-items:center;justify-content:space-between;gap:16px}.ai-ops-conversation-title{flex:1}.ai-ops-conversation-controls{width:390px;flex-shrink:0}}
+.ai-ops-reasoning-settings{margin:4px 0 16px}
+.ai-ops-reasoning-settings>.ant-typography-secondary{margin:6px 0 12px;font-size:12px}
+.ai-ops-reasoning-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px;min-width:0}
+.ai-ops-reasoning-grid .ant-form-item-label>label{height:auto;overflow-wrap:anywhere}
+.ai-ops-reasoning-grid .ant-select{width:100%;min-width:0}
+@media(min-width:1400px){.ai-ops-conversation-head{flex-direction:row;align-items:center;justify-content:space-between;gap:16px}.ai-ops-conversation-title{flex:1}.ai-ops-conversation-controls{width:540px;flex-shrink:0}}
 @media(max-width:991.98px){
   .ai-ops-page-chat{display:flex;flex-direction:column;height:calc(100dvh - 60px);min-height:520px;box-sizing:border-box;padding-bottom:8px}
   .ai-ops-page>.content-heading{padding:10px 16px;margin-bottom:8px;font-size:18px;flex-shrink:0}
@@ -40,7 +45,7 @@
   .ai-ops-chat-layout{grid-template-columns:minmax(0,1fr);gap:0}
   .ai-ops-chat-layout>.ai-ops-sessions{display:none}
   .ai-ops-conversation{padding:12px}
-  .ai-ops-conversation-controls{max-width:none;grid-template-columns:minmax(0,1fr) minmax(112px,.55fr)}
+  .ai-ops-conversation-controls{max-width:none;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr) 112px}
   .ai-ops-messages{height:calc(100dvh - 350px);min-height:180px;max-height:760px;padding:12px 0;gap:12px}
   .ai-ops-composer{padding-top:8px;gap:8px;padding-bottom:env(safe-area-inset-bottom,0)}
   .ai-ops-composer textarea{max-height:min(150px,28dvh);overflow-y:auto!important}
@@ -57,7 +62,9 @@
   .ai-ops-mobile-actions{gap:2px}
   .ai-ops-mobile-actions>.ant-btn{padding-inline:5px;font-size:12px}
   .ai-ops-conversation-controls{gap:6px;grid-template-columns:minmax(0,1fr) 112px}
+  .ai-ops-conversation-controls>.ai-ops-model-select{grid-column:1/-1}
   .ai-ops-conversation-controls .ant-select-selector{font-size:12px}
+  .ai-ops-reasoning-grid{grid-template-columns:minmax(0,1fr)}
   .ai-ops-messages{height:calc(100dvh - 330px)}
   .ai-ops-message{padding:10px}
   .ai-ops-message-assistant{padding:4px 2px}
