@@ -125,6 +125,7 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 		return ToolOutcome{}, ErrValidation
 	}
 	var result any
+	var actionID int64
 	var err error
 	pending := false
 	switch call.Function.Name {
@@ -308,6 +309,7 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 			// Do not duplicate a long command or 100 monitor targets in the model
 			// result and accidentally lose Pending when a byte limit is reached.
 			result = actionToolSummary(action)
+			actionID = action.ID
 		}
 		pending = err == nil
 	default:
@@ -321,9 +323,9 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 		return ToolOutcome{}, ErrUnavailable
 	}
 	if len(raw) > maxToolOutputBytes {
-		return ToolOutcome{Content: `{"status":"error","code":"output_too_large","message":"单项结果仍过大，请按精确ID缩小范围或在后台查看详情"}`, Pending: pending}, nil
+		return ToolOutcome{Content: `{"status":"error","code":"output_too_large","message":"单项结果仍过大，请按精确ID缩小范围或在后台查看详情"}`, Pending: pending, ActionID: actionID}, nil
 	}
-	return ToolOutcome{Content: string(raw), Pending: pending}, nil
+	return ToolOutcome{Content: string(raw), Pending: pending, ActionID: actionID}, nil
 }
 
 func actionToolSummary(action Action) map[string]any {

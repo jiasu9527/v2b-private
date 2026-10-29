@@ -10,12 +10,12 @@ import (
 	"unicode/utf8"
 )
 
-const sessionColumns = `id,title,model,created_by,status,created_at,updated_at`
-const turnColumns = `id,session_id,request_id,status,error,created_at,completed_at,draft_content,draft_round,draft_version`
+const sessionColumns = `id,title,model,created_by,status,created_at,updated_at,access_mode,full_access_by,access_version`
+const turnColumns = `id,session_id,request_id,status,error,created_at,completed_at,draft_content,draft_round,draft_version,access_mode,stop_requested`
 
 func scanSession(row interface{ Scan(...any) error }) (Session, error) {
 	var v Session
-	err := row.Scan(&v.ID, &v.Title, &v.Model, &v.CreatedBy, &v.Status, &v.CreatedAt, &v.UpdatedAt)
+	err := row.Scan(&v.ID, &v.Title, &v.Model, &v.CreatedBy, &v.Status, &v.CreatedAt, &v.UpdatedAt, &v.AccessMode, &v.FullAccessBy, &v.AccessVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, ErrNotFound
 	}
@@ -23,7 +23,7 @@ func scanSession(row interface{ Scan(...any) error }) (Session, error) {
 }
 func scanTurn(row interface{ Scan(...any) error }) (Turn, error) {
 	var v Turn
-	err := row.Scan(&v.ID, &v.SessionID, &v.RequestID, &v.Status, &v.Error, &v.CreatedAt, &v.CompletedAt, &v.DraftContent, &v.DraftRound, &v.DraftVersion)
+	err := row.Scan(&v.ID, &v.SessionID, &v.RequestID, &v.Status, &v.Error, &v.CreatedAt, &v.CompletedAt, &v.DraftContent, &v.DraftRound, &v.DraftVersion, &v.AccessMode, &v.StopRequested)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, ErrNotFound
 	}
@@ -94,7 +94,7 @@ func (s *Service) GetSession(ctx context.Context, actorID, id int64) (SessionDet
 	if err != nil {
 		return out, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id,session_id,turn_id,role,content,tool_calls::TEXT,tool_call_id,created_at FROM v2_ai_message WHERE session_id=$1 ORDER BY id LIMIT 400`, id)
+	rows, err := tx.QueryContext(ctx, `SELECT id,session_id,turn_id,role,content,tool_calls::TEXT,tool_call_id,created_at FROM (SELECT * FROM v2_ai_message WHERE session_id=$1 ORDER BY id DESC LIMIT 400) recent ORDER BY id`, id)
 	if err != nil {
 		return out, err
 	}
@@ -116,6 +116,11 @@ func (s *Service) GetSession(ctx context.Context, actorID, id int64) (SessionDet
 	rows.Close()
 	if err != nil {
 		return out, err
+	}
+	if len(out.Messages) == 400 {
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_ai_message WHERE session_id=$1 AND id<$2)`, id, out.Messages[0].ID).Scan(&out.MessagesTruncated); err != nil {
+			return out, err
+		}
 	}
 	rows, err = tx.QueryContext(ctx, `SELECT `+turnColumns+` FROM v2_ai_turn WHERE session_id=$1 ORDER BY id DESC LIMIT 200`, id)
 	if err != nil {

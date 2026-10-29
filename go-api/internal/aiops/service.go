@@ -134,7 +134,7 @@ func (s *Service) decryptSecret(value string) (string, error) {
 	return string(plain), nil
 }
 
-const maxSessionMessages = 400
+const maxSessionMessages = 4000
 const maxSessions = 200
 const maxContentBytes = 16000
 const turnLifetime = 150 * time.Second

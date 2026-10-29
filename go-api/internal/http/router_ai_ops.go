@@ -23,6 +23,11 @@ type aiOpsService interface {
 	ResetData(context.Context, int64) error
 }
 
+type aiOpsAccessService interface {
+	SetAccessMode(context.Context, int64, aiops.AccessModeRequest) (aiops.Session, error)
+	StopSession(context.Context, int64, int64) error
+}
+
 func WithAIOps(service aiOpsService) Option {
 	return func(state *routerState) { state.aiOps = service }
 }
@@ -42,7 +47,7 @@ func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Servic
 	switch action {
 	case "config", "sessions", "session", "session/stream", "servers":
 		expected = "GET"
-	case "config/save", "session/create", "chat/send", "session/delete", "session/clear", "reset", "server/save", "server/delete", "server/fingerprint", "action/approve", "action/reject":
+	case "config/save", "session/create", "chat/send", "session/access", "chat/stop", "session/delete", "session/clear", "reset", "server/save", "server/delete", "server/fingerprint", "action/approve", "action/reject":
 	default:
 		writeJSON(w, 404, map[string]string{"message": "Not found"})
 		return
@@ -114,6 +119,28 @@ func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Servic
 		}
 		result, err = service.SendMessage(ctx, actor.ID, req)
 		status = 202
+	case "session/access", "chat/stop":
+		access, ok := service.(aiOpsAccessService)
+		if !ok {
+			handleAIOpsError(w, aiops.ErrUnavailable)
+			return
+		}
+		if action == "session/access" {
+			var req aiops.AccessModeRequest
+			if !decodeSupportJSON(w, r, &req) {
+				return
+			}
+			result, err = access.SetAccessMode(ctx, actor.ID, req)
+		} else {
+			var req struct {
+				ID int64 `json:"id"`
+			}
+			if !decodeSupportJSON(w, r, &req) {
+				return
+			}
+			err = access.StopSession(ctx, actor.ID, req.ID)
+			result = true
+		}
 	case "session/delete", "session/clear", "reset":
 		var req struct {
 			ID          int64  `json:"id"`

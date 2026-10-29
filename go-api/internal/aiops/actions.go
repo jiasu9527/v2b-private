@@ -35,7 +35,7 @@ func hashOperation(raw string) string {
 }
 func scanAction(row interface{ Scan(...any) error }) (Action, error) {
 	var a Action
-	err := row.Scan(&a.ID, &a.SessionID, &a.ActorID, &a.ApprovedBy, &a.RejectedBy, &a.ToolCallID, &a.Kind, &a.TargetID, &a.TargetType, &a.ServerLabel, &a.Payload, &a.Reason, &a.Status, &a.ExpiresAt, &a.ClaimedAt, &a.CompletedAt, &a.Output, &a.Error, &a.CreatedAt, &a.UpdatedAt)
+	err := row.Scan(&a.ID, &a.SessionID, &a.ActorID, &a.ApprovedBy, &a.RejectedBy, &a.ToolCallID, &a.Kind, &a.TargetID, &a.TargetType, &a.ServerLabel, &a.Payload, &a.Reason, &a.Status, &a.ExpiresAt, &a.ClaimedAt, &a.CompletedAt, &a.Output, &a.Error, &a.CreatedAt, &a.UpdatedAt, &a.ApprovalMode, &a.AuthorizationTurnID)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrNotFound
 	}
@@ -413,6 +413,9 @@ func requireActionSessionTx(ctx context.Context, tx *sql.Tx, sessionID int64) er
 	return err
 }
 func (s *Service) changeAction(ctx context.Context, actorID, sessionID, id int64, approve bool) (Action, error) {
+	return s.changeActionAuthorized(ctx, actorID, sessionID, id, approve, 0)
+}
+func (s *Service) changeActionAuthorized(ctx context.Context, actorID, sessionID, id int64, approve bool, autoTurnID int64) (Action, error) {
 	var empty Action
 	if id <= 0 || sessionID <= 0 {
 		return empty, ErrValidation
@@ -441,6 +444,18 @@ func (s *Service) changeAction(ctx context.Context, actorID, sessionID, id int64
 	if a.Status != "pending" {
 		return a, ErrConflict
 	}
+	approvalMode := "manual"
+	if autoTurnID > 0 {
+		if !approve || a.ActorID != actorID || !strings.HasPrefix(a.ToolCallID, fmt.Sprintf("turn:%d:", autoTurnID)) {
+			return empty, ErrForbidden
+		}
+		if err = s.requireFullAccessTx(ctx, tx, actorID, sessionID, autoTurnID); err != nil {
+			return empty, err
+		}
+		approvalMode = "full_access"
+	}
+	a.ApprovalMode, a.AuthorizationTurnID = approvalMode, autoTurnID
+
 	now := time.Now().Unix()
 	if a.ExpiresAt <= now {
 		return a, ErrConflict
@@ -493,7 +508,7 @@ func (s *Service) changeAction(ctx context.Context, actorID, sessionID, id int64
 		if err = applyPanelAction(ctx, tx, a); err != nil {
 			return empty, err
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE v2_ai_action SET status='succeeded',claimed_at=$2,completed_at=$2,updated_at=$2,approved_by=$3,output='已执行经人工批准的配置变更' WHERE id=$1`, id, now, actorID); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE v2_ai_action SET status='succeeded',claimed_at=$2,completed_at=$2,updated_at=$2,approved_by=$3,approval_mode=$4,authorization_turn_id=$5,output=$6 WHERE id=$1`, id, now, actorID, approvalMode, autoTurnID, panelActionOutput(approvalMode)); err != nil {
 			return empty, err
 		}
 		if err = tx.Commit(); err != nil {
@@ -504,7 +519,7 @@ func (s *Service) changeAction(ctx context.Context, actorID, sessionID, id int64
 		a.CompletedAt = now
 		a.UpdatedAt = now
 		a.ApprovedBy = actorID
-		a.Output = "已执行经人工批准的配置变更"
+		a.Output = panelActionOutput(approvalMode)
 		if invalidator, ok := s.panel.(interface{ InvalidateAIEntryTargets() }); ok {
 			if a.Kind == "entry_host" || a.Kind == "node_change" || a.Kind == "node_update" || a.Kind == "entry_rule_update" {
 				invalidator.InvalidateAIEntryTargets()
@@ -527,7 +542,11 @@ func (s *Service) changeAction(ctx context.Context, actorID, sessionID, id int64
 		s.mu.Unlock()
 		return empty, ErrUnavailable
 	}
-	workerCtx, cancel := context.WithTimeout(context.Background(), actionExecutionLifetime(a))
+	workerBase := context.Background()
+	if autoTurnID > 0 {
+		workerBase = ctx
+	}
+	workerCtx, cancel := context.WithTimeout(workerBase, actionExecutionLifetime(a))
 	workerKey := -a.ID
 	if _, exists := s.workers[workerKey]; exists {
 		s.mu.Unlock()
@@ -536,7 +555,7 @@ func (s *Service) changeAction(ctx context.Context, actorID, sessionID, id int64
 	}
 	s.workers[workerKey] = cancel
 	s.wg.Add(1)
-	if _, err = tx.ExecContext(ctx, `UPDATE v2_ai_action SET status='running',claimed_at=$2,updated_at=$2,approved_by=$3 WHERE id=$1 AND status='pending'`, id, now, actorID); err == nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE v2_ai_action SET status='running',claimed_at=$2,updated_at=$2,approved_by=$3,approval_mode=$4,authorization_turn_id=$5 WHERE id=$1 AND status='pending'`, id, now, actorID, approvalMode, autoTurnID); err == nil {
 		err = tx.Commit()
 	}
 	if err != nil {
@@ -615,7 +634,15 @@ func applyPanelAction(ctx context.Context, tx *sql.Tx, a Action) error {
 }
 func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, a Action, snapshot string) {
 	defer func() { cancel(); s.mu.Lock(); delete(s.workers, -a.ID); s.mu.Unlock(); s.wg.Done() }()
+	go s.watchAction(ctx, cancel, a.ID)
 	status, output, problem := "failed", "", "操作执行失败，可能已部分执行；请人工检查"
+	if a.ApprovalMode == "full_access" && s.requireFullAccess(ctx, a.ApprovedBy, a.SessionID, a.AuthorizationTurnID) != nil {
+		finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer finishCancel()
+		_, _ = s.db.ExecContext(finishCtx, `UPDATE v2_ai_action SET status='failed',error='完全访问授权已撤回，未执行操作',completed_at=$2,updated_at=$2 WHERE id=$1 AND status='running'`, a.ID, time.Now().Unix())
+		return
+	}
+
 	if a.Kind == "ticket_settings" {
 		status, output, problem = s.executeTicketSettings(ctx, a, snapshot)
 	}

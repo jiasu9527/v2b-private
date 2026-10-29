@@ -48,34 +48,39 @@ type HostKeyResult struct {
 	KeyType     string `json:"key_type"`
 }
 type Action struct {
-	ID          int64           `json:"id"`
-	SessionID   int64           `json:"session_id"`
-	ActorID     int64           `json:"actor_id"`
-	ApprovedBy  int64           `json:"approved_by"`
-	RejectedBy  int64           `json:"rejected_by"`
-	ToolCallID  string          `json:"tool_call_id"`
-	Kind        string          `json:"kind"`
-	TargetID    int64           `json:"target_id"`
-	TargetType  string          `json:"target_type"`
-	ServerLabel string          `json:"server_label"`
-	Payload     json.RawMessage `json:"payload"`
-	Reason      string          `json:"reason"`
-	Status      string          `json:"status"`
-	ExpiresAt   int64           `json:"expires_at"`
-	ClaimedAt   int64           `json:"claimed_at"`
-	CompletedAt int64           `json:"completed_at"`
-	Output      string          `json:"output"`
-	Error       string          `json:"error"`
-	CreatedAt   int64           `json:"created_at"`
-	UpdatedAt   int64           `json:"updated_at"`
+	ApprovalMode        string          `json:"approval_mode"`
+	AuthorizationTurnID int64           `json:"authorization_turn_id"`
+	ID                  int64           `json:"id"`
+	SessionID           int64           `json:"session_id"`
+	ActorID             int64           `json:"actor_id"`
+	ApprovedBy          int64           `json:"approved_by"`
+	RejectedBy          int64           `json:"rejected_by"`
+	ToolCallID          string          `json:"tool_call_id"`
+	Kind                string          `json:"kind"`
+	TargetID            int64           `json:"target_id"`
+	TargetType          string          `json:"target_type"`
+	ServerLabel         string          `json:"server_label"`
+	Payload             json.RawMessage `json:"payload"`
+	Reason              string          `json:"reason"`
+	Status              string          `json:"status"`
+	ExpiresAt           int64           `json:"expires_at"`
+	ClaimedAt           int64           `json:"claimed_at"`
+	CompletedAt         int64           `json:"completed_at"`
+	Output              string          `json:"output"`
+	Error               string          `json:"error"`
+	CreatedAt           int64           `json:"created_at"`
+	UpdatedAt           int64           `json:"updated_at"`
 }
 
-const actionColumns = `id,session_id,actor_id,approved_by,rejected_by,tool_call_id,kind,target_id,target_type,server_label,payload,reason,status,expires_at,claimed_at,completed_at,output,error,created_at,updated_at`
+const actionColumns = `id,session_id,actor_id,approved_by,rejected_by,tool_call_id,kind,target_id,target_type,server_label,payload,reason,status,expires_at,claimed_at,completed_at,output,error,created_at,updated_at,approval_mode,authorization_turn_id`
 
 func ensureActionSchema(ctx context.Context, tx *sql.Tx) error {
 	for _, statement := range []string{
 		`CREATE TABLE IF NOT EXISTS v2_ai_server(id BIGSERIAL PRIMARY KEY,actor_id BIGINT NOT NULL REFERENCES v2_user(id),name TEXT NOT NULL,host TEXT NOT NULL,port INTEGER NOT NULL CHECK(port BETWEEN 1 AND 65535),username TEXT NOT NULL,password_cipher TEXT NOT NULL DEFAULT '',private_key_cipher TEXT NOT NULL DEFAULT '',key_passphrase_cipher TEXT NOT NULL DEFAULT '',host_key_sha256 TEXT NOT NULL,enabled BOOLEAN NOT NULL DEFAULT TRUE,version BIGINT NOT NULL DEFAULT 1,created_at BIGINT NOT NULL,updated_at BIGINT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS v2_ai_action(id BIGSERIAL PRIMARY KEY,session_id BIGINT NOT NULL REFERENCES v2_ai_session(id) ON DELETE CASCADE,actor_id BIGINT NOT NULL REFERENCES v2_user(id),tool_call_id TEXT NOT NULL,kind TEXT NOT NULL,target_id BIGINT NOT NULL DEFAULT 0,target_type TEXT NOT NULL DEFAULT '',server_label TEXT NOT NULL DEFAULT '',payload JSONB NOT NULL,snapshot_hash TEXT NOT NULL,request_hash TEXT NOT NULL,reason TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',expires_at BIGINT NOT NULL,claimed_at BIGINT NOT NULL DEFAULT 0,completed_at BIGINT NOT NULL DEFAULT 0,output TEXT NOT NULL DEFAULT '',error TEXT NOT NULL DEFAULT '',created_at BIGINT NOT NULL,updated_at BIGINT NOT NULL,UNIQUE(session_id,tool_call_id))`,
+		`ALTER TABLE v2_ai_action ADD COLUMN IF NOT EXISTS stop_requested BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE v2_ai_action ADD COLUMN IF NOT EXISTS approval_mode TEXT NOT NULL DEFAULT 'manual'`,
+		`ALTER TABLE v2_ai_action ADD COLUMN IF NOT EXISTS authorization_turn_id BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE v2_ai_action ADD COLUMN IF NOT EXISTS approved_by BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE v2_ai_action ADD COLUMN IF NOT EXISTS rejected_by BIGINT NOT NULL DEFAULT 0`,
 		`CREATE INDEX IF NOT EXISTS idx_ai_action_session ON v2_ai_action(session_id,id)`,

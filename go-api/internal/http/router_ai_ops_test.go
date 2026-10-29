@@ -12,9 +12,10 @@ import (
 )
 
 type fakeAIOps struct {
-	calls     int
-	actor, id int64
-	err       error
+	calls      int
+	actor, id  int64
+	err        error
+	accessMode string
 }
 
 func (f *fakeAIOps) called(id int64) { f.calls++; f.actor = id }
@@ -42,6 +43,17 @@ func (f *fakeAIOps) CreateSession(_ context.Context, actor int64, r aiops.Create
 func (f *fakeAIOps) SendMessage(_ context.Context, actor int64, r aiops.SendMessageRequest) (aiops.SendMessageResult, error) {
 	f.called(actor)
 	return aiops.SendMessageResult{Session: aiops.Session{ID: r.SessionID}, Turn: aiops.Turn{ID: 1, Status: "running"}}, f.err
+}
+func (f *fakeAIOps) SetAccessMode(_ context.Context, actor int64, r aiops.AccessModeRequest) (aiops.Session, error) {
+	f.called(actor)
+	f.id = r.ID
+	f.accessMode = r.Mode
+	return aiops.Session{ID: r.ID, AccessMode: r.Mode, FullAccessBy: actor}, f.err
+}
+func (f *fakeAIOps) StopSession(_ context.Context, actor, id int64) error {
+	f.called(actor)
+	f.id = id
+	return f.err
 }
 func (f *fakeAIOps) DeleteSession(_ context.Context, actor, id int64) error {
 	f.called(actor)
@@ -152,5 +164,34 @@ func TestAIOpsManagementSecretsErrorsAndSessionActions(t *testing.T) {
 	w = aiOpsTestRequest(t, f, identity, "GET", "reset", "")
 	if w.Code != 405 {
 		t.Fatal("wrong method accepted")
+	}
+}
+
+func TestAIOpsAccessAndStopRequireRealAdminAndStrictPayload(t *testing.T) {
+	for _, action := range []string{"session/access", "chat/stop"} {
+		body := `{"id":9}`
+		if action == "session/access" {
+			body = `{"id":9,"mode":"full","expected_version":2}`
+		}
+		for _, identity := range []*session.Identity{nil, {ID: 7}, {ID: 7, IsStaff: 1}, {ID: 7, IsAdmin: 1}} {
+			f := &fakeAIOps{}
+			w := aiOpsTestRequest(t, f, identity, "POST", action, body)
+			if identity != nil && identity.IsAdmin == 1 {
+				if w.Code != 200 || f.actor != 7 || f.id != 9 || f.calls != 1 {
+					t.Fatalf("admin request %s: %d %+v", action, w.Code, f)
+				}
+			} else if w.Code != 403 || f.calls != 0 {
+				t.Fatalf("unauthorized %s: %d calls=%d", action, w.Code, f.calls)
+			}
+		}
+		f := &fakeAIOps{}
+		w := aiOpsTestRequest(t, f, &session.Identity{ID: 7, IsAdmin: 1}, "POST", action, strings.TrimSuffix(body, "}")+`,"actor_id":999}`)
+		if w.Code != 400 || f.calls != 0 {
+			t.Fatal("caller supplied identity accepted", action, w.Code)
+		}
+		w = aiOpsTestRequest(t, f, &session.Identity{ID: 7, IsAdmin: 1}, "GET", action, "")
+		if w.Code != 405 || f.calls != 0 {
+			t.Fatal("GET mutated permissions", action, w.Code)
+		}
 	}
 }

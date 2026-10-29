@@ -21,10 +21,11 @@ func newProviderHTTPClient() *http.Client {
 }
 
 type providerMessage struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role        string     `json:"role"`
+	Content     string     `json:"content"`
+	ToolCalls   []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID  string     `json:"tool_call_id,omitempty"`
+	contextKind string
 }
 type completionRequest struct {
 	Model      string            `json:"model"`
@@ -74,9 +75,18 @@ func (s *Service) completeStream(ctx context.Context, model string, messages []p
 	if err != nil || base == "" {
 		return empty, errors.New("AI 中转地址无效")
 	}
-	payload, err := json.Marshal(completionRequest{Model: model, Messages: messages, Tools: s.toolDefinitions(), ToolChoice: "auto", Stream: true, MaxTokens: 4096})
-	if err != nil || len(payload) > 512<<10 {
-		return empty, errors.New("对话上下文过长，请新建会话")
+	request := completionRequest{Model: model, Messages: []providerMessage{}, Tools: s.toolDefinitions(), ToolChoice: "auto", Stream: true, MaxTokens: 4096}
+	overhead, err := json.Marshal(request)
+	if err != nil {
+		return empty, errors.New("无法编码 AI 请求")
+	}
+	request.Messages, err = compactProviderContext(messages, min(maxHistoryContextBytes, maxProviderRequestBytes-len(overhead)))
+	if err != nil {
+		return empty, err
+	}
+	payload, err := json.Marshal(request)
+	if err != nil || len(payload) > maxProviderRequestBytes {
+		return empty, errContextTooLarge
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/chat/completions", bytes.NewReader(payload))
 	if err != nil {

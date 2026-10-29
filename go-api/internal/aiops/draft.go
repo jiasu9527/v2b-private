@@ -20,7 +20,7 @@ type Draft struct {
 // Overwrite one bounded draft, never append a row per token. UPDATE-only plus
 // the existing FK ensures reset/deletion cannot be undone by late stream data.
 func (s *Service) updateDraft(ctx context.Context, actorID, sessionID, turnID int64, round int, content string) error {
-	if len(content) > 32000 || !utf8.ValidString(content) || round < 1 || round > 6 {
+	if len(content) > 32000 || !utf8.ValidString(content) || round < 1 || round > fullAccessMaxRounds {
 		return ErrValidation
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)

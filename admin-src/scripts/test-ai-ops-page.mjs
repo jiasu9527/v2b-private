@@ -6,7 +6,7 @@ const source = await readFile(new URL('../src/pages/aiOpsModel.ts', import.meta.
 const page = await readFile(new URL('../src/pages/AIOpsPage.tsx', import.meta.url), 'utf8');
 const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 } });
-const { AI_DEFAULT_MODELS, aiActionStatus, aiCanApprove, aiSessionBusy, aiLatestTurn, aiParseModels, aiFingerprintMatches, aiRequestID } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
+const { AI_DEFAULT_MODELS, aiActionStatus, aiCanApprove, aiSessionBusy, aiLatestTurn, aiParseModels, aiFingerprintMatches, aiRequestID, aiAccessMode, aiOwnsFullAccess, aiMergeSessionAccess } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
 const now = 1900000000000;
 const action = { status: 'pending', expires_at: now / 1000 + 60 };
 
@@ -66,9 +66,9 @@ test('SSH secrets stay in settings-only requests and clear on save/close', () =>
   assert.match(page, /api_key: values\.api_key \|\| ''/);
 });
 
-test('every server command requires manual one-action approval with full unrendered command and output warning', () => {
+test('standard mode retains manual one-action approval with complete command and output disclosure', () => {
   assert.match(page, /<pre className="ai-ops-pre ai-ops-command">\{command\}<\/pre>/);
-  assert.match(page, /所有服务器命令（包括状态诊断）和部署操作都必须逐项批准/);
+  assert.match(page, /逐次确认模式下，每条服务器命令和部署操作均须批准/);
   assert.match(page, /输出会进入对话并发往中转模型/);
   assert.match(page, /setReview\(\{ action, decision: 'approve' \}\)/);
   assert.match(page, /!confirmedOutput \|\| !aiCanApprove/);
@@ -172,4 +172,63 @@ test('draft versions preserve explicit clears and reject stale snapshots from an
  assert.equal(extra.aiMergeSnapshot(cleared,base).turns[0].draft_content,'');
  const completed={...base,turns:[{id:10,status:'completed',draft_version:7,draft_content:''}]};
  assert.equal(extra.aiMergeSnapshot(base,completed).turns[0].status,'completed');
+});
+
+
+test('full access belongs to one session and one administrator, never inherited from missing or foreign identity', () => {
+  const full = { id: 4, access_mode: 'full', full_access_by: 7, access_version: 3 };
+  assert.equal(aiAccessMode(undefined), 'standard');
+  assert.equal(aiAccessMode({ access_mode: 'unexpected' }), 'standard');
+  assert.equal(aiOwnsFullAccess(full, 7), true);
+  for (const actor of [0, 6, NaN]) assert.equal(aiOwnsFullAccess(full, actor), false);
+  assert.equal(aiOwnsFullAccess({ ...full, access_mode: 'standard' }, 7), false);
+  assert.equal(aiOwnsFullAccess({ ...full, full_access_by: undefined }, 7), false);
+  assert.match(page, /由我启用完全访问/);
+  assert.match(page, /foreignFullAccess \|\| !begin\('send'\)/);
+});
+
+test('revoked access survives stale stream and list snapshots without overriding other session data', () => {
+  const revoked = { id: 4, access_mode: 'standard', full_access_by: 0, access_version: 4, status: 'running' };
+  const stale = { id: 4, access_mode: 'full', full_access_by: 7, access_version: 3, status: 'idle' };
+  assert.deepEqual(aiMergeSessionAccess(revoked, stale), { ...stale, access_mode: 'standard', full_access_by: 0, access_version: 4 });
+  assert.equal(aiMergeSessionAccess(revoked, { ...stale, id: 5 }).access_mode, 'full');
+  const fresh = { ...stale, access_version: 5 };
+  assert.equal(aiMergeSessionAccess(revoked, fresh), fresh);
+  const merged = extra.aiMergeSnapshot({ session: revoked, messages: [], turns: [], actions: [] }, { session: stale, messages: [], turns: [], actions: [] });
+  assert.equal(merged.session.access_mode, 'standard');
+  assert.equal(merged.session.access_version, 4);
+  assert.equal(merged.session.status, 'idle');
+});
+
+test('mode changes are server-authorized, send retries include the exact grant version, and new chats reset mode', () => {
+  assert.match(page, /apiJsonPost\('\/ai-ops\/session\/access', \{ id, mode, expected_version: detail.session.access_version \|\| 0 \}\)/);
+  assert.match(page, /session.access_mode !== mode/);
+  assert.match(page, /sendRetry.accessMode === accessMode && sendRetry.accessVersion === accessVersion/);
+  assert.match(page, /access_mode: retry.accessMode, access_version: retry.accessVersion/);
+  const newSession = page.slice(page.indexOf('const newSession ='), page.indexOf('const accessMode ='));
+  assert.match(newSession, /setNewAccessMode\('standard'\)/);
+  assert.doesNotMatch(page, /localStorage|sessionStorage/);
+});
+
+test('running work exposes stop and permits revocation, while automatic actions identify the grant instead of manual approval', () => {
+  assert.match(page, /apiJsonPost\('\/ai-ops\/chat\/stop', \{ id \}\)/);
+  assert.match(page, /aiSessionBusy\(detail\) && <Button danger icon=\{<StopOutlined/);
+  const select = page.split('aria-label="AI 访问权限"')[1].split('</Space>')[0];
+  assert.match(select, /disabled=\{!!busy \|\| \(selectedID > 0 && !detail\)\}/);
+  assert.match(select, /value: 'standard', label: '逐次确认'/);
+  assert.match(page, /action.approval_mode === 'full_access' \? '完全访问授权：' : '人工批准：'/);
+});
+
+test('tool result labels use their preceding batch within the same turn when providers reuse call IDs', () => {
+  const assistant = (turn, name, id = 'reused') => ({ session_id: 1, turn_id: turn, role: 'assistant', tool_calls: [{ id, function: { name, arguments: '{}' } }] });
+  const result = (turn, id = 'reused') => ({ session_id: 1, turn_id: turn, role: 'tool', tool_call_id: id });
+  const messages = [assistant(1, 'old_turn'), result(1), assistant(2, 'entry_health'), result(2), assistant(2, 'nodes_list'), result(2), assistant(2, 'future_tool')];
+  assert.equal(extra.aiToolResultName(messages, 1), 'old_turn');
+  assert.equal(extra.aiToolResultName(messages, 3), 'entry_health');
+  assert.equal(extra.aiToolResultName(messages, 5), 'nodes_list');
+  assert.equal(extra.aiToolResultName(messages, 4), '');
+  assert.equal(extra.aiToolResultName(messages, 99), '');
+  assert.equal(extra.aiToolResultName([assistant(1, 'foreign_turn'), result(2)], 1), '');
+  assert.equal(extra.aiToolResultName([{ ...assistant(2, 'foreign_session'), session_id: 2 }, result(2)], 1), '');
+  assert.equal(extra.aiToolResultName([assistant(2, 'old_batch'), assistant(2, 'new_batch', 'new-id'), result(2)], 2), '');
 });

@@ -267,7 +267,7 @@ func (s *Service) callTicketTool(ctx context.Context, actorID, sessionID int64, 
 			return ToolOutcome{}, err
 		}
 		raw, _ := json.Marshal(actionToolSummary(action))
-		return ToolOutcome{Content: string(raw), Pending: true}, nil
+		return ToolOutcome{Content: string(raw), Pending: true, ActionID: action.ID}, nil
 	default:
 		return ToolOutcome{}, ErrValidation
 	}

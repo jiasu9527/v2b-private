@@ -65,7 +65,7 @@ func (s *Service) callEntryRuleTool(ctx context.Context, actor, sessionID int64,
 			return ToolOutcome{}, err
 		}
 		raw, _ := json.Marshal(actionToolSummary(action))
-		return ToolOutcome{Content: string(raw), Pending: true}, nil
+		return ToolOutcome{Content: string(raw), Pending: true, ActionID: action.ID}, nil
 	}
 	if call.Function.Name != "entry_rule_detail" {
 		return ToolOutcome{}, ErrValidation

@@ -140,7 +140,7 @@ func (s *Service) callUserTool(ctx context.Context, actor, sessionID int64, call
 			return ToolOutcome{}, err
 		}
 		raw, _ := json.Marshal(actionToolSummary(action))
-		return ToolOutcome{Content: string(raw), Pending: true}, nil
+		return ToolOutcome{Content: string(raw), Pending: true, ActionID: action.ID}, nil
 	default:
 		return ToolOutcome{}, ErrValidation
 	}

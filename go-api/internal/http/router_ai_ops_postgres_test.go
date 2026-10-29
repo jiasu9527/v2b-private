@@ -148,6 +148,20 @@ func TestAIOpsHTTPPostgresIntegration(t *testing.T) {
 	if err = db.QueryRowContext(ctx, `SELECT host,port FROM v2_server_vmess WHERE id=$1`, node).Scan(&host, &port); err != nil || host != "after.example.test" || port != "54102" {
 		t.Fatal("node changes not persisted", err)
 	}
+	// Permission changes come only from the authenticated administrator, and
+	// stale browser requests cannot reinstate a grant after it is revoked.
+	var fullSession, standardSession aiops.Session
+	request("POST", "session/access", map[string]any{"id": sent.Session.ID, "mode": "full", "expected_version": sent.Session.AccessVersion}, 200, &fullSession)
+	if fullSession.AccessMode != "full" || fullSession.FullAccessBy != actor || fullSession.AccessVersion <= sent.Session.AccessVersion {
+		t.Fatalf("full grant not persisted: %+v", fullSession)
+	}
+	request("POST", "session/access", map[string]any{"id": sent.Session.ID, "mode": "standard", "expected_version": fullSession.AccessVersion}, 200, &standardSession)
+	request("POST", "session/access", map[string]any{"id": sent.Session.ID, "mode": "full", "expected_version": fullSession.AccessVersion}, 409, nil)
+	request("POST", "chat/send", map[string]any{"session_id": sent.Session.ID, "model": "glm-5.3", "content": "stale full request", "request_id": "stale-full-http-request", "access_mode": "full", "access_version": fullSession.AccessVersion}, 409, nil)
+	request("POST", "chat/stop", map[string]any{"id": sent.Session.ID}, 200, nil)
+	if standardSession.AccessMode != "standard" || standardSession.FullAccessBy != 0 || relayCalls.Load() != 1 {
+		t.Fatal("revocation or stale send executed unexpectedly")
+	}
 	request("POST", "session/delete", map[string]any{"id": sent.Session.ID, "confirm": true}, 200, nil)
 	request("GET", fmt.Sprintf("session?id=%d", sent.Session.ID), nil, 404, nil)
 	request("POST", "reset", map[string]any{"confirm": true, "confirm_text": "RESET_AI_DATA"}, 200, nil)

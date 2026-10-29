@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Form, Input, InputNumber, Modal, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
-import { DeleteOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SendOutlined } from '@ant-design/icons';
-import { apiGet, apiJsonPost } from '../lib/api';
-import { AI_DEFAULT_MODELS, aiActionStatus, aiApplyDraft, aiCanApprove, aiFingerprintMatches, aiLatestTurn, aiMergeSnapshot, aiNearBottom, aiParseModels, aiRequestID, aiSessionBusy, aiShouldSendKey, aiVisibleDraft, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
+import { DeleteOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
+import { apiGet, apiJsonPost, getAdminUserInfo } from '../lib/api';
+import { AI_DEFAULT_MODELS, aiAccessMode, aiOwnsFullAccess, aiMergeSessionAccess, aiActionStatus, aiApplyDraft, aiCanApprove, aiFingerprintMatches, aiLatestTurn, aiToolResultName, aiMergeSnapshot, aiNearBottom, aiParseModels, aiRequestID, aiSessionBusy, aiShouldSendKey, aiVisibleDraft, type AIAccessMode, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
 import { aiReadSessionStream } from './aiOpsStream';
 import AIOpsMarkdown from './AIOpsMarkdown';
 import AIOpsActionSummary, { aiActionNames } from './AIOpsActionSummary';
@@ -11,7 +11,7 @@ import './AIOpsPage.css';
 const { Text, Paragraph } = Typography;
 const initialConfig: AIConfig = { enabled: false, base_url: '', models: AI_DEFAULT_MODELS, has_api_key: false };
 const time = (value: number) => value ? new Date(value * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
-const statusLabels: Record<string, string> = { idle: '就绪', running: '处理中', pending: '待确认', succeeded: '已执行', completed: '已完成', failed: '失败', unknown: '结果待核对', rejected: '已拒绝', expired: '已过期', interrupted: '已中断' };
+const statusLabels: Record<string, string> = { idle: '就绪', running: '处理中', pending: '待确认', succeeded: '已执行', completed: '已完成', failed: '失败', unknown: '结果待核对', rejected: '已拒绝', expired: '已过期', interrupted: '已中断', stopped: '已停止' };
 const statusColor = (status: string) => ['succeeded', 'completed'].includes(status) ? 'success' : ['running', 'pending'].includes(status) ? 'processing' : ['failed', 'unknown', 'interrupted'].includes(status) ? 'error' : 'default';
 const pretty = (value: unknown) => JSON.stringify(value ?? {}, null, 2);
 const responseList = (response: any): any[] => Array.isArray(response?.data) ? response.data : [];
@@ -31,7 +31,7 @@ function ActionDetails({ action }: { action: AIAction }) {
       <Descriptions.Item label="有效至">{time(action.expires_at)}</Descriptions.Item>
     </Descriptions>
     <AIOpsActionSummary action={action} />
-    {command ? <><Text strong>完整命令（不会自动执行）</Text><pre className="ai-ops-pre ai-ops-command">{command}</pre></> : <><Text strong>完整变更参数 / 前后快照</Text><pre className="ai-ops-pre">{pretty(payload)}</pre></>}
+    {command ? <><Text strong>{action.approval_mode === 'full_access' ? '完整执行命令' : '完整命令（逐次确认后执行）'}</Text><pre className="ai-ops-pre ai-ops-command">{command}</pre></> : <><Text strong>完整变更参数 / 前后快照</Text><pre className="ai-ops-pre">{pretty(payload)}</pre></>}
   </Space>;
 }
 
@@ -45,6 +45,8 @@ export default function AIOpsPage() {
   const selectionSequence = useRef(0);
   const [detail, setDetail] = useState<AISessionDetail | null>(null);
   const [model, setModel] = useState(AI_DEFAULT_MODELS[0]);
+  const [newAccessMode, setNewAccessMode] = useState<AIAccessMode>('standard');
+  const actorID = Number(getAdminUserInfo().id || 0);
   const [draft, setDraft] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -62,7 +64,7 @@ export default function AIOpsPage() {
   const [confirmedOutput, setConfirmedOutput] = useState(false);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [resetText, setResetText] = useState('');
-  const [sendRetry, setSendRetry] = useState<{ sessionID: number; model: string; content: string; requestID: string } | null>(null);
+  const [sendRetry, setSendRetry] = useState<{ sessionID: number; model: string; content: string; requestID: string; accessMode: AIAccessMode; accessVersion?: number } | null>(null);
   const [streamConnected, setStreamConnected] = useState(false);
   const alive = useRef(true);
   const detailSequence = useRef(0);
@@ -77,7 +79,7 @@ export default function AIOpsPage() {
   const applySnapshot = (value: AISessionDetail) => {
     if (!alive.current || selectedRef.current !== value.session.id) return;
     setDetail((previous) => aiMergeSnapshot(previous, { ...value, turns: value.turns || [], actions: value.actions || [] }));
-    setSessions((items) => items.map((item) => item.id === value.session.id ? value.session : item));
+    setSessions((items) => items.map((item) => item.id === value.session.id ? aiMergeSessionAccess(item, value.session) : item));
   };
 
   const fail = (e: any, fallback: string) => { if (alive.current && !e?.errorFields) message.error(e?.message || fallback); };
@@ -95,7 +97,7 @@ export default function AIOpsPage() {
   const loadLists = async () => {
     const [sessionResult, serverResult] = await Promise.all([apiGet('/ai-ops/sessions', {}, { cache: 'no-store' }), apiGet('/ai-ops/servers', {}, { cache: 'no-store' })]);
     if (!alive.current) return;
-    setSessions(responseList(sessionResult)); setServers(responseList(serverResult));
+    setSessions((items) => responseList(sessionResult).map((session) => aiMergeSessionAccess(items.find((item) => item.id === session.id), session))); setServers(responseList(serverResult));
   };
   const load = async (refreshConfig = true) => {
     setLoading(true);
@@ -179,20 +181,56 @@ export default function AIOpsPage() {
   }, [detail?.messages.length, detail?.actions.length, visibleDraft?.draft_content]);
   const selectSession = (session: AISession) => {
     followOutput.current = true;
-    selectionSequence.current += 1; selectedRef.current = session.id; setSelectedID(session.id); setDetail(null); setDraft(''); setSendRetry(null); setModel(session.model); setTab('chat');
+    selectionSequence.current += 1; selectedRef.current = session.id; setSelectedID(session.id); setDetail(null); setDraft(''); setSendRetry(null); setNewAccessMode('standard'); setModel(session.model); setTab('chat');
     void loadDetail(session.id).catch((e) => fail(e, '读取会话失败'));
   };
-  const newSession = () => { followOutput.current = true; selectionSequence.current += 1; selectedRef.current = 0; detailSequence.current += 1; setSelectedID(0); setDetail(null); setDraft(''); setSendRetry(null); setTab('chat'); };
+  const newSession = () => { followOutput.current = true; selectionSequence.current += 1; selectedRef.current = 0; detailSequence.current += 1; setSelectedID(0); setDetail(null); setNewAccessMode('standard'); setDraft(''); setSendRetry(null); setTab('chat'); };
+  const accessMode = selectedID ? aiAccessMode(detail?.session) : newAccessMode;
+  const foreignFullAccess = !!detail && aiAccessMode(detail.session) === 'full' && !aiOwnsFullAccess(detail.session, actorID);
+  const changeAccess = async (mode: AIAccessMode) => {
+    if (mode !== 'standard' && mode !== 'full') return;
+    if (!selectedRef.current) { setNewAccessMode(mode); setSendRetry(null); return; }
+    if (!detail || !begin('access')) return;
+    const id = selectedRef.current;
+    const selection = selectionSequence.current;
+    try {
+      const response = await apiJsonPost('/ai-ops/session/access', { id, mode, expected_version: detail.session.access_version || 0 });
+      const session = response?.data as AISession;
+      if (!session || session.id !== id || session.access_mode !== mode || !Number.isSafeInteger(session.access_version)) throw new Error('权限变更状态未确认，请刷新后核对');
+      if (!alive.current) return;
+      setSessions((items) => items.map((item) => item.id === id ? aiMergeSessionAccess(item, session) : item));
+      if (selectedRef.current === id && selectionSequence.current === selection) {
+        setDetail((previous) => previous?.session.id === id ? { ...previous, session: aiMergeSessionAccess(previous.session, session) } : previous);
+        setSendRetry(null);
+        await loadDetail(id);
+      }
+      message.success(mode === 'full' ? '本会话已启用完全访问' : '已撤回完全访问，后续操作逐次确认');
+    } catch (e) { fail(e, '更改权限失败，请刷新核对'); }
+    finally { finish(); }
+  };
+  const stop = async () => {
+    const id = selectedRef.current;
+    if (!id || !begin('stop')) return;
+    try {
+      await apiJsonPost('/ai-ops/chat/stop', { id });
+      if (!alive.current) return;
+      if (selectedRef.current === id) await loadDetail(id);
+      await loadLists();
+      message.success('已请求停止；已执行的修改不会自动回滚');
+    } catch (e) { fail(e, '停止请求失败，请刷新核对执行状态'); }
+    finally { finish(); }
+  };
   const send = async (contentOverride?: string) => {
     const content = (contentOverride ?? draft).trim();
-    if (!content || !config.enabled || !config.has_api_key || (selectedRef.current > 0 && !detail) || aiSessionBusy(detail) || !begin('send')) return;
+    if (!content || !config.enabled || !config.has_api_key || (selectedRef.current > 0 && !detail) || aiSessionBusy(detail) || foreignFullAccess || !begin('send')) return;
     followOutput.current = true;
     const originalID = selectedRef.current;
     const selection = selectionSequence.current;
-    const retry = sendRetry && sendRetry.sessionID === originalID && sendRetry.model === model && sendRetry.content === content ? sendRetry : { sessionID: originalID, model, content, requestID: aiRequestID() };
+    const accessVersion = detail?.session.access_version;
+    const retry = sendRetry && sendRetry.sessionID === originalID && sendRetry.model === model && sendRetry.content === content && sendRetry.accessMode === accessMode && sendRetry.accessVersion === accessVersion ? sendRetry : { sessionID: originalID, model, content, requestID: aiRequestID(), accessMode, accessVersion };
     setSendRetry(retry);
     try {
-      const response = await apiJsonPost('/ai-ops/chat/send', { session_id: originalID, model, content, request_id: retry.requestID });
+      const response = await apiJsonPost('/ai-ops/chat/send', { session_id: originalID, model, content, request_id: retry.requestID, access_mode: retry.accessMode, access_version: retry.accessVersion });
       if (!alive.current) return;
       const session = response?.data?.session as AISession;
       if (!session?.id) throw new Error('发送状态未确认，请刷新后重试同一消息');
@@ -269,21 +307,24 @@ export default function AIOpsPage() {
     finally { finish(); }
   };
   const checkServer = (server: AIServer) => { newSession(); setDraft(`请检查已登记服务器 #${server.id}（${server.name}）的状态，仅使用固定只读诊断，不执行其他命令。`); };
-  const deployServer = (server: AIServer) => { newSession(); setDraft(`我要在已登记服务器 #${server.id}（${server.name}，${server.host}）上部署或调整节点／中转服务。先检查系统、现有服务和端口，再按我补充的安装脚本与目标配置生成完整非交互命令，逐项确认后执行。安装任务请设置足够的执行时间，完成后检查服务与连通性。\n\n部署需求：`); };
+  const deployServer = (server: AIServer) => { newSession(); setDraft(`我要在已登记服务器 #${server.id}（${server.name}，${server.host}）上部署或调整节点／中转服务。先检查系统、现有服务和端口，再按我补充的安装脚本与目标配置生成完整非交互命令，按本会话选择的权限模式执行。安装任务请设置足够的执行时间，完成后检查服务与连通性。\n\n部署需求：`); };
   const actions = detail?.actions || [];
   const latestTurn = aiLatestTurn(detail?.turns || []);
   const unavailable = !config.enabled || !config.has_api_key;
   const chat = <div className="ai-ops-chat-layout">
     <aside className="ai-ops-sessions"><Space wrap><Button icon={<PlusOutlined />} onClick={newSession}>新对话</Button><Button danger type="text" disabled={!sessions.length || !!busy} onClick={() => setConfirmation({ kind: 'clear' })}>清空全部会话</Button></Space><Paragraph type="secondary">所有管理员共享会话，可查看与删除；列出最近 200 个会话。</Paragraph><div className="ai-ops-session-list">{sessions.map((session) => <div className={`ai-ops-session ${selectedID === session.id ? 'is-active' : ''}`} key={session.id}><button onClick={() => selectSession(session)}><strong>{session.title || `会话 #${session.id}`}</strong><span>{session.model}</span><span>{time(session.updated_at)} · 管理员 #{session.created_by} {session.status === 'running' ? '· 处理中' : ''}</span></button><Button type="text" danger aria-label={`删除会话 ${session.id}`} icon={<DeleteOutlined />} disabled={!!busy} onClick={() => setConfirmation({ kind: 'delete', session })} /></div>)}</div></aside>
     <section className="ai-ops-conversation">
-      <div className="ai-ops-conversation-head"><div><Text strong>{detail?.session.title || (selectedID ? '读取会话中…' : '新的运维对话')}</Text><div><Text type="secondary">可管理用户、工单、入口规则、节点配置，通过 SSH 部署落地和中转服务；操作逐项确认。</Text></div></div><Select aria-label="选择 AI 模型" value={model} onChange={setModel} disabled={!!busy || aiSessionBusy(detail)} options={config.models.map((value) => ({ value, label: value }))} style={{ minWidth: 210 }} /></div>
+      <div className="ai-ops-conversation-head"><div><Text strong>{detail?.session.title || (selectedID ? '读取会话中…' : '新的运维对话')}</Text><div><Text type="secondary">{accessMode === 'full' ? '完全访问：AI 可连续修改配置、执行 SSH 并根据结果继续处理。' : '逐次确认：查询直接进行，修改和 SSH 操作由你逐项确认。'}</Text></div></div><Space wrap><Select aria-label="选择 AI 模型" value={model} onChange={setModel} disabled={!!busy || aiSessionBusy(detail)} options={config.models.map((value) => ({ value, label: value }))} style={{ minWidth: 210 }} /><Select<AIAccessMode> aria-label="AI 访问权限" value={accessMode} onChange={(mode) => void changeAccess(mode)} loading={busy === 'access'} disabled={!!busy || (selectedID > 0 && !detail)} options={[{ value: 'standard', label: '逐次确认' }, { value: 'full', label: '完全访问', disabled: aiSessionBusy(detail) && accessMode !== 'full' }]} style={{ minWidth: 150 }} /></Space></div>
+      {accessMode === 'full' && <Alert type="info" showIcon message={foreignFullAccess ? `本会话由管理员 #${detail?.session.full_access_by || '未知'} 授予完全访问` : '完全访问已选择，当前会话操作不再逐次询问'} description={<Space direction="vertical" size={4}><span>{foreignFullAccess ? '他人的授权不会自动沿用到你的消息。请选择逐次确认，或由你重新启用完全访问后发送。' : '可随时切回逐次确认或点击停止。服务器凭据仍在“服务器”中登记；停止不会回滚已完成的修改。'}</span>{foreignFullAccess && <Button size="small" disabled={!!busy || aiSessionBusy(detail)} onClick={() => void changeAccess('full')}>由我启用完全访问</Button>}</Space>} />}
+
       <Alert type="info" showIcon message="对话、查询结果及命令输出会发送到你配置的中转模型" description="不要在聊天中输入服务器密码、私钥、订阅 Token 或私人数据。服务器凭据只在“服务器”选项卡录入；AI 返回内容与工具输出均作为业务数据展示。" />
       <div className="ai-ops-messages" ref={messageViewport} onScroll={() => { const pane = messageViewport.current; if (pane) followOutput.current = aiNearBottom(pane.scrollTop, pane.clientHeight, pane.scrollHeight); }}>
         {!detail && !selectedID && <div className="ai-ops-empty"><MessageOutlined /><h3>告诉 AI 需要处理什么</h3><p>例如：调整入口规则的 UA 和用户范围、修改节点连接端口、检测指定入口，或在已登记服务器上安装落地／中转服务。</p></div>}
         {selectedID > 0 && !detail && <Spin />}
-        {detail?.messages.map((item) => {
+        {detail?.messages_truncated && <Text type="secondary">当前显示最近 400 条消息，较早记录仍保留；AI 会自动整理发送给模型的上下文。</Text>}
+        {detail?.messages.map((item, index) => {
           const ordinaryText = item.role === 'user' || item.role === 'assistant';
-          const toolName = item.role === 'tool' ? detail.messages.flatMap((message) => message.tool_calls || []).find((call) => call.id === item.tool_call_id)?.function.name : '';
+          const toolName = aiToolResultName(detail.messages, index);
           if (!ordinaryText) return <Collapse key={item.id} className="ai-ops-tool-result" size="small" items={[{ key: String(item.id), label: <Space wrap><span>{item.role === 'tool' ? `工具结果${toolName ? ` · ${toolName}` : ''}` : '系统详情'}</span><Text type="secondary">{time(item.created_at)}</Text></Space>, children: <pre className="ai-ops-pre">{item.content}</pre> }]} />;
           return <article key={item.id} className={`ai-ops-message ai-ops-message-${item.role}`}>
             <div><Tag>{item.role === 'user' ? '管理员' : 'AI'}</Tag><Text type="secondary">{time(item.created_at)}</Text></div>
@@ -292,9 +333,9 @@ export default function AIOpsPage() {
           </article>;
         })}
         {visibleDraft && <article className="ai-ops-message ai-ops-message-assistant ai-ops-live-draft" aria-label="AI 实时回复"><Tag color="processing">AI · 正在回复</Tag><AIOpsMarkdown content={visibleDraft.draft_content || ''} /><span className="ai-ops-stream-cursor" aria-hidden="true" /></article>}
-        {actions.map((action) => { const state = aiActionStatus(action, now); return <Card size="small" key={action.id} className="ai-ops-action" title={<Space wrap><span>操作确认 #{action.id}</span><Tag color={statusColor(state)}>{statusLabels[state] || state}</Tag>{(action.approved_by ?? 0) > 0 && <Text type="secondary"><small>人工批准：管理员 #{action.approved_by}</small></Text>}{(action.rejected_by ?? 0) > 0 && <Text type="secondary"><small>人工拒绝：管理员 #{action.rejected_by}</small></Text>}</Space>}>
+        {actions.map((action) => { const state = aiActionStatus(action, now); return <Card size="small" key={action.id} className="ai-ops-action" title={<Space wrap><span>{action.approval_mode === 'full_access' ? '执行记录' : '操作确认'} #{action.id}</span><Tag color={statusColor(state)}>{statusLabels[state] || state}</Tag>{(action.approved_by ?? 0) > 0 && <Text type="secondary"><small>{action.approval_mode === 'full_access' ? '完全访问授权：' : '人工批准：'}管理员 #{action.approved_by}</small></Text>}{(action.rejected_by ?? 0) > 0 && <Text type="secondary"><small>人工拒绝：管理员 #{action.rejected_by}</small></Text>}</Space>}>
           <Collapse size="small" className="ai-ops-action-details" items={[{ key: 'details', label: `操作详情 · ${action.server_label || aiActionNames[action.kind] || action.kind}`, children: <Space direction="vertical" style={{ width: '100%' }}><ActionDetails action={action} />{action.output && <><Text strong>执行输出（会进入模型上下文）</Text><pre className="ai-ops-pre">{action.output}</pre></>}{action.error && <Alert type="error" showIcon message={action.error} />}</Space> }]} />
-          {state === 'pending' && <Space wrap style={{ marginTop: 12 }}><Button type="primary" disabled={!!busy || !aiCanApprove(action, config.enabled, now)} onClick={() => { setConfirmedOutput(false); setReview({ action, decision: 'approve' }); }}>审核执行</Button><Button danger disabled={!!busy} onClick={() => { setConfirmedOutput(false); setReview({ action, decision: 'reject' }); }}>拒绝</Button><Text type="secondary">尚未执行，审核时会展开完整操作。</Text></Space>}
+          {state === 'pending' && <Space wrap style={{ marginTop: 12 }}><Button type="primary" disabled={!!busy || aiSessionBusy(detail) || !aiCanApprove(action, config.enabled, now)} onClick={() => { setConfirmedOutput(false); setReview({ action, decision: 'approve' }); }}>审核执行</Button><Button danger disabled={!!busy} onClick={() => { setConfirmedOutput(false); setReview({ action, decision: 'reject' }); }}>拒绝</Button><Text type="secondary">尚未执行，审核时会展开完整操作。</Text></Space>}
           {state === 'running' && action.kind === 'ssh_command' && <Text type="secondary">SSH 正在执行，最长 {Number(action.payload.timeout_seconds || 120)} 秒；展开操作详情可查看实时输出。</Text>}
         </Card>; })}
         {latestTurn?.error && <Alert type="error" showIcon message={`本轮${statusLabels[latestTurn.status] || latestTurn.status}`} description={latestTurn.error} />}
@@ -303,10 +344,10 @@ export default function AIOpsPage() {
       <div className="ai-ops-composer"><Input.TextArea aria-label="运维消息" value={draft} onChange={(e) => setDraft(e.target.value)} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; compositionEndedAt.current = Date.now(); }} onKeyDown={(event) => {
         if (!aiShouldSendKey({ key: event.key, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey, repeat: event.repeat, isComposing: event.nativeEvent.isComposing, keyCode: event.keyCode }, composing.current || Date.now() - compositionEndedAt.current < 50)) return;
         event.preventDefault(); void send();
-      }} placeholder="描述问题或操作需求；Enter 发送，Shift+Enter 换行" autoSize={{ minRows: 3, maxRows: 8 }} maxLength={12000} disabled={busy === 'send' || aiSessionBusy(detail)} /><Space wrap><Button type="primary" icon={<SendOutlined />} loading={busy === 'send'} disabled={!draft.trim() || unavailable || !!busy || aiSessionBusy(detail) || (selectedID > 0 && !detail)} onClick={() => void send()}>发送</Button><Text type="secondary">{unavailable ? '请先在设置中启用 AI 并保存中转 API Key。' : 'Enter 发送 · Shift+Enter 换行 · 工具详情默认折叠'}</Text></Space></div>
+      }} placeholder="描述问题或操作需求；Enter 发送，Shift+Enter 换行" autoSize={{ minRows: 3, maxRows: 8 }} maxLength={12000} disabled={busy === 'send' || aiSessionBusy(detail)} /><Space wrap><Button type="primary" icon={<SendOutlined />} loading={busy === 'send'} disabled={!draft.trim() || unavailable || !!busy || aiSessionBusy(detail) || foreignFullAccess || (selectedID > 0 && !detail)} onClick={() => void send()}>发送</Button>{aiSessionBusy(detail) && <Button danger icon={<StopOutlined />} loading={busy === 'stop'} disabled={!!busy && busy !== 'stop'} onClick={() => void stop()}>停止</Button>}<Text type="secondary">{unavailable ? '请先在设置中启用 AI 并保存中转 API Key。' : 'Enter 发送 · Shift+Enter 换行 · 工具详情默认折叠'}</Text></Space></div>
     </section>
   </div>;
-  const serverPanel = <Space direction="vertical" size="middle" style={{ width: '100%' }}><Alert type="info" showIcon message="服务器凭据仅保存到后端，不发给模型" description="必须填写已核对的 SSH 主机指纹；获取到的指纹只是观察值，不会自动信任或覆盖旧指纹。所有服务器命令（包括状态诊断）和部署操作都必须逐项批准，AI 无法自行确认。" /><Button type="primary" icon={<PlusOutlined />} disabled={!!busy} onClick={() => openServer(null)}>登记服务器</Button><Table<AIServer> rowKey="id" size="small" dataSource={servers} scroll={{ x: 1100 }} columns={[
+  const serverPanel = <Space direction="vertical" size="middle" style={{ width: '100%' }}><Alert type="info" showIcon message="服务器凭据仅保存到后端，不发给模型" description="必须填写已核对的 SSH 主机指纹；获取到的指纹只是观察值，不会自动信任或覆盖旧指纹。逐次确认模式下，每条服务器命令和部署操作均须批准；在对话窗口选择完全访问后，AI 可按当前任务连续执行。" /><Button type="primary" icon={<PlusOutlined />} disabled={!!busy} onClick={() => openServer(null)}>登记服务器</Button><Table<AIServer> rowKey="id" size="small" dataSource={servers} scroll={{ x: 1100 }} columns={[
     { title: '名称', dataIndex: 'name', width: 160, render: (name, server) => <><strong>{name}</strong><div>#{server.id}</div></> },
     { title: '连接', width: 240, render: (_, server) => <Text code>{server.username}@{server.host}:{server.port}</Text> },
     { title: '主机指纹', dataIndex: 'host_key_sha256', width: 300, render: (value) => <span className="ai-ops-wrap">{value}</span> },

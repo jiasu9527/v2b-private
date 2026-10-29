@@ -209,7 +209,7 @@ func (s *Service) callProbeTool(ctx context.Context, actorID, sessionID int64, c
 			return ToolOutcome{}, e
 		}
 		raw, _ = json.Marshal(actionToolSummary(action))
-		return ToolOutcome{Content: string(raw), Pending: true}, nil
+		return ToolOutcome{Content: string(raw), Pending: true, ActionID: action.ID}, nil
 	case "entry_probe_result":
 		if a.RunID <= 0 {
 			return ToolOutcome{}, ErrValidation
