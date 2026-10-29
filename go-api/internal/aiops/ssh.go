@@ -73,7 +73,7 @@ func (s *Service) ListServers(ctx context.Context, actorID int64) ([]Server, err
 	if err := s.ensureSchema(ctx); err != nil {
 		return nil, err
 	}
-	if err := s.requireAdmin(ctx, actorID); err != nil {
+	if err := s.requireOperator(ctx, actorID); err != nil {
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT `+serverColumns+` FROM v2_ai_server ORDER BY id DESC LIMIT 200`)
@@ -100,7 +100,7 @@ func (s *Service) SaveServer(ctx context.Context, actorID int64, r ServerSaveReq
 	if err = s.ensureSchema(ctx); err != nil {
 		return empty, err
 	}
-	if err = s.requireAdmin(ctx, actorID); err != nil {
+	if err = s.requireOperator(ctx, actorID); err != nil {
 		return empty, err
 	}
 	if r.ID > 0 {
@@ -116,7 +116,7 @@ func (s *Service) SaveServer(ctx context.Context, actorID int64, r ServerSaveReq
 	if err = lockAIState(ctx, tx); err != nil {
 		return empty, err
 	}
-	if err = s.requireAdminTx(ctx, tx, actorID); err != nil {
+	if err = s.requireOperatorTx(ctx, tx, actorID); err != nil {
 		return empty, err
 	}
 	password, key, pass := "", "", ""
@@ -210,7 +210,7 @@ func (s *Service) DeleteServer(ctx context.Context, actorID, id, version int64) 
 	if err := s.ensureSchema(ctx); err != nil {
 		return err
 	}
-	if err := s.requireAdmin(ctx, actorID); err != nil {
+	if err := s.requireOperator(ctx, actorID); err != nil {
 		return err
 	}
 	if err := s.rejectBusySSHServer(ctx, id); err != nil {
@@ -224,7 +224,7 @@ func (s *Service) DeleteServer(ctx context.Context, actorID, id, version int64) 
 	if err = lockAIState(ctx, tx); err != nil {
 		return err
 	}
-	if err = s.requireAdminTx(ctx, tx, actorID); err != nil {
+	if err = s.requireOperatorTx(ctx, tx, actorID); err != nil {
 		return err
 	}
 	var lockedVersion int64
@@ -273,7 +273,7 @@ func (s *Service) ProbeHostKey(ctx context.Context, actorID int64, r HostKeyRequ
 	if err := s.ensureSchema(ctx); err != nil {
 		return HostKeyResult{}, err
 	}
-	if err := s.requireAdmin(ctx, actorID); err != nil {
+	if err := s.requireOperator(ctx, actorID); err != nil {
 		return HostKeyResult{}, err
 	}
 	host, err := cliententry.NormalizeHost(r.Host)

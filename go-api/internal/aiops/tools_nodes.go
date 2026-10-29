@@ -40,7 +40,7 @@ func nodeToolDefinitions() []ToolDefinition {
 	p := identity()
 	p["changes"] = map[string]any{"type": "object", "properties": props, "additionalProperties": false}
 	p["reason"] = str("原因、影响与回滚办法", 500)
-	add("propose_node_update", "创建节点连接配置修改审批卡。先node_detail查看可编辑字段；支持地址/前后端端口、权限组、计费倍率、显示、TLS/SNI及传输参数；保留未指定配置和凭据，确认后执行。修改面板配置不等于远程部署或服务已重启。", p, []string{"node_type", "node_id", "changes", "reason"})
+	add("propose_node_update", "创建节点连接配置修改审批卡。先node_detail查看可编辑字段；支持地址/前后端端口、权限组、计费倍率、显示、TLS/SNI及传输参数；保留未指定配置和凭据；完全访问自动执行，逐次确认模式等待批准。修改面板配置不等于远程部署或服务已重启。", p, []string{"node_type", "node_id", "changes", "reason"})
 	return out
 }
 

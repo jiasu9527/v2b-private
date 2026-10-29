@@ -6,6 +6,7 @@ export const aiActionNames: Record<string, string> = {
   monitor_run: '按入口规则发起检测', entry_probe_run: '指定入口与探针检测',
   user_update: '修改用户', ticket_update: '处理工单', ticket_settings: '全站工单设置',
   entry_rule_update: '修改入口规则', node_update: '修改节点连接配置',
+  entry_manual_split: '手动触发入口二分', entry_auto_split: '设置入口自动二分', entry_split: '直接二分入口用户组',
 };
 const fieldNames: Record<string, string> = {
   plan_id: '套餐 ID', group_id: '节点权限组 ID', transfer_enable: '总流量配额', expired_at: '有效期',
@@ -37,6 +38,32 @@ function valueText(key: string, value: unknown): string {
 
 export default function AIOpsActionSummary({ action }: { action: AIAction }) {
   const p = action.payload || {};
+  if (['entry_manual_split', 'entry_auto_split', 'entry_split'].includes(action.kind)) {
+    const target = (p.target || {}) as Record<string, unknown>;
+    const direct = (p.direct || {}) as Record<string, unknown>;
+    const selection = (p.selection || direct.selection || {}) as Record<string, unknown>;
+    let result: Record<string, unknown> = {};
+    try { const value = JSON.parse(action.output || '{}'); if (value && typeof value === 'object' && !Array.isArray(value)) result = value; } catch { /* Raw command output stays visible below. */ }
+    return <>
+      <Descriptions size="small" column={1}>
+        <Descriptions.Item label="入口">{String(target.name || direct.name || action.server_label || '—')} · #{String(target.target_id || selection.target_id || p.target_id || action.target_id)}</Descriptions.Item>
+        <Descriptions.Item label="当前地址">{String(target.host || direct.source_host || '—')}{target.port ? `:${String(target.port)}` : ''}</Descriptions.Item>
+        {(target.user_count != null || direct.user_count != null) && <Descriptions.Item label="涉及用户">{String(target.user_count ?? direct.user_count)} 人</Descriptions.Item>}
+        {action.kind === 'entry_auto_split' && <Descriptions.Item label="自动二分">{target.auto_split_enabled ? '开启' : '关闭'} → {p.enabled ? '开启' : '关闭'}</Descriptions.Item>}
+        {action.kind === 'entry_manual_split' && <Descriptions.Item label="执行方式">本次触发二分，不依赖也不自动开启永久自动二分开关；任务受理后需查询执行结果。</Descriptions.Item>}
+        {action.kind === 'entry_split' && <>
+          <Descriptions.Item label="分组对象">{selection.kind === 'split_group' ? '现有二分子组' : '标准入口规则'}；保留 UA 条件并建立两个子组。</Descriptions.Item>
+          <Descriptions.Item label="新入口">{selection.use_backup_ip_pool ? '从 IP 池分配两个入口' : `${String(selection.entry_host_a || '—')} / ${String(selection.entry_host_b || '—')}`}</Descriptions.Item>
+        </>}
+        {result.operation_id != null && <Descriptions.Item label="任务">#{String(result.operation_id)}{result.operation_status ? ` · ${String(result.operation_status)}` : ''}</Descriptions.Item>}
+        {result.split_completed === false && <Descriptions.Item label="二分结果">任务已受理，二分尚未完成。</Descriptions.Item>}
+        {result.split_completed === true && <Descriptions.Item label="二分结果">已完成</Descriptions.Item>}
+      </Descriptions>
+      {Array.isArray(p.effects) && p.effects.length > 0 && <Typography.Paragraph type="secondary">{p.effects.map(String).join('；')}</Typography.Paragraph>}
+      {typeof p.effects === 'string' && <Typography.Paragraph type="secondary">{p.effects}</Typography.Paragraph>}
+      {Array.isArray(result.groups) && result.groups.length > 0 && <Descriptions size="small" column={1}>{result.groups.filter((value) => value && typeof value === 'object' && !Array.isArray(value)).map((value, index) => { const group = value as Record<string, unknown>; return <Descriptions.Item key={`${String(group.group_id)}:${index}`} label={String(group.name || `子组 ${index + 1}`)}>#{String(group.group_id)} · {String(group.entry_host || '—')}</Descriptions.Item>; })}</Descriptions>}
+    </>;
+  }
   if (action.kind === 'server_register') return <Descriptions size="small" column={1}>
     <Descriptions.Item label="服务器名称">{String(p.name || '—')}</Descriptions.Item>
     <Descriptions.Item label="连接身份"><Typography.Text code>{String(p.username || '')}@{String(p.host || '')}:{String(p.port || 22)}</Typography.Text></Descriptions.Item>

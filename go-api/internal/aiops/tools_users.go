@@ -44,7 +44,7 @@ func userToolDefinitions() []ToolDefinition {
 	add("plans_list", "查询可分配套餐及对应权限组、流量bytes、设备/限速；含隐藏套餐。按next_offset分页。", page, []string{})
 	add("groups_list", "查询节点权限组ID和名称，供修改用户权限组使用；不同于邮箱指定入口规则。按next_offset分页。", page, []string{})
 	add("user_detail", "按准确用户ID查询普通用户可修改设置、余额分、流量字节和备注；不含角色或任何密码/订阅凭据。", map[string]any{"user_id": map[string]any{"type": "integer", "minimum": 1}}, []string{"user_id"})
-	add("propose_user_update", "为指定普通用户创建修改审批卡；支持套餐、权限组、配额、有效期、限速、设备、封禁、余额、折扣返佣和备注。先查user_detail核对。金额/配额为绝对值；reset_usage=true明确清零上下行流量。必须管理员逐次确认，不立即执行。", map[string]any{"user_id": map[string]any{"type": "integer", "minimum": 1}, "changes": map[string]any{"type": "object", "properties": changes, "additionalProperties": false}, "reset_usage": map[string]any{"type": "boolean", "description": "只在管理员要求重置已用流量时传true"}, "reason": map[string]any{"type": "string", "maxLength": 500}}, []string{"user_id", "changes", "reason"})
+	add("propose_user_update", "为指定普通用户创建修改审批卡；支持套餐、权限组、配额、有效期、限速、设备、封禁、余额、折扣返佣和备注。先查user_detail核对。金额/配额为绝对值；reset_usage=true明确清零上下行流量。完全访问自动执行，逐次确认模式等待批准。", map[string]any{"user_id": map[string]any{"type": "integer", "minimum": 1}, "changes": map[string]any{"type": "object", "properties": changes, "additionalProperties": false}, "reset_usage": map[string]any{"type": "boolean", "description": "只在操作人要求重置已用流量时传true"}, "reason": map[string]any{"type": "string", "maxLength": 500}}, []string{"user_id", "changes", "reason"})
 	return out
 }
 

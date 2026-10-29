@@ -66,13 +66,20 @@ func (s *Service) loadConfig(ctx context.Context) (Config, string, error) {
 	return result, cipher, nil
 }
 func (s *Service) GetConfig(ctx context.Context, actorID int64) (Config, error) {
-	if err := s.requireAdmin(ctx, actorID); err != nil {
+	if err := s.requireOperator(ctx, actorID); err != nil {
 		return Config{}, err
 	}
 	if err := s.ensureSchema(ctx); err != nil {
 		return Config{}, err
 	}
 	cfg, _, err := s.loadConfig(ctx)
+	if err == nil {
+		var isAdmin bool
+		err = s.db.QueryRowContext(ctx, `SELECT is_admin=1 FROM v2_user WHERE id=$1 AND banned=0 AND (is_admin=1 OR is_staff=1)`, actorID).Scan(&isAdmin)
+		if !isAdmin {
+			cfg.BaseURL = ""
+		}
+	}
 	return cfg, err
 }
 func (s *Service) SaveConfig(ctx context.Context, actorID int64, req ConfigSaveRequest) (Config, error) {

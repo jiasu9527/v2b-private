@@ -47,11 +47,14 @@ func (s *Service) ListActions(ctx context.Context, actorID, sessionID int64) ([]
 	if err := s.ensureSchema(ctx); err != nil {
 		return nil, err
 	}
-	if err := s.requireAdmin(ctx, actorID); err != nil {
+	if err := s.requireOperator(ctx, actorID); err != nil {
 		return nil, err
 	}
 	if sessionID <= 0 {
 		return nil, ErrValidation
+	}
+	if err := s.requireSessionAccess(ctx, actorID, sessionID); err != nil {
+		return nil, err
 	}
 	if err := s.reconcileExpiredActions(ctx); err != nil {
 		return nil, err
@@ -95,7 +98,10 @@ func (s *Service) proposeAction(ctx context.Context, actorID, sessionID int64, c
 	if err = lockAIState(ctx, tx); err != nil {
 		return empty, err
 	}
-	if err = s.requireAdminTx(ctx, tx, actorID); err != nil {
+	if err = s.requireOperatorTx(ctx, tx, actorID); err != nil {
+		return empty, err
+	}
+	if err = s.requireSessionAccessTx(ctx, tx, actorID, sessionID); err != nil {
 		return empty, err
 	}
 	if err = s.requireSessionTx(ctx, tx, sessionID); err != nil {
@@ -195,6 +201,8 @@ func (s *Service) captureActionTarget(ctx context.Context, tx *sql.Tx, spec acti
 		return s.captureProbeAction(ctx, tx, spec)
 	case "entry_rule_update":
 		return s.captureEntryRuleAction(ctx, tx, spec)
+	case "entry_manual_split", "entry_auto_split", "entry_split":
+		return s.captureEntrySplitAction(ctx, tx, spec)
 	case "node_update":
 		return s.captureNodeUpdateAction(ctx, tx, spec)
 	case "ssh_command":
@@ -443,7 +451,10 @@ func (s *Service) changeActionAuthorized(ctx context.Context, actorID, sessionID
 	if err = lockAIState(ctx, tx); err != nil {
 		return empty, err
 	}
-	if err = s.requireAdminTx(ctx, tx, actorID); err != nil {
+	if err = s.requireOperatorTx(ctx, tx, actorID); err != nil {
+		return empty, err
+	}
+	if err = s.requireSessionAccessTx(ctx, tx, actorID, sessionID); err != nil {
 		return empty, err
 	}
 	if err = requireActionSessionTx(ctx, tx, sessionID); err != nil {
@@ -515,11 +526,13 @@ func (s *Service) changeActionAuthorized(ctx context.Context, actorID, sessionID
 	if snapshot != current {
 		return a, ErrConflict
 	}
-	if a.Kind == "server_register" || a.Kind == "entry_host" || a.Kind == "node_change" || a.Kind == "node_update" || a.Kind == "entry_rule_update" || a.Kind == "user_update" || a.Kind == "ticket_update" {
+	if a.Kind == "server_register" || a.Kind == "entry_host" || a.Kind == "node_change" || a.Kind == "node_update" || a.Kind == "entry_rule_update" || a.Kind == "user_update" || a.Kind == "ticket_update" || a.Kind == "entry_manual_split" || a.Kind == "entry_auto_split" || a.Kind == "entry_split" {
 		a.ApprovedBy = actorID
 		output := panelActionOutput(approvalMode)
 		if a.Kind == "server_register" {
 			output, err = s.applyServerRegisterAction(ctx, tx, a)
+		} else if a.Kind == "entry_manual_split" || a.Kind == "entry_auto_split" || a.Kind == "entry_split" {
+			output, err = applyEntrySplitAction(ctx, tx, a)
 		} else {
 			err = applyPanelAction(ctx, tx, a)
 		}
@@ -538,6 +551,11 @@ func (s *Service) changeActionAuthorized(ctx context.Context, actorID, sessionID
 		a.UpdatedAt = now
 		a.ApprovedBy = actorID
 		a.Output = output
+		if a.Kind == "entry_manual_split" || a.Kind == "entry_auto_split" || a.Kind == "entry_split" {
+			if wake, ok := s.panel.(interface{ WakeAIEntrySplits(context.Context) }); ok {
+				wake.WakeAIEntrySplits(ctx)
+			}
+		}
 		if invalidator, ok := s.panel.(interface{ InvalidateAIEntryTargets() }); ok {
 			if a.Kind == "entry_host" || a.Kind == "node_change" || a.Kind == "node_update" || a.Kind == "entry_rule_update" {
 				invalidator.InvalidateAIEntryTargets()
@@ -654,6 +672,12 @@ func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, 
 	defer func() { cancel(); s.mu.Lock(); delete(s.workers, -a.ID); s.mu.Unlock(); s.wg.Done() }()
 	go s.watchAction(ctx, cancel, a.ID)
 	status, output, problem := "failed", "", "操作执行失败，可能已部分执行；请人工检查"
+	if s.requireOperator(ctx, a.ApprovedBy) != nil || s.requireSessionAccess(ctx, a.ApprovedBy, a.SessionID) != nil {
+		finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer finishCancel()
+		_, _ = s.db.ExecContext(finishCtx, `UPDATE v2_ai_action SET status='failed',error='运维权限已变化，未执行操作',completed_at=$2,updated_at=$2 WHERE id=$1 AND status='running'`, a.ID, time.Now().Unix())
+		return
+	}
 	if a.ApprovalMode == "full_access" && s.requireFullAccess(ctx, a.ApprovedBy, a.SessionID, a.AuthorizationTurnID) != nil {
 		finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer finishCancel()
@@ -683,7 +707,12 @@ func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, 
 					err = tx.QueryRowContext(ctx, `SELECT id FROM v2_ai_session WHERE id=$1`, a.SessionID).Scan(&sessionID)
 				}
 				if err == nil {
-					err = s.requireAdminTx(ctx, tx, a.ApprovedBy)
+					// Do not hold a role row lock through an SSH installation:
+					// administrators must be able to revoke the employee at once.
+					err = s.requireOperator(ctx, a.ApprovedBy)
+				}
+				if err == nil {
+					err = s.requireSessionAccess(ctx, a.ApprovedBy, a.SessionID)
 				}
 				var v sshSecretServer
 				if err == nil {

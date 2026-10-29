@@ -55,6 +55,7 @@ func newPaginationToolFixture(t *testing.T) (*Service, sqlmock.Sqlmock, *paginat
 func paginationToolCall(t *testing.T, s *Service, mock sqlmock.Sqlmock, name, arguments string) (ToolOutcome, error) {
 	t.Helper()
 	mock.ExpectQuery(`SELECT id FROM v2_user`).WithArgs(int64(1)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+	mock.ExpectQuery(`SELECT s.id FROM v2_ai_session s JOIN v2_user`).WithArgs(int64(2), int64(1)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(2))
 	return s.callTool(context.Background(), 1, 2, ToolCall{ID: "pagination-fixture", Function: ToolFunction{Name: name, Arguments: arguments}})
 }
 
@@ -162,7 +163,7 @@ func TestAIToolLimitCompatibilityDoesNotWeakenValidation(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			s, mock, panel := newPaginationToolFixture(t)
 			result, err := paginationToolCall(t, s, mock, test.name, test.arguments)
-			// Only the identity lookup is expected in sqlmock. No proposal/schema
+			// Only identity and session ownership lookups are expected in sqlmock. No proposal/schema
 			// write may run, even though a read-only page would accept limit=100.
 			if !errors.Is(err, ErrValidation) || result.Pending || panel.calls != 0 {
 				t.Fatalf("undeclared mutation argument accepted: err=%v pending=%v calls=%d", err, result.Pending, panel.calls)

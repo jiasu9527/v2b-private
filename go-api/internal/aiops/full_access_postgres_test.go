@@ -148,18 +148,21 @@ func TestAIFullAccessPostgres(t *testing.T) {
 		}
 		return h
 	}
-	t.Run("default leaves pending", func(t *testing.T) {
+	t.Run("explicit standard leaves pending", func(t *testing.T) {
 		scenario.Store(0)
-		r := send("")
+		r := send("standard")
 		tr := wait(r.Session.ID)
 		if tr.Status != "pending" || host() != "old.example.test" || calls.Load() != 1 {
 			t.Fatalf("default executed %+v host=%s calls=%d", tr, host(), calls.Load())
 		}
 	})
-	t.Run("full executes sequentially and results return", func(t *testing.T) {
+	t.Run("default full executes sequentially and results return", func(t *testing.T) {
 		scenario.Store(1)
-		r := send("full")
+		r := send("")
 		tr := wait(r.Session.ID)
+		if r.Session.AccessMode != "full" || r.Session.FullAccessBy != actor || tr.AccessMode != "full" {
+			t.Fatalf("new conversation did not default to full: session=%+v turn=%+v", r.Session, tr)
+		}
 		if tr.Status != "completed" || host() != "second.example.test" || calls.Load() != 3 {
 			t.Fatalf("full result %+v host=%s calls=%d", tr, host(), calls.Load())
 		}

@@ -81,6 +81,55 @@ func (s *Service) requireAdminTx(ctx context.Context, tx *sql.Tx, id int64) erro
 	}
 	return err
 }
+
+// Operational tools are available to active employees as well as admins.
+// Re-check database roles rather than trusting a cached browser identity.
+func (s *Service) requireOperator(ctx context.Context, id int64) error {
+	if s == nil || s.db == nil {
+		return ErrUnavailable
+	}
+	if id <= 0 {
+		return ErrForbidden
+	}
+	var found int64
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM v2_user WHERE id=$1 AND (is_admin=1 OR is_staff=1) AND banned=0`, id).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrForbidden
+	}
+	return err
+}
+
+func (s *Service) requireOperatorTx(ctx context.Context, tx *sql.Tx, id int64) error {
+	if id <= 0 {
+		return ErrForbidden
+	}
+	var found int64
+	err := tx.QueryRowContext(ctx, `SELECT id FROM v2_user WHERE id=$1 AND (is_admin=1 OR is_staff=1) AND banned=0 FOR SHARE`, id).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrForbidden
+	}
+	return err
+}
+
+const sessionAccessSQL = `SELECT s.id FROM v2_ai_session s JOIN v2_user u ON u.id=$2 WHERE s.id=$1 AND u.banned=0 AND (u.is_admin=1 OR (u.is_staff=1 AND s.created_by=u.id))`
+
+func (s *Service) requireSessionAccess(ctx context.Context, actorID, sessionID int64) error {
+	var found int64
+	err := s.db.QueryRowContext(ctx, sessionAccessSQL, sessionID, actorID).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
+}
+
+func (s *Service) requireSessionAccessTx(ctx context.Context, tx *sql.Tx, actorID, sessionID int64) error {
+	var found int64
+	err := tx.QueryRowContext(ctx, sessionAccessSQL, sessionID, actorID).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
+}
 func (s *Service) requireSessionTx(ctx context.Context, tx *sql.Tx, id int64) error {
 	var found int64
 	err := tx.QueryRowContext(ctx, `SELECT id FROM v2_ai_session WHERE id=$1 FOR UPDATE`, id).Scan(&found)

@@ -127,7 +127,7 @@ func TestAIHTTPStreamFlushesDraftBeforeCompletion(t *testing.T) {
 	}
 }
 func TestAIHTTPStreamErrorsDoNotLeakAndUnauthorisedCannotSubscribe(t *testing.T) {
-	for _, identity := range []*session.Identity{nil, {ID: 1, IsStaff: 1}} {
+	for _, identity := range []*session.Identity{nil, {ID: 1}} {
 		s := &streamTestOps{}
 		r := NewRouter(config.Config{AdminPath: "test"}, WithAIOps(s), WithSessionService(strictAppleIDSession{identity: identity}))
 		w := httptest.NewRecorder()
@@ -147,5 +147,58 @@ func TestAIHTTPStreamErrorsDoNotLeakAndUnauthorisedCannotSubscribe(t *testing.T)
 	r.ServeHTTP(w, req)
 	if !strings.Contains(w.Body.String(), "event: error") || strings.Contains(w.Body.String(), "secret-never-echo") {
 		t.Fatal("unsafe streamed error")
+	}
+}
+
+type freshAIStaffSession struct {
+	strictAppleIDSession
+	revoked        atomic.Bool
+	adminRequested atomic.Bool
+	freshCalls     atomic.Int32
+}
+
+func (s *freshAIStaffSession) AuthenticateFresh(_ context.Context, _ string, requireAdmin bool) (*session.Identity, error) {
+	s.freshCalls.Add(1)
+	if requireAdmin {
+		s.adminRequested.Store(true)
+	}
+	if s.revoked.Load() {
+		return &session.Identity{ID: 7}, nil
+	}
+	return &session.Identity{ID: 7, IsStaff: 1}, nil
+}
+
+func TestAIHTTPStaffStreamRechecksFreshIdentityAndStopsOnRevocation(t *testing.T) {
+	ops := &streamTestOps{}
+	auth := &freshAIStaffSession{}
+	router := NewRouter(config.Config{AdminPath: "test"}, WithAIOps(ops), WithSessionService(auth))
+	server := httptest.NewServer(router)
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL+"/api/v1/test/ai-ops/session/stream?id=7", nil)
+	req.Header.Set("Authorization", "Bearer staff-fixture")
+	response, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != 200 {
+		t.Fatal("staff cannot open event stream", response.StatusCode)
+	}
+	scan := bufio.NewScanner(response.Body)
+	sawSnapshot, sawError := false, false
+	for scan.Scan() {
+		line := scan.Text()
+		if line == "event: snapshot" {
+			sawSnapshot = true
+			auth.revoked.Store(true)
+		}
+		if line == "event: error" {
+			sawError = true
+		}
+	}
+	if scan.Err() != nil || !sawSnapshot || !sawError || auth.freshCalls.Load() < 2 || auth.adminRequested.Load() {
+		t.Fatalf("staff SSE auth did not revalidate: initial=%v error=%v calls=%d adminOnly=%v err=%v", sawSnapshot, sawError, auth.freshCalls.Load(), auth.adminRequested.Load(), scan.Err())
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"forest/go-api/internal/admin"
 	"forest/go-api/internal/aiops"
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/session"
@@ -107,11 +108,11 @@ func aiOpsTestRequest(t *testing.T, f *fakeAIOps, identity *session.Identity, me
 	router.ServeHTTP(w, r)
 	return w
 }
-func TestAIOpsRoutesRequireFreshAdmin(t *testing.T) {
+func TestAIOpsRoutesRequireFreshOperator(t *testing.T) {
 	for _, identity := range []*session.Identity{nil, {ID: 7}, {ID: 7, IsStaff: 1}, {ID: 7, IsAdmin: 1}} {
 		f := &fakeAIOps{}
 		w := aiOpsTestRequest(t, f, identity, "POST", "action/approve", `{"session_id":1,"id":2}`)
-		if identity != nil && identity.IsAdmin == 1 {
+		if identity != nil && (identity.IsAdmin == 1 || identity.IsStaff == 1) {
 			if w.Code != 202 || f.actor != 7 || f.id != 2 {
 				t.Fatalf("admin %d calls%d", w.Code, f.calls)
 			}
@@ -168,6 +169,22 @@ func TestAIOpsManagementSecretsErrorsAndSessionActions(t *testing.T) {
 	}
 }
 
+func TestAIOpsSplitErrorsExplainMissingCapacityAndChangedTargets(t *testing.T) {
+	for _, tc := range []struct {
+		err     error
+		status  int
+		message string
+	}{
+		{fmt.Errorf("%w：可用且健康的备用 IP 不足 2 个，未二分、未领取 IP", admin.ErrAIEntrySplitInvalid), 400, "备用 IP 不足 2 个"},
+		{admin.ErrAIEntrySplitConflict, 409, "入口配置或名单已变化"},
+	} {
+		w := aiOpsTestRequest(t, &fakeAIOps{err: tc.err}, &session.Identity{ID: 7, IsStaff: 1}, "POST", "action/approve", `{"session_id":1,"id":2}`)
+		if w.Code != tc.status || !strings.Contains(w.Body.String(), tc.message) {
+			t.Fatalf("split cause lost: %d %s", w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestAIOpsSSHIntakeErrorExplainsHowToCorrectWithoutEchoingCredentials(t *testing.T) {
 	for _, problem := range []error{aiops.ErrSSHIntakeInvalid, aiops.ErrSSHIntakeMultiple} {
 		f := &fakeAIOps{err: fmt.Errorf("secret-password: %w", problem)}
@@ -178,7 +195,7 @@ func TestAIOpsSSHIntakeErrorExplainsHowToCorrectWithoutEchoingCredentials(t *tes
 	}
 }
 
-func TestAIOpsAccessAndStopRequireRealAdminAndStrictPayload(t *testing.T) {
+func TestAIOpsAccessAndStopRequireRealOperatorAndStrictPayload(t *testing.T) {
 	for _, action := range []string{"session/access", "chat/stop"} {
 		body := `{"id":9}`
 		if action == "session/access" {
@@ -187,7 +204,7 @@ func TestAIOpsAccessAndStopRequireRealAdminAndStrictPayload(t *testing.T) {
 		for _, identity := range []*session.Identity{nil, {ID: 7}, {ID: 7, IsStaff: 1}, {ID: 7, IsAdmin: 1}} {
 			f := &fakeAIOps{}
 			w := aiOpsTestRequest(t, f, identity, "POST", action, body)
-			if identity != nil && identity.IsAdmin == 1 {
+			if identity != nil && (identity.IsAdmin == 1 || identity.IsStaff == 1) {
 				if w.Code != 200 || f.actor != 7 || f.id != 9 || f.calls != 1 {
 					t.Fatalf("admin request %s: %d %+v", action, w.Code, f)
 				}
@@ -203,6 +220,23 @@ func TestAIOpsAccessAndStopRequireRealAdminAndStrictPayload(t *testing.T) {
 		w = aiOpsTestRequest(t, f, &session.Identity{ID: 7, IsAdmin: 1}, "GET", action, "")
 		if w.Code != 405 || f.calls != 0 {
 			t.Fatal("GET mutated permissions", action, w.Code)
+		}
+	}
+}
+
+func TestAIOpsGlobalManagementRemainsAdminOnly(t *testing.T) {
+	for _, action := range []string{"config/save", "session/clear", "reset"} {
+		f := &fakeAIOps{}
+		w := aiOpsTestRequest(t, f, &session.Identity{ID: 7, IsStaff: 1}, "POST", action, `{"confirm":true,"confirm_text":"RESET_AI_DATA"}`)
+		if w.Code != 403 || f.calls != 0 {
+			t.Fatalf("staff reached global management %s: status=%d calls=%d", action, w.Code, f.calls)
+		}
+	}
+	for _, action := range []string{"config", "sessions", "servers", "session?id=1"} {
+		f := &fakeAIOps{}
+		w := aiOpsTestRequest(t, f, &session.Identity{ID: 7, IsStaff: 1}, "GET", action, "")
+		if w.Code != 200 || f.actor != 7 {
+			t.Fatalf("staff operational route blocked %s: status=%d", action, w.Code)
 		}
 	}
 }

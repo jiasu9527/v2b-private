@@ -179,8 +179,8 @@ func (s *Service) executeTicketSettings(ctx context.Context, a Action, snapshot 
 	if !ok {
 		return "failed", "", "工单设置接口不可用，未修改"
 	}
-	if err := s.requireAdmin(ctx, a.ApprovedBy); err != nil {
-		return "failed", "", "管理员权限已变化，未修改"
+	if err := s.requireOperator(ctx, a.ApprovedBy); err != nil {
+		return "failed", "", "运维权限已变化，未修改"
 	}
 	if err := writer.CompareAndSetAITicketStatus(ctx, p.BeforeStatus, p.Status); err != nil {
 		if errors.Is(err, admin.ErrAITicketConfigConflict) {

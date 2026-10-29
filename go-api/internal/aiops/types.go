@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	ErrForbidden   = errors.New("仅管理员可使用 AI 运维")
+	ErrForbidden   = errors.New("无权使用 AI 运维或访问此记录")
 	ErrValidation  = errors.New("AI 运维参数无效")
 	ErrNotFound    = errors.New("AI 运维记录不存在")
 	ErrConflict    = errors.New("会话或操作状态已变化，请刷新重试")

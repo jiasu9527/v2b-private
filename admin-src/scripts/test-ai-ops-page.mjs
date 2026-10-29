@@ -6,7 +6,7 @@ const source = await readFile(new URL('../src/pages/aiOpsModel.ts', import.meta.
 const page = await readFile(new URL('../src/pages/AIOpsPage.tsx', import.meta.url), 'utf8');
 const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 } });
-const { AI_DEFAULT_MODELS, aiActionStatus, aiCanApprove, aiSessionBusy, aiLatestTurn, aiParseModels, aiFingerprintMatches, aiRequestID, aiAccessMode, aiOwnsFullAccess, aiMergeSessionAccess } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
+const { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, aiActionStatus, aiCanApprove, aiCanReadSession, aiSessionBusy, aiLatestTurn, aiParseModels, aiFingerprintMatches, aiRequestID, aiAccessMode, aiOwnsFullAccess, aiMergeSessionAccess } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
 const now = 1900000000000;
 const action = { status: 'pending', expires_at: now / 1000 + 60 };
 
@@ -48,13 +48,30 @@ test('observed fingerprint is scoped to exact current host and port, never auto-
   assert.match(page, /获取主机指纹（仅观察）/);
 });
 
-test('page is administrator-only and introduces no MCP menu or browser persistence', () => {
+test('administrators and staff can reach AI operations while ordinary users cannot enter the backend', () => {
   assert.match(app, /key: '\/config\/ai-ops'.*label: 'AI 运维'/);
   assert.match(app, /route === '\/config\/ai-ops'\) return <AIOpsPage/);
-  assert.match(app, /const visibleMenu = supportOnly \? \[.*员工工作台.*\] : menu/);
-  assert.match(app, /supportOnly \? <SupportWorkbenchPage[\s\S]*: <Page key=\{path\}/);
+  assert.match(app, /const visibleMenu = supportOnly \? \[.*员工工作台.*key: '\/config\/ai-ops'.*\] : menu/);
+  assert.match(app, /supportOnly \? staffAIOpsPage \? <AIOpsPage key=\{path\} \/> : <SupportWorkbenchPage/);
+  assert.match(app, /if \(!identity\.is_admin && !identity\.is_staff\) \{ rejectIdentity\(\); return; \}/);
   assert.doesNotMatch(page, /localStorage|sessionStorage|console\.|dangerouslySetInnerHTML|eval\(|MCP/);
   assert.doesNotMatch(app, /MCPPage|config\/mcp/);
+});
+
+test('staff only see their own conversations and global settings and cleanup remain administrator-only', () => {
+  const own = { id: 1, created_by: 7 };
+  assert.equal(aiCanReadSession(own, 7, false), true);
+  for (const actorID of [0, 8, NaN]) assert.equal(aiCanReadSession(own, actorID, false), false);
+  assert.equal(aiCanReadSession(own, 8, true), true);
+  assert.match(page, /filter\(\(session\) => aiCanReadSession\(session, actorID, isAdmin\)\)/);
+  assert.match(page, /if \(!aiCanReadSession\(value.session, actorID, isAdmin\)\) throw/);
+  assert.match(page, /const settings = isAdmin \?/);
+  assert.match(page, /\.\.\.\(isAdmin \? \[\{ key: 'settings'/);
+  assert.match(page, /if \(!isAdmin \|\| !begin\('config'\)\) return/);
+  assert.match(page, /\(confirmation.kind === 'clear' \|\| confirmation.kind === 'reset'\) && !isAdmin/);
+  const accessOwner = page.slice(page.indexOf('{foreignFullAccess &&'), page.indexOf('<div className="ai-ops-messages"'));
+  assert.match(accessOwner, /onClick=\{\(\) => void changeAccess\('full'\)\}>由我启用完全访问/);
+  assert.doesNotMatch(accessOwner, /isAdmin/);
 });
 
 test('explicit server form credentials clear on save/close and chat sends only its content envelope', () => {
@@ -80,7 +97,7 @@ test('destructive actions require explicit confirmation and reset distinguishes 
   assert.match(page, /resetText !== 'RESET_AI_DATA'/);
   assert.match(page, /apiJsonPost\('\/ai-ops\/reset', \{ confirm: true, confirm_text: 'RESET_AI_DATA' \}\)/);
   assert.match(page, /apiJsonPost\('\/ai-ops\/session\/clear', \{ confirm: true \}\)/);
-  assert.match(page, /包括中转配置及 API Key、全部服务器 SSH 凭据、所有管理员的会话与操作记录/);
+  assert.match(page, /包括中转配置及 API Key、全部服务器 SSH 凭据、全部操作人的会话与操作记录/);
   assert.match(page, /已在远程启动的命令不保证停止或回滚/);
 });
 
@@ -115,7 +132,7 @@ test('action cards expose optional approver/rejector IDs without showing zero or
   for (const field of ['approved_by', 'rejected_by']) {
     assert.ok(source.includes(`${field}?: number`));
     assert.ok(page.includes(`(action.${field} ?? 0) > 0`));
-    assert.ok(page.includes(`管理员 #{action.${field}}`));
+    assert.ok(page.includes(`操作人 #{action.${field}}`));
   }
 });
 
@@ -211,13 +228,17 @@ test('revoked access survives stale stream and list snapshots without overriding
   assert.equal(merged.session.status, 'idle');
 });
 
-test('mode changes are server-authorized, send retries include the exact grant version, and new chats reset mode', () => {
+test('new chats default to full access while existing standard mode and exact retry grants are preserved', () => {
+  assert.equal(AI_DEFAULT_ACCESS_MODE, 'full');
+  assert.equal(aiAccessMode({ access_mode: 'standard' }), 'standard');
+  assert.match(page, /useState<AIAccessMode>\(AI_DEFAULT_ACCESS_MODE\)/);
   assert.match(page, /apiJsonPost\('\/ai-ops\/session\/access', \{ id, mode, expected_version: detail.session.access_version \|\| 0 \}\)/);
   assert.match(page, /session.access_mode !== mode/);
   assert.match(page, /sendRetry.accessMode === accessMode && sendRetry.accessVersion === accessVersion/);
   assert.match(page, /access_mode: retry.accessMode, access_version: retry.accessVersion/);
   const newSession = page.slice(page.indexOf('const newSession ='), page.indexOf('const accessMode ='));
-  assert.match(newSession, /setNewAccessMode\('standard'\)/);
+  assert.match(newSession, /setNewAccessMode\(AI_DEFAULT_ACCESS_MODE\)/);
+  assert.match(page, /const accessMode = selectedID \? aiAccessMode\(detail\?\.session\) : newAccessMode/);
   assert.doesNotMatch(page, /localStorage|sessionStorage/);
 });
 

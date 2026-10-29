@@ -34,7 +34,7 @@ func probeToolDefinitions() []ToolDefinition {
 	p["policy_id"] = integer("只看指定规则")
 	p["target_id"] = integer("只看指定检测入口目标；不是节点或二分组 ID")
 	add("entry_probe_targets", "查找现有入口检测目标、规则及已登记探针 ID，不发探测。target_id 对应具体入口（含二分叶子），probe_id 对应探针。按 targets.next_offset 翻页；未配置监测的入口不会出现。", p)
-	add("entry_probe_run", "提议对指定入口通过探针发起一次新 TCP 检测，需人工确认。policy_ids 与 target_ids 至少填一项；都填时取交集。target_ids 精确到入口，未填时检查选中规则全部入口；probe_ids 未填时使用全部启用探针，最多50目标×50探针。任务已受理不等于检测通过，需用 entry_probe_result 查结果；上报仍可能触发现有自动切换/二分。", map[string]any{"policy_ids": ids("规则 ID，可省略"), "target_ids": ids("entry_probe_targets 返回的入口目标 ID，可省略"), "probe_ids": ids("指定探针 ID，可省略"), "reason": map[string]any{"type": "string", "description": "检测目的与预期影响"}}, "reason")
+	add("entry_probe_run", "提议对指定入口通过探针发起一次新 TCP 检测，完全访问自动执行，逐次确认模式等待批准。policy_ids 与 target_ids 至少填一项；都填时取交集。target_ids 精确到入口，未填时检查选中规则全部入口；probe_ids 未填时使用全部启用探针，最多50目标×50探针。任务已受理不等于检测通过，需用 entry_probe_result 查结果；上报仍可能触发现有自动切换/二分。", map[string]any{"policy_ids": ids("规则 ID，可省略"), "target_ids": ids("entry_probe_targets 返回的入口目标 ID，可省略"), "probe_ids": ids("指定探针 ID，可省略"), "reason": map[string]any{"type": "string", "description": "检测目的与预期影响"}}, "reason")
 	p = page()
 	p["run_id"] = integer("检测任务 run_id；审批完成后从动作输出取得")
 	add("entry_probe_result", "读取指定检测任务及目标×探针的逐项结果，包含待上报项。按 results.next_offset 翻页；pending不代表正常、TCP正常不代表业务全链路正常，不重复发起任务。", p, "run_id")

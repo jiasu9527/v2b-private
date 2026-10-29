@@ -214,6 +214,18 @@ func (s *DBService) ConvertClientEntryUserPolicyToSplit(ctx context.Context, req
 		return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
 	}
 	defer tx.Rollback()
+	result, err := convertClientEntryUserPolicyToSplitTx(ctx, tx, req, hostA, hostB)
+	if err != nil {
+		return ClientEntryUserPolicyRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
+	}
+	s.markClientEntryMonitorTargetsDirty()
+	return result, nil
+}
+
+func convertClientEntryUserPolicyToSplitTx(ctx context.Context, tx *sql.Tx, req ClientEntryUserPolicySplitConvertRequest, hostA, hostB string) (ClientEntryUserPolicyRecord, error) {
 	if err := lockClientEntryVisibleOrder(ctx, tx); err != nil {
 		return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
 	}
@@ -342,10 +354,6 @@ WHERE id = $1 AND mode = 'standard'`, req.PolicyID, now)
 	if err := requireClientEntryRuleAffected(result, "规则"); err != nil {
 		return ClientEntryUserPolicyRecord{}, errors.New("规则已变化，请刷新后重试")
 	}
-	if err := tx.Commit(); err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("转换固定二分规则失败")
-	}
-	s.markClientEntryMonitorTargetsDirty()
 	return ClientEntryUserPolicyRecord{
 		ID: req.PolicyID, Mode: ClientEntryUserPolicyModeSplit, Action: cliententry.ActionOverride,
 		Conditions: conditions, SnapshotUserCount: userCount,
@@ -380,6 +388,18 @@ func (s *DBService) SplitClientEntryUserPolicyGroup(ctx context.Context, req Cli
 		return ClientEntryUserPolicyRecord{}, errors.New("继续二分失败")
 	}
 	defer tx.Rollback()
+	result, err := splitClientEntryUserPolicyGroupTx(ctx, tx, req, hostA, hostB, now)
+	if err != nil {
+		return ClientEntryUserPolicyRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ClientEntryUserPolicyRecord{}, errors.New("继续二分失败")
+	}
+	s.markClientEntryMonitorTargetsDirty()
+	return result, nil
+}
+
+func splitClientEntryUserPolicyGroupTx(ctx context.Context, tx *sql.Tx, req ClientEntryUserPolicyGroupSplitRequest, hostA, hostB string, now int64) (ClientEntryUserPolicyRecord, error) {
 	if err := lockClientEntryVisibleOrder(ctx, tx); err != nil {
 		return ClientEntryUserPolicyRecord{}, errors.New("继续二分失败")
 	}
@@ -492,10 +512,6 @@ WHERE id = $1`, req.GroupID, now); err != nil {
 	if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy SET updated_at = $2 WHERE id = $1`, req.PolicyID, now); err != nil {
 		return ClientEntryUserPolicyRecord{}, errors.New("继续二分失败")
 	}
-	if err := tx.Commit(); err != nil {
-		return ClientEntryUserPolicyRecord{}, errors.New("继续二分失败")
-	}
-	s.markClientEntryMonitorTargetsDirty()
 	return ClientEntryUserPolicyRecord{ID: req.PolicyID, Mode: ClientEntryUserPolicyModeSplit}, nil
 }
 

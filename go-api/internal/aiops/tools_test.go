@@ -26,7 +26,7 @@ func TestAIToolsHaveNoApproveOrDirectExecute(t *testing.T) {
 	s := NewService(config.Config{}, nil, nil)
 	defer s.Close()
 	defs := s.toolDefinitions()
-	if len(defs) != 31 {
+	if len(defs) != 36 {
 		t.Fatalf("tools %d", len(defs))
 	}
 	seen := map[string]bool{}
@@ -54,6 +54,7 @@ func TestAIUserLookupSanitizesAndRestricts(t *testing.T) {
 	s := NewService(config.Config{}, db, panel)
 	defer s.Close()
 	mock.ExpectQuery(`SELECT id FROM v2_user`).WithArgs(int64(1)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+	mock.ExpectQuery(`SELECT s.id FROM v2_ai_session s JOIN v2_user`).WithArgs(int64(2), int64(1)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(2))
 	v, err := s.callTool(context.Background(), 1, 2, ToolCall{ID: "call1", Function: ToolFunction{Name: "user_lookup", Arguments: `{"query":"U@example.test"}`}})
 	if err != nil || strings.Contains(v.Content, "SENSITIVE") || v.Pending || len(panel.request.Filters) != 3 || panel.request.Filters[0].Condition != "=" {
 		t.Fatalf("result=%+v err=%v filters=%+v", v, err, panel.request)

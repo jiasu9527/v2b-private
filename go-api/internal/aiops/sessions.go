@@ -35,7 +35,7 @@ func (s *Service) expireTurns(ctx context.Context, tx *sql.Tx) error {
 	return err
 }
 func (s *Service) ListSessions(ctx context.Context, actorID int64) ([]Session, error) {
-	if err := s.requireAdmin(ctx, actorID); err != nil {
+	if err := s.requireOperator(ctx, actorID); err != nil {
 		return nil, err
 	}
 	if err := s.ensureSchema(ctx); err != nil {
@@ -49,7 +49,7 @@ func (s *Service) ListSessions(ctx context.Context, actorID int64) ([]Session, e
 	if err = s.expireTurns(ctx, tx); err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT `+sessionColumns+` FROM v2_ai_session ORDER BY updated_at DESC,id DESC LIMIT 200`)
+	rows, err := tx.QueryContext(ctx, `SELECT `+sessionColumns+` FROM v2_ai_session WHERE EXISTS(SELECT 1 FROM v2_user u WHERE u.id=$1 AND u.banned=0 AND (u.is_admin=1 OR (u.is_staff=1 AND created_by=u.id))) ORDER BY updated_at DESC,id DESC LIMIT 200`, actorID)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func (s *Service) GetSession(ctx context.Context, actorID, id int64) (SessionDet
 	if id <= 0 {
 		return out, ErrValidation
 	}
-	if err := s.requireAdmin(ctx, actorID); err != nil {
+	if err := s.requireOperator(ctx, actorID); err != nil {
 		return out, err
 	}
 	if err := s.ensureSchema(ctx); err != nil {
@@ -87,6 +87,9 @@ func (s *Service) GetSession(ctx context.Context, actorID, id int64) (SessionDet
 		return out, err
 	}
 	defer tx.Rollback()
+	if err = s.requireSessionAccessTx(ctx, tx, actorID, id); err != nil {
+		return out, err
+	}
 	if err = s.expireTurns(ctx, tx); err != nil {
 		return out, err
 	}
@@ -156,7 +159,7 @@ func (s *Service) validateModel(ctx context.Context, model string) error {
 }
 func (s *Service) CreateSession(ctx context.Context, actorID int64, req CreateSessionRequest) (Session, error) {
 	var empty Session
-	if err := s.requireAdmin(ctx, actorID); err != nil {
+	if err := s.requireOperator(ctx, actorID); err != nil {
 		return empty, err
 	}
 	if err := s.ensureSchema(ctx); err != nil {
@@ -180,7 +183,7 @@ func (s *Service) CreateSession(ctx context.Context, actorID int64, req CreateSe
 	if err = lockAIState(ctx, tx); err != nil {
 		return empty, err
 	}
-	if err = s.requireAdminTx(ctx, tx, actorID); err != nil {
+	if err = s.requireOperatorTx(ctx, tx, actorID); err != nil {
 		return empty, err
 	}
 	v, err := insertSession(ctx, tx, actorID, title, req.Model)
@@ -202,7 +205,7 @@ func insertSession(ctx context.Context, tx *sql.Tx, actorID int64, title, model 
 		return empty, ErrBusy
 	}
 	now := time.Now().Unix()
-	return scanSession(tx.QueryRowContext(ctx, `INSERT INTO v2_ai_session(title,model,created_by,status,created_at,updated_at) VALUES($1,$2,$3,'idle',$4,$4) RETURNING `+sessionColumns, title, model, actorID, now))
+	return scanSession(tx.QueryRowContext(ctx, `INSERT INTO v2_ai_session(title,model,created_by,status,created_at,updated_at,access_mode,full_access_by) VALUES($1,$2,$3,'idle',$4,$4,'full',$3) RETURNING `+sessionColumns, title, model, actorID, now))
 }
 func (s *Service) DeleteSession(ctx context.Context, actorID, id int64) error {
 	if id <= 0 {
@@ -217,11 +220,21 @@ func (s *Service) ResetData(ctx context.Context, actorID int64) error {
 	return s.deleteData(ctx, actorID, 0, true)
 }
 func (s *Service) deleteData(ctx context.Context, actorID, id int64, reset bool) error {
-	if err := s.requireAdmin(ctx, actorID); err != nil {
+	if err := s.requireOperator(ctx, actorID); err != nil {
 		return err
+	}
+	if id == 0 || reset {
+		if err := s.requireAdmin(ctx, actorID); err != nil {
+			return err
+		}
 	}
 	if err := s.ensureSchema(ctx); err != nil {
 		return err
+	}
+	if id > 0 {
+		if err := s.requireSessionAccess(ctx, actorID, id); err != nil {
+			return err
+		}
 	}
 	// A prior process may have died after claiming an external operation. Such
 	// operations remain unknown, never retried, but must not block cleanup forever.
@@ -243,10 +256,18 @@ func (s *Service) deleteData(ctx context.Context, actorID, id int64, reset bool)
 	if err = lockAIStateExclusive(ctx, tx); err != nil {
 		return err
 	}
-	if err = s.requireAdminTx(ctx, tx, actorID); err != nil {
+	if err = s.requireOperatorTx(ctx, tx, actorID); err != nil {
 		return err
 	}
+	if id == 0 || reset {
+		if err = s.requireAdminTx(ctx, tx, actorID); err != nil {
+			return err
+		}
+	}
 	if id > 0 {
+		if err = s.requireSessionAccessTx(ctx, tx, actorID, id); err != nil {
+			return err
+		}
 		if err = s.requireSessionTx(ctx, tx, id); err != nil {
 			return err
 		}

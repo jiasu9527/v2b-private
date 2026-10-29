@@ -70,6 +70,7 @@ func TestAIToolRulesAdaptivePaginationDoesNotSkipOrLoseWholeRule(t *testing.T) {
 	offset, seen := 0, []int64{}
 	for attempts := 0; attempts < 30; attempts++ {
 		mock.ExpectQuery(`SELECT id FROM v2_user`).WithArgs(int64(1)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+		mock.ExpectQuery(`SELECT s.id FROM v2_ai_session s JOIN v2_user`).WithArgs(int64(2), int64(1)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(2))
 		result, err := s.callTool(context.Background(), 1, 2, ToolCall{ID: "rules", Function: ToolFunction{Name: "entry_rules_list", Arguments: fmt.Sprintf(`{"limit":50,"offset":%d}`, offset)}})
 		if err != nil || result.Pending || len(result.Content) > maxToolOutputBytes {
 			t.Fatalf("tool failure err=%v bytes=%d", err, len(result.Content))

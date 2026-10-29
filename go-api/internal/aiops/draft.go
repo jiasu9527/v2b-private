@@ -25,7 +25,7 @@ func (s *Service) updateDraft(ctx context.Context, actorID, sessionID, turnID in
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	result, err := s.db.ExecContext(ctx, `UPDATE v2_ai_turn SET draft_content=$4,draft_round=$5,draft_version=draft_version+1 WHERE id=$1 AND session_id=$2 AND status='running' AND expires_at>$6 AND EXISTS(SELECT 1 FROM v2_user WHERE id=$3 AND is_admin=1 AND banned=0)`, turnID, sessionID, actorID, content, round, time.Now().Unix())
+	result, err := s.db.ExecContext(ctx, `UPDATE v2_ai_turn SET draft_content=$4,draft_round=$5,draft_version=draft_version+1 WHERE id=$1 AND session_id=$2 AND status='running' AND expires_at>$6 AND actor_id=$3 AND EXISTS(SELECT 1 FROM v2_user u JOIN v2_ai_session s ON s.id=$2 WHERE u.id=$3 AND u.banned=0 AND (u.is_admin=1 OR (u.is_staff=1 AND s.created_by=u.id)))`, turnID, sessionID, actorID, content, round, time.Now().Unix())
 	if err != nil {
 		return ErrUnavailable
 	}
@@ -43,10 +43,13 @@ func (s *Service) GetDraft(ctx context.Context, actorID, sessionID int64) (Draft
 	if sessionID <= 0 {
 		return out, ErrValidation
 	}
-	if err := s.requireAdmin(ctx, actorID); err != nil {
+	if err := s.requireOperator(ctx, actorID); err != nil {
 		return out, err
 	}
 	if err := s.ensureSchema(ctx); err != nil {
+		return out, err
+	}
+	if err := s.requireSessionAccess(ctx, actorID, sessionID); err != nil {
 		return out, err
 	}
 	err := s.db.QueryRowContext(ctx, `SELECT s.id,COALESCE(t.id,0),COALESCE(t.draft_round,0),CASE WHEN t.status='running' AND t.expires_at>$2 THEN t.draft_content ELSE '' END,COALESCE(t.status,'idle'),COALESCE(t.draft_version,0) FROM v2_ai_session s LEFT JOIN LATERAL (SELECT id,draft_round,draft_content,status,expires_at,draft_version FROM v2_ai_turn WHERE session_id=s.id ORDER BY id DESC LIMIT 1) t ON TRUE WHERE s.id=$1`, sessionID, time.Now().Unix()).Scan(&out.SessionID, &out.TurnID, &out.Round, &out.Content, &out.Status, &out.Version)

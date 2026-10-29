@@ -67,15 +67,16 @@ func (s *Service) toolDefinitions() []ToolDefinition {
 	add("entry_health", "读取已有入口检测结果，不发新探测，TCP正常不代表业务全链路正常。", page())
 	add("backup_ips_list", "读取备用IP健康及占用，不清检测状态不领取IP。", page())
 	add("servers_list", "分页读取管理员登记SSH服务器，不返回密码/私钥；按next_offset继续。", page())
-	add("ssh_status", "创建固定只读系统诊断命令的待审批卡片；不立即执行，必须管理员逐次确认。", map[string]any{"server_id": num("已登记SSH服务器ID"), "reason": str("检查原因")}, "server_id", "reason")
-	add("propose_ssh_command", "提议通过SSH在已登记落地机或中转机执行完整命令，可安装节点、运行非交互安装脚本、修改配置、重启服务；须逐次人工审批。先检查目标系统并确认脚本来源和参数，不猜测安装地址；不可在命令中放SSH密码私钥。执行输出实时更新，失败或断线不自动重试。", map[string]any{"server_id": num("已登记服务器ID"), "command": str("完整非交互命令，最多16000字节；没有终端和键盘输入，安装脚本须明确非交互参数"), "timeout_seconds": map[string]any{"type": "integer", "minimum": 30, "maximum": 1800, "default": 120, "description": "最长执行秒数，默认120；安装可选较长时间，最长1800秒"}, "reason": str("原因、风险与可回滚性，最多500字")}, "server_id", "command", "reason")
-	add("propose_entry_host", "创建入口host变更待审批卡，不执行；保留UA与固定名单，合集成员不支持单独改。", map[string]any{"kind": map[string]any{"type": "string", "enum": []string{"policy", "split_group"}}, "target_id": num("规则/叶子ID"), "host": str("单个域名或IP"), "reason": str("原因与影响")}, "kind", "target_id", "host", "reason")
-	add("propose_node_change", "仅提议指定节点host/port/show改变，必须后台确认，不支持其他配置或任意API透传。", map[string]any{"node_type": str("协议"), "node_id": num("节点ID"), "changes": map[string]any{"type": "object", "properties": map[string]any{"host": str("域名或IP"), "port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535}, "show": map[string]any{"type": "integer", "enum": []int{0, 1}}}, "additionalProperties": false}, "reason": str("原因与影响")}, "node_type", "node_id", "changes", "reason")
-	add("monitor_run", "创建指定1-10条规则检测审批卡。检测不直接修改入口，结果仍遵循后台既有自动化配置。", map[string]any{"policy_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer", "minimum": 1}, "minItems": 1, "maxItems": 10, "uniqueItems": true}, "reason": str("检测原因")}, "policy_ids", "reason")
+	add("ssh_status", "检查已登记服务器的系统与端口；完全访问自动执行，逐次确认模式等待操作人批准。", map[string]any{"server_id": num("已登记SSH服务器ID"), "reason": str("检查原因")}, "server_id", "reason")
+	add("propose_ssh_command", "提议通过SSH在已登记落地机或中转机执行完整命令，可安装节点、运行非交互安装脚本、修改配置、重启服务；完全访问自动执行，逐次确认模式等待批准。先检查目标系统并确认脚本来源和参数，不猜测安装地址；不可在命令中放SSH密码私钥。执行输出实时更新，失败或断线不自动重试。", map[string]any{"server_id": num("已登记服务器ID"), "command": str("完整非交互命令，最多16000字节；没有终端和键盘输入，安装脚本须明确非交互参数"), "timeout_seconds": map[string]any{"type": "integer", "minimum": 30, "maximum": 1800, "default": 120, "description": "最长执行秒数，默认120；安装可选较长时间，最长1800秒"}, "reason": str("原因、风险与可回滚性，最多500字")}, "server_id", "command", "reason")
+	add("propose_entry_host", "修改入口host；完全访问自动执行，逐次确认模式等待批准；保留UA与固定名单，合集成员不支持单独改。", map[string]any{"kind": map[string]any{"type": "string", "enum": []string{"policy", "split_group"}}, "target_id": num("规则/叶子ID"), "host": str("单个域名或IP"), "reason": str("原因与影响")}, "kind", "target_id", "host", "reason")
+	add("propose_node_change", "修改指定节点host/port/show；完全访问自动执行，逐次确认模式等待批准。其他连接字段使用propose_node_update。", map[string]any{"node_type": str("协议"), "node_id": num("节点ID"), "changes": map[string]any{"type": "object", "properties": map[string]any{"host": str("域名或IP"), "port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535}, "show": map[string]any{"type": "integer", "enum": []int{0, 1}}}, "additionalProperties": false}, "reason": str("原因与影响")}, "node_type", "node_id", "changes", "reason")
+	add("monitor_run", "对指定1-10条规则检测，按会话权限执行。检测不直接修改入口，结果仍遵循后台既有自动化配置。", map[string]any{"policy_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer", "minimum": 1}, "minItems": 1, "maxItems": 10, "uniqueItems": true}, "reason": str("检测原因")}, "policy_ids", "reason")
 	out = append(out, userToolDefinitions()...)
 	out = append(out, ticketToolDefinitions()...)
 	out = append(out, probeToolDefinitions()...)
 	out = append(out, entryRuleToolDefinitions()...)
+	out = append(out, entrySplitToolDefinitions()...)
 	out = append(out, nodeToolDefinitions()...)
 	out = append(out, serverToolDefinitions()...)
 	return out
@@ -83,7 +84,10 @@ func (s *Service) toolDefinitions() []ToolDefinition {
 func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call ToolCall) (ToolOutcome, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if err := s.requireAdmin(ctx, actorID); err != nil {
+	if err := s.requireOperator(ctx, actorID); err != nil {
+		return ToolOutcome{}, err
+	}
+	if err := s.requireSessionAccess(ctx, actorID, sessionID); err != nil {
 		return ToolOutcome{}, err
 	}
 	if s.panel == nil {
@@ -104,6 +108,8 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 		return s.callProbeTool(ctx, actorID, sessionID, call)
 	case "entry_rule_detail", "propose_entry_rule_update":
 		return s.callEntryRuleTool(ctx, actorID, sessionID, call)
+	case "entry_split_options", "propose_entry_manual_split", "entry_split_operation", "propose_entry_auto_split", "propose_entry_split":
+		return s.callEntrySplitTool(ctx, actorID, sessionID, call)
 	case "node_detail", "propose_node_update":
 		return s.callNodeTool(ctx, actorID, sessionID, call)
 	case "ssh_server_register":
@@ -383,6 +389,12 @@ func oneOf(s string, v ...string) bool {
 	return false
 }
 func safeAIError(e error) error {
+	if errors.Is(e, admin.ErrAIEntrySplitInvalid) {
+		return e
+	}
+	if errors.Is(e, admin.ErrAIEntrySplitConflict) || errors.Is(e, admin.ErrAIEntryRuleConflict) {
+		return ErrConflict
+	}
 	for _, v := range []error{ErrForbidden, ErrValidation, ErrConflict, ErrNotFound, ErrBusy, ErrUnavailable} {
 		if errors.Is(e, v) {
 			return v
@@ -402,10 +414,14 @@ func safeAIError(e error) error {
 func toolErrorContent(err error) string {
 	code, message := "unavailable", "当前查询暂不可用，请核对后台服务状态；不要连续重复请求"
 	switch {
+	case errors.Is(err, admin.ErrAIEntrySplitInvalid):
+		code, message = "split_unavailable", err.Error()
+	case errors.Is(err, admin.ErrAIEntrySplitConflict), errors.Is(err, admin.ErrAIEntryRuleConflict):
+		code, message = "conflict", "入口配置或名单已变化，请读取最新状态后重新判断"
 	case errors.Is(err, ErrValidation):
 		code, message = "invalid_arguments", "工具参数无效，请按声明字段检查参数和分页范围"
 	case errors.Is(err, ErrForbidden):
-		code, message = "forbidden", "管理员权限已变化，请停止操作"
+		code, message = "forbidden", "运维权限已变化，请停止操作"
 	case errors.Is(err, ErrNotFound):
 		code, message = "not_found", "目标记录不存在，请核对准确ID"
 	case errors.Is(err, ErrConflict):

@@ -154,6 +154,20 @@ FOR SHARE`, requestedByUserID).Scan(&operatorID); err != nil {
 		return 0, fmt.Errorf("authorize manual client entry split: %w", err)
 	}
 
+	operationID, err := requestClientEntryManualAutoSplitTx(ctx, tx, targetID, now)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit manual client entry split: %w", err)
+	}
+	s.wakeClientEntryMonitorEvaluation(ctx)
+	return operationID, nil
+}
+
+// Caller owns authorization and transaction; canonical probe/monitor/target locks
+// and durable operation deduplication are shared by the UI and AI action paths.
+func requestClientEntryManualAutoSplitTx(ctx context.Context, tx *sql.Tx, targetID, now int64) (int64, error) {
 	// A Telegram webhook may be delivered again after the database commit but
 	// before editMessageText succeeds. Return the durable pending operation as
 	// an idempotent success instead of revalidating a now-hidden picker option.
@@ -161,16 +175,12 @@ FOR SHARE`, requestedByUserID).Scan(&operatorID); err != nil {
 	// target -> operation, so taking an operation lock here would deadlock with
 	// the target lock acquired below.
 	var existingOperationID int64
-	err = tx.QueryRowContext(ctx, `SELECT id
+	err := tx.QueryRowContext(ctx, `SELECT id
 FROM v2_client_entry_auto_split_operation
 WHERE target_id = $1 AND status = 'pending'
 ORDER BY id ASC
 LIMIT 1`, targetID).Scan(&existingOperationID)
 	if err == nil {
-		if err := tx.Commit(); err != nil {
-			return 0, fmt.Errorf("commit existing manual client entry split: %w", err)
-		}
-		s.wakeClientEntryMonitorEvaluation(ctx)
 		return existingOperationID, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -285,10 +295,6 @@ RETURNING current_operation.id`, monitorID, targetID, generation, policyID, grou
 	if err != nil {
 		return 0, fmt.Errorf("enqueue manual client entry split: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit manual client entry split: %w", err)
-	}
-	s.wakeClientEntryMonitorEvaluation(ctx)
 	return operationID, nil
 }
 

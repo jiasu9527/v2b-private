@@ -197,10 +197,11 @@ export default function App() {
   const supportOnly = authed && !adminUser.is_admin && !!adminUser.is_staff;
   const staffAppleRoute = path.split('?')[0];
   const staffApplePage = staffAppleRoute === '/apple-id' || staffAppleRoute === '/apple-id/finance';
-  const visibleMenu = supportOnly ? [{ type: 'item', key: '/support/workbench', icon: <SafetyCertificateOutlined />, label: '员工工作台' }] : menu;
+  const staffAIOpsPage = staffAppleRoute === '/config/ai-ops';
+  const visibleMenu = supportOnly ? [{ type: 'item', key: '/support/workbench', icon: <SafetyCertificateOutlined />, label: '员工工作台' }, { type: 'item', key: '/config/ai-ops', icon: <MessageOutlined />, label: 'AI 运维' }] : menu;
   const navItems = visibleMenu.map((item) => item.type === 'heading'
     ? <li key={item.key} className="nav-main-heading">{item.label}</li>
-    : <li key={item.key} className="nav-main-item"><button className={`nav-main-link ${(supportOnly || selected.includes(item.key)) ? 'active' : ''}`} onClick={() => navigate(item.key)}><span className="nav-main-link-icon">{item.icon}</span>{!collapsed && <span className="nav-main-link-name">{item.label}</span>}</button></li>);
+    : <li key={item.key} className="nav-main-item"><button className={`nav-main-link ${(supportOnly ? item.key === (staffAIOpsPage ? '/config/ai-ops' : '/support/workbench') : selected.includes(item.key)) ? 'active' : ''}`} onClick={() => navigate(item.key)}><span className="nav-main-link-icon">{item.icon}</span>{!collapsed && <span className="nav-main-link-name">{item.label}</span>}</button></li>);
   if (authChecking) return <ConfigProvider locale={zhCN}><div className="login-page"><Spin size="large" tip="正在验证后台权限"><div style={{ width: 240, height: 80 }} /></Spin></div></ConfigProvider>;
   if (!authed) return <ConfigProvider locale={zhCN}><Login onDone={(user) => { setAdminUser(user); setAuthed(true); setAuthChecking(false); if (!user.is_admin) { history.replaceState(null, '', `/${adminPath}/support/workbench`); setPath('/support/workbench'); } }} /></ConfigProvider>;
 
@@ -222,7 +223,7 @@ export default function App() {
       {isMobile && !collapsed && <div className="admin-sider-mask" onClick={() => setCollapsed(true)} />}
       <Layout>
         <Header className="admin-header"><Button type="text" aria-label={collapsed ? '展开菜单' : '收起菜单'} icon={collapsed ? <MenuUnfoldOutlined/> : <MenuFoldOutlined/>} onClick={()=>setCollapsed((value)=>!value)} /><div className="header-spacer"/><Dropdown trigger={['click']} menu={{ items: [{ key: 'logout', icon: <LogoutOutlined />, label: '退出登录', onClick: logout }] }}><Button type="text" className="admin-account-button"><Space size={6}><UserOutlined /><span className="admin-account-name" title={adminDisplayName}>{adminDisplayName}</span><DownOutlined /></Space></Button></Dropdown></Header>
-        <Content className="admin-content">{supportOnly ? <SupportWorkbenchPage key={path} initialTab={staffApplePage ? 'apple-id' : 'overview'} appleInitialTab={staffAppleRoute === '/apple-id/finance' ? 'finance' : 'products'} /> : <Page key={path} path={path} />}</Content>
+        <Content className="admin-content">{supportOnly ? staffAIOpsPage ? <AIOpsPage key={path} /> : <SupportWorkbenchPage key={path} initialTab={staffApplePage ? 'apple-id' : 'overview'} appleInitialTab={staffAppleRoute === '/apple-id/finance' ? 'finance' : 'products'} /> : <Page key={path} path={path} />}</Content>
       </Layout>
     </Layout>}
   </ConfigProvider>;

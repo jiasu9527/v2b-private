@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"forest/go-api/internal/admin"
 	"forest/go-api/internal/aiops"
 	"forest/go-api/internal/session"
 )
@@ -35,8 +36,16 @@ func WithAIOps(service aiOpsService) Option {
 func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Service, service aiOpsService, action string) {
 	disableResponseCache(w)
 	w.Header().Set("Vary", "Authorization")
-	actor, ok := authenticateSupportSession(w, r, sessions, true)
+	actor, ok := authenticateSupportSession(w, r, sessions, false)
 	if !ok {
+		return
+	}
+	if actor.IsAdmin == 0 && actor.IsStaff == 0 {
+		handleAIOpsError(w, aiops.ErrForbidden)
+		return
+	}
+	if actor.IsAdmin == 0 && (action == "config/save" || action == "session/clear" || action == "reset") {
+		handleAIOpsError(w, aiops.ErrForbidden)
 		return
 	}
 	if service == nil {
@@ -176,6 +185,10 @@ func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Servic
 func handleAIOpsError(w http.ResponseWriter, err error) {
 	status, msg := 500, "AI 运维操作失败，请核对配置或服务状态后重试"
 	switch {
+	case errors.Is(err, admin.ErrAIEntrySplitInvalid):
+		status, msg = 400, err.Error()
+	case errors.Is(err, admin.ErrAIEntrySplitConflict), errors.Is(err, admin.ErrAIEntryRuleConflict):
+		status, msg = 409, "入口配置或名单已变化，请读取最新状态后重新判断"
 	case errors.Is(err, aiops.ErrForbidden):
 		status, msg = 403, aiops.ErrForbidden.Error()
 	case errors.Is(err, aiops.ErrSSHIntakeInvalid):

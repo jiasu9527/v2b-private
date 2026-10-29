@@ -51,8 +51,8 @@ func (s *Service) captureProbeAction(ctx context.Context, tx *sql.Tx, spec actio
 }
 
 func (s *Service) executeProbeAction(ctx context.Context, a Action, snapshot string) (status, output, problem string) {
-	if err := s.requireAdmin(ctx, a.ApprovedBy); err != nil {
-		return "failed", "", "管理员权限已变化，未发起检测"
+	if err := s.requireOperator(ctx, a.ApprovedBy); err != nil {
+		return "failed", "", "运维权限已变化，未发起检测"
 	}
 	var p probeActionPayload
 	if json.Unmarshal(a.Payload, &p) != nil {

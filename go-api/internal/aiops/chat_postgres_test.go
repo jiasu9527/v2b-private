@@ -177,7 +177,7 @@ func TestAIChatPostgresIntegration(t *testing.T) {
 	mu.Lock()
 	mode = "pending"
 	mu.Unlock()
-	pendingResult, err := s.SendMessage(ctx, actor, SendMessageRequest{Model: DefaultModels[0], Content: "提案入口切换", RequestID: "request-pending-0001"})
+	pendingResult, err := s.SendMessage(ctx, actor, SendMessageRequest{Model: DefaultModels[0], Content: "提案入口切换", AccessMode: "standard", RequestID: "request-pending-0001"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestAIChatPostgresIntegration(t *testing.T) {
 	mu.Lock()
 	mode = "tools"
 	mu.Unlock()
-	tools, err := s.SendMessage(ctx, actor, SendMessageRequest{Model: DefaultModels[0], Content: "测试工具配对", RequestID: "request-tools-0001"})
+	tools, err := s.SendMessage(ctx, actor, SendMessageRequest{Model: DefaultModels[0], Content: "测试工具配对", AccessMode: "standard", RequestID: "request-tools-0001"})
 	if err != nil {
 		t.Fatal(err)
 	}

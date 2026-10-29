@@ -151,12 +151,12 @@ func handleAIOpsStream(w http.ResponseWriter, r *http.Request, sessions session.
 				// Fresh token validation catches session revocation, not only role changes.
 				var identity *session.Identity
 				if fresh, ok := sessions.(freshSessionService); ok {
-					identity, err = fresh.AuthenticateFresh(ctx, token, true)
+					identity, err = fresh.AuthenticateFresh(ctx, token, false)
 				} else {
-					identity, err = sessions.Authenticate(ctx, token, true)
+					identity, err = sessions.Authenticate(ctx, token, false)
 				}
-				if err != nil || identity == nil || identity.ID != actor || identity.IsAdmin == 0 {
-					writeEvent("error", map[string]any{"session_id": id, "message": "管理员会话已失效，请重新登录"})
+				if err != nil || identity == nil || identity.ID != actor || (identity.IsAdmin == 0 && identity.IsStaff == 0) {
+					writeEvent("error", map[string]any{"session_id": id, "message": "运维登录会话已失效，请重新登录"})
 					return
 				}
 				snapshot, err := loadAIOpsSnapshot(ctx, s, tools, actor, id)

@@ -1,6 +1,7 @@
 export const AI_DEFAULT_MODELS = ['gpt-6.1-sol', 'claude-fable-5-1', 'deepseek-v4.1-flash', 'glm-5.3'];
 export type AIAccessMode = 'standard' | 'full';
-export type AIConfig = { enabled: boolean; base_url: string; models: string[]; has_api_key: boolean };
+export const AI_DEFAULT_ACCESS_MODE: AIAccessMode = 'full';
+export type AIConfig = { enabled: boolean; base_url?: string; models: string[]; has_api_key: boolean };
 export type AISession = { id: number; title: string; model: string; created_by: number; status: string; created_at: number; updated_at: number; access_mode?: AIAccessMode; access_version?: number; full_access_by?: number };
 export type AIMessage = { id: number; session_id: number; turn_id: number; role: string; content: string; tool_calls?: { id: string; function: { name: string; arguments: string } }[]; tool_call_id?: string; created_at: number };
 export type AITurn = { id: number; status: string; error: string; created_at: number; completed_at: number; draft_content?: string; draft_round?: number; draft_version?: number; access_mode?: AIAccessMode; stop_requested?: boolean };
@@ -19,6 +20,9 @@ export function aiSessionBusy(detail: AISessionDetail | null): boolean {
 }
 export function aiAccessMode(session?: AISession | null): AIAccessMode {
   return session?.access_mode === 'full' ? 'full' : 'standard';
+}
+export function aiCanReadSession(session: AISession, actorID: number, isAdmin: boolean): boolean {
+  return isAdmin || actorID > 0 && session.created_by === actorID;
 }
 export function aiOwnsFullAccess(session: AISession | null | undefined, actorID: number): boolean {
   return aiAccessMode(session) === 'full' && actorID > 0 && session?.full_access_by === actorID;
