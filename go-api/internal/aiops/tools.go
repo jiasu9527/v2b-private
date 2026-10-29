@@ -49,7 +49,7 @@ func (s *Service) toolDefinitions() []ToolDefinition {
 		out = append(out, ToolDefinition{Type: "function", Function: ToolFunctionDefinition{Name: n, Description: d, Parameters: raw}})
 	}
 	page := func() map[string]any {
-		return map[string]any{"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 50}, "offset": map[string]any{"type": "integer", "minimum": 0, "maximum": 10000}}
+		return map[string]any{"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "最大记录数；输出较大时会返回更少记录，按 next_offset 继续，不要使用 offset+limit"}, "offset": map[string]any{"type": "integer", "minimum": 0, "maximum": 10000}}
 	}
 	add("panel_status", "读取调度器与队列健康，不读取凭据或原始日志。", nil)
 	add("user_lookup", "完整邮箱或ID精确查询普通用户套餐和用量，不含凭据。", map[string]any{"query": str("完整邮箱或正整数ID")}, "query")
@@ -61,11 +61,11 @@ func (s *Service) toolDefinitions() []ToolDefinition {
 	add("nodes_list", "查询节点基础配置和上报状态，不含节点凭据或安装命令。", page())
 	p = page()
 	p["policy_id"] = num("可选精确规则ID")
-	add("entry_rules_list", "查询入口规则/UA/固定分组，指定邮箱仅返回数量。", p)
+	add("entry_rules_list", "查询入口规则/UA/固定分组，指定邮箱仅返回数量；大规则嵌套列表会摘要裁剪并返回总数与truncated，不可将省略的条件视为不存在。按next_offset翻页。", p)
 	add("entry_simulate", "按实际UA和当前规则模拟入口；不改配置。", map[string]any{"email": str("完整邮箱"), "ua": str("实际UA最多1024字节，空表示真实为空")}, "email", "ua")
 	add("entry_health", "读取已有入口检测结果，不发新探测，TCP正常不代表业务全链路正常。", page())
 	add("backup_ips_list", "读取备用IP健康及占用，不清检测状态不领取IP。", page())
-	add("servers_list", "读取管理员登记SSH服务器，不返回密码/私钥。", nil)
+	add("servers_list", "分页读取管理员登记SSH服务器，不返回密码/私钥；按next_offset继续。", page())
 	add("ssh_status", "创建固定只读系统诊断命令的待审批卡片；不立即执行，必须管理员逐次确认。", map[string]any{"server_id": num("已登记SSH服务器ID"), "reason": str("检查原因")}, "server_id", "reason")
 	add("propose_ssh_command", "提议在已登记且固定指纹的SSH服务器执行完整命令，任何命令必须逐次人工审批；不可把密码私钥放入命令。命令与输出可能包含敏感数据。", map[string]any{"server_id": num("已登记服务器ID"), "command": str("完整原命令，最多16000字节"), "reason": str("原因、风险与可回滚性，最多500字")}, "server_id", "command", "reason")
 	add("propose_entry_host", "创建入口host变更待审批卡，不执行；保留UA与固定名单，合集成员不支持单独改。", map[string]any{"kind": map[string]any{"type": "string", "enum": []string{"policy", "split_group"}}, "target_id": num("规则/叶子ID"), "host": str("单个域名或IP"), "reason": str("原因与影响")}, "kind", "target_id", "host", "reason")
@@ -167,7 +167,7 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 			for _, r := range window(rows, a.Limit, start) {
 				items = append(items, projectOrder(r))
 			}
-			result = makePage(items, v.Total, a.Limit, a.Offset)
+			result = boundedPage(items, v.Total, a.Limit, a.Offset, maxToolOutputBytes)
 		}
 	case "nodes_list":
 		var v []map[string]any
@@ -177,7 +177,7 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 			for _, r := range window(v, a.Limit, a.Offset) {
 				items = append(items, projectNode(r))
 			}
-			result = makePage(items, int64(len(v)), a.Limit, a.Offset)
+			result = boundedPage(items, int64(len(v)), a.Limit, a.Offset, maxToolOutputBytes)
 		}
 	case "entry_rules_list":
 		if a.PolicyID < 0 {
@@ -196,7 +196,7 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 			for _, r := range window(rows, a.Limit, a.Offset) {
 				items = append(items, projectRule(r))
 			}
-			result = makePage(items, int64(len(rows)), a.Limit, a.Offset)
+			result = boundedPage(items, int64(len(rows)), a.Limit, a.Offset, maxToolOutputBytes)
 		}
 	case "entry_simulate":
 		if !validAIEmail(a.Email) || len(a.UA) > 1024 {
@@ -241,10 +241,14 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 			for _, r := range window(v.Items, a.Limit, a.Offset) {
 				items = append(items, projectBackup(r))
 			}
-			result = makePage(items, int64(len(v.Items)), a.Limit, a.Offset)
+			result = boundedPage(items, int64(len(v.Items)), a.Limit, a.Offset, maxToolOutputBytes)
 		}
 	case "servers_list":
-		result, err = s.ListServers(ctx, actorID)
+		var v []Server
+		v, err = s.ListServers(ctx, actorID)
+		if err == nil {
+			result = boundedPage(window(v, a.Limit, a.Offset), int64(len(v)), a.Limit, a.Offset, maxToolOutputBytes)
+		}
 	case "ssh_status", "propose_ssh_command", "propose_entry_host", "propose_node_change", "monitor_run":
 		spec := actionSpec{Reason: a.Reason}
 		switch call.Function.Name {
@@ -273,7 +277,14 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 			spec.Kind = "monitor_run"
 			spec.Payload, _ = json.Marshal(monitorPayload{PolicyIDs: a.PolicyIDs})
 		}
-		result, err = s.proposeAction(ctx, actorID, sessionID, call.ID, spec)
+		var action Action
+		action, err = s.proposeAction(ctx, actorID, sessionID, call.ID, spec)
+		if err == nil {
+			// The full immutable payload is available in the human-review card.
+			// Do not duplicate a long command or 100 monitor targets in the model
+			// result and accidentally lose Pending when a byte limit is reached.
+			result = actionToolSummary(action)
+		}
 		pending = err == nil
 	default:
 		return ToolOutcome{}, ErrValidation
@@ -285,10 +296,14 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 	if e != nil {
 		return ToolOutcome{}, ErrUnavailable
 	}
-	if len(raw) > 64<<10 {
-		return ToolOutcome{Content: `{"error":"结果过大，请减少limit或缩小查询范围"}`}, nil
+	if len(raw) > maxToolOutputBytes {
+		return ToolOutcome{Content: `{"status":"error","code":"output_too_large","message":"单项结果仍过大，请按精确ID缩小范围或在后台查看详情"}`, Pending: pending}, nil
 	}
 	return ToolOutcome{Content: string(raw), Pending: pending}, nil
+}
+
+func actionToolSummary(action Action) map[string]any {
+	return map[string]any{"action_id": action.ID, "session_id": action.SessionID, "kind": action.Kind, "status": action.Status, "target_id": action.TargetID, "target_type": action.TargetType, "expires_at": action.ExpiresAt, "message": "待人工确认，尚未执行；完整目标与命令请在操作审核卡查看"}
 }
 
 // Enforce the per-tool allowlist server-side, not just in the provider's JSON
@@ -344,8 +359,33 @@ func safeAIError(e error) error {
 			return v
 		}
 	}
-	if errors.Is(e, context.DeadlineExceeded) || errors.Is(e, context.Canceled) {
-		return errors.New("操作超时或取消，请核对后台状态，禁止自动重试写操作")
+	if errors.Is(e, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	if errors.Is(e, context.Canceled) {
+		return context.Canceled
 	}
 	return ErrUnavailable
+}
+
+// Only fixed error categories reach the model. SQL, network error bodies and
+// administrator credentials must never be copied into a tool result.
+func toolErrorContent(err error) string {
+	code, message := "unavailable", "当前查询暂不可用，请核对后台服务状态；不要连续重复请求"
+	switch {
+	case errors.Is(err, ErrValidation):
+		code, message = "invalid_arguments", "工具参数无效，请按声明字段检查参数和分页范围"
+	case errors.Is(err, ErrForbidden):
+		code, message = "forbidden", "管理员权限已变化，请停止操作"
+	case errors.Is(err, ErrNotFound):
+		code, message = "not_found", "目标记录不存在，请核对准确ID"
+	case errors.Is(err, ErrConflict):
+		code, message = "conflict", "目标配置或操作状态已变化，请先刷新核对，不要重复写操作"
+	case errors.Is(err, ErrBusy):
+		code, message = "busy", "另一个请求正在处理，请稍后核对结果，不要重复写操作"
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		code, message = "timeout", "查询超时或取消，请缩小查询范围；禁止自动重试写操作"
+	}
+	raw, _ := json.Marshal(map[string]string{"status": "error", "code": code, "message": message})
+	return string(raw)
 }

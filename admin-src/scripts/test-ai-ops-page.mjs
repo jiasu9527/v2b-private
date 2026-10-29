@@ -116,3 +116,60 @@ test('an unconfigured disabled provider can be saved and enabling it requires it
   assert.ok(baseURLField.includes("required: !!getFieldValue('enabled')"));
   assert.ok(baseURLField.includes("whitespace: !!getFieldValue('enabled')"));
 });
+
+const extra = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
+test('Enter sends only once; Shift+Enter, IME composition and held keys never send', () => {
+  assert.equal(extra.aiShouldSendKey({key:'Enter'}),true);
+  for (const option of ['shiftKey','ctrlKey','altKey','metaKey','repeat','isComposing']) assert.equal(extra.aiShouldSendKey({key:'Enter',[option]:true}),false);
+  assert.equal(extra.aiShouldSendKey({key:'Enter',keyCode:229}),false);
+  assert.equal(extra.aiShouldSendKey({key:'Enter'},true),false);
+  assert.equal(extra.aiShouldSendKey({key:'a'}),false);
+  assert.match(page,/event\.preventDefault\(\); void send\(\)/);
+  assert.match(page,/onCompositionStart/); assert.match(page,/onCompositionEnd/);
+});
+
+test('tools and commands are collapsed by default but approval dialog always shows full command', () => {
+  assert.match(page,/if \(!ordinaryText\) return <Collapse/);
+  assert.match(page,/className="ai-ops-tool-calls"/);
+  assert.match(page,/className="ai-ops-action-details"/);
+  assert.doesNotMatch(page,/defaultActiveKey|activeKey=\{\[/);
+  const modal=page.slice(page.indexOf('<Modal title={review?.decision'));
+  assert.match(modal,/<ActionDetails action=\{review.action\}/);
+});
+
+test('draft snapshots are monotonic, session-scoped, and never duplicate final assistant messages', () => {
+  const base={session:{id:1,status:'running'},messages:[],actions:[],turns:[{id:10,status:'running',draft_round:1,draft_content:'你好'}]};
+  const newer={session_id:1,turn_id:10,round:1,content:'你好世界'};
+  const next=extra.aiApplyDraft(base,newer);
+  assert.equal(next.turns[0].draft_content,'你好世界');
+  assert.equal(extra.aiApplyDraft(next,{...newer,content:'你'}),next);
+  assert.equal(extra.aiApplyDraft(next,{...newer,session_id:2}),next);
+  assert.equal(extra.aiApplyDraft(next,{...newer,round:0}),next);
+  assert.equal(extra.aiVisibleDraft(next).draft_content,'你好世界');
+  assert.equal(extra.aiVisibleDraft({...next,messages:[{turn_id:10,role:'assistant',content:'你好世界'}]}),undefined);
+  assert.equal(extra.aiVisibleDraft({...next,turns:[{...next.turns[0],status:'completed'}]}),undefined);
+  assert.equal(extra.aiApplyDraft(next,{...newer,round:2,content:''}).turns[0].draft_content,'');
+  assert.equal(extra.aiApplyDraft(next,{...newer,status:'completed',content:''}).turns[0].draft_content,'');
+  assert.equal(extra.aiMergeSnapshot(next,base).turns[0].draft_content,'你好世界');
+  assert.equal(extra.aiMergeSnapshot(next,{...base,turns:[{id:10,status:'completed',draft_content:''}]}).turns[0].draft_content,'');
+});
+
+test('streaming follows only a reader at the bottom; idle sessions use polling fallback', () => {
+  assert.equal(extra.aiNearBottom(0,500,2000),false);
+  assert.equal(extra.aiNearBottom(1450,500,2000),true);
+  assert.match(page,/pane && followOutput.current/);
+  assert.match(page,/onScroll=.*aiNearBottom/);
+  assert.match(page,/const streamWanted = tab === 'chat'.*aiSessionBusy/);
+  assert.match(page,/if \(!streamWanted\) return/);
+  assert.match(page,/streamActive.current \|\| pollRunning/);
+});
+
+test('draft versions preserve explicit clears and reject stale snapshots from another connection',()=>{
+ const base={session:{id:1,status:'running'},messages:[],actions:[],turns:[{id:10,status:'running',draft_round:1,draft_content:'长文本',draft_version:5}]};
+ const cleared=extra.aiApplyDraft(base,{session_id:1,turn_id:10,round:1,content:'',version:6});
+ assert.equal(cleared.turns[0].draft_content,'');
+ assert.equal(extra.aiApplyDraft(cleared,{session_id:1,turn_id:10,round:1,content:'长文本',version:5}),cleared);
+ assert.equal(extra.aiMergeSnapshot(cleared,base).turns[0].draft_content,'');
+ const completed={...base,turns:[{id:10,status:'completed',draft_version:7,draft_content:''}]};
+ assert.equal(extra.aiMergeSnapshot(base,completed).turns[0].status,'completed');
+});

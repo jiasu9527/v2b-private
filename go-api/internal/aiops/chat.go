@@ -260,6 +260,10 @@ func (s *Service) appendMessages(ctx context.Context, actorID, sessionID, turnID
 			return err
 		}
 	}
+	// Replace the transient streamed draft atomically with the final messages.
+	if _, err = tx.ExecContext(ctx, `UPDATE v2_ai_turn SET draft_content='',draft_version=draft_version+1 WHERE id=$1 AND session_id=$2`, turnID, sessionID); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 func (s *Service) finishTurn(sessionID, turnID int64, status, errText string) {
@@ -276,7 +280,7 @@ func (s *Service) finishTurn(sessionID, turnID int64, status, errText string) {
 	if err = s.requireSessionTx(ctx, tx, sessionID); err != nil {
 		return
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE v2_ai_turn SET status=$2,error=$3,completed_at=$4 WHERE id=$1 AND session_id=$5 AND status='running'`, turnID, status, errText, time.Now().Unix(), sessionID)
+	result, err := tx.ExecContext(ctx, `UPDATE v2_ai_turn SET status=$2,error=$3,completed_at=$4,draft_content='',draft_version=draft_version+1 WHERE id=$1 AND session_id=$5 AND status='running'`, turnID, status, errText, time.Now().Unix(), sessionID)
 	if err != nil {
 		return
 	}
@@ -308,7 +312,20 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 			errText = "管理员权限已变化，处理已停止"
 			return
 		}
-		assistant, err := s.complete(ctx, model, messages)
+		if err = s.updateDraft(ctx, actorID, sessionID, turnID, round+1, ""); err != nil {
+			return
+		}
+		lastWrite := time.Time{}
+		assistant, err := s.completeStream(ctx, model, messages, func(content string) error {
+			if time.Since(lastWrite) < 600*time.Millisecond {
+				return nil
+			}
+			if err := s.updateDraft(ctx, actorID, sessionID, turnID, round+1, content); err != nil {
+				return err
+			}
+			lastWrite = time.Now()
+			return nil
+		})
 		if err != nil {
 			errText = err.Error()
 			return
@@ -332,7 +349,7 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 				namespacedCall.ID = fmt.Sprintf("turn:%d:%s", turnID, call.ID)
 				result, err = s.callTool(ctx, actorID, sessionID, namespacedCall)
 				if err != nil {
-					result = ToolOutcome{Content: `{"status":"error","message":"工具调用失败，请核对参数或稍后重试"}`}
+					result = ToolOutcome{Content: toolErrorContent(err)}
 				}
 			}
 			if len(result.Content) > 32000 {

@@ -2,7 +2,7 @@ export const AI_DEFAULT_MODELS = ['gpt-6.1-sol', 'claude-fable-5-1', 'deepseek-v
 export type AIConfig = { enabled: boolean; base_url: string; models: string[]; has_api_key: boolean };
 export type AISession = { id: number; title: string; model: string; created_by: number; status: string; created_at: number; updated_at: number };
 export type AIMessage = { id: number; session_id: number; turn_id: number; role: string; content: string; tool_calls?: { id: string; function: { name: string; arguments: string } }[]; tool_call_id?: string; created_at: number };
-export type AITurn = { id: number; status: string; error: string; created_at: number; completed_at: number };
+export type AITurn = { id: number; status: string; error: string; created_at: number; completed_at: number; draft_content?: string; draft_round?: number; draft_version?: number };
 export type AIAction = { id: number; session_id: number; actor_id: number; approved_by?: number; rejected_by?: number; tool_call_id: string; kind: string; target_id: number; target_type: string; server_label: string; payload: Record<string, unknown>; reason: string; status: string; expires_at: number; claimed_at: number; completed_at: number; output: string; error: string; created_at: number; updated_at: number };
 export type AISessionDetail = { session: AISession; messages: AIMessage[]; turns: AITurn[]; actions: AIAction[] };
 export type AIServer = { id: number; name: string; host: string; port: number; username: string; host_key_sha256: string; enabled: boolean; version: number; has_password: boolean; has_private_key: boolean; has_key_passphrase: boolean; created_at: number; updated_at: number };
@@ -29,4 +29,40 @@ export function aiRequestID(): string {
 }
 export function aiFingerprintMatches(observed: AIFingerprint | null, host: unknown, port: unknown): boolean {
   return !!observed && observed.host === String(host || '').trim() && observed.port === Number(port || 22);
+}
+
+export type AIDraft = { session_id: number; turn_id: number; round: number; content: string; status?: string; version?: number };
+export function aiApplyDraft(detail: AISessionDetail | null, draft: AIDraft): AISessionDetail | null {
+  if (!detail || draft.session_id !== detail.session.id || typeof draft.content !== 'string' || !Number.isInteger(draft.round) || draft.round < 0) return detail;
+  const turn = detail.turns.find((item) => item.id === draft.turn_id);
+  if (!turn || turn.status !== 'running') return detail;
+  const versioned = Number.isSafeInteger(draft.version) && draft.version! >= 0;
+  if (versioned ? draft.version! < (turn.draft_version || 0) : draft.round < (turn.draft_round || 0)) return detail;
+  if (draft.status && draft.status !== 'running') return { ...detail, turns: detail.turns.map((item) => item.id === turn.id ? { ...item, status: draft.status!, draft_content: '', draft_version: draft.version ?? item.draft_version } : item) };
+  if (!versioned && draft.round === (turn.draft_round || 0) && draft.content.length < (turn.draft_content || '').length) return detail;
+  return { ...detail, turns: detail.turns.map((item) => item.id === turn.id ? { ...item, draft_round: draft.round, draft_content: draft.content, draft_version: draft.version ?? item.draft_version } : item) };
+}
+export function aiMergeSnapshot(previous: AISessionDetail | null, incoming: AISessionDetail): AISessionDetail {
+  if (!previous || previous.session.id !== incoming.session.id) return incoming;
+  let next = incoming;
+  for (const turn of previous.turns) {
+    const incomingTurn = incoming.turns.find((item) => item.id === turn.id);
+    if (!incomingTurn || turn.status !== 'running' || incomingTurn.status !== 'running') continue;
+    if (turn.draft_version !== undefined && turn.draft_version <= (incomingTurn.draft_version || 0)) continue;
+    if (turn.draft_content || turn.draft_version !== undefined) next = aiApplyDraft(next, { session_id: incoming.session.id, turn_id: turn.id, round: turn.draft_round || 0, content: turn.draft_content || '', version: turn.draft_version }) || next;
+  }
+  return next;
+}
+export function aiVisibleDraft(detail: AISessionDetail | null): AITurn | undefined {
+  if (!detail) return undefined;
+  const turn = aiLatestTurn(detail.turns);
+  if (!turn || turn.status !== 'running' || !turn.draft_content) return undefined;
+  if (detail.messages.some((message) => message.turn_id === turn.id && message.role === 'assistant' && message.content === turn.draft_content)) return undefined;
+  return turn;
+}
+export function aiShouldSendKey(event: { key: string; shiftKey?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean; repeat?: boolean; isComposing?: boolean; keyCode?: number }, composing = false): boolean {
+  return event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.repeat && !event.isComposing && event.keyCode !== 229 && !composing;
+}
+export function aiNearBottom(scrollTop: number, clientHeight: number, scrollHeight: number): boolean {
+  return scrollHeight - scrollTop - clientHeight <= 80;
 }

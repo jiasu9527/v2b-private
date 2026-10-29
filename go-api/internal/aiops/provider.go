@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -45,6 +46,12 @@ type completionResponse struct {
 }
 
 func (s *Service) complete(ctx context.Context, model string, messages []providerMessage) (providerMessage, error) {
+	return s.completeStream(ctx, model, messages, nil)
+}
+
+// onContent receives the accumulated public answer, never reasoning or tool
+// arguments. Tool requests are returned only after a complete valid response.
+func (s *Service) completeStream(ctx context.Context, model string, messages []providerMessage, onContent func(string) error) (providerMessage, error) {
 	var empty providerMessage
 	cfg, cipher, err := s.loadConfig(ctx)
 	if err != nil || !cfg.Enabled {
@@ -67,7 +74,7 @@ func (s *Service) complete(ctx context.Context, model string, messages []provide
 	if err != nil || base == "" {
 		return empty, errors.New("AI 中转地址无效")
 	}
-	payload, err := json.Marshal(completionRequest{Model: model, Messages: messages, Tools: s.toolDefinitions(), ToolChoice: "auto", MaxTokens: 4096})
+	payload, err := json.Marshal(completionRequest{Model: model, Messages: messages, Tools: s.toolDefinitions(), ToolChoice: "auto", Stream: true, MaxTokens: 4096})
 	if err != nil || len(payload) > 512<<10 {
 		return empty, errors.New("对话上下文过长，请新建会话")
 	}
@@ -76,6 +83,7 @@ func (s *Service) complete(ctx context.Context, model string, messages []provide
 		return empty, errors.New("无法创建 AI 请求")
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream, application/json")
 	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -85,6 +93,12 @@ func (s *Service) complete(ctx context.Context, model string, messages []provide
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return empty, providerResponseError(resp.StatusCode, resp.Body)
 	}
+	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if mediaType == "text/event-stream" {
+		return readCompletionStream(ctx, resp.Body, onContent)
+	}
+	// Some compatible relays ignore stream=true. Accept their single JSON
+	// response without making a second paid request or changing the model.
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, (512<<10)+1))
 	if err != nil || len(raw) > 512<<10 {
 		return empty, errors.New("AI 响应过大或读取失败")
@@ -98,20 +112,35 @@ func (s *Service) complete(ctx context.Context, model string, messages []provide
 	if choice.Message.Content != nil {
 		out.Content = *choice.Message.Content
 	}
+	if choice.FinishReason != "" && choice.FinishReason != "stop" && choice.FinishReason != "tool_calls" {
+		return empty, errors.New("AI 响应未完整结束，未执行工具；请检查模型输出限制")
+	}
+	if err = validateCompletion(out); err != nil {
+		return empty, err
+	}
+	if onContent != nil && out.Content != "" {
+		if err = onContent(out.Content); err != nil {
+			return empty, errors.New("AI 回复更新已中止")
+		}
+	}
+	return out, nil
+}
+
+func validateCompletion(out providerMessage) error {
 	if len(out.Content) > 32000 || len(out.ToolCalls) > 8 {
-		return empty, errors.New("AI 响应超出单轮限制")
+		return errors.New("AI 响应超出单轮限制")
 	}
 	seen := map[string]bool{}
 	for _, call := range out.ToolCalls {
 		if call.ID == "" || len(call.ID) > 200 || seen[call.ID] || call.Type != "function" || call.Function.Name == "" || len(call.Function.Name) > 100 || len(call.Function.Arguments) > 16000 || !json.Valid([]byte(call.Function.Arguments)) || !strings.HasPrefix(strings.TrimSpace(call.Function.Arguments), "{") {
-			return empty, errors.New("AI 工具请求格式无效")
+			return errors.New("AI 工具请求格式无效")
 		}
 		seen[call.ID] = true
 	}
 	if out.Content == "" && len(out.ToolCalls) == 0 {
-		return empty, errors.New("AI 未返回有效内容")
+		return errors.New("AI 未返回有效内容")
 	}
-	return out, nil
+	return nil
 }
 
 // Relay error messages can echo credentials, request content or HTML. Inspect

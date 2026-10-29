@@ -42,13 +42,16 @@ type Session struct {
 	UpdatedAt int64  `json:"updated_at"`
 }
 type Turn struct {
-	ID          int64  `json:"id"`
-	SessionID   int64  `json:"session_id"`
-	RequestID   string `json:"request_id"`
-	Status      string `json:"status"`
-	Error       string `json:"error"`
-	CreatedAt   int64  `json:"created_at"`
-	CompletedAt int64  `json:"completed_at"`
+	ID           int64  `json:"id"`
+	SessionID    int64  `json:"session_id"`
+	RequestID    string `json:"request_id"`
+	Status       string `json:"status"`
+	Error        string `json:"error"`
+	CreatedAt    int64  `json:"created_at"`
+	CompletedAt  int64  `json:"completed_at"`
+	DraftContent string `json:"draft_content"`
+	DraftRound   int    `json:"draft_round"`
+	DraftVersion int64  `json:"draft_version"`
 }
 type Message struct {
 	ID         int64      `json:"id"`

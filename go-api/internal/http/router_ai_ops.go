@@ -40,7 +40,7 @@ func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Servic
 	}
 	expected := "POST"
 	switch action {
-	case "config", "sessions", "session", "servers":
+	case "config", "sessions", "session", "session/stream", "servers":
 		expected = "GET"
 	case "config/save", "session/create", "chat/send", "session/delete", "session/clear", "reset", "server/save", "server/delete", "server/fingerprint", "action/approve", "action/reject":
 	default:
@@ -50,6 +50,10 @@ func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Servic
 	if r.Method != expected {
 		w.Header().Set("Allow", expected)
 		writeJSON(w, 405, map[string]string{"message": "Method not allowed"})
+		return
+	}
+	if action == "session/stream" {
+		handleAIOpsStream(w, r, sessions, service, actor.ID)
 		return
 	}
 	// Chat/model and SSH command execution are asynchronous. Short management

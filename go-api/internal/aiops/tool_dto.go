@@ -11,13 +11,19 @@ import (
 // These DTOs are intentionally separate from admin DTOs. Adding a password,
 // token or config field to an admin response must not expand AI model exposure.
 type pageDTO[T any] struct {
-	Items      []T   `json:"items"`
-	Total      int64 `json:"total"`
-	Limit      int   `json:"limit"`
-	Offset     int   `json:"offset"`
-	NextOffset *int  `json:"next_offset,omitempty"`
-	Truncated  bool  `json:"truncated"`
+	Items       []T   `json:"items"`
+	Total       int64 `json:"total"`
+	Limit       int   `json:"limit"`
+	Offset      int   `json:"offset"`
+	NextOffset  *int  `json:"next_offset,omitempty"`
+	Truncated   bool  `json:"truncated"`
+	SizeLimited bool  `json:"size_limited,omitempty"`
 }
+
+// Keep every tool result below the chat persistence/context guard. Items are
+// projected and individually bounded before this page budget is applied.
+const maxToolOutputBytes = 30000
+const maxToolItemBytes = 16000
 
 func makePage[T any](items []T, total int64, limit, offset int) pageDTO[T] {
 	p := pageDTO[T]{Items: items, Total: total, Limit: limit, Offset: offset}
@@ -27,6 +33,41 @@ func makePage[T any](items []T, total int64, limit, offset int) pageDTO[T] {
 		p.NextOffset = &next
 	}
 	return p
+}
+
+func boundedPage[T any](items []T, total int64, limit, offset, budget int) pageDTO[T] {
+	if items == nil {
+		items = []T{}
+	}
+	build := func(count int) pageDTO[T] {
+		p := makePage(items[:count], total, limit, offset)
+		p.SizeLimited = count < len(items)
+		return p
+	}
+	full := build(len(items))
+	if jsonSize(full) <= budget || len(items) <= 1 {
+		return full
+	}
+	// Find the largest fitting prefix without O(n²) JSON work for long pages.
+	// A single item is pre-bounded below maxToolItemBytes by its projection.
+	low, high := 1, len(items)-1
+	for low < high {
+		middle := (low + high + 1) / 2
+		if jsonSize(build(middle)) <= budget {
+			low = middle
+		} else {
+			high = middle - 1
+		}
+	}
+	return build(low)
+}
+
+func jsonSize(value any) int {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return maxToolOutputBytes + 1
+	}
+	return len(raw)
 }
 func window[T any](items []T, limit, offset int) []T {
 	if offset >= len(items) {
@@ -94,6 +135,47 @@ func scalarList(v any) []string {
 	return out
 }
 
+// A single rule may contain many long UA values and hundreds of split leaves.
+// Return a useful rule summary rather than losing the entire result. All
+// omitted collections retain their original count and explicit truncation flag.
+func boundRule(out ruleDTO) ruleDTO {
+	for jsonSize(out) > maxToolItemBytes {
+		switch {
+		case len(out.Groups) > 4:
+			out.Groups = out.Groups[:len(out.Groups)/2]
+			out.GroupsTruncated = true
+		case len(out.Members) > 4:
+			out.Members = out.Members[:len(out.Members)/2]
+			out.MembersTruncated = true
+		default:
+			reduced := false
+			for i := range out.Conditions {
+				c := &out.Conditions[i]
+				if len(c.Values) > 0 {
+					c.Values = c.Values[:len(c.Values)/2]
+					c.ValuesTruncated = true
+					reduced = true
+				}
+			}
+			if reduced {
+				continue
+			} else if len(out.Conditions) > 0 {
+				out.Conditions = out.Conditions[:len(out.Conditions)/2]
+				out.ConditionsTruncated = true
+			} else if len(out.Groups) > 0 {
+				out.Groups = out.Groups[:len(out.Groups)/2]
+				out.GroupsTruncated = true
+			} else if len(out.Members) > 0 {
+				out.Members = out.Members[:len(out.Members)/2]
+				out.MembersTruncated = true
+			} else {
+				return out
+			}
+		}
+	}
+	return out
+}
+
 type panelDTO struct {
 	Schedule            bool   `json:"schedule"`
 	Horizon             bool   `json:"horizon"`
@@ -148,18 +230,19 @@ func projectOrder(m map[string]any) orderDTO {
 }
 
 type nodeDTO struct {
-	ID              int64    `json:"id"`
-	Type            string   `json:"type"`
-	Name            string   `json:"name"`
-	Host            string   `json:"host"`
-	Port            string   `json:"port"`
-	ServerPort      int64    `json:"server_port"`
-	Visible         bool     `json:"visible"`
-	GroupIDs        []string `json:"group_ids"`
-	Online          int64    `json:"online"`
-	LastCheckAt     int64    `json:"last_check_at"`
-	LastPushAt      int64    `json:"last_push_at"`
-	AvailableStatus int64    `json:"available_status"`
+	ID                int64    `json:"id"`
+	Type              string   `json:"type"`
+	Name              string   `json:"name"`
+	Host              string   `json:"host"`
+	Port              string   `json:"port"`
+	ServerPort        int64    `json:"server_port"`
+	Visible           bool     `json:"visible"`
+	GroupIDs          []string `json:"group_ids"`
+	GroupIDsTruncated bool     `json:"group_ids_truncated"`
+	Online            int64    `json:"online"`
+	LastCheckAt       int64    `json:"last_check_at"`
+	LastPushAt        int64    `json:"last_push_at"`
+	AvailableStatus   int64    `json:"available_status"`
 }
 
 func projectNode(m map[string]any) nodeDTO {
@@ -167,7 +250,18 @@ func projectNode(m map[string]any) nodeDTO {
 	if port == "" {
 		port = strconv.FormatInt(integer(m, "port"), 10)
 	}
-	return nodeDTO{ID: integer(m, "id"), Type: text(m, "type", 20), Name: text(m, "name", 128), Host: text(m, "host", 255), Port: port, ServerPort: integer(m, "server_port"), Visible: integer(m, "show") != 0, GroupIDs: scalarList(m["group_id"]), Online: integer(m, "online"), LastCheckAt: integer(m, "last_check_at"), LastPushAt: integer(m, "last_push_at"), AvailableStatus: integer(m, "available_status")}
+	out := nodeDTO{ID: integer(m, "id"), Type: text(m, "type", 20), Name: text(m, "name", 128), Host: text(m, "host", 255), Port: port, ServerPort: integer(m, "server_port"), Visible: integer(m, "show") != 0, GroupIDs: scalarList(m["group_id"]), Online: integer(m, "online"), LastCheckAt: integer(m, "last_check_at"), LastPushAt: integer(m, "last_push_at"), AvailableStatus: integer(m, "available_status")}
+	switch ids := m["group_id"].(type) {
+	case []string:
+		out.GroupIDsTruncated = len(ids) > len(out.GroupIDs)
+	case []any:
+		out.GroupIDsTruncated = len(ids) > len(out.GroupIDs)
+	}
+	for jsonSize(out) > maxToolItemBytes && len(out.GroupIDs) > 0 {
+		out.GroupIDs = out.GroupIDs[:len(out.GroupIDs)/2]
+		out.GroupIDsTruncated = true
+	}
+	return out
 }
 
 type conditionDTO struct {
@@ -229,7 +323,7 @@ func rawScalar(raw json.RawMessage) string {
 	return ""
 }
 func projectRule(r admin.ClientEntryUserPolicyRecord) ruleDTO {
-	out := ruleDTO{ID: r.ID, Name: clip(r.Name, 128), Mode: r.Mode, Action: r.Action, Sort: r.Sort, Enabled: r.Enabled != 0, EntryHost: clip(r.EntryHost, 255), ResolveHost: r.ResolveEntryHost != 0, SnapshotUsers: r.SnapshotUserCount, Conditions: []conditionDTO{}, Members: []memberDTO{}, Groups: []leafDTO{}, ConditionsTotal: len(r.Conditions), MembersTotal: len(r.Members), GroupsTotal: len(r.SplitGroups), ConditionsTruncated: len(r.Conditions) > 20, MembersTruncated: len(r.Members) > 50, GroupsTruncated: len(r.SplitGroups) > 50}
+	out := ruleDTO{ID: r.ID, Name: clip(r.Name, 128), Mode: clip(r.Mode, 32), Action: clip(r.Action, 32), Sort: r.Sort, Enabled: r.Enabled != 0, EntryHost: clip(r.EntryHost, 255), ResolveHost: r.ResolveEntryHost != 0, SnapshotUsers: r.SnapshotUserCount, Conditions: []conditionDTO{}, Members: []memberDTO{}, Groups: []leafDTO{}, ConditionsTotal: len(r.Conditions), MembersTotal: len(r.Members), GroupsTotal: len(r.SplitGroups), ConditionsTruncated: len(r.Conditions) > 20, MembersTruncated: len(r.Members) > 50, GroupsTruncated: len(r.SplitGroups) > 50}
 	for _, c := range window(r.Conditions, 20, 0) {
 		item := conditionDTO{Field: clip(c.Field, 32), Operator: clip(c.Operator, 32), ValueCount: len(c.Values)}
 		if strings.EqualFold(c.Field, "email") {
@@ -252,7 +346,7 @@ func projectRule(r admin.ClientEntryUserPolicyRecord) ruleDTO {
 	for _, g := range window(r.SplitGroups, 50, 0) {
 		out.Groups = append(out.Groups, leafDTO{ID: g.ID, Name: clip(g.Name, 128), Path: clip(g.Path, 128), EntryHost: clip(g.EntryHost, 255), UserCount: g.UserCount, IsLeaf: g.IsLeaf, GlobalSort: g.GlobalSort})
 	}
-	return out
+	return boundRule(out)
 }
 
 type simulationUserDTO struct {
@@ -319,9 +413,24 @@ func projectHealth(v admin.SupportEntryOverview, status string, limit, offset in
 		for _, p := range window(r.Probes, 20, 0) {
 			o.Probes = append(o.Probes, probeDTO{ID: p.ProbeID, Name: clip(p.ProbeName, 128), Online: p.Online, Status: clip(p.Status, 64), Success: p.LastSuccess, LatencyMS: p.LastLatencyMS, ReportedAt: p.LastReportedAt})
 		}
+		for jsonSize(o) > maxToolItemBytes {
+			if len(o.Sources) > 0 && (len(o.Probes) == 0 || jsonSize(o.Sources) >= jsonSize(o.Probes)) {
+				o.Sources = o.Sources[:len(o.Sources)/2]
+				o.SourcesTruncated = true
+			} else if len(o.Probes) > 0 {
+				o.Probes = o.Probes[:len(o.Probes)/2]
+				o.ProbesTruncated = true
+			} else {
+				break
+			}
+		}
 		items = append(items, o)
 	}
-	return healthDTO{GeneratedAt: v.GeneratedAt, Coverage: clip(v.Coverage, 128), Summary: v.Summary, Entries: makePage(items, int64(len(filtered)), limit, offset)}
+	out := healthDTO{GeneratedAt: v.GeneratedAt, Coverage: clip(v.Coverage, 128), Summary: v.Summary}
+	// Account for the health envelope and aggregate summary, not just items.
+	budget := maxToolOutputBytes - jsonSize(out) - 64
+	out.Entries = boundedPage(items, int64(len(filtered)), limit, offset, budget)
+	return out
 }
 
 type usageDTO struct {
@@ -351,6 +460,10 @@ func projectBackup(r admin.ClientEntryBackupIPRecord) backupDTO {
 	o := backupDTO{ID: r.ID, Name: clip(r.Name, 128), IP: clip(r.IP, 64), Port: r.Port, Enabled: r.Enabled, Available: r.Available, Used: r.Used, Status: clip(r.Status, 64), QuarantineUntil: r.QuarantineUntil, OnlineProbes: r.OnlineProbeCount, HealthyProbes: r.HealthyProbeCount, Usages: []usageDTO{}, UsageCount: len(r.Usages), UsagesTruncated: len(r.Usages) > 20}
 	for _, u := range window(r.Usages, 20, 0) {
 		o.Usages = append(o.Usages, usageDTO{Kind: clip(u.Kind, 32), PolicyID: u.PolicyID, GroupID: u.SplitGroupID, Name: clip(u.PolicyName, 128)})
+	}
+	for jsonSize(o) > maxToolItemBytes && len(o.Usages) > 0 {
+		o.Usages = o.Usages[:len(o.Usages)/2]
+		o.UsagesTruncated = true
 	}
 	return o
 }

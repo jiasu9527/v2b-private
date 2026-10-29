@@ -2,7 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Form, Input, InputNumber, Modal, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
 import { DeleteOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SendOutlined } from '@ant-design/icons';
 import { apiGet, apiJsonPost } from '../lib/api';
-import { AI_DEFAULT_MODELS, aiActionStatus, aiCanApprove, aiFingerprintMatches, aiLatestTurn, aiParseModels, aiRequestID, aiSessionBusy, type AIAction, type AIConfig, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
+import { AI_DEFAULT_MODELS, aiActionStatus, aiApplyDraft, aiCanApprove, aiFingerprintMatches, aiLatestTurn, aiMergeSnapshot, aiNearBottom, aiParseModels, aiRequestID, aiSessionBusy, aiShouldSendKey, aiVisibleDraft, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
+import { aiReadSessionStream } from './aiOpsStream';
+import AIOpsMarkdown from './AIOpsMarkdown';
 import './AIOpsPage.css';
 
 const { Text, Paragraph } = Typography;
@@ -59,11 +61,22 @@ export default function AIOpsPage() {
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [resetText, setResetText] = useState('');
   const [sendRetry, setSendRetry] = useState<{ sessionID: number; model: string; content: string; requestID: string } | null>(null);
+  const [streamConnected, setStreamConnected] = useState(false);
   const alive = useRef(true);
   const detailSequence = useRef(0);
   const fingerprintSequence = useRef(0);
   const pollRunning = useRef(false);
   const messageViewport = useRef<HTMLDivElement>(null);
+  const streamActive = useRef(false);
+  const followOutput = useRef(true);
+  const composing = useRef(false);
+  const compositionEndedAt = useRef(0);
+
+  const applySnapshot = (value: AISessionDetail) => {
+    if (!alive.current || selectedRef.current !== value.session.id) return;
+    setDetail((previous) => aiMergeSnapshot(previous, { ...value, turns: value.turns || [], actions: value.actions || [] }));
+    setSessions((items) => items.map((item) => item.id === value.session.id ? value.session : item));
+  };
 
   const fail = (e: any, fallback: string) => { if (alive.current && !e?.errorFields) message.error(e?.message || fallback); };
   const begin = (name: string) => { if (busyRef.current) return false; busyRef.current = true; setBusy(name); return true; };
@@ -75,8 +88,7 @@ export default function AIOpsPage() {
     if (!alive.current || selectedRef.current !== id || sequence !== detailSequence.current) return;
     const value = response?.data;
     if (!value?.session || !Array.isArray(value.messages)) throw new Error('会话数据格式不正确');
-    setDetail({ ...value, turns: value.turns || [], actions: value.actions || [] });
-    setSessions((items) => items.map((item) => item.id === id ? value.session : item));
+    applySnapshot(value);
   };
   const loadLists = async () => {
     const [sessionResult, serverResult] = await Promise.all([apiGet('/ai-ops/sessions', {}, { cache: 'no-store' }), apiGet('/ai-ops/servers', {}, { cache: 'no-store' })]);
@@ -104,26 +116,75 @@ export default function AIOpsPage() {
     alive.current = true; void load();
     const tick = window.setInterval(() => setNow(Date.now()), 1000);
     const timer = window.setInterval(async () => {
-      if (!selectedRef.current || pollRunning.current || document.visibilityState === 'hidden') return;
+      if (!selectedRef.current || streamActive.current || pollRunning.current || document.visibilityState === 'hidden') return;
       pollRunning.current = true;
       try { await loadDetail(selectedRef.current); } catch { /* Keep the last snapshot; explicit refresh shows errors. */ }
       finally { pollRunning.current = false; }
-    }, 2500);
+    }, 5000);
     return () => { alive.current = false; detailSequence.current += 1; fingerprintSequence.current += 1; window.clearInterval(tick); window.clearInterval(timer); };
   }, []);
+  const streamWanted = tab === 'chat' && selectedID > 0 && (aiSessionBusy(detail) || sessions.some((item) => item.id === selectedID && item.status === 'running'));
   useEffect(() => {
-    // Scroll only the message pane, not the whole admin page or mobile tabs.
+    if (!streamWanted) return;
+    let stopped = false;
+    let controller: AbortController | null = null;
+    let timer: number | undefined;
+    const resetConnection = () => { streamActive.current = false; if (!stopped && alive.current) setStreamConnected(false); };
+    const connect = async () => {
+      if (stopped || document.visibilityState === 'hidden' || controller) return;
+      controller = new AbortController();
+      const current = controller;
+      let delay = 1000;
+      try {
+        await aiReadSessionStream(selectedID, current.signal, ({ event, data }) => {
+          if (stopped || current.signal.aborted || selectedRef.current !== selectedID) return;
+          streamActive.current = true; setStreamConnected(true);
+          if (event === 'snapshot') {
+            const value = data as AISessionDetail;
+            if (value?.session?.id !== selectedID || !Array.isArray(value.messages) || !Array.isArray(value.turns)) return;
+            detailSequence.current += 1;
+            applySnapshot(value);
+          } else if (event === 'draft') {
+            const value = data as AIDraft;
+            if (value?.session_id !== selectedID) return;
+            detailSequence.current += 1;
+            setDetail((previous) => aiApplyDraft(previous, value));
+          } else if (event === 'invalidate') {
+            void loadDetail(selectedID).catch(() => undefined);
+          }
+        });
+      } catch { delay = 5000; /* Old backends or proxies fall back to normal polling. */ }
+      finally {
+        if (controller === current) controller = null;
+        resetConnection();
+        if (!stopped) timer = window.setTimeout(() => void connect(), delay);
+      }
+    };
+    const visibility = () => {
+      if (document.visibilityState === 'hidden') { window.clearTimeout(timer); controller?.abort(); resetConnection(); }
+      else { window.clearTimeout(timer); void connect(); }
+    };
+    document.addEventListener('visibilitychange', visibility);
+    void connect();
+    return () => { stopped = true; window.clearTimeout(timer); controller?.abort(); streamActive.current = false; setStreamConnected(false); document.removeEventListener('visibilitychange', visibility); };
+  }, [selectedID, streamWanted]);
+  const visibleDraft = aiVisibleDraft(detail);
+  useEffect(() => {
+    // Follow only while already at the bottom; reading earlier messages must
+    // not be interrupted by a streamed token or another administrator's action.
     const pane = messageViewport.current;
-    if (pane) pane.scrollTop = pane.scrollHeight;
-  }, [detail?.messages.length, detail?.actions.length]);
+    if (pane && followOutput.current) pane.scrollTop = pane.scrollHeight;
+  }, [detail?.messages.length, detail?.actions.length, visibleDraft?.draft_content]);
   const selectSession = (session: AISession) => {
+    followOutput.current = true;
     selectionSequence.current += 1; selectedRef.current = session.id; setSelectedID(session.id); setDetail(null); setDraft(''); setSendRetry(null); setModel(session.model); setTab('chat');
     void loadDetail(session.id).catch((e) => fail(e, '读取会话失败'));
   };
-  const newSession = () => { selectionSequence.current += 1; selectedRef.current = 0; detailSequence.current += 1; setSelectedID(0); setDetail(null); setDraft(''); setSendRetry(null); setTab('chat'); };
+  const newSession = () => { followOutput.current = true; selectionSequence.current += 1; selectedRef.current = 0; detailSequence.current += 1; setSelectedID(0); setDetail(null); setDraft(''); setSendRetry(null); setTab('chat'); };
   const send = async (contentOverride?: string) => {
     const content = (contentOverride ?? draft).trim();
-    if (!content || !config.enabled || !config.has_api_key || aiSessionBusy(detail) || !begin('send')) return;
+    if (!content || !config.enabled || !config.has_api_key || (selectedRef.current > 0 && !detail) || aiSessionBusy(detail) || !begin('send')) return;
+    followOutput.current = true;
     const originalID = selectedRef.current;
     const selection = selectionSequence.current;
     const retry = sendRetry && sendRetry.sessionID === originalID && sendRetry.model === model && sendRetry.content === content ? sendRetry : { sessionID: originalID, model, content, requestID: aiRequestID() };
@@ -214,11 +275,31 @@ export default function AIOpsPage() {
     <section className="ai-ops-conversation">
       <div className="ai-ops-conversation-head"><div><Text strong>{detail?.session.title || (selectedID ? '读取会话中…' : '新的运维对话')}</Text><div><Text type="secondary">面板查询可自动执行；修改、部署及所有服务器命令需逐项确认。</Text></div></div><Select aria-label="选择 AI 模型" value={model} onChange={setModel} disabled={!!busy || aiSessionBusy(detail)} options={config.models.map((value) => ({ value, label: value }))} style={{ minWidth: 210 }} /></div>
       <Alert type="info" showIcon message="对话、查询结果及命令输出会发送到你配置的中转模型" description="不要在聊天中输入服务器密码、私钥、订阅 Token 或私人数据。服务器凭据只在“服务器”选项卡录入；AI 返回内容与工具输出均作为业务数据展示。" />
-      <div className="ai-ops-messages" ref={messageViewport}>{!detail && !selectedID && <div className="ai-ops-empty"><MessageOutlined /><h3>告诉 AI 需要排查什么</h3><p>例如：检查异常入口、查询指定用户的入口匹配、检查已登记服务器状态。</p></div>}{selectedID > 0 && !detail && <Spin />}{detail?.messages.map((item) => <article key={item.id} className={`ai-ops-message ai-ops-message-${item.role}`}><div><Tag>{({ user: '管理员', assistant: 'AI', tool: '工具结果', system: '系统' } as Record<string, string>)[item.role] || item.role}</Tag><Text type="secondary">{time(item.created_at)}</Text></div>{item.content && <pre className="ai-ops-text">{item.content}</pre>}{!!item.tool_calls?.length && <Collapse size="small" items={item.tool_calls.map((call) => ({ key: call.id, label: `工具调用：${call.function.name}`, children: <pre className="ai-ops-pre">{call.function.arguments}</pre> }))} />}</article>)}
-        {actions.map((action) => { const state = aiActionStatus(action, now); return <Card size="small" key={action.id} className="ai-ops-action" title={<Space wrap><span>操作确认 #{action.id}</span><Tag color={statusColor(state)}>{statusLabels[state] || state}</Tag>{(action.approved_by ?? 0) > 0 && <Text type="secondary"><small>人工批准：管理员 #{action.approved_by}</small></Text>}{(action.rejected_by ?? 0) > 0 && <Text type="secondary"><small>人工拒绝：管理员 #{action.rejected_by}</small></Text>}</Space>}><ActionDetails action={action} />{action.output && <Collapse style={{ marginTop: 12 }} items={[{ key: 'result', label: '执行输出（会进入模型上下文）', children: <pre className="ai-ops-pre">{action.output}</pre> }]} />}{action.error && <Alert type="error" showIcon message={action.error} style={{ marginTop: 12 }} />}{state === 'pending' && <Space wrap style={{ marginTop: 12 }}><Button type="primary" disabled={!!busy || !aiCanApprove(action, config.enabled, now)} onClick={() => { setConfirmedOutput(false); setReview({ action, decision: 'approve' }); }}>审核执行</Button><Button danger disabled={!!busy} onClick={() => { setConfirmedOutput(false); setReview({ action, decision: 'reject' }); }}>拒绝</Button></Space>}</Card>; })}
-        {latestTurn?.error && <Alert type="error" showIcon message={`本轮${statusLabels[latestTurn.status] || latestTurn.status}`} description={latestTurn.error} />}{aiSessionBusy(detail) && <Space><Spin size="small" /><Text type="secondary">正在处理，可切换其他会话；本页会自动刷新结果。</Text></Space>}
+      <div className="ai-ops-messages" ref={messageViewport} onScroll={() => { const pane = messageViewport.current; if (pane) followOutput.current = aiNearBottom(pane.scrollTop, pane.clientHeight, pane.scrollHeight); }}>
+        {!detail && !selectedID && <div className="ai-ops-empty"><MessageOutlined /><h3>告诉 AI 需要排查什么</h3><p>例如：检查异常入口、查询指定用户的入口匹配、检查已登记服务器状态。</p></div>}
+        {selectedID > 0 && !detail && <Spin />}
+        {detail?.messages.map((item) => {
+          const ordinaryText = item.role === 'user' || item.role === 'assistant';
+          const toolName = item.role === 'tool' ? detail.messages.flatMap((message) => message.tool_calls || []).find((call) => call.id === item.tool_call_id)?.function.name : '';
+          if (!ordinaryText) return <Collapse key={item.id} className="ai-ops-tool-result" size="small" items={[{ key: String(item.id), label: <Space wrap><span>{item.role === 'tool' ? `工具结果${toolName ? ` · ${toolName}` : ''}` : '系统详情'}</span><Text type="secondary">{time(item.created_at)}</Text></Space>, children: <pre className="ai-ops-pre">{item.content}</pre> }]} />;
+          return <article key={item.id} className={`ai-ops-message ai-ops-message-${item.role}`}>
+            <div><Tag>{item.role === 'user' ? '管理员' : 'AI'}</Tag><Text type="secondary">{time(item.created_at)}</Text></div>
+            {item.content && (item.role === 'assistant' ? <AIOpsMarkdown content={item.content} /> : <pre className="ai-ops-text">{item.content}</pre>)}
+            {!!item.tool_calls?.length && <Collapse size="small" className="ai-ops-tool-calls" items={[{ key: 'calls', label: `工具调用 · ${item.tool_calls.map((call) => call.function.name).join('、')}`, children: <Space direction="vertical" style={{ width: '100%' }}>{item.tool_calls.map((call) => <div key={call.id}><Text strong>{call.function.name}</Text><pre className="ai-ops-pre">{call.function.arguments}</pre></div>)}</Space> }]} />}
+          </article>;
+        })}
+        {visibleDraft && <article className="ai-ops-message ai-ops-message-assistant ai-ops-live-draft" aria-label="AI 实时回复"><Tag color="processing">AI · 正在回复</Tag><AIOpsMarkdown content={visibleDraft.draft_content || ''} /><span className="ai-ops-stream-cursor" aria-hidden="true" /></article>}
+        {actions.map((action) => { const state = aiActionStatus(action, now); return <Card size="small" key={action.id} className="ai-ops-action" title={<Space wrap><span>操作确认 #{action.id}</span><Tag color={statusColor(state)}>{statusLabels[state] || state}</Tag>{(action.approved_by ?? 0) > 0 && <Text type="secondary"><small>人工批准：管理员 #{action.approved_by}</small></Text>}{(action.rejected_by ?? 0) > 0 && <Text type="secondary"><small>人工拒绝：管理员 #{action.rejected_by}</small></Text>}</Space>}>
+          <Collapse size="small" className="ai-ops-action-details" items={[{ key: 'details', label: `操作详情 · ${action.server_label || action.kind}`, children: <Space direction="vertical" style={{ width: '100%' }}><ActionDetails action={action} />{action.output && <><Text strong>执行输出（会进入模型上下文）</Text><pre className="ai-ops-pre">{action.output}</pre></>}{action.error && <Alert type="error" showIcon message={action.error} />}</Space> }]} />
+          {state === 'pending' && <Space wrap style={{ marginTop: 12 }}><Button type="primary" disabled={!!busy || !aiCanApprove(action, config.enabled, now)} onClick={() => { setConfirmedOutput(false); setReview({ action, decision: 'approve' }); }}>审核执行</Button><Button danger disabled={!!busy} onClick={() => { setConfirmedOutput(false); setReview({ action, decision: 'reject' }); }}>拒绝</Button><Text type="secondary">尚未执行，审核时会展开完整操作。</Text></Space>}
+        </Card>; })}
+        {latestTurn?.error && <Alert type="error" showIcon message={`本轮${statusLabels[latestTurn.status] || latestTurn.status}`} description={latestTurn.error} />}
+        {aiSessionBusy(detail) && <Space><Spin size="small" /><Text type="secondary">{streamConnected ? '实时接收中…' : '正在处理，自动同步中…'} 可切换会话，不影响后台处理。</Text></Space>}
       </div>
-      <div className="ai-ops-composer"><Input.TextArea aria-label="运维消息" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="描述问题或操作需求；不要填写密码、私钥等秘密" autoSize={{ minRows: 3, maxRows: 8 }} maxLength={12000} disabled={busy === 'send' || aiSessionBusy(detail)} /><Space wrap><Button type="primary" icon={<SendOutlined />} loading={busy === 'send'} disabled={!draft.trim() || unavailable || !!busy || aiSessionBusy(detail) || (selectedID > 0 && !detail)} onClick={() => void send()}>发送</Button><Text type="secondary">{unavailable ? '请先在设置中启用 AI 并保存中转 API Key。' : '发送后后台异步处理，不需要保持当前会话打开。'}</Text></Space></div>
+      <div className="ai-ops-composer"><Input.TextArea aria-label="运维消息" value={draft} onChange={(e) => setDraft(e.target.value)} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; compositionEndedAt.current = Date.now(); }} onKeyDown={(event) => {
+        if (!aiShouldSendKey({ key: event.key, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey, repeat: event.repeat, isComposing: event.nativeEvent.isComposing, keyCode: event.keyCode }, composing.current || Date.now() - compositionEndedAt.current < 50)) return;
+        event.preventDefault(); void send();
+      }} placeholder="描述问题或操作需求；Enter 发送，Shift+Enter 换行" autoSize={{ minRows: 3, maxRows: 8 }} maxLength={12000} disabled={busy === 'send' || aiSessionBusy(detail)} /><Space wrap><Button type="primary" icon={<SendOutlined />} loading={busy === 'send'} disabled={!draft.trim() || unavailable || !!busy || aiSessionBusy(detail) || (selectedID > 0 && !detail)} onClick={() => void send()}>发送</Button><Text type="secondary">{unavailable ? '请先在设置中启用 AI 并保存中转 API Key。' : 'Enter 发送 · Shift+Enter 换行 · 工具详情默认折叠'}</Text></Space></div>
     </section>
   </div>;
   const serverPanel = <Space direction="vertical" size="middle" style={{ width: '100%' }}><Alert type="info" showIcon message="服务器凭据仅保存到后端，不发给模型" description="必须填写已核对的 SSH 主机指纹；获取到的指纹只是观察值，不会自动信任或覆盖旧指纹。所有服务器命令（包括状态诊断）和部署操作都必须逐项批准，AI 无法自行确认。" /><Button type="primary" icon={<PlusOutlined />} disabled={!!busy} onClick={() => openServer(null)}>登记服务器</Button><Table<AIServer> rowKey="id" size="small" dataSource={servers} scroll={{ x: 1100 }} columns={[

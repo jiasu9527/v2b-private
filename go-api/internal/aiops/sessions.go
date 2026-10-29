@@ -11,7 +11,7 @@ import (
 )
 
 const sessionColumns = `id,title,model,created_by,status,created_at,updated_at`
-const turnColumns = `id,session_id,request_id,status,error,created_at,completed_at`
+const turnColumns = `id,session_id,request_id,status,error,created_at,completed_at,draft_content,draft_round,draft_version`
 
 func scanSession(row interface{ Scan(...any) error }) (Session, error) {
 	var v Session
@@ -23,7 +23,7 @@ func scanSession(row interface{ Scan(...any) error }) (Session, error) {
 }
 func scanTurn(row interface{ Scan(...any) error }) (Turn, error) {
 	var v Turn
-	err := row.Scan(&v.ID, &v.SessionID, &v.RequestID, &v.Status, &v.Error, &v.CreatedAt, &v.CompletedAt)
+	err := row.Scan(&v.ID, &v.SessionID, &v.RequestID, &v.Status, &v.Error, &v.CreatedAt, &v.CompletedAt, &v.DraftContent, &v.DraftRound, &v.DraftVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, ErrNotFound
 	}
@@ -31,7 +31,7 @@ func scanTurn(row interface{ Scan(...any) error }) (Turn, error) {
 }
 func (s *Service) expireTurns(ctx context.Context, tx *sql.Tx) error {
 	now := time.Now().Unix()
-	_, err := tx.ExecContext(ctx, `WITH locked AS (SELECT id FROM v2_ai_session WHERE id IN(SELECT session_id FROM v2_ai_turn WHERE status='running' AND expires_at<=$1) FOR UPDATE SKIP LOCKED), expired AS (UPDATE v2_ai_turn SET status='interrupted',error='处理已中断，请检查结果后使用新请求继续',completed_at=$1 WHERE status='running' AND expires_at<=$1 AND session_id IN(SELECT id FROM locked) RETURNING session_id) UPDATE v2_ai_session SET status='idle',updated_at=$1 WHERE id IN(SELECT session_id FROM expired)`, now)
+	_, err := tx.ExecContext(ctx, `WITH locked AS (SELECT id FROM v2_ai_session WHERE id IN(SELECT session_id FROM v2_ai_turn WHERE status='running' AND expires_at<=$1) FOR UPDATE SKIP LOCKED), expired AS (UPDATE v2_ai_turn SET status='interrupted',error='处理已中断，请检查结果后使用新请求继续',completed_at=$1,draft_content='' WHERE status='running' AND expires_at<=$1 AND session_id IN(SELECT id FROM locked) RETURNING session_id) UPDATE v2_ai_session SET status='idle',updated_at=$1 WHERE id IN(SELECT session_id FROM expired)`, now)
 	return err
 }
 func (s *Service) ListSessions(ctx context.Context, actorID int64) ([]Session, error) {
@@ -80,7 +80,9 @@ func (s *Service) GetSession(ctx context.Context, actorID, id int64) (SessionDet
 	if err := s.ensureSchema(ctx); err != nil {
 		return out, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	// Final messages replace the live draft in one write transaction. Read all
+	// three parts from one snapshot so that transition cannot hide both at once.
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return out, err
 	}
