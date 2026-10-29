@@ -6,8 +6,6 @@ import (
 	"strings"
 )
 
-const maxSSHRecoveryFailures = 3
-
 // Only suppress a previously failed command on the same registered server in
 // this turn. This is an exact replay guard, not a shell semantic classifier.
 func sshRecoveryCommandKey(call ToolCall) string {

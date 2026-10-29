@@ -183,11 +183,9 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 	full := req.AccessMode == "full" && out.Session.AccessMode == "full" && out.Session.FullAccessBy == actorID
 	mode := "standard"
 	lifetime := turnLifetime
-	workerLifetime := 120 * time.Second
 	if full {
 		mode = "full"
-		lifetime = fullAccessLifetime + 30*time.Second
-		workerLifetime = fullAccessLifetime
+		lifetime = fullAccessLease
 	}
 	selection := req.ReasoningEffort
 	if !isAdmin {
@@ -212,11 +210,7 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_ai_message WHERE session_id=$1`, out.Session.ID).Scan(&messageCount); err != nil {
 		return out, err
 	}
-	reserve := 64
-	if full {
-		reserve = fullAccessMaxRounds*9 + 2
-	}
-	if messageCount > maxSessionMessages-reserve {
+	if !full && messageCount > maxSessionMessages-64 {
 		return out, fmt.Errorf("%w: 会话消息已达上限，请新建会话", ErrValidation)
 	}
 	now := time.Now().Unix()
@@ -249,7 +243,7 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 	out.Session.Model = req.Model
 	out.Session.ReasoningEffort = selection
 	out.Session.UpdatedAt = now
-	workerCtx, cancel := context.WithTimeout(context.Background(), workerLifetime)
+	workerCtx, cancel := newTurnContext(full)
 	s.workers[out.Session.ID] = cancel
 	s.workerTurns[out.Session.ID] = out.Turn.ID
 	s.wg.Add(1)
@@ -271,6 +265,16 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 	}(out.Session.ID, out.Turn.ID)
 	return out, nil
 }
+
+func newTurnContext(full bool) (context.Context, context.CancelFunc) {
+	if full {
+		// The worker renews its database lease while alive; it has no total
+		// deadline. Stop, revocation and service shutdown still cancel it.
+		return context.WithCancel(context.Background())
+	}
+	return context.WithTimeout(context.Background(), 120*time.Second)
+}
+
 func (s *Service) history(ctx context.Context, sessionID, currentTurnID int64) ([]providerMessage, error) {
 	// Complete turns retain paired calls/results. Failed or interrupted turns
 	// retain only their original request: a following "continue" must not lose
@@ -281,6 +285,37 @@ func (s *Service) history(ctx context.Context, sessionID, currentTurnID int64) (
 	}
 	defer rows.Close()
 	out := []providerMessage{{Role: "system", Content: systemPrompt}}
+	contextBytes := jsonSize(out)
+	pending := map[string]bool{}
+	appendHistory := func(message providerMessage) error {
+		// Read arbitrarily long persisted turns without retaining them all in
+		// worker memory. Compact only at complete tool-batch boundaries.
+		if message.Role == "tool" {
+			if !pending[message.ToolCallID] {
+				return errContextInvalid
+			}
+			delete(pending, message.ToolCallID)
+		} else if len(pending) != 0 {
+			return errContextInvalid
+		}
+		for _, call := range message.ToolCalls {
+			if call.ID == "" || pending[call.ID] {
+				return errContextInvalid
+			}
+			pending[call.ID] = true
+		}
+		out = append(out, message)
+		contextBytes += jsonSize(message) + 1
+		if len(pending) == 0 && (contextBytes > maxHistoryContextBytes || len(out) > maxContextMessages) {
+			var compactErr error
+			out, compactErr = compactProviderContext(out, maxHistoryContextBytes)
+			if compactErr != nil {
+				return compactErr
+			}
+			contextBytes = jsonSize(out)
+		}
+		return nil
+	}
 	for rows.Next() {
 		var m providerMessage
 		var raw, turnStatus string
@@ -290,19 +325,29 @@ func (s *Service) history(ctx context.Context, sessionID, currentTurnID int64) (
 		}
 		if sourceTurnID != currentTurnID && (turnStatus == "failed" || turnStatus == "interrupted") {
 			if m.Role == "user" {
-				out = append(out, providerMessage{Role: "user", Content: m.Content}, providerMessage{Role: "assistant", Content: "[该轮未完成，保留以上原始请求供继续处理；部分操作可能已经执行，实际状态以最新操作摘要为准。未载入该轮的工具片段不能视为未执行；请先核对现状，结果未知的操作不得自动重试。]"})
+				if err = appendHistory(providerMessage{Role: "user", Content: m.Content}); err != nil {
+					return nil, err
+				}
+				if err = appendHistory(providerMessage{Role: "assistant", Content: "[该轮未完成，保留以上原始请求供继续处理；部分操作可能已经执行，实际状态以最新操作摘要为准。未载入该轮的工具片段不能视为未执行；请先核对现状，结果未知的操作不得自动重试。]"}); err != nil {
+					return nil, err
+				}
 			}
 			continue
 		}
 		if json.Unmarshal([]byte(raw), &m.ToolCalls) != nil {
 			return nil, ErrUnavailable
 		}
-		out = append(out, m)
+		if err = appendHistory(m); err != nil {
+			return nil, err
+		}
 	}
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 	rows.Close()
+	if len(pending) != 0 {
+		return nil, errContextInvalid
+	}
 	out, err = s.refreshActionContext(ctx, sessionID, out)
 	if err != nil {
 		return nil, err
@@ -390,7 +435,7 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 		done()
 		if ctx.Err() != nil || stopped {
 			status = "interrupted"
-			errText = "任务已停止或达到运行时限；已执行操作不会撤销，请核对远程执行结果"
+			errText = "任务已停止或运行已中断；已执行操作不会撤销，请核对远程执行结果"
 		}
 		s.finishTurn(sessionID, turnID, status, errText)
 	}()
@@ -407,10 +452,9 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 		}
 		return
 	}
-	maxRounds := 6
+	const standardMaxRounds = 6
 	modePrompt := standardAccessModePrompt
 	if full {
-		maxRounds = fullAccessMaxRounds
 		modePrompt = fullAccessModePrompt
 	}
 	for i := range messages {
@@ -421,8 +465,7 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 	}
 	var knownPanelSecrets []string
 	failedSSHCommands := map[string]int64{}
-	sshRecoveryFailures := 0
-	for round := 0; round < maxRounds; round++ {
+	for round := 0; full || round < standardMaxRounds; round++ {
 		if err = s.requireOperator(ctx, actorID); err != nil {
 			errText = "运维权限已变化，处理已停止"
 			return
@@ -446,6 +489,13 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 		messages, err = s.refreshKnowledgeContext(ctx, messages)
 		if err != nil {
 			errText = "读取共享知识失败，请稍后重试"
+			return
+		}
+		// Keep the live worker window bounded too, not only the outgoing copy
+		// prepared by the provider. Full history remains in the database.
+		messages, err = compactProviderContext(messages, maxHistoryContextBytes)
+		if err != nil {
+			errText = err.Error()
 			return
 		}
 		lastWrite := time.Time{}
@@ -490,7 +540,6 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 				raw, _ := json.Marshal(map[string]any{"status": "error", "code": "ssh_command_already_failed", "action_id": actionID, "message": "该服务器上的同一命令本轮已非零退出，未再次执行。请根据失败输出先核对现状，再修正命令；不要原样重跑"})
 				result = ToolOutcome{ActionID: actionID, Content: string(raw)}
 				recoverSSH = true
-				sshRecoveryFailures++
 			} else if !pending && !halt && !recoverSSH {
 				namespacedCall := call
 				namespacedCall.ID = fmt.Sprintf("turn:%d:round:%d:%s", turnID, round+1, call.ID)
@@ -510,16 +559,11 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 						// The process terminated: let the next model request diagnose
 						// its output. Remaining calls assumed success and are stale.
 						recoverSSH = true
-						sshRecoveryFailures++
 						if commandKey != "" {
 							failedSSHCommands[commandKey] = result.ActionID
 						}
 					}
 				}
-			}
-			if recoverSSH && !halt && sshRecoveryFailures >= maxSSHRecoveryFailures {
-				halt = true
-				errText = fmt.Sprintf("本轮 SSH 命令累计 %d 次失败或重复失败命令，已停止继续尝试；请核对操作 #%d 的输出后处理", sshRecoveryFailures, result.ActionID)
 			}
 			if len(result.Content) > 32000 {
 				result.Content = `{"status":"error","message":"工具输出过大，请缩小查询范围"}`
@@ -549,5 +593,5 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 			return
 		}
 	}
-	errText = fmt.Sprintf("本轮已达到 %d 次工具分析上限，已有结果已保存，可继续发送消息", maxRounds)
+	errText = fmt.Sprintf("逐次确认模式已达到 %d 次工具分析上限，已有结果已保存；需连续执行可切换完全访问模式", standardMaxRounds)
 }

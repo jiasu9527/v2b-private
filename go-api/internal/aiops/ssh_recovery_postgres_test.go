@@ -319,7 +319,7 @@ func TestAISSHRecoveryPostgres(t *testing.T) {
 	})
 
 	for _, repeated := range []bool{false, true} {
-		t.Run(fmt.Sprintf("three failed recovery attempts halt repeated=%v", repeated), func(t *testing.T) {
+		t.Run(fmt.Sprintf("recovery continues beyond three failures without replay repeated=%v", repeated), func(t *testing.T) {
 			f := setupStaffAIFixture(t)
 			serverRequest, commands := sshRecoveryHost(t, func(command string, channel ssh.Channel) *uint32 {
 				_, _ = io.WriteString(channel, "fixture old value mismatch\n")
@@ -331,10 +331,30 @@ func TestAISSHRecoveryPostgres(t *testing.T) {
 			}
 			var calls atomic.Int32
 			relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				n := calls.Add(1)
-				if n > 3 {
-					t.Error("failure budget did not stop model requests")
+				var request completionRequest
+				if json.NewDecoder(r.Body).Decode(&request) != nil {
+					t.Error("invalid model request")
 					w.WriteHeader(400)
+					return
+				}
+				n := calls.Add(1)
+				if n > 5 {
+					t.Error("model continued after completing the task")
+					w.WriteHeader(400)
+					return
+				}
+				if n > 1 {
+					previous := sshRecoveryToolResult(t, request, fmt.Sprintf("attempt-%d", n-1))
+					if repeated && n > 2 {
+						if previous["status"] != "error" || previous["code"] != "ssh_command_already_failed" {
+							t.Error("repeated failed command was not rejected before execution", previous)
+						}
+					} else if previous["status"] != "failed" || previous["exit_code"] != float64(1) {
+						t.Error("known SSH failure was not returned for further diagnosis", previous)
+					}
+				}
+				if n == 5 {
+					sshRecoveryReply(w)
 					return
 				}
 				command := fmt.Sprintf("fixture-apply attempt-%d", n)
@@ -346,15 +366,24 @@ func TestAISSHRecoveryPostgres(t *testing.T) {
 			defer relay.Close()
 			started := sshRecoverySend(t, f, relay.URL)
 			detail := sshRecoveryWait(t, f, started.Session.ID)
-			wantCommands := 3
+			wantCommands := 4
 			if repeated {
 				wantCommands = 1
 			}
-			if detail.Turns[0].Status != "failed" || calls.Load() != 3 || len(commands()) != wantCommands {
-				t.Fatalf("unbounded recovery: turn=%+v calls=%d commands=%v", detail.Turns[0], calls.Load(), commands())
+			if detail.Turns[0].Status != "completed" || calls.Load() != 5 || len(commands()) != wantCommands {
+				t.Fatalf("recovery stopped early or replayed a known failure: turn=%+v calls=%d commands=%v", detail.Turns[0], calls.Load(), commands())
 			}
-			if detail.Turns[0].Error == "" {
-				t.Fatal("exhausted recovery has no error explanation")
+			if detail.Turns[0].Error != "" {
+				t.Fatal("completed diagnosis retained a failure-limit error", detail.Turns[0].Error)
+			}
+			actions, err := f.s.ListActions(context.Background(), f.staff, started.Session.ID)
+			if err != nil || len(actions) != wantCommands {
+				t.Fatal("unexpected persisted failed commands", actions, err)
+			}
+			for _, action := range actions {
+				if action.Status != "failed" || action.ExitCode == nil || *action.ExitCode != 1 {
+					t.Fatal("continued diagnosis rewrote the original failed action", action)
+				}
 			}
 		})
 	}

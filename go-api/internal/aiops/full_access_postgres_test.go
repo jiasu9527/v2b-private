@@ -255,12 +255,12 @@ func TestAIFullAccessPostgres(t *testing.T) {
 			t.Fatal(tr, host())
 		}
 	})
-	t.Run("full long worker lease", func(t *testing.T) {
+	t.Run("full renewable worker lease", func(t *testing.T) {
 		scenario.Store(3)
 		r := send("full")
 		wait(r.Session.ID)
 		var delta int64
-		if e := db.QueryRow(`SELECT expires_at-created_at FROM v2_ai_turn WHERE id=$1`, r.Turn.ID).Scan(&delta); e != nil || delta < 3600 {
+		if e := db.QueryRow(`SELECT expires_at-created_at FROM v2_ai_turn WHERE id=$1`, r.Turn.ID).Scan(&delta); e != nil || delta < int64(fullAccessLease/time.Second) || delta > int64(fullAccessLease/time.Second)+5 {
 			t.Fatal(delta, e)
 		}
 	})
