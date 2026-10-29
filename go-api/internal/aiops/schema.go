@@ -1,0 +1,66 @@
+package aiops
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+)
+
+func (s *Service) ensureSchema(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return ErrUnavailable
+	}
+	s.schemaMu.Lock()
+	defer s.schemaMu.Unlock()
+	if s.schemaOK {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(2026102901)`); err != nil {
+		return err
+	}
+	for _, q := range []string{
+		`CREATE TABLE IF NOT EXISTS v2_ai_config(id SMALLINT PRIMARY KEY CHECK(id=1),enabled BOOLEAN NOT NULL DEFAULT FALSE,base_url TEXT NOT NULL DEFAULT '',models JSONB NOT NULL,api_key_cipher TEXT NOT NULL DEFAULT '',updated_by BIGINT NOT NULL,updated_at BIGINT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS v2_ai_session(id BIGSERIAL PRIMARY KEY,title VARCHAR(200) NOT NULL,model VARCHAR(120) NOT NULL,created_by BIGINT NOT NULL,status VARCHAR(16) NOT NULL DEFAULT 'idle',created_at BIGINT NOT NULL,updated_at BIGINT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS v2_ai_turn(id BIGSERIAL PRIMARY KEY,session_id BIGINT NOT NULL REFERENCES v2_ai_session(id) ON DELETE CASCADE,actor_id BIGINT NOT NULL,request_id VARCHAR(80) NOT NULL,request_hash VARCHAR(64) NOT NULL,model VARCHAR(120) NOT NULL,status VARCHAR(16) NOT NULL,error TEXT NOT NULL DEFAULT '',created_at BIGINT NOT NULL,expires_at BIGINT NOT NULL,completed_at BIGINT NOT NULL DEFAULT 0,UNIQUE(actor_id,request_id))`,
+		`CREATE TABLE IF NOT EXISTS v2_ai_message(id BIGSERIAL PRIMARY KEY,session_id BIGINT NOT NULL REFERENCES v2_ai_session(id) ON DELETE CASCADE,turn_id BIGINT NOT NULL REFERENCES v2_ai_turn(id) ON DELETE CASCADE,role VARCHAR(16) NOT NULL,content TEXT NOT NULL DEFAULT '',tool_calls JSONB NOT NULL DEFAULT '[]',tool_call_id VARCHAR(200) NOT NULL DEFAULT '',created_at BIGINT NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS v2_ai_message_session_idx ON v2_ai_message(session_id,id)`,
+		`CREATE INDEX IF NOT EXISTS v2_ai_turn_session_idx ON v2_ai_turn(session_id,id)`,
+		`CREATE INDEX IF NOT EXISTS v2_ai_turn_running_idx ON v2_ai_turn(status,expires_at)`,
+	} {
+		if _, err = tx.ExecContext(ctx, q); err != nil {
+			return fmt.Errorf("ensure AI schema: %w", err)
+		}
+	}
+	if err = ensureActionSchema(ctx, tx); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	s.schemaOK = true
+	return nil
+}
+
+// All resets, sends and approvals take this shared transaction lock before
+// per-session locks. Reset takes it exclusively, closing deletion/create races.
+func lockAIState(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock_shared(2026102902)`)
+	return err
+}
+func lockAIStateExclusive(ctx context.Context, tx *sql.Tx) error {
+	// Remote operations hold the shared lock while they execute. Cleanup must
+	// fail fast even when that operation belongs to a different session.
+	var locked bool
+	if err := tx.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock(2026102902)`).Scan(&locked); err != nil {
+		return err
+	}
+	if !locked {
+		return ErrBusy
+	}
+	return nil
+}

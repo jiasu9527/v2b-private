@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"forest/go-api/internal/admin"
+	"forest/go-api/internal/aiops"
 	"forest/go-api/internal/appleid"
 	"forest/go-api/internal/background"
 	"forest/go-api/internal/config"
@@ -105,6 +106,7 @@ func main() {
 	var appleIDService *appleid.DBService
 	var migrationService *usermigration.DBService
 	var adminService admin.Service
+	var aiOpsService *aiops.Service
 	var nodeService nodeapi.Service
 	var telegramService *telegram.Service
 	var backgroundRunner *background.Runner
@@ -140,6 +142,8 @@ func main() {
 			WithAdminService(adminDBService).
 			WithEntryMonitorController(adminDBService)
 		adminService = adminDBService
+		aiOpsService = aiops.NewService(cfg, db, adminDBService)
+		defer aiOpsService.Close()
 		nodeDBService := nodeapi.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithOnlineGeoResolver(onlineGeo)
 		nodeService = nodeDBService
 		adminDBService.WithOnlineLocationRefresh(nodeDBService.ReconcileOnlineLocations)
@@ -160,6 +164,7 @@ func main() {
 			httpapi.WithAppleIDService(appleIDService),
 			httpapi.WithUserMigrationService(migrationService),
 			httpapi.WithAdminService(adminService),
+			httpapi.WithAIOps(aiOpsService),
 			httpapi.WithNodeService(nodeService),
 			httpapi.WithQueueRuntime(jobQueue),
 			httpapi.WithTelegramService(telegramService),

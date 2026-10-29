@@ -17,6 +17,7 @@ import AppleIDPage from './pages/AppleIDPage';
 import ServerManagePage from './pages/ServerManagePage';
 import TicketPage, { TicketDetailPage } from './pages/TicketPage';
 import ConfigPage from './pages/ConfigPage';
+import AIOpsPage from './pages/AIOpsPage';
 import QueuePage from './pages/QueuePage';
 import InviteCampaignPage from './pages/InviteCampaignPage';
 import GenericResourcePage from './pages/GenericResourcePage';
@@ -48,6 +49,7 @@ const menu = [
   { type: 'item', key: '/config/payment', icon: <CreditCardOutlined />, label: '支付配置' },
   { type: 'item', key: '/config/subscribe-guard', icon: <SafetyCertificateOutlined />, label: '订阅防护' },
   { type: 'item', key: '/config/user-migration', icon: <DatabaseOutlined />, label: '用户迁移' },
+  { type: 'item', key: '/config/ai-ops', icon: <MessageOutlined />, label: 'AI 运维' },
   { type: 'heading', key: 'server-heading', label: '服务器' },
   { type: 'item', key: '/server/manage', icon: <DeploymentUnitOutlined />, label: '节点管理' },
   { type: 'item', key: '/server/group', icon: <DatabaseOutlined />, label: '权限组管理' },
@@ -100,6 +102,7 @@ function Page({ path }: { path: string }) {
   if (route === '/dns') return <DNSPodPage />;
   if (route === '/dns-failover') return <DNSFailoverPage />;
   if (route === '/config/system') return <ConfigPage />;
+  if (route === '/config/ai-ops') return <AIOpsPage />;
   if (route === '/config/payment') return <PaymentPage />;
   if (route === '/config/subscribe-guard') return <SubscribeGuardPage />;
   if (route === '/config/user-migration') return <XboardMigrationPage />;

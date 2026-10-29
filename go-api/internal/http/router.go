@@ -54,6 +54,7 @@ type routerState struct {
 	jobs              queue.Enqueuer
 	telegram          telegramWebhookService
 	clientEntryRemote clientEntryRemoteResolver
+	aiOps             aiOpsService
 }
 
 var managedServerRouterTypes = map[string]struct{}{
@@ -232,6 +233,9 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 		adminPrefix := "/api/v1/" + strings.Trim(strings.TrimSpace(cfg.AdminPath), "/")
 
 		switch {
+		case strings.HasPrefix(r.URL.Path, adminPrefix+"/ai-ops/"):
+			handleAIOps(w, r, state.session, state.aiOps, strings.TrimPrefix(r.URL.Path, adminPrefix+"/ai-ops/"))
+			return
 		case r.URL.Path == "/api/v1/probe/install.sh":
 			handleProbeInstall(w, r)
 			return
