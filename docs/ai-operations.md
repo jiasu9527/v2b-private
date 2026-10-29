@@ -109,3 +109,28 @@ npm run build
 ```
 
 PostgreSQL 集成测试仅在指定一次性测试数据库时运行；初始化测试库使用安装 SQL，**切勿对真实数据库执行**。核心测试使用 `FOREST_AIOPS_TEST_DSN`，HTTP 集成使用独立空库的 `FOREST_AIOPS_HTTP_TEST_DSN`。模拟中转与本地模拟 SSH 验证加密、精确模型 ID、未确认不执行、并发批准、错误主机指纹、结果回传、取消／清理以及数据不复活，不消耗真实中转额度或连接业务服务器。
+
+### 真实中转兼容性测试（可选）
+
+提供 `FOREST_AIOPS_LIVE_BASE_URL`、`FOREST_AIOPS_LIVE_API_KEY` 后，运行：
+
+```sh
+go test ./internal/aiops -run '^TestAIRelayLiveCompatibility$' -count=1 -v -timeout=8m
+```
+
+Key 应由临时环境或秘密管理设施注入，不写进源码、测试快照或命令行参数。缺少配置时测试自动跳过；显式启用会消耗少量中转额度。可设置 `FOREST_AIOPS_LIVE_MODELS=gpt-6.1-sol` 只测一个已授权模型；不指定则测试四个默认 ID，不会替换成其他模型。
+
+兼容性测试使用实际的 14 个工具定义，验证只读工具调用、合成工具结果回填、待审批节点变更提案；不会真正调用工具或连接业务数据库、SSH。只输出阶段、HTTP 状态及耗时，不输出 Key 或完整响应。
+
+若还需要验证真实会话和审批持久化，可以额外设置指向**空白一次性 PostgreSQL 测试库**的 `FOREST_AIOPS_LIVE_TEST_DSN`，执行 `go test ./internal/aiops -run '^TestAIRelayLivePostgresFlow$' -count=1 -v -timeout=6m`。该测试只使用 `gpt-6.1-sol`，最多两次中转请求；创建虚构本地节点，核对未审批不修改、仅批准该测试节点一次、结果进入下一轮上下文、删除／重置不影响业务表，随后清理全部测试记录。不登记或连接 SSH，不允许使用真实数据库；测试使用一次性随机 `APP_KEY`，不会保留可解密临时凭据的固定密钥。
+
+### 常见中转错误
+
+- **401**：Key 无效或过期。
+- **403**：权限、IP 白名单或中转防火墙拒绝访问。
+- **`model_not_found` / `model_not_available`**：当前 Key 所属分组没有该模型，即使中转站其他分组支持也不能调用。后台会明确提示“所选模型在当前 API Key 分组不可用”，不会自动改用别的模型。
+- **429**：频率／并发受限，或额度不足；明确的额度错误会单独提示。
+- **普通 404**：核对 Base URL 和模型 ID。
+- **5xx**：中转或上游服务异常。
+
+后端只识别有限的错误代码，返回固定中文提示，不把中转错误正文或它可能回显的密钥写入会话。

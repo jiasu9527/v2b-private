@@ -83,7 +83,7 @@ func (s *Service) complete(ctx context.Context, model string, messages []provide
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return empty, errors.New("AI 中转返回错误，请检查密钥、模型权限或额度")
+		return empty, providerResponseError(resp.StatusCode, resp.Body)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, (512<<10)+1))
 	if err != nil || len(raw) > 512<<10 {
@@ -112,4 +112,43 @@ func (s *Service) complete(ctx context.Context, model string, messages []provide
 		return empty, errors.New("AI 未返回有效内容")
 	}
 	return out, nil
+}
+
+// Relay error messages can echo credentials, request content or HTML. Inspect
+// only bounded machine-readable codes and return fixed local messages, never
+// the upstream body. No error is retried automatically or changes the model.
+func providerResponseError(status int, body io.Reader) error {
+	raw, _ := io.ReadAll(io.LimitReader(body, 8193))
+	var envelope struct {
+		Error struct {
+			Code string `json:"code"`
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if len(raw) <= 8192 {
+		_ = json.Unmarshal(raw, &envelope)
+	}
+	code, kind := envelope.Error.Code, envelope.Error.Type
+	switch {
+	case status == http.StatusUnauthorized:
+		return errors.New("AI 中转鉴权失败（401），请检查 API Key 是否正确、有效")
+	case status == http.StatusForbidden:
+		return errors.New("AI 中转拒绝访问（403），请检查 Key 权限、IP 白名单或中转防火墙")
+	case code == "model_not_found" || code == "model_not_available":
+		return errors.New("所选模型在当前 API Key 分组不可用，请在中转开通该模型或手动选择已授权模型")
+	case code == "insufficient_quota" || kind == "insufficient_quota" || code == "quota_exceeded":
+		return errors.New("AI 中转额度不足，请检查当前 Key 分组的余额或额度")
+	case status == http.StatusTooManyRequests:
+		return errors.New("AI 中转请求受限（429），请稍后重试或检查分组额度")
+	case status == http.StatusNotFound:
+		return errors.New("AI 中转接口或模型不存在（404），请核对 Base URL 和模型 ID")
+	case status >= 300 && status < 400:
+		return errors.New("AI 中转要求重定向，已拒绝转发 Key；请填写最终 API 地址")
+	case status >= 500:
+		return errors.New("AI 中转或上游模型暂时异常（5xx），请稍后核对服务状态")
+	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity:
+		return errors.New("AI 中转不接受请求参数，请确认模型支持 Chat Completions 和工具调用")
+	default:
+		return errors.New("AI 中转返回错误，请检查密钥、模型权限或额度")
+	}
 }
