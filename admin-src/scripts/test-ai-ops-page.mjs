@@ -57,7 +57,7 @@ test('page is administrator-only and introduces no MCP menu or browser persisten
   assert.doesNotMatch(app, /MCPPage|config\/mcp/);
 });
 
-test('SSH secrets stay in settings-only requests and clear on save/close', () => {
+test('explicit server form credentials clear on save/close and chat sends only its content envelope', () => {
   const send = page.slice(page.indexOf('const send ='), page.indexOf('const saveConfig'));
   assert.doesNotMatch(send, /password|private_key|api_key:/);
   assert.match(page, /configForm\.setFieldsValue\(\{ api_key: '', clear_api_key: false \}\)/);
@@ -91,6 +91,15 @@ test('async send uses stable retry request IDs and does not replace a subsequent
   assert.match(page, /selectionSequence\.current === selection/);
   assert.match(page, /requestSequence|detailSequence/);
   assert.match(page, /cache: 'no-store'/);
+});
+
+test('chat preserves raw SSH password whitespace for sending and retry identity while rejecting blank input', () => {
+  const send = page.slice(page.indexOf('const send ='), page.indexOf('const saveConfig'));
+  assert.match(send, /const content = contentOverride \?\? draft;/);
+  assert.match(send, /if \(!content\.trim\(\) \|\|/);
+  assert.match(send, /sendRetry\.content === content/);
+  assert.match(send, /model, content, request_id: retry\.requestID/);
+  assert.doesNotMatch(send, /content:\s*content\.trim\(\)|const content =[^;]*\.trim\(\)/);
 });
 
 test('latest turn selection is stable for descending API order and shows the newest failure', () => {

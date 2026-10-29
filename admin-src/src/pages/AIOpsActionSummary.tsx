@@ -2,7 +2,7 @@ import { Alert, Descriptions, Table, Typography } from 'antd';
 import type { AIAction } from './aiOpsModel';
 
 export const aiActionNames: Record<string, string> = {
-  ssh_command: '服务器命令', entry_host: '修改入口地址', node_change: '修改节点',
+  ssh_command: '服务器命令', server_register: '登记 SSH 服务器', entry_host: '修改入口地址', node_change: '修改节点',
   monitor_run: '按入口规则发起检测', entry_probe_run: '指定入口与探针检测',
   user_update: '修改用户', ticket_update: '处理工单', ticket_settings: '全站工单设置',
   entry_rule_update: '修改入口规则', node_update: '修改节点连接配置',
@@ -37,6 +37,13 @@ function valueText(key: string, value: unknown): string {
 
 export default function AIOpsActionSummary({ action }: { action: AIAction }) {
   const p = action.payload || {};
+  if (action.kind === 'server_register') return <Descriptions size="small" column={1}>
+    <Descriptions.Item label="服务器名称">{String(p.name || '—')}</Descriptions.Item>
+    <Descriptions.Item label="连接身份"><Typography.Text code>{String(p.username || '')}@{String(p.host || '')}:{String(p.port || 22)}</Typography.Text></Descriptions.Item>
+    <Descriptions.Item label="凭据">{[p.has_password && `密码${action.status === 'succeeded' ? '已加密保存' : '已安全暂存'}`, p.has_private_key && `私钥${action.status === 'succeeded' ? '已加密保存' : '已安全暂存'}`].filter(Boolean).join('；') || '未提供'}</Descriptions.Item>
+    <Descriptions.Item label="主机指纹"><Typography.Text code>{String(p.host_key_sha256 || '—')}</Typography.Text></Descriptions.Item>
+    <Descriptions.Item label="指纹来源">{p.trust_source === 'first_use' ? '首次连接记录的指纹，未经独立验证；后续连接必须匹配。' : '使用提供的固定指纹；后续连接必须匹配。'}</Descriptions.Item>
+  </Descriptions>;
   if (action.kind === 'ssh_command') return <Descriptions size="small" column={1}>
     <Descriptions.Item label="最长执行时间">{Number(p.timeout_seconds || 120)} 秒</Descriptions.Item>
     <Descriptions.Item label="执行方式">非交互 SSH；运行中可展开操作详情查看实时输出。</Descriptions.Item>

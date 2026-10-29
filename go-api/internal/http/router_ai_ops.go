@@ -178,6 +178,10 @@ func handleAIOpsError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, aiops.ErrForbidden):
 		status, msg = 403, aiops.ErrForbidden.Error()
+	case errors.Is(err, aiops.ErrSSHIntakeInvalid):
+		status, msg = 400, aiops.ErrSSHIntakeInvalid.Error()
+	case errors.Is(err, aiops.ErrSSHIntakeMultiple):
+		status, msg = 400, aiops.ErrSSHIntakeMultiple.Error()
 	case errors.Is(err, aiops.ErrValidation):
 		status, msg = 400, aiops.ErrValidation.Error()
 	case errors.Is(err, aiops.ErrNotFound):

@@ -77,6 +77,7 @@ func (s *Service) toolDefinitions() []ToolDefinition {
 	out = append(out, probeToolDefinitions()...)
 	out = append(out, entryRuleToolDefinitions()...)
 	out = append(out, nodeToolDefinitions()...)
+	out = append(out, serverToolDefinitions()...)
 	return out
 }
 func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call ToolCall) (ToolOutcome, error) {
@@ -105,6 +106,8 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 		return s.callEntryRuleTool(ctx, actorID, sessionID, call)
 	case "node_detail", "propose_node_update":
 		return s.callNodeTool(ctx, actorID, sessionID, call)
+	case "ssh_server_register":
+		return s.callServerTool(ctx, actorID, sessionID, call)
 	}
 	var a aiToolArgs
 	d := json.NewDecoder(strings.NewReader(call.Function.Arguments))

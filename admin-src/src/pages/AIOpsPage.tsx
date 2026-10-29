@@ -26,12 +26,12 @@ function ActionDetails({ action }: { action: AIAction }) {
       <Descriptions.Item label="操作">{aiActionNames[action.kind] || action.kind} · #{action.id}</Descriptions.Item>
       {action.server_label && <Descriptions.Item label="操作对象">{action.server_label}</Descriptions.Item>}
       {action.kind === 'ssh_command' && payload.host != null && <Descriptions.Item label="连接身份"><Text code>{String(payload.username || '')}@{String(payload.host)}:{String(payload.port || 22)}</Text></Descriptions.Item>}
-      {payload.host_key_sha256 != null && <Descriptions.Item label="固定主机指纹"><Text code>{String(payload.host_key_sha256)}</Text></Descriptions.Item>}
+      {action.kind !== 'server_register' && payload.host_key_sha256 != null && <Descriptions.Item label="固定主机指纹"><Text code>{String(payload.host_key_sha256)}</Text></Descriptions.Item>}
       <Descriptions.Item label="原因">{action.reason || '—'}</Descriptions.Item>
       <Descriptions.Item label="有效至">{time(action.expires_at)}</Descriptions.Item>
     </Descriptions>
     <AIOpsActionSummary action={action} />
-    {command ? <><Text strong>{action.approval_mode === 'full_access' ? '完整执行命令' : '完整命令（逐次确认后执行）'}</Text><pre className="ai-ops-pre ai-ops-command">{command}</pre></> : <><Text strong>完整变更参数 / 前后快照</Text><pre className="ai-ops-pre">{pretty(payload)}</pre></>}
+    {action.kind !== 'server_register' && (command ? <><Text strong>{action.approval_mode === 'full_access' ? '完整执行命令' : '完整命令（逐次确认后执行）'}</Text><pre className="ai-ops-pre ai-ops-command">{command}</pre></> : <><Text strong>完整变更参数 / 前后快照</Text><pre className="ai-ops-pre">{pretty(payload)}</pre></>)}
   </Space>;
 }
 
@@ -68,6 +68,8 @@ export default function AIOpsPage() {
   const [streamConnected, setStreamConnected] = useState(false);
   const alive = useRef(true);
   const detailSequence = useRef(0);
+  const serverListSequence = useRef(0);
+  const refreshedRegistrations = useRef(new Set<string>());
   const fingerprintSequence = useRef(0);
   const pollRunning = useRef(false);
   const messageViewport = useRef<HTMLDivElement>(null);
@@ -94,10 +96,21 @@ export default function AIOpsPage() {
     if (!value?.session || !Array.isArray(value.messages)) throw new Error('会话数据格式不正确');
     applySnapshot(value);
   };
+  const loadServers = async (selection?: { id: number; sequence: number }) => {
+    const sequence = ++serverListSequence.current;
+    const response = await apiGet('/ai-ops/servers', {}, { cache: 'no-store' });
+    if (!alive.current || sequence !== serverListSequence.current) return;
+    if (selection && (selectedRef.current !== selection.id || selectionSequence.current !== selection.sequence)) return;
+    setServers(responseList(response));
+  };
+  const changeTab = (next: string) => {
+    setTab(next);
+    if (next === 'servers') void loadServers().catch((e) => fail(e, '读取服务器列表失败'));
+  };
   const loadLists = async () => {
-    const [sessionResult, serverResult] = await Promise.all([apiGet('/ai-ops/sessions', {}, { cache: 'no-store' }), apiGet('/ai-ops/servers', {}, { cache: 'no-store' })]);
+    const [sessionResult] = await Promise.all([apiGet('/ai-ops/sessions', {}, { cache: 'no-store' }), loadServers()]);
     if (!alive.current) return;
-    setSessions((items) => responseList(sessionResult).map((session) => aiMergeSessionAccess(items.find((item) => item.id === session.id), session))); setServers(responseList(serverResult));
+    setSessions((items) => responseList(sessionResult).map((session) => aiMergeSessionAccess(items.find((item) => item.id === session.id), session)));
   };
   const load = async (refreshConfig = true) => {
     setLoading(true);
@@ -125,8 +138,16 @@ export default function AIOpsPage() {
       try { await loadDetail(selectedRef.current); } catch { /* Keep the last snapshot; explicit refresh shows errors. */ }
       finally { pollRunning.current = false; }
     }, 5000);
-    return () => { alive.current = false; detailSequence.current += 1; fingerprintSequence.current += 1; window.clearInterval(tick); window.clearInterval(timer); };
+    return () => { alive.current = false; detailSequence.current += 1; serverListSequence.current += 1; fingerprintSequence.current += 1; window.clearInterval(tick); window.clearInterval(timer); };
   }, []);
+  useEffect(() => {
+    if (!detail || detail.session.id !== selectedRef.current) return;
+    const completed = detail.actions.filter((action) => action.kind === 'server_register' && action.status === 'succeeded' && action.session_id === detail.session.id && !refreshedRegistrations.current.has(`${action.session_id}:${action.id}`));
+    if (!completed.length) return;
+    completed.forEach((action) => refreshedRegistrations.current.add(`${action.session_id}:${action.id}`));
+    const selection = { id: detail.session.id, sequence: selectionSequence.current };
+    void loadServers(selection).catch((e) => { if (selectedRef.current === selection.id && selectionSequence.current === selection.sequence) fail(e, '服务器已登记，列表刷新失败，请点击刷新'); });
+  }, [detail?.session.id, detail?.actions]);
   const streamWanted = tab === 'chat' && selectedID > 0 && (aiSessionBusy(detail) || sessions.some((item) => item.id === selectedID && item.status === 'running'));
   useEffect(() => {
     if (!streamWanted) return;
@@ -221,8 +242,8 @@ export default function AIOpsPage() {
     finally { finish(); }
   };
   const send = async (contentOverride?: string) => {
-    const content = (contentOverride ?? draft).trim();
-    if (!content || !config.enabled || !config.has_api_key || (selectedRef.current > 0 && !detail) || aiSessionBusy(detail) || foreignFullAccess || !begin('send')) return;
+    const content = contentOverride ?? draft;
+    if (!content.trim() || !config.enabled || !config.has_api_key || (selectedRef.current > 0 && !detail) || aiSessionBusy(detail) || foreignFullAccess || !begin('send')) return;
     followOutput.current = true;
     const originalID = selectedRef.current;
     const selection = selectionSequence.current;
@@ -315,9 +336,9 @@ export default function AIOpsPage() {
     <aside className="ai-ops-sessions"><Space wrap><Button icon={<PlusOutlined />} onClick={newSession}>新对话</Button><Button danger type="text" disabled={!sessions.length || !!busy} onClick={() => setConfirmation({ kind: 'clear' })}>清空全部会话</Button></Space><Paragraph type="secondary">所有管理员共享会话，可查看与删除；列出最近 200 个会话。</Paragraph><div className="ai-ops-session-list">{sessions.map((session) => <div className={`ai-ops-session ${selectedID === session.id ? 'is-active' : ''}`} key={session.id}><button onClick={() => selectSession(session)}><strong>{session.title || `会话 #${session.id}`}</strong><span>{session.model}</span><span>{time(session.updated_at)} · 管理员 #{session.created_by} {session.status === 'running' ? '· 处理中' : ''}</span></button><Button type="text" danger aria-label={`删除会话 ${session.id}`} icon={<DeleteOutlined />} disabled={!!busy} onClick={() => setConfirmation({ kind: 'delete', session })} /></div>)}</div></aside>
     <section className="ai-ops-conversation">
       <div className="ai-ops-conversation-head"><div><Text strong>{detail?.session.title || (selectedID ? '读取会话中…' : '新的运维对话')}</Text><div><Text type="secondary">{accessMode === 'full' ? '完全访问：AI 可连续修改配置、执行 SSH 并根据结果继续处理。' : '逐次确认：查询直接进行，修改和 SSH 操作由你逐项确认。'}</Text></div></div><Space wrap><Select aria-label="选择 AI 模型" value={model} onChange={setModel} disabled={!!busy || aiSessionBusy(detail)} options={config.models.map((value) => ({ value, label: value }))} style={{ minWidth: 210 }} /><Select<AIAccessMode> aria-label="AI 访问权限" value={accessMode} onChange={(mode) => void changeAccess(mode)} loading={busy === 'access'} disabled={!!busy || (selectedID > 0 && !detail)} options={[{ value: 'standard', label: '逐次确认' }, { value: 'full', label: '完全访问', disabled: aiSessionBusy(detail) && accessMode !== 'full' }]} style={{ minWidth: 150 }} /></Space></div>
-      {accessMode === 'full' && <Alert type="info" showIcon message={foreignFullAccess ? `本会话由管理员 #${detail?.session.full_access_by || '未知'} 授予完全访问` : '完全访问已选择，当前会话操作不再逐次询问'} description={<Space direction="vertical" size={4}><span>{foreignFullAccess ? '他人的授权不会自动沿用到你的消息。请选择逐次确认，或由你重新启用完全访问后发送。' : '可随时切回逐次确认或点击停止。服务器凭据仍在“服务器”中登记；停止不会回滚已完成的修改。'}</span>{foreignFullAccess && <Button size="small" disabled={!!busy || aiSessionBusy(detail)} onClick={() => void changeAccess('full')}>由我启用完全访问</Button>}</Space>} />}
+      {accessMode === 'full' && <Alert type="info" showIcon message={foreignFullAccess ? `本会话由管理员 #${detail?.session.full_access_by || '未知'} 授予完全访问` : '完全访问已选择，当前会话操作不再逐次询问'} description={<Space direction="vertical" size={4}><span>{foreignFullAccess ? '他人的授权不会自动沿用到你的消息。请选择逐次确认，或由你重新启用完全访问后发送。' : '可随时切回逐次确认或点击停止。服务器可通过聊天提供连接资料，也可在“服务器”中登记；停止不会回滚已完成的修改。'}</span>{foreignFullAccess && <Button size="small" disabled={!!busy || aiSessionBusy(detail)} onClick={() => void changeAccess('full')}>由我启用完全访问</Button>}</Space>} />}
 
-      <Alert type="info" showIcon message="对话、查询结果及命令输出会发送到你配置的中转模型" description="不要在聊天中输入服务器密码、私钥、订阅 Token 或私人数据。服务器凭据只在“服务器”选项卡录入；AI 返回内容与工具输出均作为业务数据展示。" />
+      <Alert type="info" showIcon message="支持在聊天中粘贴 SSH 连接资料" description="地址（可含端口）、用户名、密码可各占一行，也支持中英文标签。识别到的密码和私钥由后端加密暂存，聊天记录与模型只接收隐藏后的信息；其他对话、查询结果和命令输出会发送到你配置的中转模型。" />
       <div className="ai-ops-messages" ref={messageViewport} onScroll={() => { const pane = messageViewport.current; if (pane) followOutput.current = aiNearBottom(pane.scrollTop, pane.clientHeight, pane.scrollHeight); }}>
         {!detail && !selectedID && <div className="ai-ops-empty"><MessageOutlined /><h3>告诉 AI 需要处理什么</h3><p>例如：调整入口规则的 UA 和用户范围、修改节点连接端口、检测指定入口，或在已登记服务器上安装落地／中转服务。</p></div>}
         {selectedID > 0 && !detail && <Spin />}
@@ -369,7 +390,7 @@ export default function AIOpsPage() {
       }} placeholder="描述问题或操作需求；Enter 发送，Shift+Enter 换行" autoSize={{ minRows: 3, maxRows: 8 }} maxLength={12000} disabled={busy === 'send' || aiSessionBusy(detail)} /><Space wrap><Button type="primary" icon={<SendOutlined />} loading={busy === 'send'} disabled={!draft.trim() || unavailable || !!busy || aiSessionBusy(detail) || foreignFullAccess || (selectedID > 0 && !detail)} onClick={() => void send()}>发送</Button>{aiSessionBusy(detail) && <Button danger icon={<StopOutlined />} loading={busy === 'stop'} disabled={!!busy && busy !== 'stop'} onClick={() => void stop()}>停止</Button>}<Text type="secondary">{unavailable ? '请先在设置中启用 AI 并保存中转 API Key。' : 'Enter 发送 · Shift+Enter 换行 · 工具详情默认折叠'}</Text></Space></div>
     </section>
   </div>;
-  const serverPanel = <Space direction="vertical" size="middle" style={{ width: '100%' }}><Alert type="info" showIcon message="服务器凭据仅保存到后端，不发给模型" description="必须填写已核对的 SSH 主机指纹；获取到的指纹只是观察值，不会自动信任或覆盖旧指纹。逐次确认模式下，每条服务器命令和部署操作均须批准；在对话窗口选择完全访问后，AI 可按当前任务连续执行。" /><Button type="primary" icon={<PlusOutlined />} disabled={!!busy} onClick={() => openServer(null)}>登记服务器</Button><Table<AIServer> rowKey="id" size="small" dataSource={servers} scroll={{ x: 1100 }} columns={[
+  const serverPanel = <Space direction="vertical" size="middle" style={{ width: '100%' }}><Alert type="info" showIcon message="服务器凭据仅保存到后端，不发给模型" description="可通过聊天粘贴连接资料，也可在此表单登记。表单需填写已核对的 SSH 主机指纹；聊天未提供指纹时，会记录首次连接指纹，后续连接必须匹配。逐次确认模式下，每条服务器命令和部署操作均须批准；在对话窗口选择完全访问后，AI 可按当前任务连续执行。" /><Button type="primary" icon={<PlusOutlined />} disabled={!!busy} onClick={() => openServer(null)}>登记服务器</Button><Table<AIServer> rowKey="id" size="small" dataSource={servers} scroll={{ x: 1100 }} columns={[
     { title: '名称', dataIndex: 'name', width: 160, render: (name, server) => <><strong>{name}</strong><div>#{server.id}</div></> },
     { title: '连接', width: 240, render: (_, server) => <Text code>{server.username}@{server.host}:{server.port}</Text> },
     { title: '主机指纹', dataIndex: 'host_key_sha256', width: 300, render: (value) => <span className="ai-ops-wrap">{value}</span> },
@@ -385,7 +406,7 @@ export default function AIOpsPage() {
     <Button type="primary" htmlType="submit" loading={busy === 'config'}>保存设置</Button>
   </Form></Card><Card title="数据清理" size="small"><Paragraph>清空会话只删除聊天、消息及相关操作记录，保留中转配置和服务器凭据。重置全部 AI 数据会同时清除这三类数据并停止进行中的 AI 任务；已经在远程服务器启动的命令不能保证撤回或回滚。有远程操作正在执行时，删除、清空和重置会被拒绝，需等操作完成或进入“结果待核对”状态后再处理。</Paragraph><Space wrap><Button danger disabled={!!busy} onClick={() => setConfirmation({ kind: 'clear' })}>清空全部会话</Button><Button danger type="primary" disabled={!!busy} onClick={() => { setResetText(''); setConfirmation({ kind: 'reset' }); }}>重置全部 AI 数据</Button></Space></Card></Space>;
   const titles = { delete: '删除当前会话', clear: '清空全部管理员会话', reset: '重置全部 AI 数据', 'server-delete': '删除服务器配置' };
-  return <div className="legacy-page ai-ops-page"><div className="content-heading">AI 运维</div><div className="ai-ops-page-body"><Space direction="vertical" size="middle" style={{ width: '100%' }}><Space wrap><Tag color={config.enabled && config.has_api_key ? 'success' : 'default'}>{!loaded ? '加载中' : config.enabled ? config.has_api_key ? '已启用' : '缺少 API Key' : '未启用'}</Tag><Button icon={<ReloadOutlined />} loading={loading} disabled={!!busy} onClick={() => void load()}>刷新</Button></Space>{error && <Alert type="error" showIcon message="读取失败" description={error} />}<Tabs activeKey={tab} onChange={setTab} items={[{ key: 'chat', label: '运维对话', children: chat }, { key: 'servers', label: '服务器', children: serverPanel }, { key: 'settings', label: '设置', children: settings }]} /></Space></div>
+  return <div className="legacy-page ai-ops-page"><div className="content-heading">AI 运维</div><div className="ai-ops-page-body"><Space direction="vertical" size="middle" style={{ width: '100%' }}><Space wrap><Tag color={config.enabled && config.has_api_key ? 'success' : 'default'}>{!loaded ? '加载中' : config.enabled ? config.has_api_key ? '已启用' : '缺少 API Key' : '未启用'}</Tag><Button icon={<ReloadOutlined />} loading={loading} disabled={!!busy} onClick={() => void load()}>刷新</Button></Space>{error && <Alert type="error" showIcon message="读取失败" description={error} />}<Tabs activeKey={tab} onChange={changeTab} items={[{ key: 'chat', label: '运维对话', children: chat }, { key: 'servers', label: '服务器', children: serverPanel }, { key: 'settings', label: '设置', children: settings }]} /></Space></div>
     <Modal title={editing ? `编辑服务器 · ${editing.name}` : '登记服务器'} open={serverOpen} onCancel={closeServer} onOk={saveServer} confirmLoading={busy === 'server'} okText="保存服务器" cancelButtonProps={{ disabled: !!busy }} closable={!busy} maskClosable={!busy} destroyOnHidden width={720}>
       <Alert type="warning" showIcon message="凭据与连接身份绑定" description="修改地址、端口、用户名或主机指纹后，必须重新输入密码或私钥；旧的密码、私钥和口令都不会沿用。" style={{ marginBottom: 16 }} />
       <Form form={serverForm} layout="vertical" disabled={!!busy} onValuesChange={(changed) => { if ('host' in changed || 'port' in changed) { fingerprintSequence.current += 1; setFingerprint(null); setFingerprintLoading(false); } }}>

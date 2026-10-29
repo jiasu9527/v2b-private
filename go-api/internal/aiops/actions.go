@@ -27,6 +27,8 @@ type actionSpec struct {
 	TargetType string
 	Payload    json.RawMessage
 	Reason     string
+	ActorID    int64 `json:"-"`
+	SessionID  int64 `json:"-"`
 }
 
 func hashOperation(raw string) string {
@@ -99,6 +101,7 @@ func (s *Service) proposeAction(ctx context.Context, actorID, sessionID int64, c
 	if err = s.requireSessionTx(ctx, tx, sessionID); err != nil {
 		return empty, err
 	}
+	spec.ActorID, spec.SessionID = actorID, sessionID
 	reqBytes, _ := json.Marshal(spec)
 	requestHash := hashOperation(string(reqBytes))
 	var existingHash string
@@ -115,6 +118,13 @@ func (s *Service) proposeAction(ctx context.Context, actorID, sessionID int64, c
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return empty, err
+	}
+	if spec.Kind == "server_register" {
+		if existing, e := pendingServerRegistration(ctx, tx, sessionID, actorID, spec.TargetID); e == nil {
+			return existing, tx.Commit()
+		} else if !errors.Is(e, ErrNotFound) {
+			return empty, e
+		}
 	}
 	var pending int
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_ai_action WHERE session_id=$1 AND status='pending' AND expires_at>$2`, sessionID, time.Now().Unix()).Scan(&pending); err != nil {
@@ -175,6 +185,8 @@ type monitorTarget struct {
 
 func (s *Service) captureActionTarget(ctx context.Context, tx *sql.Tx, spec actionSpec) (json.RawMessage, string, string, error) {
 	switch spec.Kind {
+	case "server_register":
+		return s.captureServerRegisterAction(ctx, tx, spec)
 	case "user_update":
 		return s.captureUserAction(ctx, tx, spec)
 	case "ticket_update", "ticket_settings":
@@ -495,7 +507,7 @@ func (s *Service) changeActionAuthorized(ctx context.Context, actorID, sessionID
 	if err = tx.QueryRowContext(ctx, `SELECT snapshot_hash FROM v2_ai_action WHERE id=$1`, id).Scan(&snapshot); err != nil {
 		return empty, err
 	}
-	spec := actionSpec{Kind: a.Kind, TargetID: a.TargetID, TargetType: a.TargetType, Payload: a.Payload, Reason: a.Reason}
+	spec := actionSpec{Kind: a.Kind, TargetID: a.TargetID, TargetType: a.TargetType, Payload: a.Payload, Reason: a.Reason, ActorID: a.ActorID, SessionID: a.SessionID}
 	_, current, _, err := s.captureActionTarget(ctx, tx, spec)
 	if err != nil {
 		return empty, err
@@ -503,12 +515,18 @@ func (s *Service) changeActionAuthorized(ctx context.Context, actorID, sessionID
 	if snapshot != current {
 		return a, ErrConflict
 	}
-	if a.Kind == "entry_host" || a.Kind == "node_change" || a.Kind == "node_update" || a.Kind == "entry_rule_update" || a.Kind == "user_update" || a.Kind == "ticket_update" {
+	if a.Kind == "server_register" || a.Kind == "entry_host" || a.Kind == "node_change" || a.Kind == "node_update" || a.Kind == "entry_rule_update" || a.Kind == "user_update" || a.Kind == "ticket_update" {
 		a.ApprovedBy = actorID
-		if err = applyPanelAction(ctx, tx, a); err != nil {
+		output := panelActionOutput(approvalMode)
+		if a.Kind == "server_register" {
+			output, err = s.applyServerRegisterAction(ctx, tx, a)
+		} else {
+			err = applyPanelAction(ctx, tx, a)
+		}
+		if err != nil {
 			return empty, err
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE v2_ai_action SET status='succeeded',claimed_at=$2,completed_at=$2,updated_at=$2,approved_by=$3,approval_mode=$4,authorization_turn_id=$5,output=$6 WHERE id=$1`, id, now, actorID, approvalMode, autoTurnID, panelActionOutput(approvalMode)); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE v2_ai_action SET status='succeeded',claimed_at=$2,completed_at=$2,updated_at=$2,approved_by=$3,approval_mode=$4,authorization_turn_id=$5,output=$6 WHERE id=$1`, id, now, actorID, approvalMode, autoTurnID, output); err != nil {
 			return empty, err
 		}
 		if err = tx.Commit(); err != nil {
@@ -519,7 +537,7 @@ func (s *Service) changeActionAuthorized(ctx context.Context, actorID, sessionID
 		a.CompletedAt = now
 		a.UpdatedAt = now
 		a.ApprovedBy = actorID
-		a.Output = panelActionOutput(approvalMode)
+		a.Output = output
 		if invalidator, ok := s.panel.(interface{ InvalidateAIEntryTargets() }); ok {
 			if a.Kind == "entry_host" || a.Kind == "node_change" || a.Kind == "node_update" || a.Kind == "entry_rule_update" {
 				invalidator.InvalidateAIEntryTargets()

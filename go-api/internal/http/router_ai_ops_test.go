@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"forest/go-api/internal/aiops"
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/session"
@@ -164,6 +165,16 @@ func TestAIOpsManagementSecretsErrorsAndSessionActions(t *testing.T) {
 	w = aiOpsTestRequest(t, f, identity, "GET", "reset", "")
 	if w.Code != 405 {
 		t.Fatal("wrong method accepted")
+	}
+}
+
+func TestAIOpsSSHIntakeErrorExplainsHowToCorrectWithoutEchoingCredentials(t *testing.T) {
+	for _, problem := range []error{aiops.ErrSSHIntakeInvalid, aiops.ErrSSHIntakeMultiple} {
+		f := &fakeAIOps{err: fmt.Errorf("secret-password: %w", problem)}
+		w := aiOpsTestRequest(t, f, &session.Identity{ID: 7, IsAdmin: 1}, "POST", "chat/send", `{"model":"gpt-6.1-sol","content":"fixture","request_id":"fixture-intake"}`)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), "凭据未发送给模型") || strings.Contains(w.Body.String(), "secret-password") {
+			t.Fatalf("unexpected intake error: %d %s", w.Code, w.Body.String())
+		}
 	}
 }
 
