@@ -62,7 +62,7 @@ func TestAIRelayLiveCompatibility(t *testing.T) {
 			for _, definition := range s.toolDefinitions() {
 				knownTools[definition.Function.Name] = true
 			}
-			if len(knownTools) != 14 {
+			if len(knownTools) != 26 {
 				t.Fatal("update the explicit live test tool-count contract")
 			}
 			invoke := func(t *testing.T, stage string, messages []providerMessage) (providerMessage, bool) {
@@ -93,7 +93,7 @@ func TestAIRelayLiveCompatibility(t *testing.T) {
 					t.Errorf("stage=%s class=%s", stage, category)
 					return providerMessage{}, false
 				}
-				if transport.model != model || transport.toolCount != 14 {
+				if transport.model != model || transport.toolCount != len(knownTools) {
 					t.Errorf("stage=%s class=request_model_or_tool_schema_mismatch", stage)
 					return providerMessage{}, false
 				}

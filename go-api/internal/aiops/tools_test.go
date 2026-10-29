@@ -26,10 +26,15 @@ func TestAIToolsHaveNoApproveOrDirectExecute(t *testing.T) {
 	s := NewService(config.Config{}, nil, nil)
 	defer s.Close()
 	defs := s.toolDefinitions()
-	if len(defs) != 14 {
+	if len(defs) != 26 {
 		t.Fatalf("tools %d", len(defs))
 	}
+	seen := map[string]bool{}
 	for _, d := range defs {
+		if seen[d.Function.Name] {
+			t.Fatalf("duplicate tool %s", d.Function.Name)
+		}
+		seen[d.Function.Name] = true
 		if strings.Contains(d.Function.Name, "approve") || strings.Contains(d.Function.Name, "execute") || d.Function.Name == "sql" {
 			t.Fatal(d.Function.Name)
 		}

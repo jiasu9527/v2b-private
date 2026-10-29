@@ -71,6 +71,9 @@ func (s *Service) toolDefinitions() []ToolDefinition {
 	add("propose_entry_host", "创建入口host变更待审批卡，不执行；保留UA与固定名单，合集成员不支持单独改。", map[string]any{"kind": map[string]any{"type": "string", "enum": []string{"policy", "split_group"}}, "target_id": num("规则/叶子ID"), "host": str("单个域名或IP"), "reason": str("原因与影响")}, "kind", "target_id", "host", "reason")
 	add("propose_node_change", "仅提议指定节点host/port/show改变，必须后台确认，不支持其他配置或任意API透传。", map[string]any{"node_type": str("协议"), "node_id": num("节点ID"), "changes": map[string]any{"type": "object", "properties": map[string]any{"host": str("域名或IP"), "port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535}, "show": map[string]any{"type": "integer", "enum": []int{0, 1}}}, "additionalProperties": false}, "reason": str("原因与影响")}, "node_type", "node_id", "changes", "reason")
 	add("monitor_run", "创建指定1-10条规则检测审批卡。检测不直接修改入口，结果仍遵循后台既有自动化配置。", map[string]any{"policy_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer", "minimum": 1}, "minItems": 1, "maxItems": 10, "uniqueItems": true}, "reason": str("检测原因")}, "policy_ids", "reason")
+	out = append(out, userToolDefinitions()...)
+	out = append(out, ticketToolDefinitions()...)
+	out = append(out, probeToolDefinitions()...)
 	return out
 }
 func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call ToolCall) (ToolOutcome, error) {
@@ -87,6 +90,14 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 	}
 	if !s.validToolArgumentKeys(call.Function.Name, call.Function.Arguments) {
 		return ToolOutcome{}, ErrValidation
+	}
+	switch call.Function.Name {
+	case "plans_list", "groups_list", "user_detail", "propose_user_update":
+		return s.callUserTool(ctx, actorID, sessionID, call)
+	case "tickets_list", "ticket_get", "ticket_settings", "propose_ticket_update", "propose_ticket_settings":
+		return s.callTicketTool(ctx, actorID, sessionID, call)
+	case "entry_probe_targets", "entry_probe_run", "entry_probe_result":
+		return s.callProbeTool(ctx, actorID, sessionID, call)
 	}
 	var a aiToolArgs
 	d := json.NewDecoder(strings.NewReader(call.Function.Arguments))

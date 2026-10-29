@@ -174,6 +174,12 @@ type monitorTarget struct {
 
 func (s *Service) captureActionTarget(ctx context.Context, tx *sql.Tx, spec actionSpec) (json.RawMessage, string, string, error) {
 	switch spec.Kind {
+	case "user_update":
+		return s.captureUserAction(ctx, tx, spec)
+	case "ticket_update", "ticket_settings":
+		return s.captureTicketAction(ctx, tx, spec)
+	case "entry_probe_run":
+		return s.captureProbeAction(ctx, tx, spec)
 	case "ssh_command":
 		var p sshPayload
 		if json.Unmarshal(spec.Payload, &p) != nil || p.ServerID <= 0 || len(p.Command) == 0 || len(p.Command) > 16000 || strings.ContainsRune(p.Command, 0) {
@@ -462,7 +468,8 @@ func (s *Service) changeAction(ctx context.Context, actorID, sessionID, id int64
 	if snapshot != current {
 		return a, ErrConflict
 	}
-	if a.Kind == "entry_host" || a.Kind == "node_change" {
+	if a.Kind == "entry_host" || a.Kind == "node_change" || a.Kind == "user_update" || a.Kind == "ticket_update" {
+		a.ApprovedBy = actorID
 		if err = applyPanelAction(ctx, tx, a); err != nil {
 			return empty, err
 		}
@@ -479,7 +486,17 @@ func (s *Service) changeAction(ctx context.Context, actorID, sessionID, id int64
 		a.ApprovedBy = actorID
 		a.Output = "已执行经人工批准的配置变更"
 		if invalidator, ok := s.panel.(interface{ InvalidateAIEntryTargets() }); ok {
-			invalidator.InvalidateAIEntryTargets()
+			if a.Kind == "entry_host" || a.Kind == "node_change" {
+				invalidator.InvalidateAIEntryTargets()
+			}
+		}
+		if a.Kind == "user_update" {
+			if invalidator, ok := s.panel.(interface{ InvalidateAIUserSessions(int64) }); ok {
+				invalidator.InvalidateAIUserSessions(a.TargetID)
+			}
+		}
+		if a.Kind == "ticket_update" {
+			s.afterTicketAction(ctx, a)
 		}
 		return a, nil
 	}
@@ -518,6 +535,12 @@ func (s *Service) changeAction(ctx context.Context, actorID, sessionID, id int64
 	return a, nil
 }
 func applyPanelAction(ctx context.Context, tx *sql.Tx, a Action) error {
+	if a.Kind == "user_update" {
+		return applyUserAction(ctx, tx, a)
+	}
+	if a.Kind == "ticket_update" {
+		return applyTicketAction(ctx, tx, a)
+	}
 	if a.Kind == "entry_host" {
 		var p entryPayload
 		if json.Unmarshal(a.Payload, &p) != nil {
@@ -567,6 +590,12 @@ func applyPanelAction(ctx context.Context, tx *sql.Tx, a Action) error {
 func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, a Action, snapshot string) {
 	defer func() { cancel(); s.mu.Lock(); delete(s.workers, -a.ID); s.mu.Unlock(); s.wg.Done() }()
 	status, output, problem := "failed", "", "操作执行失败，可能已部分执行；请人工检查"
+	if a.Kind == "ticket_settings" {
+		status, output, problem = s.executeTicketSettings(ctx, a, snapshot)
+	}
+	if a.Kind == "entry_probe_run" {
+		status, output, problem = s.executeProbeAction(ctx, a, snapshot)
+	}
 	if a.Kind == "ssh_command" {
 		var p sshPayload
 		if json.Unmarshal(a.Payload, &p) == nil {

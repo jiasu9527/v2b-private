@@ -79,6 +79,10 @@ ORDER BY policy.sort ASC NULLS LAST, policy.id ASC`)
 // run for the selected policy groups. Every enabled probe participates. When a
 // Telegram progress message is available, its ID is retained for later edits.
 func (s *DBService) StartClientEntryMonitorRunForPoliciesWithMessage(ctx context.Context, policyIDs []int64, userID, chatID, messageID int64, requestKey string) (int64, error) {
+	return s.startClientEntryMonitorRun(ctx, policyIDs, userID, chatID, messageID, requestKey, nil, "")
+}
+
+func (s *DBService) startClientEntryMonitorRun(ctx context.Context, policyIDs []int64, userID, chatID, messageID int64, requestKey string, selection *AIEntryProbeSelection, expectedSnapshot string) (int64, error) {
 	if s == nil || s.db == nil {
 		return 0, ErrUnavailable
 	}
@@ -137,54 +141,70 @@ WHERE status = 'running' AND started_at < $2`, now, cutoff); err != nil {
 	if !errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("query active client entry monitor run: %w", err)
 	}
-	available, err := loadEnabledClientEntryMonitorPolicyIDs(ctx, tx)
-	if err != nil {
-		return 0, err
-	}
-	if len(policyIDs) == 0 {
-		policyIDs = available
-	} else {
-		availableSet := make(map[int64]struct{}, len(available))
-		for _, policyID := range available {
-			availableSet[policyID] = struct{}{}
+	expectedPairs := make([]clientEntryMonitorRunPair, 0)
+	if selection != nil {
+		snapshot, err := s.CaptureAIEntryProbeSelection(ctx, tx, *selection)
+		if err != nil {
+			return 0, err
 		}
-		for _, policyID := range policyIDs {
-			if _, ok := availableSet[policyID]; !ok {
-				return 0, errors.New("所选用户入口检测规则未启用或当前没有已启用探针")
+		if expectedSnapshot == "" || snapshot.Fingerprint != expectedSnapshot {
+			return 0, ErrAIEntryProbeConflict
+		}
+		policyIDs = snapshot.PolicyIDs
+		for _, target := range snapshot.Targets {
+			for _, probe := range snapshot.Probes {
+				expectedPairs = append(expectedPairs, clientEntryMonitorRunPair{TargetID: target.TargetID, ProbeID: probe.ID, TargetVersion: target.Generation, PolicyID: target.PolicyID, PolicyName: target.PolicyName, TargetName: target.Name, Host: target.Host, Port: target.Port, ProbeName: probe.Name})
 			}
 		}
-	}
-	if len(policyIDs) == 0 {
-		return 0, errors.New("暂无已启用的用户入口检测规则")
-	}
-	placeholders, args := clientEntryMonitorIDPlaceholders(policyIDs, 1)
-	rows, err := tx.QueryContext(ctx, `SELECT target.id, probe.id, target.generation,
-	policy.id, policy.name, target.name, target.host, target.port, probe.name
-	FROM v2_client_entry_monitor m
-	JOIN v2_client_entry_user_policy policy ON policy.id = m.policy_id AND policy.enabled = 1
-	JOIN v2_client_entry_monitor_target target ON target.monitor_id = m.id
-	JOIN v2_dns_probe probe ON probe.enabled = 1
-	WHERE m.enabled = 1 AND m.policy_id IN (`+strings.Join(placeholders, ",")+`)
-	ORDER BY target.id, probe.id`, args...)
-	if err != nil {
-		return 0, fmt.Errorf("snapshot client entry monitor run tasks: %w", err)
-	}
-	expectedPairs := make([]clientEntryMonitorRunPair, 0)
-	for rows.Next() {
-		var pair clientEntryMonitorRunPair
-		if err := rows.Scan(&pair.TargetID, &pair.ProbeID, &pair.TargetVersion,
-			&pair.PolicyID, &pair.PolicyName, &pair.TargetName, &pair.Host, &pair.Port, &pair.ProbeName); err != nil {
-			_ = rows.Close()
-			return 0, fmt.Errorf("scan client entry monitor run task: %w", err)
+	} else {
+		available, err := loadEnabledClientEntryMonitorPolicyIDs(ctx, tx)
+		if err != nil {
+			return 0, err
 		}
-		expectedPairs = append(expectedPairs, pair)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return 0, fmt.Errorf("iterate client entry monitor run tasks: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return 0, fmt.Errorf("close client entry monitor run tasks: %w", err)
+		if len(policyIDs) == 0 {
+			policyIDs = available
+		} else {
+			availableSet := make(map[int64]struct{}, len(available))
+			for _, policyID := range available {
+				availableSet[policyID] = struct{}{}
+			}
+			for _, policyID := range policyIDs {
+				if _, ok := availableSet[policyID]; !ok {
+					return 0, errors.New("所选用户入口检测规则未启用或当前没有已启用探针")
+				}
+			}
+		}
+		if len(policyIDs) == 0 {
+			return 0, errors.New("暂无已启用的用户入口检测规则")
+		}
+		placeholders, args := clientEntryMonitorIDPlaceholders(policyIDs, 1)
+		rows, err := tx.QueryContext(ctx, `SELECT target.id, probe.id, target.generation,
+		policy.id, policy.name, target.name, target.host, target.port, probe.name
+		FROM v2_client_entry_monitor m
+		JOIN v2_client_entry_user_policy policy ON policy.id = m.policy_id AND policy.enabled = 1
+		JOIN v2_client_entry_monitor_target target ON target.monitor_id = m.id
+		JOIN v2_dns_probe probe ON probe.enabled = 1
+		WHERE m.enabled = 1 AND m.policy_id IN (`+strings.Join(placeholders, ",")+`)
+		ORDER BY target.id, probe.id`, args...)
+		if err != nil {
+			return 0, fmt.Errorf("snapshot client entry monitor run tasks: %w", err)
+		}
+		for rows.Next() {
+			var pair clientEntryMonitorRunPair
+			if err := rows.Scan(&pair.TargetID, &pair.ProbeID, &pair.TargetVersion,
+				&pair.PolicyID, &pair.PolicyName, &pair.TargetName, &pair.Host, &pair.Port, &pair.ProbeName); err != nil {
+				_ = rows.Close()
+				return 0, fmt.Errorf("scan client entry monitor run task: %w", err)
+			}
+			expectedPairs = append(expectedPairs, pair)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("iterate client entry monitor run tasks: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return 0, fmt.Errorf("close client entry monitor run tasks: %w", err)
+		}
 	}
 	expected := int64(len(expectedPairs))
 	rawPolicies, err := json.Marshal(policyIDs)
