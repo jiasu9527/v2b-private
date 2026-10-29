@@ -214,6 +214,17 @@ SSH 为非交互执行，不提供键盘输入或交互终端；脚本须使用�
 
 数据库删除不等于擦除备份、WAL、代理记录或中转提供商已经收到的数据。**聊天文字、业务查询结果、命令以及有限输出会发送到管理员配置的中转站**；中转和模型保留策略由管理员选择的平台决定。本模块只会过滤它已知的 SSH 凭据原文，不保证任意远程输出都没有秘密。
 
+## 跨会话共享知识
+
+后台「AI 运维 → 共享知识」用于保存站点架构、服务器用途、网络关系、部署步骤和排障经验。支持关键词搜索、分类、常用标记及 Markdown 正文；条目显示版本、更新时间、操作人及来源会话／轮次。可直接在聊天中说“把这次核实的架构整理进共享知识”，AI 会先检索已有条目再保存；不会自动把全部聊天内容搬进知识库。
+
+- **管理员**：可新增、编辑、发布草稿、停用、删除；管理员会话里的 AI 保存后直接共享。
+- **员工**：可读取已共享知识及本人草稿，手动或通过 AI 新建草稿；不能修改已有条目、发布、停用或删除。草稿经管理员发布后才供其他会话使用。
+- AI 提供 `knowledge_search`、`knowledge_get`、`knowledge_save` 三个工具。检索和阅读只返回已发布知识；来源会话和轮次由后端写入，模型不能指定或伪造。修改、删除均校验 `expected_version`，出现冲突需重新读取并合并，界面保留尚未保存的编辑内容。
+- 每次模型请求重新读取最新目录，优先加载常用条目和部分正文；该块最多 14,000 字节，最多列出 24 条，其余通过工具搜索及分页读取，避免挤占当前问题。资料通过独立的上下文数据消息提供，不作为系统指令，也不重复存入聊天记录。修改、停用、删除会影响后续模型请求，已发出的请求及历史对话中的旧内容不会被追溯抹除。
+- 知识与会话独立保存：删除单个会话、清空全部会话均保留知识；管理员「重置全部 AI 数据」会同时删除知识。没有外部向量数据库或额外摘要模型调用。
+- 最多 500 条，每条标题 120 字符、摘要 500 字符、正文 12,000 字符。AI 单次保存正文最多 6,000 字符且参数总计不超过 32 KiB；长知识按独立主题拆分。明显的密码赋值、认证串、私钥等会被拒绝，仍需避免粘贴任何凭据、支付配置或用户私人数据。
+
 ## 容量及接口
 
 - 最多 200 个会话、200 台登记服务器；单会话最多 4000 条消息，页面显示最近 400 条，较早记录未显示时会给出提示，旧记录仍保存在数据库。
@@ -236,6 +247,12 @@ SSH 为非交互执行，不提供键盘输入或交互终端；脚本须使用�
 | GET / POST | `servers` / `server/save` | 服务器列表 / 保存加密凭据 |
 | POST | `server/fingerprint`、`server/delete` | 观察指纹 / 版本校验删除 |
 | POST | `action/approve`、`action/reject` | 人工确认（202）/ 拒绝 |
+| GET | `knowledge` | `query`、`category`、`status` 可选筛选；`current=1`、`page_size=20`（最大 100）；列表不包含正文 |
+| GET | `knowledge/detail?id=...` | 查看一条可访问知识的完整正文与版本 |
+| POST | `knowledge/save` | 新增／管理员编辑；字段 `title,summary,content,category,status,pinned`，编辑还需 `id,expected_version`；员工新建强制草稿且不置顶 |
+| POST | `knowledge/delete` | 仅管理员，`{id,expected_version,confirm:true}` |
+
+知识分类为 `architecture/server/network/deployment/troubleshooting/other`，状态为 `draft/active/disabled`。列表响应为 `{data:{data:[条目],total,current,page_size}}`，详情和保存响应为 `{data:条目}`。AI 搜索通过 `next_current` 翻页，正文通过 Unicode 字符偏移 `next_content_offset` 续读。上述接口继续使用现有登录、后台权限与禁止缓存设置。
 
 `config/save.reasoning_efforts` 示例为 `{"gpt-6.1-sol":"high","claude-fable-5-1":"auto"}`，未列出的模型使用 `auto`；整个字段省略时保留现有模型的配置，显式 `{}` 重置为中转默认。管理员的 `chat/send.reasoning_effort` 省略时沿用当前会话选择，新会话为 `default`；员工始终解析为 `default`，显式指定其他等级返回 403。返回的 `session.reasoning_effort` 是所选项，`turn.reasoning_effort` 是本轮实际解析值。
 

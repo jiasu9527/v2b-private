@@ -44,7 +44,7 @@ func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Servic
 		handleAIOpsError(w, aiops.ErrForbidden)
 		return
 	}
-	if actor.IsAdmin == 0 && (action == "config/save" || action == "session/delete" || action == "session/clear" || action == "reset") {
+	if actor.IsAdmin == 0 && (action == "config/save" || action == "session/delete" || action == "session/clear" || action == "reset" || action == "knowledge/delete") {
 		handleAIOpsError(w, aiops.ErrForbidden)
 		return
 	}
@@ -54,9 +54,9 @@ func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Servic
 	}
 	expected := "POST"
 	switch action {
-	case "config", "sessions", "session", "session/stream", "servers":
+	case "config", "sessions", "session", "session/stream", "servers", "knowledge", "knowledge/detail":
 		expected = "GET"
-	case "config/save", "session/create", "chat/send", "session/access", "chat/stop", "session/delete", "session/clear", "reset", "server/save", "server/delete", "server/fingerprint", "action/approve", "action/reject":
+	case "config/save", "session/create", "chat/send", "session/access", "chat/stop", "session/delete", "session/clear", "reset", "server/save", "server/delete", "server/fingerprint", "action/approve", "action/reject", "knowledge/save", "knowledge/delete":
 	default:
 		writeJSON(w, 404, map[string]string{"message": "Not found"})
 		return
@@ -80,6 +80,9 @@ func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Servic
 	var err error
 	status := 200
 	switch action {
+	case "knowledge", "knowledge/detail", "knowledge/save", "knowledge/delete":
+		handleAIOpsKnowledge(w, r, service, actor.ID, actor.IsAdmin == 1, action)
+		return
 	case "config":
 		result, err = service.GetConfig(ctx, actor.ID)
 	case "config/save":
@@ -193,6 +196,8 @@ func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Servic
 func handleAIOpsError(w http.ResponseWriter, err error) {
 	status, msg := 500, "AI 运维操作失败，请核对配置或服务状态后重试"
 	switch {
+	case errors.Is(err, aiops.ErrKnowledgeCredential):
+		status, msg = 400, aiops.ErrKnowledgeCredential.Error()
 	case errors.Is(err, admin.ErrAIEntrySplitInvalid):
 		status, msg = 400, err.Error()
 	case errors.Is(err, admin.ErrAIEntrySplitConflict), errors.Is(err, admin.ErrAIEntryRuleConflict):

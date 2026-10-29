@@ -75,9 +75,9 @@ type contextUnit struct{ indexes []int }
 
 // compactProviderContext changes only the outgoing view. Entire old turns go
 // first; within the active turn, assistant calls and ALL their results are one
-// unit. System policy, the current administrator input and action status never
-// disappear. Internal metadata prevents synthetic action data from being
-// mistaken for a newer administrator request.
+// unit. System policy, the current operator input, action status and bounded
+// knowledge directory never disappear. Internal metadata prevents synthetic
+// data from being mistaken for a newer operator request.
 func compactProviderContext(messages []providerMessage, budget int) ([]providerMessage, error) {
 	source := make([]providerMessage, 0, len(messages))
 	hadNotice := false
@@ -90,7 +90,7 @@ func compactProviderContext(messages []providerMessage, budget int) ([]providerM
 	}
 	current := -1
 	for i, message := range source {
-		if message.Role == "user" && message.contextKind != "actions" {
+		if message.Role == "user" && message.contextKind != "actions" && message.contextKind != "knowledge" {
 			current = i
 		}
 	}
@@ -108,7 +108,7 @@ func compactProviderContext(messages []providerMessage, budget int) ([]providerM
 	}
 	for i := 0; i < len(source); i++ {
 		message := source[i]
-		if message.Role == "system" || message.contextKind == "actions" || i == current {
+		if message.Role == "system" || message.contextKind == "actions" || message.contextKind == "knowledge" || i == current {
 			flushOld()
 			continue
 		}

@@ -196,7 +196,7 @@ func validateCompletion(out providerMessage) error {
 }
 
 func providerToolArgumentLimit(name string) int {
-	if name == "panel_query" || name == "propose_panel_operation" {
+	if name == "panel_query" || name == "propose_panel_operation" || name == "knowledge_save" {
 		return 32768
 	}
 	return 16000

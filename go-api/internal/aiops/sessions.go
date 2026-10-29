@@ -282,6 +282,9 @@ func (s *Service) deleteData(ctx context.Context, actorID, id int64, reset bool)
 		return err
 	}
 	if reset {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM v2_ai_knowledge`); err != nil {
+			return err
+		}
 		if _, err = tx.ExecContext(ctx, `DELETE FROM v2_ai_server`); err != nil {
 			return err
 		}

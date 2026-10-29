@@ -84,6 +84,7 @@ func (s *Service) declaredToolDefinitions() []ToolDefinition {
 	out = append(out, nodeToolDefinitions()...)
 	out = append(out, serverToolDefinitions()...)
 	out = append(out, panelOperationToolDefinitions()...)
+	out = append(out, knowledgeToolDefinitions()...)
 	return out
 }
 func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call ToolCall) (ToolOutcome, error) {
@@ -98,14 +99,18 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 	if err := s.requireSessionAccess(ctx, actorID, sessionID); err != nil {
 		return ToolOutcome{}, err
 	}
-	if s.panel == nil {
-		return ToolOutcome{}, ErrUnavailable
-	}
 	if len(call.Function.Arguments) > 32768 {
 		return ToolOutcome{}, ErrValidation
 	}
 	if !s.validToolArgumentKeys(call.Function.Name, call.Function.Arguments) {
 		return ToolOutcome{}, ErrValidation
+	}
+	switch call.Function.Name {
+	case "knowledge_search", "knowledge_get", "knowledge_save":
+		return s.callKnowledgeTool(ctx, actorID, sessionID, call)
+	}
+	if s.panel == nil {
+		return ToolOutcome{}, ErrUnavailable
 	}
 	switch call.Function.Name {
 	case "panel_operations_list", "panel_operation_describe", "panel_query", "propose_panel_operation", "panel_result_read":
@@ -436,6 +441,8 @@ func toolErrorContent(err error) string {
 		code, message = "split_unavailable", err.Error()
 	case errors.Is(err, admin.ErrAIEntrySplitConflict), errors.Is(err, admin.ErrAIEntryRuleConflict):
 		code, message = "conflict", "入口配置或名单已变化，请读取最新状态后重新判断"
+	case errors.Is(err, ErrKnowledgeCredential):
+		code, message = "knowledge_contains_credentials", "知识库不能保存密码、Token、API Key 或私钥，请删除凭据后再保存"
 	case errors.Is(err, ErrValidation):
 		code, message = "invalid_arguments", "工具参数无效，请按声明字段检查参数和分页范围"
 	case errors.Is(err, ErrForbidden):

@@ -59,6 +59,9 @@ func (s *Service) ensureSchema(ctx context.Context) error {
 	if err = ensureActionSchema(ctx, tx); err != nil {
 		return err
 	}
+	if err = ensureKnowledgeSchema(ctx, tx); err != nil {
+		return err
+	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}

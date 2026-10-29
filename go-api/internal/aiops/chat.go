@@ -377,6 +377,7 @@ func (s *Service) finishTurn(sessionID, turnID int64, status, errText string) {
 	_ = tx.Commit()
 }
 func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64, model string) {
+	ctx = context.WithValue(ctx, knowledgeTurnContextKey{}, turnID)
 	status, errText := "failed", "AI 处理失败，请查看状态后重试"
 	defer func() {
 		if recover() != nil {
@@ -414,7 +415,7 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 	}
 	for i := range messages {
 		if messages[i].Role == "system" {
-			messages[i].Content += "\n" + modePrompt + "\n" + paymentConfigurationBoundaryPrompt + "\n" + ticketWorkflowPrompt + "\n" + panelOperationsPrompt
+			messages[i].Content += "\n" + modePrompt + "\n" + paymentConfigurationBoundaryPrompt + "\n" + ticketWorkflowPrompt + "\n" + panelOperationsPrompt + "\n" + sharedKnowledgePrompt
 			break
 		}
 	}
@@ -441,6 +442,11 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 				errText = "读取最新操作状态失败，已停止后续执行；请稍后核对"
 				return
 			}
+		}
+		messages, err = s.refreshKnowledgeContext(ctx, messages)
+		if err != nil {
+			errText = "读取共享知识失败，请稍后重试"
+			return
 		}
 		lastWrite := time.Time{}
 		assistant, err := s.completeStreamWithReasoning(ctx, model, reasoningEffort, messages, func(content string) error {
