@@ -6919,7 +6919,11 @@ func handlePaymentError(w http.ResponseWriter, err error) bool {
 }
 
 func handleAdminError(w http.ResponseWriter, err error) bool {
+	var nodeValidation *admin.ManagedServerValidationError
 	switch {
+	case errors.As(err, &nodeValidation):
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"message": nodeValidation.Error()})
+		return true
 	case errors.Is(err, admin.ErrUnavailable):
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "admin service unavailable"})
 		return true

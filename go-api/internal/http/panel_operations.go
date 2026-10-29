@@ -97,6 +97,20 @@ func (p *panelOperations) Validate(ctx context.Context, actor aiops.PanelOperati
 	if err != nil {
 		return err
 	}
+	if op.Method == http.MethodPost {
+		// Reuse the business validator before proposing or dispatching a write.
+		// A missing protocol must not become an ambiguous HTTP failure after
+		// automatic approval, and no connection values may be guessed here.
+		parts := strings.Split(op.Path, "/")
+		if len(parts) == 4 && parts[1] == "server" && parts[3] == "save" {
+			switch parts[2] {
+			case "shadowsocks", "vmess", "vless", "trojan", "tuic", "hysteria", "anytls", "v2node":
+				if err := admin.ValidateManagedServerSavePayload(parts[2], params); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	if len(op.Parameters) > 0 {
 		var schema map[string]any
 		if json.Unmarshal(op.Parameters, &schema) != nil || !panelSchemaMatches(params, schema) {

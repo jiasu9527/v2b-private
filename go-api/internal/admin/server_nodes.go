@@ -32,6 +32,63 @@ type managedServerCommonOptions struct {
 	defaultListen string
 }
 
+// ManagedServerValidationError reports a rejected payload before any database writes.
+// Its message is private so other packages cannot expose arbitrary input as a
+// trusted validation message.
+type ManagedServerValidationError struct {
+	message string
+}
+
+func (e *ManagedServerValidationError) Error() string {
+	if e == nil || e.message == "" {
+		return "保存失败"
+	}
+	return e.message
+}
+
+// ValidateManagedServerSavePayload validates without accessing a database or
+// changing the payload, including generated keys and nested network settings.
+func ValidateManagedServerSavePayload(serverType string, payload map[string]any) error {
+	_, _, err := normalizeManagedServerSavePayload(strings.TrimSpace(serverType), cloneManagedServerSavePayload(payload))
+	if err != nil {
+		// The normalizer only returns fixed validation messages; parser and key
+		// generation errors are mapped to fixed messages at their call sites.
+		return &ManagedServerValidationError{message: err.Error()}
+	}
+	return nil
+}
+
+func cloneManagedServerSavePayload(payload map[string]any) map[string]any {
+	if payload == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(payload))
+	for key, value := range payload {
+		cloned[key] = cloneManagedServerSaveValue(value)
+	}
+	return cloned
+}
+
+func cloneManagedServerSaveValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneManagedServerSavePayload(typed)
+	case []any:
+		if typed == nil {
+			return []any(nil)
+		}
+		cloned := make([]any, len(typed))
+		for index, item := range typed {
+			cloned[index] = cloneManagedServerSaveValue(item)
+		}
+		return cloned
+	default:
+		// The normalizer reads scalar and typed container values without
+		// changing them, or JSON-decodes them into its own containers.
+		return value
+	}
+}
+
 var managedServerDefinitions = map[string]managedServerDefinition{
 	"vmess": {
 		table: "v2_server_vmess",
@@ -107,17 +164,18 @@ func (s *DBService) SaveManagedServer(ctx context.Context, serverType string, pa
 	if s.db == nil {
 		return false, ErrUnavailable
 	}
-	if err := s.ensureClientEntrySchema(ctx); err != nil {
-		return false, err
-	}
 
-	def, ok := managedServerDefinitions[strings.TrimSpace(serverType)]
+	serverType = strings.TrimSpace(serverType)
+	def, ok := managedServerDefinitions[serverType]
 	if !ok {
-		return false, errors.New("保存失败")
+		return false, &ManagedServerValidationError{message: "保存失败"}
 	}
 
-	id, values, err := normalizeManagedServerSavePayload(serverType, payload)
+	id, values, err := normalizeManagedServerSavePayload(serverType, cloneManagedServerSavePayload(payload))
 	if err != nil {
+		return false, &ManagedServerValidationError{message: err.Error()}
+	}
+	if err := s.ensureClientEntrySchema(ctx); err != nil {
 		return false, err
 	}
 

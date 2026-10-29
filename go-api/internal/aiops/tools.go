@@ -404,6 +404,10 @@ func oneOf(s string, v ...string) bool {
 	return false
 }
 func safeAIError(e error) error {
+	var nodeValidation *admin.ManagedServerValidationError
+	if errors.As(e, &nodeValidation) {
+		return nodeValidation
+	}
 	var panelError *PanelOperationError
 	if errors.As(e, &panelError) {
 		code, message := panelOperationErrorText(panelError)
@@ -433,8 +437,11 @@ func safeAIError(e error) error {
 // administrator credentials must never be copied into a tool result.
 func toolErrorContent(err error) string {
 	code, message := "unavailable", "当前查询暂不可用，请核对后台服务状态；不要连续重复请求"
+	var nodeValidation *admin.ManagedServerValidationError
 	var panelError *PanelOperationError
 	switch {
+	case errors.As(err, &nodeValidation):
+		code, message = "invalid_arguments", "节点参数校验未通过，未执行节点保存："+nodeValidation.Error()+"。请查询参考节点并按操作定义补齐或修正参数，不要猜测协议或重复提交相同参数"
 	case errors.As(err, &panelError):
 		code, message = panelOperationErrorText(panelError)
 	case errors.Is(err, admin.ErrAIEntrySplitInvalid):

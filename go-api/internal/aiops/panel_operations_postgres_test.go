@@ -254,7 +254,7 @@ func TestAIPanelOperationsPostgresLifecycle(t *testing.T) {
 		runtime.mu.Lock()
 		runtime.onExecute = nil
 		runtime.mu.Unlock()
-		if done.Status != "unknown" || strings.Contains(done.Error, "RAW_SECRET") {
+		if done.Status != "unknown" || strings.Contains(done.Error, "RAW_SECRET") || !strings.Contains(done.Error, "HTTP 409") || !strings.Contains(done.Error, "conflict") {
 			t.Fatal(done)
 		}
 	})

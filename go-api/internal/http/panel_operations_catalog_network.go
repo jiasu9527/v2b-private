@@ -15,11 +15,26 @@ func panelNetworkOperations() []aiops.PanelOperation {
 	}
 	add("nodes.list", "nodes", "列出所有协议节点及运行状态，默认隐藏安装命令与凭据。明确部署V2node时可传include_install_command=true，必须同时传node_id；此时仍返回节点列表结构，但只含该ID的V2node及其install_command，其他凭据仍隐藏；目标不存在返回404", "GET", "/server/manage/getNodes", false, false, panelSchema{"node_id": poID(), "include_install_command": poBool("默认false；仅明确部署V2node需要时设true，必须同时指定node_id，取得该节点后台生成的完整安装命令")})
 	nodeSort := panelSchema{}
+	nodeRequired := map[string][]string{
+		"shadowsocks": {"cipher"},
+		"vmess":       {"tls", "network"},
+		"vless":       {"tls", "network"},
+		"trojan":      {"network"},
+		"tuic":        {"insecure", "disable_sni", "zero_rtt_handshake"},
+		"hysteria":    {"version", "insecure"},
+		"anytls":      {"insecure"},
+		"v2node":      {"protocol", "tls", "network", "disable_sni", "zero_rtt_handshake"},
+	}
 	for _, protocol := range []string{"shadowsocks", "vmess", "vless", "trojan", "tuic", "hysteria", "anytls", "v2node"} {
 		nodeSort[protocol] = panelSchema{"type": "object", "additionalProperties": poInt("排序值"), "description": "节点ID字符串到排序值的映射"}
 		prefix := "/server/" + protocol
 		fields := panelNodeFields(protocol)
-		add("nodes."+protocol+".save", "nodes", "创建或完整保存"+protocol+"节点；有id时先查询当前设置并保留未修改字段。group_id/route_id是ID字符串数组，port可为端口范围字符串；其他连接参数按后台协议校验。", "POST", prefix+"/save", true, false, fields, "name", "group_id", "host", "port", "server_port", "rate")
+		required := append([]string{"name", "group_id", "host", "port", "server_port", "rate"}, nodeRequired[protocol]...)
+		description := "创建或完整保存" + protocol + "节点；有id时先查询当前设置并保留未修改字段。group_id/route_id是ID字符串数组，port可为端口范围字符串；其他连接参数按后台协议校验。"
+		if protocol == "v2node" {
+			description += "protocol是V2node使用的底层协议，先查询目标或参考模板节点，不能由V2node名称猜测；disable_sni和zero_rtt_handshake必须从该模板或用户明确设置取得，不能遗漏或擅自填默认值。"
+		}
+		add("nodes."+protocol+".save", "nodes", description, "POST", prefix+"/save", true, false, fields, required...)
 		add("nodes."+protocol+".update", "nodes", "修改节点显示状态或入口归属", "POST", prefix+"/update", true, false, poFields("id:i show:i client_entry_only:i entry_group_id:i"), "id")
 		add("nodes."+protocol+".copy", "nodes", "复制现有节点配置", "POST", prefix+"/copy", true, false, panelSchema{"id": poID()}, "id")
 		add("nodes."+protocol+".delete", "nodes", "删除指定协议节点", "POST", prefix+"/drop", true, false, panelSchema{"id": poID()}, "id")
@@ -138,6 +153,11 @@ func panelNodeFields(protocol string) panelSchema {
 	}
 	for k, v := range poFields(extra[protocol]) {
 		p[k] = v
+	}
+	if protocol == "v2node" {
+		p["protocol"] = poText("V2node使用的底层协议；先查询目标或参考模板节点取得，不能猜测")
+		p["disable_sni"] = poInt("必填，0或1；从目标或参考模板节点，或用户明确设置取得，不能擅自填默认值")
+		p["zero_rtt_handshake"] = poInt("必填，0或1；从目标或参考模板节点，或用户明确设置取得，不能擅自填默认值")
 	}
 	for _, k := range []string{"networkSettings", "tlsSettings", "ruleSettings", "dnsSettings", "network_settings", "tls_settings", "encryption_settings", "obfs_settings", "ddns_settings"} {
 		if _, ok := p[k]; ok {
