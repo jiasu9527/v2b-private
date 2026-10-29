@@ -37,7 +37,7 @@ func hashOperation(raw string) string {
 }
 func scanAction(row interface{ Scan(...any) error }) (Action, error) {
 	var a Action
-	err := row.Scan(&a.ID, &a.SessionID, &a.ActorID, &a.ApprovedBy, &a.RejectedBy, &a.ToolCallID, &a.Kind, &a.TargetID, &a.TargetType, &a.ServerLabel, &a.Payload, &a.Reason, &a.Status, &a.ExpiresAt, &a.ClaimedAt, &a.CompletedAt, &a.Output, &a.Error, &a.CreatedAt, &a.UpdatedAt, &a.ApprovalMode, &a.AuthorizationTurnID)
+	err := row.Scan(&a.ID, &a.SessionID, &a.ActorID, &a.ApprovedBy, &a.RejectedBy, &a.ToolCallID, &a.Kind, &a.TargetID, &a.TargetType, &a.ServerLabel, &a.Payload, &a.Reason, &a.Status, &a.ExpiresAt, &a.ClaimedAt, &a.CompletedAt, &a.Output, &a.Error, &a.CreatedAt, &a.UpdatedAt, &a.ApprovalMode, &a.AuthorizationTurnID, &a.ExitCode)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrNotFound
 	}
@@ -697,6 +697,7 @@ func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, 
 	}
 	go s.watchAction(ctx, cancel, a.ID)
 	status, output, problem := "failed", "", "操作执行失败，可能已部分执行；请人工检查"
+	var exitCode *int
 	if s.requireOperator(ctx, a.ApprovedBy) != nil || s.requireSessionAccess(ctx, a.ApprovedBy, a.SessionID) != nil {
 		finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer finishCancel()
@@ -755,6 +756,7 @@ func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, 
 				if err == nil {
 					result := s.runSSHWithProgress(ctx, v, p.Command, func(output string) { s.persistSSHProgress(ctx, a.ID, output) })
 					output = result.Output
+					exitCode = result.ExitCode
 					if result.Err == nil {
 						status = "succeeded"
 						problem = ""
@@ -793,7 +795,7 @@ func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, 
 	// UPDATE only: session reset/deletion cannot be undone by a late completion.
 	finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer finishCancel()
-	_, _ = s.db.ExecContext(finishCtx, `UPDATE v2_ai_action SET status=$2,output=$3,error=$4,completed_at=$5,updated_at=$5 WHERE id=$1 AND status='running'`, a.ID, status, output, problem, time.Now().Unix())
+	_, _ = s.db.ExecContext(finishCtx, `UPDATE v2_ai_action SET status=$2,output=$3,error=$4,completed_at=$5,updated_at=$5,exit_code=$6 WHERE id=$1 AND status='running'`, a.ID, status, output, problem, time.Now().Unix(), exitCode)
 }
 
 func (s *Service) monitorActionStillCurrent(ctx context.Context, ids []int64, expected string) bool {

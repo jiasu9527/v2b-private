@@ -68,6 +68,22 @@ func TestAIFullAccessPostgres(t *testing.T) {
 			return
 		}
 		n := calls.Add(1)
+		if scenario.Load() == 5 && n > 1 {
+			var sawFailure, sawSkipped bool
+			for _, message := range req.Messages {
+				if message.Role == "tool" && message.ToolCallID == "ssh-stop" {
+					sawFailure = strings.Contains(message.Content, `"exit_code":7`) && strings.Contains(message.Content, "fixture deployment failed")
+				}
+				if message.Role == "tool" && message.ToolCallID == "must-skip" {
+					sawSkipped = strings.Contains(message.Content, `"status":"skipped"`)
+				}
+			}
+			if !sawFailure || !sawSkipped {
+				t.Error("model did not receive failed execution and skipped batch")
+			}
+			json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": providerMessage{Role: "assistant", Content: "命令退出码 7，输出显示部署失败，尚未完成；已保留原结果供检查。"}}}})
+			return
+		}
 		if scenario.Load() == 4 || scenario.Load() == 5 {
 			args, _ := json.Marshal(map[string]any{"server_id": sshServerID.Load(), "command": "fixture deploy", "timeout_seconds": 900, "reason": "stop fixture"})
 			msg := providerMessage{Role: "assistant", ToolCalls: []ToolCall{{ID: "ssh-stop", Type: "function", Function: ToolFunction{Name: "propose_ssh_command", Arguments: string(args)}}}}
@@ -324,7 +340,7 @@ func TestAIFullAccessPostgres(t *testing.T) {
 	}
 
 	for _, failure := range []string{"exit", "disconnect"} {
-		t.Run("failed SSH "+failure+" prevents remaining calls and next model request", func(t *testing.T) {
+		t.Run("failed SSH "+failure+" skips stale calls and classifies continuation", func(t *testing.T) {
 			host, port, pin, _, execs := testSSHHostWithExec(t, func(ch ssh.Channel) {
 				_, _ = io.WriteString(ch, "fixture deployment failed\n")
 				if failure == "exit" {
@@ -342,11 +358,11 @@ func TestAIFullAccessPostgres(t *testing.T) {
 			r := send("full")
 			tr := wait(r.Session.ID)
 			actions, e := s.ListActions(ctx, actor, r.Session.ID)
-			want := "failed"
+			want, turnStatus, modelCalls := "failed", "completed", int64(2)
 			if failure == "disconnect" {
-				want = "unknown"
+				want, turnStatus, modelCalls = "unknown", "failed", 1
 			}
-			if e != nil || tr.Status != "failed" || len(actions) != 1 || actions[0].Status != want || calls.Load() != 1 || execs.Load() != 1 {
+			if e != nil || tr.Status != turnStatus || len(actions) != 1 || actions[0].Status != want || calls.Load() != modelCalls || execs.Load() != 1 {
 				t.Fatalf("failure continued actions=%+v turn=%+v calls=%d execs=%d err=%v", actions, tr, calls.Load(), execs.Load(), e)
 			}
 			var nodeHost string

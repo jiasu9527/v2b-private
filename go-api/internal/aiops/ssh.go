@@ -478,6 +478,7 @@ func redactSSHOutput(raw string, secrets []string, final bool) string {
 type sshRunResult struct {
 	Output    string
 	Uncertain bool
+	ExitCode  *int
 	Err       error
 }
 
@@ -560,8 +561,9 @@ func (s *Service) runSSHWithProgress(ctx context.Context, v sshSecretServer, com
 		return sshRunResult{Output: output}
 	}
 	var exit *ssh.ExitError
-	if errors.As(err, &exit) {
-		return sshRunResult{Output: output, Err: fmt.Errorf("远程命令退出码 %d；可能已部分执行，请人工检查，禁止自动重试", exit.ExitStatus())}
+	if errors.As(err, &exit) && exit.ExitStatus() >= 0 {
+		code := exit.ExitStatus()
+		return sshRunResult{Output: output, ExitCode: &code, Err: fmt.Errorf("远程命令退出码 %d；命令已结束，可能已部分执行；先核对输出与现状再修正，不要原样重跑", code)}
 	}
 	return sshRunResult{Output: output, Uncertain: true, Err: errors.New("SSH 中断或超时，执行结果未知，可能已部分执行；请人工检查，不要自动重试")}
 }

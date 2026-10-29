@@ -68,11 +68,12 @@ type Action struct {
 	CompletedAt         int64           `json:"completed_at"`
 	Output              string          `json:"output"`
 	Error               string          `json:"error"`
+	ExitCode            *int            `json:"exit_code,omitempty"`
 	CreatedAt           int64           `json:"created_at"`
 	UpdatedAt           int64           `json:"updated_at"`
 }
 
-const actionColumns = `id,session_id,actor_id,approved_by,rejected_by,tool_call_id,kind,target_id,target_type,server_label,payload,reason,status,expires_at,claimed_at,completed_at,output,error,created_at,updated_at,approval_mode,authorization_turn_id`
+const actionColumns = `id,session_id,actor_id,approved_by,rejected_by,tool_call_id,kind,target_id,target_type,server_label,payload,reason,status,expires_at,claimed_at,completed_at,output,error,created_at,updated_at,approval_mode,authorization_turn_id,exit_code`
 
 func ensureActionSchema(ctx context.Context, tx *sql.Tx) error {
 	for _, statement := range []string{
@@ -83,6 +84,7 @@ func ensureActionSchema(ctx context.Context, tx *sql.Tx) error {
 		`ALTER TABLE v2_ai_action ADD COLUMN IF NOT EXISTS authorization_turn_id BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE v2_ai_action ADD COLUMN IF NOT EXISTS approved_by BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE v2_ai_action ADD COLUMN IF NOT EXISTS rejected_by BIGINT NOT NULL DEFAULT 0`,
+		`ALTER TABLE v2_ai_action ADD COLUMN IF NOT EXISTS exit_code BIGINT`,
 		`CREATE INDEX IF NOT EXISTS idx_ai_action_session ON v2_ai_action(session_id,id)`,
 		`CREATE INDEX IF NOT EXISTS idx_ai_action_status ON v2_ai_action(status,claimed_at)`,
 	} {
