@@ -110,7 +110,13 @@ func readCompletionStream(ctx context.Context, reader io.Reader, onContent func(
 				}
 				call.Type = delta.Type
 			}
-			if len(call.ID) > 200 || len(call.Function.Name) > 100 || len(call.Function.Arguments) > 16000 {
+			// A streamed name may still be incomplete. Bound buffered arguments
+			// by the larger permitted request, then apply the exact tool limit
+			// after the terminal frame before any tool is dispatched.
+			if len(call.Function.Arguments) > 32768 {
+				return errors.New("AI 工具参数过长，未执行工具；请缩小单次参数或分批操作")
+			}
+			if len(call.ID) > 200 || len(call.Function.Name) > 100 {
 				return errors.New("AI 工具请求超出单轮限制")
 			}
 			calls[*delta.Index] = call

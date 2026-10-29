@@ -38,7 +38,7 @@ func TestAITicketGlobalRelayLive(t *testing.T) {
 	s.httpClient = transport
 	model := DefaultModels[0]
 	messages := []providerMessage{
-		{Role: "system", Content: systemPrompt + "\n" + fullAccessModePrompt + "\n" + paymentConfigurationBoundaryPrompt + "\n" + ticketWorkflowPrompt},
+		{Role: "system", Content: systemPrompt + "\n" + fullAccessModePrompt + "\n" + paymentConfigurationBoundaryPrompt + "\n" + ticketWorkflowPrompt + "\n" + panelOperationsPrompt},
 		{Role: "user", Content: "请查看全站未关闭工单里的提现申请，整理用户、金额、申请时间和处理进展。只查询，不回复或修改工单。"},
 		{Role: "assistant", Content: "要继续直接查询，需要补齐全站未关闭工单查询能力，允许不传用户 ID。目前尚未取得全站工单。"},
 		{Role: "user", Content: "继续查询全站未关闭工单，相关能力已经更新。不要让我逐个提供用户 ID，请按实际查询结果整理。"},

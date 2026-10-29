@@ -10,6 +10,7 @@ const (
 	domainEntries              capabilityDomain = "entries"
 	domainTickets              capabilityDomain = "tickets"
 	domainServers              capabilityDomain = "servers"
+	domainPanelOperations      capabilityDomain = "panel_operations"
 	domainPaymentConfiguration capabilityDomain = "payment_configuration"
 )
 
@@ -22,6 +23,11 @@ type toolCapability struct {
 // handler alone cannot grant a new domain. SSH remains the authority of its
 // configured remote account, not a filesystem sandbox enforced by this catalog.
 var toolCapabilities = map[string]toolCapability{
+	"panel_operations_list":      {domainPanelOperations, ""},
+	"panel_operation_describe":   {domainPanelOperations, ""},
+	"panel_query":                {domainPanelOperations, ""},
+	"panel_result_read":          {domainPanelOperations, ""},
+	"propose_panel_operation":    {domainPanelOperations, "panel_operation"},
 	"panel_status":               {domainPanel, ""},
 	"user_lookup":                {domainUsers, ""},
 	"user_detail":                {domainUsers, ""},
@@ -62,6 +68,7 @@ var toolCapabilities = map[string]toolCapability{
 }
 
 var actionCapabilities = map[string]capabilityDomain{
+	"panel_operation":    domainPanelOperations,
 	"user_update":        domainUsers,
 	"node_change":        domainNodes,
 	"node_update":        domainNodes,
@@ -80,7 +87,7 @@ var actionCapabilities = map[string]capabilityDomain{
 
 func capabilityDomainAllowed(domain capabilityDomain) bool {
 	switch domain {
-	case domainPanel, domainUsers, domainOrders, domainNodes, domainEntries, domainTickets, domainServers:
+	case domainPanel, domainUsers, domainOrders, domainNodes, domainEntries, domainTickets, domainServers, domainPanelOperations:
 		return true
 	case domainPaymentConfiguration:
 		return false

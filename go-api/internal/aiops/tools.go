@@ -83,6 +83,7 @@ func (s *Service) declaredToolDefinitions() []ToolDefinition {
 	out = append(out, entrySplitToolDefinitions()...)
 	out = append(out, nodeToolDefinitions()...)
 	out = append(out, serverToolDefinitions()...)
+	out = append(out, panelOperationToolDefinitions()...)
 	return out
 }
 func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call ToolCall) (ToolOutcome, error) {
@@ -107,6 +108,8 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 		return ToolOutcome{}, ErrValidation
 	}
 	switch call.Function.Name {
+	case "panel_operations_list", "panel_operation_describe", "panel_query", "propose_panel_operation", "panel_result_read":
+		return s.callPanelOperationTool(ctx, actorID, sessionID, call)
 	case "plans_list", "groups_list", "user_detail", "propose_user_update":
 		return s.callUserTool(ctx, actorID, sessionID, call)
 	case "tickets_list", "ticket_get", "ticket_message_get", "ticket_settings", "propose_ticket_update", "propose_ticket_settings":
@@ -396,6 +399,11 @@ func oneOf(s string, v ...string) bool {
 	return false
 }
 func safeAIError(e error) error {
+	var panelError *PanelOperationError
+	if errors.As(e, &panelError) {
+		code, message := panelOperationErrorText(panelError)
+		return &PanelOperationError{Status: panelError.Status, Code: code, Message: message}
+	}
 	if errors.Is(e, admin.ErrAIEntrySplitInvalid) {
 		return e
 	}
@@ -420,7 +428,10 @@ func safeAIError(e error) error {
 // administrator credentials must never be copied into a tool result.
 func toolErrorContent(err error) string {
 	code, message := "unavailable", "当前查询暂不可用，请核对后台服务状态；不要连续重复请求"
+	var panelError *PanelOperationError
 	switch {
+	case errors.As(err, &panelError):
+		code, message = panelOperationErrorText(panelError)
 	case errors.Is(err, admin.ErrAIEntrySplitInvalid):
 		code, message = "split_unavailable", err.Error()
 	case errors.Is(err, admin.ErrAIEntrySplitConflict), errors.Is(err, admin.ErrAIEntryRuleConflict):

@@ -5,6 +5,7 @@ export const aiActionNames: Record<string, string> = {
   ssh_command: '服务器命令', server_register: '登记 SSH 服务器', entry_host: '修改入口地址', node_change: '修改节点',
   monitor_run: '按入口规则发起检测', entry_probe_run: '指定入口与探针检测',
   user_update: '修改用户', ticket_update: '处理工单', ticket_settings: '全站工单设置',
+  panel_operation: '后台业务操作',
   entry_rule_update: '修改入口规则', node_update: '修改节点连接配置',
   entry_manual_split: '手动触发入口二分', entry_auto_split: '设置入口自动二分', entry_split: '直接二分入口用户组',
 };
@@ -38,6 +39,10 @@ function valueText(key: string, value: unknown): string {
 
 export default function AIOpsActionSummary({ action }: { action: AIAction }) {
   const p = action.payload || {};
+  if (action.kind === 'panel_operation') return <Descriptions size="small" column={1}>
+    <Descriptions.Item label="后台操作">{action.server_label || String(p.operation || '—')}</Descriptions.Item>
+    <Descriptions.Item label="操作名称"><Typography.Text code>{String(p.operation || '—')}</Typography.Text></Descriptions.Item>
+  </Descriptions>;
   if (['entry_manual_split', 'entry_auto_split', 'entry_split'].includes(action.kind)) {
     const target = (p.target || {}) as Record<string, unknown>;
     const direct = (p.direct || {}) as Record<string, unknown>;

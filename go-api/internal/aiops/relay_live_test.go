@@ -62,7 +62,7 @@ func TestAIRelayLiveCompatibility(t *testing.T) {
 			for _, definition := range s.toolDefinitions() {
 				knownTools[definition.Function.Name] = true
 			}
-			if len(knownTools) != 37 {
+			if len(knownTools) != 42 {
 				t.Fatal("update the explicit live test tool-count contract")
 			}
 			invoke := func(t *testing.T, stage string, messages []providerMessage) (providerMessage, bool) {

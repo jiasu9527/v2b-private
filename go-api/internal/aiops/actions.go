@@ -197,6 +197,8 @@ func (s *Service) captureActionTarget(ctx context.Context, tx *sql.Tx, spec acti
 		return nil, "", "", ErrForbidden
 	}
 	switch spec.Kind {
+	case "panel_operation":
+		return s.capturePanelOperation(ctx, tx, spec)
 	case "server_register":
 		return s.captureServerRegisterAction(ctx, tx, spec)
 	case "user_update":
@@ -535,6 +537,11 @@ func (s *Service) changeActionAuthorized(ctx context.Context, actorID, sessionID
 	if snapshot != current {
 		return a, ErrConflict
 	}
+	if a.Kind == "panel_operation" {
+		if err = s.validatePanelOperationApprover(ctx, tx, actorID, a); err != nil {
+			return empty, err
+		}
+	}
 	if a.Kind == "server_register" || a.Kind == "entry_host" || a.Kind == "node_change" || a.Kind == "node_update" || a.Kind == "entry_rule_update" || a.Kind == "user_update" || a.Kind == "ticket_update" || a.Kind == "entry_manual_split" || a.Kind == "entry_auto_split" || a.Kind == "entry_split" {
 		a.ApprovedBy = actorID
 		output := panelActionOutput(approvalMode)
@@ -705,6 +712,9 @@ func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, 
 
 	if a.Kind == "ticket_settings" {
 		status, output, problem = s.executeTicketSettings(ctx, a, snapshot)
+	}
+	if a.Kind == "panel_operation" {
+		status, output, problem = s.executePanelOperation(ctx, a, snapshot)
 	}
 	if a.Kind == "entry_probe_run" {
 		status, output, problem = s.executeProbeAction(ctx, a, snapshot)

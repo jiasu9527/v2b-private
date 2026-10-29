@@ -156,7 +156,10 @@ func validateCompletion(out providerMessage) error {
 	}
 	seen := map[string]bool{}
 	for _, call := range out.ToolCalls {
-		if call.ID == "" || len(call.ID) > 200 || seen[call.ID] || call.Type != "function" || call.Function.Name == "" || len(call.Function.Name) > 100 || len(call.Function.Arguments) > 16000 || !json.Valid([]byte(call.Function.Arguments)) || !strings.HasPrefix(strings.TrimSpace(call.Function.Arguments), "{") {
+		if len(call.Function.Arguments) > providerToolArgumentLimit(call.Function.Name) {
+			return errors.New("AI 工具参数过长，未执行工具；请缩小单次参数或分批操作")
+		}
+		if call.ID == "" || len(call.ID) > 200 || seen[call.ID] || call.Type != "function" || call.Function.Name == "" || len(call.Function.Name) > 100 || !json.Valid([]byte(call.Function.Arguments)) || !strings.HasPrefix(strings.TrimSpace(call.Function.Arguments), "{") {
 			return errors.New("AI 工具请求格式无效")
 		}
 		seen[call.ID] = true
@@ -165,6 +168,13 @@ func validateCompletion(out providerMessage) error {
 		return errors.New("AI 未返回有效内容")
 	}
 	return nil
+}
+
+func providerToolArgumentLimit(name string) int {
+	if name == "panel_query" || name == "propose_panel_operation" {
+		return 32768
+	}
+	return 16000
 }
 
 // Relay error messages can echo credentials, request content or HTML. Inspect

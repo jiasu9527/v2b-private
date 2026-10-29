@@ -290,6 +290,9 @@ func (s *DBService) UpdateUser(ctx context.Context, req UserUpdateRequest) (bool
 		return false, err
 	}
 	addSet("is_staff", isStaffValue)
+	if aiStaffScoped(ctx) && (isAdminValue != 0 || isStaffValue != 0) {
+		return false, errors.New("员工不能修改账号管理权限")
+	}
 
 	if _, ok := values["transfer_enable"]; ok {
 		transferEnable, err := strconv.ParseInt(strings.TrimSpace(values["transfer_enable"]), 10, 64)
@@ -424,6 +427,9 @@ func (s *DBService) UpdateUser(ctx context.Context, req UserUpdateRequest) (bool
 	if err := tx.QueryRowContext(ctx, `SELECT is_admin, is_staff FROM v2_user WHERE id = $1 FOR UPDATE`, req.ID).Scan(&currentIsAdmin, &currentIsStaff); err != nil {
 		return false, fmt.Errorf("lock admin user update target: %w", err)
 	}
+	if aiStaffScoped(ctx) && (currentIsAdmin != 0 || currentIsStaff != 0) {
+		return false, errors.New("员工不能修改管理员或员工账号")
+	}
 	roleChanged := currentIsAdmin != isAdminValue || currentIsStaff != isStaffValue
 
 	if rawInviteCode, ok := values["invite_code"]; ok {
@@ -474,7 +480,7 @@ func (s *DBService) SetUserBanned(ctx context.Context, id int64, banned int64) (
 	defer tx.Rollback()
 
 	now := time.Now().Unix()
-	result, err := tx.ExecContext(ctx, `UPDATE v2_user SET banned = $2, updated_at = $3 WHERE id = $1`, id, banned, now)
+	result, err := tx.ExecContext(ctx, `UPDATE v2_user SET banned = $2, updated_at = $3 WHERE id = $1`+aiStaffUserPredicate(ctx), id, banned, now)
 	if err != nil {
 		return false, errors.New("保存失败")
 	}
@@ -519,7 +525,7 @@ func (s *DBService) updateInviteUserBinding(ctx context.Context, userID int64, i
 		}
 	}
 
-	result, err := s.db.ExecContext(ctx, `UPDATE v2_user SET invite_user_id = $2, updated_at = $3 WHERE id = $1`, userID, inviteUserID, time.Now().Unix())
+	result, err := s.db.ExecContext(ctx, `UPDATE v2_user SET invite_user_id = $2, updated_at = $3 WHERE id = $1`+aiStaffUserPredicate(ctx), userID, inviteUserID, time.Now().Unix())
 	if err != nil {
 		return false, errors.New("保存失败")
 	}
@@ -937,6 +943,9 @@ func (s *DBService) setUsersBanned(ctx context.Context, filters []UserFilter, ba
 	}
 	defer tx.Rollback()
 
+	if err := lockAIStaffUserTargets(ctx, tx, ids); err != nil {
+		return false, err
+	}
 	if banned == 1 {
 		if err := deleteAuthSessionsByUserIDs(ctx, tx, ids, "处理失败"); err != nil {
 			return false, err
@@ -978,7 +987,7 @@ func (s *DBService) ResetUserSecret(ctx context.Context, id int64) (bool, error)
 
 	result, err := s.db.ExecContext(ctx, `UPDATE v2_user
 SET token = $2, uuid = $3, updated_at = $4
-WHERE id = $1`, id, token, uuidValue, time.Now().Unix())
+WHERE id = $1`+aiStaffUserPredicate(ctx), id, token, uuidValue, time.Now().Unix())
 	if err != nil {
 		return false, fmt.Errorf("reset admin user secret: %w", err)
 	}
@@ -1137,6 +1146,9 @@ func (s *DBService) matchingUserIDs(ctx context.Context, filters []UserFilter) (
 }
 
 func deleteUsersByIDList(ctx context.Context, tx *sql.Tx, ids []int64, message string) error {
+	if err := lockAIStaffUserTargets(ctx, tx, ids); err != nil {
+		return err
+	}
 	if err := deleteAuthSessionsByUserIDs(ctx, tx, ids, message); err != nil {
 		return err
 	}

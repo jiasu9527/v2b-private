@@ -127,6 +127,36 @@ func TestProviderStreamingJSONFallbackUsesOneRequest(t *testing.T) {
 
 type oneByteReader struct{ io.Reader }
 
+func TestProviderToolArgumentBudgetsForPanelOperations(t *testing.T) {
+	for _, name := range []string{"panel_query", "propose_panel_operation", "propose_ssh_command"} {
+		limit := providerToolArgumentLimit(name)
+		for _, length := range []int{limit, limit + 1} {
+			args := `{"data":"` + strings.Repeat("x", length-len(`{"data":""}`)) + `"}`
+			call := ToolCall{ID: "fixture-call", Type: "function", Function: ToolFunction{Name: name, Arguments: args}}
+			err := validateCompletion(providerMessage{Role: "assistant", ToolCalls: []ToolCall{call}})
+			if (err == nil) != (length == limit) {
+				t.Fatal(name, length, err)
+			}
+			if err != nil && !strings.Contains(err.Error(), "工具参数过长") {
+				t.Fatal("unclear argument budget error", err)
+			}
+			// Deliberately finish the tool name after >16 KiB of arguments.
+			input := streamFrame(map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": call.ID, "type": "function", "function": map[string]any{"name": name[:3], "arguments": args}}}}, nil)
+			input += streamFrame(map[string]any{"tool_calls": []any{map[string]any{"index": 0, "function": map[string]any{"name": name[3:]}}}}, nil) + streamFrame(map[string]any{}, "tool_calls") + "data: [DONE]\n\n"
+			out, err := readCompletionStream(context.Background(), strings.NewReader(input), nil)
+			if (err == nil) != (length == limit) {
+				t.Fatal("stream budget", name, length, err)
+			}
+			if err == nil && (len(out.ToolCalls) != 1 || len(out.ToolCalls[0].Function.Arguments) != length) {
+				t.Fatal("stream truncated arguments")
+			}
+			if err != nil && !strings.Contains(err.Error(), "工具参数过长") {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
 func (r oneByteReader) Read(p []byte) (int, error) {
 	if len(p) > 1 {
 		p = p[:1]

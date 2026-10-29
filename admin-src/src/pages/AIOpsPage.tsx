@@ -31,7 +31,7 @@ function ActionDetails({ action }: { action: AIAction }) {
       <Descriptions.Item label="有效至">{time(action.expires_at)}</Descriptions.Item>
     </Descriptions>
     <AIOpsActionSummary action={action} />
-    {action.kind !== 'server_register' && (command ? <><Text strong>{action.approval_mode === 'full_access' ? '完整执行命令' : '完整命令（逐次确认后执行）'}</Text><pre className="ai-ops-pre ai-ops-command">{command}</pre></> : <><Text strong>完整变更参数 / 前后快照</Text><pre className="ai-ops-pre">{pretty(payload)}</pre></>)}
+    {action.kind !== 'server_register' && (command ? <><Text strong>{action.approval_mode === 'full_access' ? '完整执行命令' : '完整命令（逐次确认后执行）'}</Text><pre className="ai-ops-pre ai-ops-command">{command}</pre></> : <><Text strong>{action.kind === 'panel_operation' ? '操作参数（敏感值已隐藏）' : '完整变更参数 / 前后快照'}</Text><pre className="ai-ops-pre">{pretty(action.kind === 'panel_operation' ? payload.parameters_preview : payload)}</pre></>)}
   </Space>;
 }
 

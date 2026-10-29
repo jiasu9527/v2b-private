@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"forest/go-api/internal/admin"
+	"forest/go-api/internal/aiops"
 	"forest/go-api/internal/appleid"
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/guest"
@@ -1153,6 +1154,9 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 		}
 	})
 
+	if target, ok := state.aiOps.(interface{ SetPanelOperations(aiops.PanelOperations) }); ok {
+		target.SetPanelOperations(newPanelOperations(cfg, state))
+	}
 	return withMiddleware(cfg, handler)
 }
 

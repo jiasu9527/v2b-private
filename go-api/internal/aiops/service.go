@@ -16,18 +16,19 @@ import (
 )
 
 type Service struct {
-	cfg         config.Config
-	db          *sql.DB
-	panel       Panel
-	schemaMu    sync.Mutex
-	schemaOK    bool
-	mu          sync.Mutex
-	workers     map[int64]context.CancelFunc
-	workerTurns map[int64]int64
-	closed      bool
-	wg          sync.WaitGroup
-	slots       chan struct{}
-	httpClient  providerHTTPClient
+	cfg             config.Config
+	db              *sql.DB
+	panel           Panel
+	panelOperations PanelOperations
+	schemaMu        sync.Mutex
+	schemaOK        bool
+	mu              sync.Mutex
+	workers         map[int64]context.CancelFunc
+	workerTurns     map[int64]int64
+	closed          bool
+	wg              sync.WaitGroup
+	slots           chan struct{}
+	httpClient      providerHTTPClient
 }
 
 func NewService(cfg config.Config, db *sql.DB, panel Panel) *Service {
