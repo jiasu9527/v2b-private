@@ -109,7 +109,7 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 	switch call.Function.Name {
 	case "plans_list", "groups_list", "user_detail", "propose_user_update":
 		return s.callUserTool(ctx, actorID, sessionID, call)
-	case "tickets_list", "ticket_get", "ticket_settings", "propose_ticket_update", "propose_ticket_settings":
+	case "tickets_list", "ticket_get", "ticket_message_get", "ticket_settings", "propose_ticket_update", "propose_ticket_settings":
 		return s.callTicketTool(ctx, actorID, sessionID, call)
 	case "entry_probe_targets", "entry_probe_run", "entry_probe_result":
 		return s.callProbeTool(ctx, actorID, sessionID, call)

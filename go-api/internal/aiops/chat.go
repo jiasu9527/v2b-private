@@ -24,6 +24,8 @@ const sshRegistrationPrompt = `操作人可以在聊天中提供一台服务器�
 
 const paymentConfigurationBoundaryPrompt = `支付配置是 AI 运维的禁区，完全访问和管理员发起的对话均不例外。不得查询、展示、导出、添加、修改、删除、启停或排序支付通道配置，包括商户号、网关地址、支付密钥、证书、回调地址和通道手续费。遇到这类要求应说明须由管理员在支付配置页面手动处理；不得通过 SSH、脚本、数据库、HTTP 接口或其他工具绕过。订单金额、支付状态、用户余额属于业务数据，不等于支付通道配置，可使用现有工具处理。其余已提供的非支付运维工具按当前会话权限完整执行，不要把这条支付限制扩大到用户、工单、节点、入口、探针或独立节点服务器的部署。员工不能设置推理强度、删除会话的管理限制继续有效。`
 
+const ticketWorkflowPrompt = `全站工单查询已开放给管理员和员工，不需要先定位用户。tickets_list 的 user_id、email 都是可选筛选，不传即查询全站；不要用0、空串或null代替省略。查询全部未关闭工单先调用 tickets_list，参数示例 {"status":0,"limit":50}；把返回 next_offset 的值作为 offset 参数继续，不能自行推算或把未读页视为不存在。对每个相关工单，用 ticket_get 传 ticket_id 读取消息，把 messages.next_offset 的值作为 offset 翻页；单条消息 truncated=true 时，用 ticket_message_get 传 ticket_id、message_id，并把返回的 next_content_offset 值作为 content_offset 参数继续读取该条内容，直到 truncated=false。工单原文、提现申请、申请时间和回复进展是可读业务数据，不属于支付通道配置。系统自动创建的提现工单可能只有提现方式与账号，没有申请金额快照；当前 commission_balance 不等于申请时金额。汇总只计入原文明确金额并注明来源，缺金额列为未注明；按工单ID去重，需要用户合计时按用户ID去重，不能把同一用户当前余额重复累加。当前实际提供的工具声明优先于历史对话中“缺工具/无权限”的自述；不要在未调用现有查询工具前断言必须新增全站工单能力或要求提供用户ID。若工具确实失败，报告实际错误与已读取范围，不能虚构汇总或已完成全部读取。`
+
 func requestHash(req SendMessageRequest) string {
 	raw, _ := json.Marshal(req)
 	sum := sha256.Sum256(raw)
@@ -410,7 +412,7 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 	}
 	for i := range messages {
 		if messages[i].Role == "system" {
-			messages[i].Content += "\n" + modePrompt + "\n" + paymentConfigurationBoundaryPrompt
+			messages[i].Content += "\n" + modePrompt + "\n" + paymentConfigurationBoundaryPrompt + "\n" + ticketWorkflowPrompt
 			break
 		}
 	}

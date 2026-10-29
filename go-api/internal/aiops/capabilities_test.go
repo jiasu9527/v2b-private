@@ -16,7 +16,7 @@ func TestAICapabilityCatalogCoversExistingToolsAndActions(t *testing.T) {
 	s := NewService(config.Config{}, nil, nil)
 	defer s.Close()
 	declared := s.declaredToolDefinitions()
-	if len(declared) != 36 || len(declared) != len(toolCapabilities) || len(s.toolDefinitions()) != len(declared) {
+	if len(declared) != 37 || len(declared) != len(toolCapabilities) || len(s.toolDefinitions()) != len(declared) {
 		t.Fatalf("tool capability coverage: declared=%d catalog=%d exposed=%d", len(declared), len(toolCapabilities), len(s.toolDefinitions()))
 	}
 	seen := map[string]bool{}

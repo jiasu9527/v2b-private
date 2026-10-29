@@ -26,7 +26,7 @@ func TestAIToolsHaveNoApproveOrDirectExecute(t *testing.T) {
 	s := NewService(config.Config{}, nil, nil)
 	defer s.Close()
 	defs := s.toolDefinitions()
-	if len(defs) != 36 {
+	if len(defs) != 37 {
 		t.Fatalf("tools %d", len(defs))
 	}
 	seen := map[string]bool{}
