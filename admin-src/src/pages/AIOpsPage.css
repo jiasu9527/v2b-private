@@ -42,6 +42,25 @@
 .ai-ops-relay-add{max-width:100%}
 @media(max-width:575.98px){.ai-ops-failover-controls{grid-template-columns:minmax(0,1fr)}.ai-ops-relay{padding:12px}.ai-ops-relay-identity{grid-template-columns:minmax(0,1fr) 90px;gap:0 10px}.ai-ops-relay-head>.ant-space{margin-left:auto}.ai-ops-relay-head .ant-btn{padding-inline:4px;font-size:12px}}
 @media(min-width:1400px){.ai-ops-conversation-head{flex-direction:row;align-items:center;justify-content:space-between;gap:16px}.ai-ops-conversation-title{flex:1}.ai-ops-conversation-controls{width:540px;flex-shrink:0}}
+@media(min-width:992px){
+  .ai-ops-page.ai-ops-page-chat{display:flex;flex-direction:column;height:calc(100dvh - 60px);min-height:420px;box-sizing:border-box;padding:6px 0 12px}
+  .ai-ops-page-chat>.content-heading{display:none}
+  .ai-ops-page-chat .ai-ops-page-body{margin:0 12px;flex:1;min-height:0}
+  .ai-ops-page-chat .ai-ops-page-stack{height:100%;gap:8px}
+  .ai-ops-page-chat .ai-ops-page-stack>.ant-alert{flex-shrink:0}
+  .ai-ops-page-chat .ai-ops-tabs{flex:1;min-height:0}
+  .ai-ops-page-chat .ai-ops-tabs>.ant-tabs-nav{margin-bottom:8px;flex-shrink:0}
+  .ai-ops-desktop-title{display:block;margin-right:24px;font-size:16px;white-space:nowrap}
+  .ai-ops-page-chat .ai-ops-tabs>.ant-tabs-content-holder{min-height:0}
+  .ai-ops-page-chat .ai-ops-tabs>.ant-tabs-content-holder>.ant-tabs-content,.ai-ops-page-chat .ai-ops-tabs .ant-tabs-tabpane-active{height:100%}
+  .ai-ops-page-chat .ai-ops-chat-layout{height:100%;min-height:0;gap:12px;align-items:stretch}
+  .ai-ops-page-chat .ai-ops-sessions,.ai-ops-page-chat .ai-ops-conversation{height:100%;min-height:0;display:flex;flex-direction:column;box-sizing:border-box}
+  .ai-ops-page-chat .ai-ops-session-history{flex:1;min-height:0}
+  .ai-ops-page-chat .ai-ops-session-history>.ant-space,.ai-ops-page-chat .ai-ops-session-history>.ant-typography{flex-shrink:0}
+  .ai-ops-page-chat .ai-ops-session-list{flex:1;min-height:0;max-height:none;overscroll-behavior:contain}
+  .ai-ops-page-chat .ai-ops-conversation-head,.ai-ops-page-chat .ai-ops-access-owner,.ai-ops-page-chat .ai-ops-composer{flex-shrink:0}
+  .ai-ops-page-chat .ai-ops-messages{flex:1;min-height:0;height:auto;max-height:none;overscroll-behavior:contain}
+}
 @media(max-width:991.98px){
   .ai-ops-page-chat{display:flex;flex-direction:column;height:calc(100dvh - 60px);min-height:520px;box-sizing:border-box;padding-bottom:8px}
   .ai-ops-page>.content-heading{padding:10px 16px;margin-bottom:8px;font-size:18px;flex-shrink:0}
