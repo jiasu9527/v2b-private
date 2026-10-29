@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -184,7 +185,7 @@ func providerResponseError(status int, body io.Reader) error {
 	case status >= 300 && status < 400:
 		return errors.New("AI 中转要求重定向，已拒绝转发 Key；请填写最终 API 地址")
 	case status >= 500:
-		return errors.New("AI 中转或上游模型暂时异常（5xx），请稍后核对服务状态")
+		return fmt.Errorf("AI 中转或上游模型暂时异常（HTTP %d），请稍后核对中转服务状态", status)
 	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity:
 		return errors.New("AI 中转不接受请求参数，请确认模型支持 Chat Completions 和工具调用")
 	default:

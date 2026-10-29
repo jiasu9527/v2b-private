@@ -215,9 +215,10 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 	return out, nil
 }
 func (s *Service) history(ctx context.Context, sessionID, currentTurnID int64) ([]providerMessage, error) {
-	// Only complete turns are included; failed/interrupted partial tool exchanges
-	// cannot poison the next provider request. Keep whole turns to preserve IDs.
-	rows, err := s.db.QueryContext(ctx, `SELECT message.role,message.content,message.tool_calls::TEXT,message.tool_call_id FROM v2_ai_message message JOIN v2_ai_turn turn ON turn.id=message.turn_id WHERE message.session_id=$1 AND (turn.id=$2 OR turn.id IN(SELECT id FROM v2_ai_turn WHERE session_id=$1 AND status IN('completed','pending') ORDER BY id DESC LIMIT 10)) ORDER BY message.id`, sessionID, currentTurnID)
+	// Complete turns retain paired calls/results. Failed or interrupted turns
+	// retain only their original request: a following "continue" must not lose
+	// its task, but partial tool exchanges must never enter the next request.
+	rows, err := s.db.QueryContext(ctx, `SELECT turn.id,turn.status,message.role,message.content,message.tool_calls::TEXT,message.tool_call_id FROM v2_ai_message message JOIN v2_ai_turn turn ON turn.id=message.turn_id WHERE message.session_id=$1 AND (turn.id=$2 OR turn.id IN(SELECT id FROM v2_ai_turn WHERE session_id=$1 AND status IN('completed','pending') ORDER BY id DESC LIMIT 10) OR (message.role='user' AND turn.id IN(SELECT id FROM v2_ai_turn WHERE session_id=$1 AND status IN('failed','interrupted') ORDER BY id DESC LIMIT 10))) ORDER BY message.id`, sessionID, currentTurnID)
 	if err != nil {
 		return nil, err
 	}
@@ -225,9 +226,16 @@ func (s *Service) history(ctx context.Context, sessionID, currentTurnID int64) (
 	out := []providerMessage{{Role: "system", Content: systemPrompt}}
 	for rows.Next() {
 		var m providerMessage
-		var raw string
-		if err = rows.Scan(&m.Role, &m.Content, &raw, &m.ToolCallID); err != nil {
+		var raw, turnStatus string
+		var sourceTurnID int64
+		if err = rows.Scan(&sourceTurnID, &turnStatus, &m.Role, &m.Content, &raw, &m.ToolCallID); err != nil {
 			return nil, err
+		}
+		if sourceTurnID != currentTurnID && (turnStatus == "failed" || turnStatus == "interrupted") {
+			if m.Role == "user" {
+				out = append(out, providerMessage{Role: "user", Content: m.Content}, providerMessage{Role: "assistant", Content: "[该轮未完成，保留以上原始请求供继续处理；部分操作可能已经执行，实际状态以最新操作摘要为准。未载入该轮的工具片段不能视为未执行；请先核对现状，结果未知的操作不得自动重试。]"})
+			}
+			continue
 		}
 		if json.Unmarshal([]byte(raw), &m.ToolCalls) != nil {
 			return nil, ErrUnavailable
