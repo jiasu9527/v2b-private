@@ -20,14 +20,9 @@ type completionDelta struct {
 	Choices []struct {
 		Index *int `json:"index"`
 		Delta struct {
-			Role      string  `json:"role"`
-			Content   *string `json:"content"`
-			ToolCalls []struct {
-				Index    *int         `json:"index"`
-				ID       string       `json:"id"`
-				Type     string       `json:"type"`
-				Function ToolFunction `json:"function"`
-			} `json:"tool_calls"`
+			Role      string                `json:"role"`
+			Content   *string               `json:"content"`
+			ToolCalls []completionToolDelta `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -37,7 +32,7 @@ type completionDelta struct {
 func readCompletionStream(ctx context.Context, reader io.Reader, onContent func(string) error) (providerMessage, error) {
 	empty := providerMessage{}
 	out := providerMessage{Role: "assistant"}
-	calls := make(map[int]ToolCall)
+	calls := completionToolAssembler{}
 	finished, done := false, false
 	finishReason := ""
 	limited := &io.LimitedReader{R: reader, N: maxCompletionStreamBytes + 1}
@@ -97,29 +92,9 @@ func readCompletionStream(ctx context.Context, reader io.Reader, onContent func(
 			}
 		}
 		for _, delta := range choice.Delta.ToolCalls {
-			if delta.Index == nil || *delta.Index < 0 || *delta.Index >= 8 {
-				return errors.New("AI 流式工具编号无效，未执行工具")
+			if err := calls.append(delta, len(choice.Delta.ToolCalls)); err != nil {
+				return err
 			}
-			call := calls[*delta.Index]
-			call.ID += delta.ID
-			call.Function.Name += delta.Function.Name
-			call.Function.Arguments += delta.Function.Arguments
-			if delta.Type != "" {
-				if delta.Type != "function" || (call.Type != "" && call.Type != delta.Type) {
-					return errors.New("AI 流式工具类型无效，未执行工具")
-				}
-				call.Type = delta.Type
-			}
-			// A streamed name may still be incomplete. Bound buffered arguments
-			// by the larger permitted request, then apply the exact tool limit
-			// after the terminal frame before any tool is dispatched.
-			if len(call.Function.Arguments) > 32768 {
-				return errors.New("AI 工具参数过长，未执行工具；请缩小单次参数或分批操作")
-			}
-			if len(call.ID) > 200 || len(call.Function.Name) > 100 {
-				return errors.New("AI 工具请求超出单轮限制")
-			}
-			calls[*delta.Index] = call
 		}
 		if choice.FinishReason != nil && *choice.FinishReason != "" {
 			finishReason = *choice.FinishReason
@@ -180,13 +155,7 @@ func readCompletionStream(ctx context.Context, reader io.Reader, onContent func(
 	if !done || !finished || ctx.Err() != nil {
 		return empty, errors.New("AI 流式响应未完整结束，未执行工具")
 	}
-	for i := 0; i < len(calls); i++ {
-		call, ok := calls[i]
-		if !ok {
-			return empty, errors.New("AI 流式工具编号不连续，未执行工具")
-		}
-		out.ToolCalls = append(out.ToolCalls, call)
-	}
+	out.ToolCalls = calls.result()
 	if (len(out.ToolCalls) > 0 && finishReason != "tool_calls") || (len(out.ToolCalls) == 0 && finishReason != "stop") {
 		return empty, errors.New("AI 流式完成状态与工具请求不匹配，未执行工具")
 	}

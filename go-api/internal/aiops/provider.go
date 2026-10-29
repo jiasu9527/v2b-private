@@ -19,6 +19,10 @@ type providerHTTPClient interface {
 
 var errProviderContentUpdate = errors.New("AI 回复更新已中止")
 
+// Bound a single parallel batch independently of a relay's tool index labels.
+// This bounds result amplification; full-access tasks can continue in more batches.
+const maxCompletionToolCalls = 64
+
 func newProviderHTTPClient() *http.Client {
 	return &http.Client{Timeout: 90 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
@@ -176,8 +180,11 @@ func (s *Service) completeAtRelay(ctx context.Context, endpoint RelayEndpoint, p
 }
 
 func validateCompletion(out providerMessage) error {
-	if len(out.Content) > 32000 || len(out.ToolCalls) > 8 {
+	if len(out.Content) > 32000 {
 		return errors.New("AI 响应超出单轮限制")
+	}
+	if len(out.ToolCalls) > maxCompletionToolCalls {
+		return errors.New("AI 单次回复的工具调用过多，未执行工具；请分批操作后继续")
 	}
 	seen := map[string]bool{}
 	for _, call := range out.ToolCalls {
