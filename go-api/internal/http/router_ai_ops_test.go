@@ -195,6 +195,40 @@ func TestAIOpsReasoningFieldsReachServices(t *testing.T) {
 	}
 }
 
+func TestAIOpsReasoningSelectionAdminOnly(t *testing.T) {
+	for _, action := range []string{"session/create", "chat/send"} {
+		for _, effort := range []string{"", "default", "auto", "none", "minimal", "low", "medium", "high", "xhigh"} {
+			for _, isAdmin := range []int64{0, 1} {
+				t.Run(fmt.Sprintf("%s/%s/admin=%d", action, effort, isAdmin), func(t *testing.T) {
+					body := `{"model":"gpt-6.1-sol"`
+					if action == "chat/send" {
+						body += `,"content":"fixture","request_id":"fixture-reasoning-admin","access_mode":"full"`
+					}
+					if effort != "" {
+						body += fmt.Sprintf(`,"reasoning_effort":%q`, effort)
+					}
+					body += `}`
+					f := &fakeAIOps{}
+					w := aiOpsTestRequest(t, f, &session.Identity{ID: 7, IsAdmin: isAdmin, IsStaff: 1}, "POST", action, body)
+					if isAdmin == 0 && effort != "" && effort != "default" {
+						if w.Code != 403 || f.calls != 0 {
+							t.Fatalf("staff override reached service: %d calls=%d", w.Code, f.calls)
+						}
+						return
+					}
+					status := 200
+					if action == "chat/send" {
+						status = 202
+					}
+					if w.Code != status || f.calls != 1 || f.reasoningEffort != effort {
+						t.Fatalf("valid selection blocked: %d calls=%d effort=%q", w.Code, f.calls, f.reasoningEffort)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestAIOpsSplitErrorsExplainMissingCapacityAndChangedTargets(t *testing.T) {
 	for _, tc := range []struct {
 		err     error

@@ -80,3 +80,7 @@
   .ai-ops-composer textarea{max-height:100px;overflow-y:auto!important}
   .ai-ops-history-drawer .ant-drawer-header{padding:10px 12px}
 }
+.ai-ops-conversation-controls.ai-ops-conversation-controls-staff{grid-template-columns:minmax(0,1fr) 112px;max-width:500px}
+.ai-ops-conversation-controls-staff>.ai-ops-model-select{grid-column:auto}
+@media(min-width:1400px){.ai-ops-conversation-controls.ai-ops-conversation-controls-staff{width:390px}}
+@media(max-width:991.98px){.ai-ops-conversation-controls.ai-ops-conversation-controls-staff{max-width:none}}

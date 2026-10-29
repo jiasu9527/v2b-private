@@ -55,6 +55,7 @@ export default function AIOpsPage() {
   const actor = getAdminUserInfo();
   const actorID = Number(actor.id || 0);
   const isAdmin = Number(actor.is_admin) === 1;
+  const reasoningChoice: AIReasoningChoice = isAdmin ? reasoningEffort : 'default';
   const [draft, setDraft] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -264,7 +265,7 @@ export default function AIOpsPage() {
     const originalID = selectedRef.current;
     const selection = selectionSequence.current;
     const accessVersion = detail?.session.access_version;
-    const retry = sendRetry && sendRetry.sessionID === originalID && sendRetry.model === model && sendRetry.content === content && sendRetry.accessMode === accessMode && sendRetry.accessVersion === accessVersion && sendRetry.reasoningEffort === reasoningEffort ? sendRetry : { sessionID: originalID, model, content, requestID: aiRequestID(), accessMode, accessVersion, reasoningEffort };
+    const retry = sendRetry && sendRetry.sessionID === originalID && sendRetry.model === model && sendRetry.content === content && sendRetry.accessMode === accessMode && sendRetry.accessVersion === accessVersion && sendRetry.reasoningEffort === reasoningChoice ? sendRetry : { sessionID: originalID, model, content, requestID: aiRequestID(), accessMode, accessVersion, reasoningEffort: reasoningChoice };
     setSendRetry(retry);
     try {
       const response = await apiJsonPost('/ai-ops/chat/send', { session_id: originalID, model, content, request_id: retry.requestID, access_mode: retry.accessMode, access_version: retry.accessVersion, reasoning_effort: retry.reasoningEffort });
@@ -361,7 +362,7 @@ export default function AIOpsPage() {
     <section className="ai-ops-conversation">
       <div className="ai-ops-conversation-head">
         <div className="ai-ops-conversation-title"><Text strong ellipsis>{detail?.session.title || (selectedID ? '读取会话中…' : '新的运维对话')}</Text>{compact && <div className="ai-ops-mobile-actions"><Button type="text" size="small" aria-label="历史会话" icon={<HistoryOutlined />} onClick={() => setHistoryOpen(true)}>历史</Button><Button type="text" size="small" icon={<PlusOutlined />} onClick={newSession}>新对话</Button></div>}</div>
-        <div className="ai-ops-conversation-controls"><Select className="ai-ops-model-select" aria-label="选择 AI 模型" value={model} onChange={setModel} disabled={!!busy || aiSessionBusy(detail)} options={config.models.map((value) => ({ value, label: value }))} /><Select<AIReasoningChoice> className="ai-ops-reasoning-select" aria-label="推理强度" value={reasoningEffort} onChange={(value) => { reasoningEdited.current = true; setReasoningEffort(value); }} disabled={!!busy || aiSessionBusy(detail) || (selectedID > 0 && !detail)} options={[{ value: 'default', label: aiReasoningDefaultLabel(config, model) }, ...AI_REASONING_OPTIONS]} /><Select<AIAccessMode> className="ai-ops-access-select" aria-label="AI 访问权限" value={accessMode} onChange={(mode) => void changeAccess(mode)} loading={busy === 'access'} disabled={!!busy || (selectedID > 0 && !detail)} options={[{ value: 'standard', label: '逐次确认' }, { value: 'full', label: '完全访问', disabled: aiSessionBusy(detail) && accessMode !== 'full' }]} /></div>
+        <div className={`ai-ops-conversation-controls${isAdmin ? '' : ' ai-ops-conversation-controls-staff'}`}><Select className="ai-ops-model-select" aria-label="选择 AI 模型" value={model} onChange={setModel} disabled={!!busy || aiSessionBusy(detail)} options={config.models.map((value) => ({ value, label: value }))} />{isAdmin && <Select<AIReasoningChoice> className="ai-ops-reasoning-select" aria-label="推理强度" value={reasoningChoice} onChange={(value) => { reasoningEdited.current = true; setReasoningEffort(value); }} disabled={!!busy || aiSessionBusy(detail) || (selectedID > 0 && !detail)} options={[{ value: 'default', label: aiReasoningDefaultLabel(config, model) }, ...AI_REASONING_OPTIONS]} />}<Select<AIAccessMode> className="ai-ops-access-select" aria-label="AI 访问权限" value={accessMode} onChange={(mode) => void changeAccess(mode)} loading={busy === 'access'} disabled={!!busy || (selectedID > 0 && !detail)} options={[{ value: 'standard', label: '逐次确认' }, { value: 'full', label: '完全访问', disabled: aiSessionBusy(detail) && accessMode !== 'full' }]} /></div>
       </div>
       {foreignFullAccess && <div className="ai-ops-access-owner"><Text type="secondary">操作人 #{detail?.session.full_access_by || '未知'} 的授权不可沿用；请切换权限或由你启用。</Text><Button size="small" disabled={!!busy || aiSessionBusy(detail)} onClick={() => void changeAccess('full')}>由我启用完全访问</Button></div>}
       <div className="ai-ops-messages" ref={messageViewport} onScroll={() => { const pane = messageViewport.current; if (pane) followOutput.current = aiNearBottom(pane.scrollTop, pane.clientHeight, pane.scrollHeight); }}>

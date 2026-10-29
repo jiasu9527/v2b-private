@@ -64,10 +64,20 @@ test('reasoning choices restore per session, survive incoming snapshots while ed
   const select = page.slice(page.indexOf('const selectSession ='), page.indexOf('const accessMode ='));
   assert.match(select, /setReasoningEffort\(aiSessionReasoning\(session\)\)/);
   assert.match(select, /reasoningEdited.current = false; setReasoningEffort\('default'\)/);
-  assert.match(page, /sendRetry.reasoningEffort === reasoningEffort/);
+  assert.match(page, /sendRetry.reasoningEffort === reasoningChoice/);
   assert.match(page, /reasoning_effort: retry.reasoningEffort/);
   assert.match(page, /aria-label="推理强度"[\s\S]*reasoningEdited.current = true; setReasoningEffort\(value\)/);
   assert.match(page, /value: 'default', label: aiReasoningDefaultLabel\(config, model\)/);
+});
+
+test('staff have no reasoning selector and retry requests always use inherited defaults, including legacy explicit sessions', () => {
+  assert.match(page, /const reasoningChoice: AIReasoningChoice = isAdmin \? reasoningEffort : 'default';/);
+  assert.match(page, /\{isAdmin && <Select<AIReasoningChoice> className="ai-ops-reasoning-select"/);
+  const send = page.slice(page.indexOf('const send ='), page.indexOf('const saveConfig'));
+  assert.match(send, /sendRetry.reasoningEffort === reasoningChoice/);
+  assert.match(send, /reasoningEffort: reasoningChoice/);
+  assert.match(send, /reasoning_effort: retry.reasoningEffort/);
+  assert.doesNotMatch(send, /reasoning_effort: reasoningEffort\b|reasoning_effort: detail/);
 });
 
 test('observed fingerprint is scoped to exact current host and port, never auto-trusted', () => {

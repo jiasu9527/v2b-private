@@ -120,10 +120,18 @@ func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Servic
 		if !decodeSupportJSON(w, r, &req) {
 			return
 		}
+		if actor.IsAdmin == 0 && req.ReasoningEffort != "" && req.ReasoningEffort != "default" {
+			handleAIOpsError(w, aiops.ErrForbidden)
+			return
+		}
 		result, err = service.CreateSession(ctx, actor.ID, req)
 	case "chat/send":
 		var req aiops.SendMessageRequest
 		if !decodeSupportJSON(w, r, &req) {
+			return
+		}
+		if actor.IsAdmin == 0 && req.ReasoningEffort != "" && req.ReasoningEffort != "default" {
+			handleAIOpsError(w, aiops.ErrForbidden)
 			return
 		}
 		result, err = service.SendMessage(ctx, actor.ID, req)

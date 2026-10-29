@@ -43,7 +43,7 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 	if (req.AccessMode != "" && !validAccessMode(req.AccessMode)) || req.SessionID < 0 || strings.TrimSpace(req.Content) == "" || len(req.Content) > maxContentBytes || !utf8.ValidString(req.Content) || !requestIDPattern.MatchString(req.RequestID) {
 		return out, ErrValidation
 	}
-	if err := s.requireOperator(ctx, actorID); err != nil {
+	if err := s.requireReasoningAccess(ctx, actorID, req.ReasoningEffort); err != nil {
 		return out, err
 	}
 	if err := s.ensureSchema(ctx); err != nil {
@@ -73,7 +73,8 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 	if err = lockAIState(ctx, tx); err != nil {
 		return out, err
 	}
-	if err = s.requireOperatorTx(ctx, tx, actorID); err != nil {
+	isAdmin, err := s.requireReasoningAccessTx(ctx, tx, actorID, req.ReasoningEffort)
+	if err != nil {
 		return out, err
 	}
 	if req.SessionID > 0 {
@@ -183,7 +184,11 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 		workerLifetime = fullAccessLifetime
 	}
 	selection := req.ReasoningEffort
-	if selection == "" {
+	if !isAdmin {
+		// Staff always follow the administrator's current per-model default,
+		// including sessions created before this setting became admin-only.
+		selection = "default"
+	} else if selection == "" {
 		selection = out.Session.ReasoningEffort
 	}
 	if selection == "" {

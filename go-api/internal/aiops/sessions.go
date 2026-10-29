@@ -162,7 +162,7 @@ func (s *Service) CreateSession(ctx context.Context, actorID int64, req CreateSe
 	if req.ReasoningEffort != "" && !validReasoningSelection(req.ReasoningEffort) {
 		return empty, ErrValidation
 	}
-	if err := s.requireOperator(ctx, actorID); err != nil {
+	if err := s.requireReasoningAccess(ctx, actorID, req.ReasoningEffort); err != nil {
 		return empty, err
 	}
 	if err := s.ensureSchema(ctx); err != nil {
@@ -186,7 +186,7 @@ func (s *Service) CreateSession(ctx context.Context, actorID int64, req CreateSe
 	if err = lockAIState(ctx, tx); err != nil {
 		return empty, err
 	}
-	if err = s.requireOperatorTx(ctx, tx, actorID); err != nil {
+	if _, err = s.requireReasoningAccessTx(ctx, tx, actorID, req.ReasoningEffort); err != nil {
 		return empty, err
 	}
 	v, err := insertSession(ctx, tx, actorID, title, req.Model)
