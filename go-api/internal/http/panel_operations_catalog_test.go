@@ -131,7 +131,8 @@ func TestPanelOperationCatalogCoversAdminRoutes(t *testing.T) {
 		paths[op.Path] = true
 	}
 	excluded := map[string]string{
-		"/payment/fetch": "payment configuration forbidden", "/payment/getPaymentMethods": "payment configuration forbidden", "/payment/getPaymentForm": "payment configuration forbidden", "/payment/save": "payment configuration forbidden", "/payment/drop": "payment configuration forbidden", "/payment/show": "payment configuration forbidden", "/payment/sort": "payment configuration forbidden",
+		"/ai-ops/telegram/": "Telegram authorization/configuration is managed by humans; never recursively invoke",
+		"/payment/fetch":    "payment configuration forbidden", "/payment/getPaymentMethods": "payment configuration forbidden", "/payment/getPaymentForm": "payment configuration forbidden", "/payment/save": "payment configuration forbidden", "/payment/drop": "payment configuration forbidden", "/payment/show": "payment configuration forbidden", "/payment/sort": "payment configuration forbidden",
 		"/ai-ops/": "delegated to AI session/settings/SSH management; never recursively invoke", "/support/": "subroutes checked below", "/migration/xboard/": "subroutes checked below", "/apple-id/": "subroutes checked below", "/server/client-entry-user-policy/collection/": "subroutes checked below", "/dns-failover/": "dynamic REST routes checked below", "/server/": "protocol routes checked below",
 	}
 	raw, err := os.ReadFile("router.go")

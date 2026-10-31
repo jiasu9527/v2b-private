@@ -107,6 +107,7 @@ func main() {
 	var migrationService *usermigration.DBService
 	var adminService admin.Service
 	var aiOpsService *aiops.Service
+	var aiTelegram *aiops.TelegramBridge
 	var nodeService nodeapi.Service
 	var telegramService *telegram.Service
 	var backgroundRunner *background.Runner
@@ -144,6 +145,8 @@ func main() {
 		adminService = adminDBService
 		aiOpsService = aiops.NewService(cfg, db, adminDBService)
 		defer aiOpsService.Close()
+		aiTelegram = aiops.NewTelegramBridge(aiOpsService)
+		telegramService.WithAIOps(aiTelegram)
 		nodeDBService := nodeapi.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithOnlineGeoResolver(onlineGeo)
 		nodeService = nodeDBService
 		adminDBService.WithOnlineLocationRefresh(nodeDBService.ReconcileOnlineLocations)
@@ -165,12 +168,21 @@ func main() {
 			httpapi.WithUserMigrationService(migrationService),
 			httpapi.WithAdminService(adminService),
 			httpapi.WithAIOps(aiOpsService),
+			httpapi.WithAIOpsTelegram(aiTelegram),
 			httpapi.WithNodeService(nodeService),
 			httpapi.WithQueueRuntime(jobQueue),
 			httpapi.WithTelegramService(telegramService),
 		),
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,
+	}
+	// NewRouter wires the complete panel operation adapter. Restore persisted
+	// Telegram jobs only after that binding, never against a partial AI service.
+	if aiTelegram != nil {
+		if err := aiTelegram.Start(ctx, telegramService.AITransport()); err != nil {
+			log.Fatalf("initialize AI Telegram bridge: %v", err)
+		}
+		defer aiTelegram.Close()
 	}
 
 	go func() {

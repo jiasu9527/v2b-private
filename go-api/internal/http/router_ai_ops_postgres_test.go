@@ -110,7 +110,8 @@ func TestAIOpsHTTPPostgresIntegration(t *testing.T) {
 	if err = db.QueryRowContext(ctx, `SELECT api_key_cipher FROM v2_ai_config WHERE id=1`).Scan(&encrypted); err != nil || encrypted == "" || strings.Contains(encrypted, "ai-http-secret") {
 		t.Fatal("key not encrypted", err)
 	}
-	input := aiops.SendMessageRequest{Content: "调整测试节点", Model: "glm-5.3", RequestID: "http-fixture-send-1"}
+	// This fixture tests explicit approval, not the default full-access mode.
+	input := aiops.SendMessageRequest{Content: "调整测试节点", Model: "glm-5.3", RequestID: "http-fixture-send-1", AccessMode: "standard"}
 	var sent, retried aiops.SendMessageResult
 	request("POST", "chat/send", input, 202, &sent)
 	request("POST", "chat/send", input, 202, &retried)

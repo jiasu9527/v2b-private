@@ -32,7 +32,33 @@ export function aiPrepareFallbackRelays(values: AIFallbackRelayForm[] = [], prev
     return { ...(id ? { id } : {}), name: String(relay.name || '').trim(), base_url: baseURL, models: supportedModels, enabled: !!relay.enabled, api_key: apiKey, clear_api_key: clear };
   });
 }
-export type AISession = { id: number; title: string; model: string; created_by: number; status: string; created_at: number; updated_at: number; access_mode?: AIAccessMode; access_version?: number; full_access_by?: number; reasoning_effort?: AIReasoningChoice };
+export type AISession = { id: number; title: string; model: string; created_by: number; status: string; created_at: number; updated_at: number; access_mode?: AIAccessMode; access_version?: number; full_access_by?: number; reasoning_effort?: AIReasoningChoice; source?: string };
+export type AITelegramConfig = { enabled: boolean; default_model: string; default_access_mode: AIAccessMode; stream_updates: boolean; notify_completion: boolean };
+export type AITelegramBinding = { actor_id: number; email: string; telegram_id: number | string; active: boolean; session_id?: number; bound_at: number };
+export type AITelegramStatus = { config: AITelegramConfig; bindings: AITelegramBinding[]; my_binding?: AITelegramBinding | null; models: string[]; bot_ready: boolean };
+export type AITelegramBindingCode = { code: string; expires_at: number; command: string };
+export function aiTelegramConfig(value: unknown): AITelegramConfig {
+  const config = value as AITelegramConfig | null;
+  if (!config || typeof config.enabled !== 'boolean' || typeof config.default_model !== 'string' ||
+      !['standard', 'full'].includes(config.default_access_mode) || typeof config.stream_updates !== 'boolean' || typeof config.notify_completion !== 'boolean') {
+    throw new Error('Telegram 配置格式不正确，请刷新后重试');
+  }
+  return { enabled: config.enabled, default_model: config.default_model, default_access_mode: config.default_access_mode, stream_updates: config.stream_updates, notify_completion: config.notify_completion };
+}
+export function aiTelegramBindings(status: AITelegramStatus | null, actorID: number, isAdmin: boolean): AITelegramBinding[] {
+  if (!status || !isAdmin && (!Number.isSafeInteger(actorID) || actorID <= 0)) return [];
+  const items = [...(status.bindings || []), ...(status.my_binding ? [status.my_binding] : [])];
+  const seen = new Set<number>();
+  return items.filter((item) => {
+    if (!Number.isSafeInteger(item.actor_id) || item.actor_id <= 0 || seen.has(item.actor_id) || !isAdmin && item.actor_id !== actorID) return false;
+    seen.add(item.actor_id);
+    return true;
+  });
+}
+export function aiTelegramActorID(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) throw new Error('请输入有效的后台操作人 ID');
+  return value;
+}
 export type AIMessage = { id: number; session_id: number; turn_id: number; role: string; content: string; tool_calls?: { id: string; function: { name: string; arguments: string } }[]; tool_call_id?: string; created_at: number };
 export type AITurn = { id: number; status: string; error: string; created_at: number; completed_at: number; draft_content?: string; draft_round?: number; draft_version?: number; access_mode?: AIAccessMode; stop_requested?: boolean; reasoning_effort?: AIReasoningEffort };
 export type AIAction = { id: number; session_id: number; actor_id: number; approved_by?: number; rejected_by?: number; approval_mode?: 'manual' | 'full_access'; authorization_turn_id?: number; tool_call_id: string; kind: string; target_id: number; target_type: string; server_label: string; payload: Record<string, unknown>; reason: string; status: string; expires_at: number; claimed_at: number; completed_at: number; output: string; error: string; created_at: number; updated_at: number };

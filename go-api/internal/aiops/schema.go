@@ -42,6 +42,7 @@ func (s *Service) ensureSchema(ctx context.Context) error {
 		`ALTER TABLE v2_ai_session ADD COLUMN IF NOT EXISTS access_version BIGINT NOT NULL DEFAULT 1`,
 		`ALTER TABLE v2_ai_session ADD COLUMN IF NOT EXISTS full_access_by BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE v2_ai_session ADD COLUMN IF NOT EXISTS reasoning_effort TEXT NOT NULL DEFAULT 'default'`,
+		`ALTER TABLE v2_ai_session ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'web'`,
 		`ALTER TABLE v2_ai_turn ADD COLUMN IF NOT EXISTS access_mode TEXT NOT NULL DEFAULT 'standard'`,
 		`ALTER TABLE v2_ai_turn ADD COLUMN IF NOT EXISTS reasoning_effort TEXT NOT NULL DEFAULT 'auto'`,
 		`ALTER TABLE v2_ai_turn ADD COLUMN IF NOT EXISTS stop_requested BOOLEAN NOT NULL DEFAULT FALSE`,
@@ -60,6 +61,9 @@ func (s *Service) ensureSchema(ctx context.Context) error {
 		return err
 	}
 	if err = ensureKnowledgeSchema(ctx, tx); err != nil {
+		return err
+	}
+	if err = ensureTelegramSchema(ctx, tx); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {

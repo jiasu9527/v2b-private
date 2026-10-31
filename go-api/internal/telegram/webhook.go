@@ -84,6 +84,9 @@ func (s *Service) HandleWebhook(ctx context.Context, payload map[string]any) err
 	if s == nil || len(payload) == 0 {
 		return nil
 	}
+	if handled, err := s.handleAIWebhook(ctx, payload); handled || err != nil {
+		return err
+	}
 
 	if joinPayload, ok := payload["chat_join_request"].(map[string]any); ok {
 		return s.handleChatJoinRequest(ctx, joinPayload)
@@ -147,7 +150,7 @@ func (s *Service) handleMonitorCommand(ctx context.Context, message webhookMessa
 
 	if !isAdmin {
 		if err := s.sendMessageMarkup(ctx, message.ChatID,
-			"🛡 用户入口状态\n员工可查看已有检测结果；主动检测和批量入口调整仅限管理员。",
+			"🛡 用户入口状态\n员工可查看已有检测结果；主动检测和批量入口调整仅限管理员。"+s.aiMenuHint(),
 			entryMonitorReadOnlyReplyKeyboard()); err != nil {
 			return err
 		}
@@ -158,13 +161,20 @@ func (s *Service) handleMonitorCommand(ctx context.Context, message webhookMessa
 	// chat keyboard first, then retain the existing inline actions on a second
 	// message so operators can use either interaction style.
 	if err := s.sendMessageMarkup(ctx, message.ChatID,
-		"🛡 用户入口检测\n\n快捷菜单已固定在输入框下方，可随时发起检测或查看结果。",
+		"🛡 用户入口检测\n\n快捷菜单已固定在输入框下方，可随时发起检测或查看结果。"+s.aiMenuHint(),
 		entryMonitorReplyKeyboard()); err != nil {
 		return err
 	}
 	return s.sendMessageMarkup(ctx, message.ChatID,
 		"快捷操作",
 		entryMonitorInlineKeyboard())
+}
+
+func (s *Service) aiMenuHint() string {
+	if s.aiOps == nil {
+		return ""
+	}
+	return "\n\nAI 运维：发送 /ai 进入；请先在后台 AI 运维完成独立身份绑定。"
 }
 
 func (s *Service) handleCallbackQuery(ctx context.Context, callback webhookCallbackQuery) error {

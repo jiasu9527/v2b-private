@@ -10,12 +10,12 @@ import (
 	"unicode/utf8"
 )
 
-const sessionColumns = `id,title,model,created_by,status,created_at,updated_at,access_mode,full_access_by,access_version,reasoning_effort`
+const sessionColumns = `id,title,model,created_by,status,created_at,updated_at,access_mode,full_access_by,access_version,reasoning_effort,source`
 const turnColumns = `id,session_id,request_id,status,error,created_at,completed_at,draft_content,draft_round,draft_version,access_mode,stop_requested,reasoning_effort`
 
 func scanSession(row interface{ Scan(...any) error }) (Session, error) {
 	var v Session
-	err := row.Scan(&v.ID, &v.Title, &v.Model, &v.CreatedBy, &v.Status, &v.CreatedAt, &v.UpdatedAt, &v.AccessMode, &v.FullAccessBy, &v.AccessVersion, &v.ReasoningEffort)
+	err := row.Scan(&v.ID, &v.Title, &v.Model, &v.CreatedBy, &v.Status, &v.CreatedAt, &v.UpdatedAt, &v.AccessMode, &v.FullAccessBy, &v.AccessVersion, &v.ReasoningEffort, &v.Source)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, ErrNotFound
 	}
@@ -257,6 +257,11 @@ func (s *Service) deleteData(ctx context.Context, actorID, id int64, reset bool)
 		return err
 	}
 	defer tx.Rollback()
+	// Telegram dispatch takes this lock before entering the AI state lock.
+	// Use the same order so cleanup cannot race an accepted bot request.
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(2026103101)`); err != nil {
+		return err
+	}
 	if err = lockAIStateExclusive(ctx, tx); err != nil {
 		return err
 	}
@@ -277,6 +282,9 @@ func (s *Service) deleteData(ctx context.Context, actorID, id int64, reset bool)
 	}
 	if running {
 		return ErrBusy
+	}
+	if err = purgeTelegramSessionData(ctx, tx, id, reset); err != nil {
+		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM v2_ai_session WHERE $1::BIGINT=0 OR id=$1`, id); err != nil {
 		return err

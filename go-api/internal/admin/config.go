@@ -309,7 +309,7 @@ func (s *DBService) GetTelegramAdminStatus(ctx context.Context, adminID int64) (
 	}
 	if token != "" {
 		status.WebhookURL = s.telegramWebhookURL(cfg, token)
-		info, err := telegramAPIResultMap(&http.Client{Timeout: 10 * time.Second}, token, "getWebhookInfo", nil)
+		info, err := telegramAPIResultMap(ctx, &http.Client{Timeout: 10 * time.Second}, token, "getWebhookInfo", nil)
 		if err != nil {
 			status.TelegramWebhookInfoErr = err.Error()
 		} else {
@@ -364,7 +364,7 @@ func (s *DBService) SendTelegramTestMessage(ctx context.Context, adminID int64) 
 		appName = "Forest"
 	}
 	text := fmt.Sprintf("%s Telegram 测试消息发送成功", appName)
-	if err := telegramAPICall(client, token, "sendMessage", map[string]string{"chat_id": strconv.FormatInt(telegramID.Int64, 10), "text": text}); err != nil {
+	if err := telegramAPICall(ctx, client, token, "sendMessage", map[string]string{"chat_id": strconv.FormatInt(telegramID.Int64, 10), "text": text}); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -411,14 +411,14 @@ func telegramWebhookAccessToken(token string) string {
 	return fmt.Sprintf("%x", md5.Sum([]byte(strings.TrimSpace(token))))
 }
 
-func (s *DBService) SetTelegramWebhook(_ context.Context, token string) (bool, error) {
+func (s *DBService) SetTelegramWebhook(ctx context.Context, token string) (bool, error) {
 	token = strings.TrimSpace(token)
 	cfg, err := loadAdminConfigStore(adminConfigPath())
 	if err != nil {
 		return false, err
 	}
 	if token == "" {
-		token = cfg.stringValue("telegram_bot_token", "")
+		token = cfg.stringValue("telegram_bot_token", strings.TrimSpace(s.currentConfig().TelegramBotToken))
 	}
 	if token == "" {
 		return false, errors.New("参数错误")
@@ -430,19 +430,23 @@ func (s *DBService) SetTelegramWebhook(_ context.Context, token string) (bool, e
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	if err := telegramAPICall(client, token, "getMe", nil); err != nil {
+	if err := telegramAPICall(ctx, client, token, "getMe", nil); err != nil {
 		return false, err
 	}
-	if err := telegramAPICall(client, token, "setWebhook", map[string]string{"url": hookURL}); err != nil {
+	webhookParams := map[string]string{"url": hookURL}
+	if secret := cfgpkg.TelegramAIWebhookSecret(s.currentConfig().AppKey, token); secret != "" {
+		webhookParams["secret_token"] = secret
+	}
+	if err := telegramAPICall(ctx, client, token, "setWebhook", webhookParams); err != nil {
 		return false, err
 	}
-	info, err := telegramAPIResultMap(client, token, "getWebhookInfo", nil)
+	info, err := telegramAPIResultMap(ctx, client, token, "getWebhookInfo", nil)
 	if err != nil {
 		return false, err
 	}
-	actualURL := strings.TrimSpace(fmt.Sprint(info["url"]))
-	if actualURL != "" && actualURL != hookURL {
-		return false, fmt.Errorf("Webhook设置未生效，Telegram当前地址：%s，目标地址：%s", actualURL, hookURL)
+	actualURL, _ := info["url"].(string)
+	if strings.TrimSpace(actualURL) != hookURL {
+		return false, errors.New("Webhook设置未生效，请核对配置与Telegram当前地址")
 	}
 	return true, nil
 }
@@ -1005,46 +1009,76 @@ func listTemplateEntries(path string) ([]string, error) {
 	return result, nil
 }
 
-func telegramAPICall(client *http.Client, token, method string, params map[string]string) error {
-	_, err := telegramAPIResultMap(client, token, method, params)
-	return err
+func telegramAPICall(ctx context.Context, client *http.Client, token, method string, params map[string]string) error {
+	raw, err := telegramAPIResultRaw(ctx, client, token, method, params)
+	if err != nil {
+		return err
+	}
+	// setWebhook returns true, while getMe/sendMessage return objects.
+	if strings.TrimSpace(string(raw)) == "true" {
+		return nil
+	}
+	var result map[string]any
+	if json.Unmarshal(raw, &result) != nil || result == nil {
+		return errors.New("Telegram响应格式不正确")
+	}
+	return nil
 }
 
-func telegramAPIResultMap(client *http.Client, token, method string, params map[string]string) (map[string]any, error) {
-	endpoint := "https://api.telegram.org/bot" + token + "/" + method
-	if len(params) > 0 {
-		query := url.Values{}
-		for key, value := range params {
-			query.Set(key, value)
-		}
-		endpoint += "?" + query.Encode()
-	}
-	resp, err := client.Get(endpoint)
+func telegramAPIResultMap(ctx context.Context, client *http.Client, token, method string, params map[string]string) (map[string]any, error) {
+	raw, err := telegramAPIResultRaw(ctx, client, token, method, params)
 	if err != nil {
-		return nil, errors.New("请求失败")
+		return nil, err
+	}
+	var result map[string]any
+	if json.Unmarshal(raw, &result) != nil || result == nil {
+		return nil, errors.New("Telegram响应格式不正确")
+	}
+	return result, nil
+}
+
+func telegramAPIResultRaw(ctx context.Context, client *http.Client, token, method string, params map[string]string) (json.RawMessage, error) {
+	if client == nil || token == "" || strings.ContainsAny(token, "/?#\\\r\n\t ") || strings.ContainsAny(method, "/?#\\\r\n\t ") {
+		return nil, errors.New("Telegram配置格式不正确")
+	}
+	values := url.Values{}
+	for key, value := range params {
+		values.Set(key, value)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.telegram.org/bot"+token+"/"+method, strings.NewReader(values.Encode()))
+	if err != nil {
+		return nil, errors.New("Telegram请求失败")
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	safeClient := *client
+	safeClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := safeClient.Do(request)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, errors.New("Telegram请求失败")
 	}
 	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, errors.New("请求失败")
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("Telegram请求失败（HTTP %d）", resp.StatusCode)
+	}
+	const maxResponseBytes = 1 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil || len(body) > maxResponseBytes {
+		return nil, errors.New("Telegram响应无效或过大")
 	}
 	var payload struct {
-		OK          bool           `json:"ok"`
-		Description string         `json:"description"`
-		Result      map[string]any `json:"result"`
+		OK        bool            `json:"ok"`
+		ErrorCode int             `json:"error_code"`
+		Result    json.RawMessage `json:"result"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, errors.New("请求失败")
+		return nil, errors.New("Telegram响应格式不正确")
 	}
 	if !payload.OK {
-		if strings.TrimSpace(payload.Description) == "" {
-			return nil, errors.New("请求失败")
-		}
-		return nil, errors.New("来自TG的错误：" + payload.Description)
-	}
-	if payload.Result == nil {
-		payload.Result = map[string]any{}
+		// Upstream descriptions and net/url errors can include credentials.
+		return nil, fmt.Errorf("Telegram拒绝请求（错误码 %d）", payload.ErrorCode)
 	}
 	return payload.Result, nil
 }

@@ -81,6 +81,7 @@ type Service struct {
 	resolveUserID       func(ctx context.Context, token string) (int64, error)
 	adminService        ticketReplyService
 	entryMonitor        EntryMonitorController
+	aiOps               AIOpsController
 	entryMonitorMenusMu sync.Mutex
 	entryMonitorMenus   map[string]*entryMonitorMenuState
 	sendMessage         func(ctx context.Context, chatID int64, text string) error

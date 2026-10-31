@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha1"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,7 @@ import (
 	"forest/go-api/internal/payment"
 	"forest/go-api/internal/queue"
 	"forest/go-api/internal/session"
+	"forest/go-api/internal/telegram"
 	usersvc "forest/go-api/internal/user"
 )
 
@@ -56,6 +58,7 @@ type routerState struct {
 	telegram          telegramWebhookService
 	clientEntryRemote clientEntryRemoteResolver
 	aiOps             aiOpsService
+	aiTelegram        aiTelegramService
 }
 
 var managedServerRouterTypes = map[string]struct{}{
@@ -234,6 +237,9 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 		adminPrefix := "/api/v1/" + strings.Trim(strings.TrimSpace(cfg.AdminPath), "/")
 
 		switch {
+		case strings.HasPrefix(r.URL.Path, adminPrefix+"/ai-ops/telegram/"):
+			handleAITelegram(w, r, state.session, state.aiTelegram, state.admin, strings.TrimPrefix(r.URL.Path, adminPrefix+"/ai-ops/telegram/"))
+			return
 		case strings.HasPrefix(r.URL.Path, adminPrefix+"/ai-ops/"):
 			handleAIOps(w, r, state.session, state.aiOps, strings.TrimPrefix(r.URL.Path, adminPrefix+"/ai-ops/"))
 			return
@@ -1277,6 +1283,11 @@ func handleGuestInvitePreview(w http.ResponseWriter, r *http.Request, service gu
 }
 
 func handleGuestTelegramWebhook(w http.ResponseWriter, r *http.Request, cfg config.Config, service telegramWebhookService) bool {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "Method not allowed"})
+		return true
+	}
 	if service == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "telegram service unavailable"})
 		return true
@@ -1297,7 +1308,21 @@ func handleGuestTelegramWebhook(w http.ResponseWriter, r *http.Request, cfg conf
 		payload = map[string]any{}
 	}
 
-	if err := service.HandleWebhook(r.Context(), payload); err != nil {
+	ctx := r.Context()
+	current := config.Load()
+	token := strings.TrimSpace(current.TelegramBotToken)
+	if token == "" {
+		token = strings.TrimSpace(cfg.TelegramBotToken)
+	}
+	appKey := current.AppKey
+	if appKey == "" {
+		appKey = cfg.AppKey
+	}
+	secret := config.TelegramAIWebhookSecret(appKey, token)
+	if secret != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Telegram-Bot-Api-Secret-Token")), []byte(secret)) == 1 {
+		ctx = telegram.WithVerifiedAIWebhook(ctx)
+	}
+	if err := service.HandleWebhook(ctx, payload); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
 		return true
 	}

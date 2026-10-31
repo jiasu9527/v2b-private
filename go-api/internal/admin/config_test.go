@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -104,6 +105,9 @@ func TestDBServiceFetchConfigAndTemplates(t *testing.T) {
 }
 
 func TestDBServiceTelegramAdminStatusShowsBindingAndWebhookURL(t *testing.T) {
+	mockAdminTelegram(t, func(*http.Request) (*http.Response, error) {
+		return adminTelegramResponse(200, `{"ok":true,"result":{"url":"https://api.example/api/v1/guest/telegram/webhook"}}`), nil
+	})
 	root := t.TempDir()
 	writeAdminJSONFixture(t, root, map[string]any{
 		"app_url":              "https://site.example",

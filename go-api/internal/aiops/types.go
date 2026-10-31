@@ -64,6 +64,7 @@ type AccessModeRequest struct {
 	Mode            string `json:"mode"`
 }
 type Session struct {
+	Source          string `json:"source"`
 	ReasoningEffort string `json:"reasoning_effort"`
 	AccessVersion   int64  `json:"access_version"`
 	AccessMode      string `json:"access_mode"`
