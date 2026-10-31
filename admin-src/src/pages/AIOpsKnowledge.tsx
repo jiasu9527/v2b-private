@@ -16,7 +16,7 @@ function KnowledgeMeta({ entry }: { entry: AIKnowledgeEntry }) {
   return <div className="ai-knowledge-meta"><span>{entry.source_kind === 'ai' ? 'AI 整理' : '人工录入'}</span><span>更新于 {timestamp(entry.updated_at)} · 操作人 #{entry.updated_by || entry.created_by}</span>{entry.source_session_id > 0 && <span>来源会话 #{entry.source_session_id}{entry.source_turn_id > 0 ? ` · 轮次 #${entry.source_turn_id}` : ''}</span>}<span>版本 {entry.version}</span></div>;
 }
 
-export default function AIOpsKnowledge({ active, isAdmin, actorID }: { active: boolean; isAdmin: boolean; actorID: number }) {
+export default function AIOpsKnowledge({ active, isAdmin, actorID, miniBackHandler }: { active: boolean; isAdmin: boolean; actorID: number; miniBackHandler?: React.MutableRefObject<(() => boolean) | null> }) {
   const [query, setQuery] = useState('');
   const [filters, setFilters] = useState<Filters>({ query: '', category: '', status: '', current: 1, page_size: 20 });
   const [entries, setEntries] = useState<AIKnowledgeEntry[]>([]);
@@ -63,6 +63,18 @@ export default function AIOpsKnowledge({ active, isAdmin, actorID }: { active: b
   const open = (item: AIKnowledgeEntry, nextMode: 'view' | 'edit' = 'view') => { setEntry(item); void read(item.id, nextMode); };
   const create = () => { detailSequence.current += 1; setEntry(null); setDetailLoading(false); setDetailError(''); setSaveError(''); form.resetFields(); form.setFieldsValue(aiKnowledgeValues()); setMode('create'); };
   const close = () => { if (mutation.current) return; detailSequence.current += 1; setMode(null); setEntry(null); setDetailError(''); setSaveError(''); form.resetFields(); };
+  useEffect(() => {
+    if (!miniBackHandler || !active) return;
+    const goBack = () => {
+      if (!mode && !deleting) return false;
+      if (saving || mutation.current) return true;
+      if (deleting) { setDeleting(null); setDeleteError(''); }
+      else close();
+      return true;
+    };
+    miniBackHandler.current = goBack;
+    return () => { if (miniBackHandler.current === goBack) miniBackHandler.current = null; };
+  }, [miniBackHandler, active, mode, deleting, saving]);
   const save = async () => {
     if (mutation.current || !mode || mode === 'view' || mode === 'edit' && (!isAdmin || !entry)) return;
     mutation.current = true; setSaving(true); setSaveError('');

@@ -7,12 +7,15 @@ import ts from 'typescript';
 const apiSource = await readFile(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
 const streamSource = await readFile(new URL('../src/pages/aiOpsStream.ts', import.meta.url), 'utf8');
 const miniSource = await readFile(new URL('../src/TelegramMiniApp.tsx', import.meta.url), 'utf8');
+const themeSource = await readFile(new URL('../src/lib/telegramMiniTheme.ts', import.meta.url), 'utf8');
 const pageSource = await readFile(new URL('../src/pages/AIOpsPage.tsx', import.meta.url), 'utf8');
 const mainSource = await readFile(new URL('../src/main.tsx', import.meta.url), 'utf8');
 const compiled = (source) => ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.React, esModuleInterop: true } }).outputText;
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const identity = { id: 7, email: 'staff@example.test', is_admin: 0, is_staff: 1 };
 const session = () => ({ token: 'mini.fixture-token', expires_at: Math.floor(Date.now() / 1000) + 3600, user: { ...identity } });
+const themeContext = createContext({ exports: {} });
+runInContext(compiled(themeSource), themeContext);
 
 function runtime() {
   const requests = [], storageCalls = [];
@@ -152,20 +155,20 @@ test('mini entry bypasses web login, revalidates identity and never trusts unsig
 });
 
 function miniLifecycle({ initData = 'signed', authFails = false } = {}) {
-  const effects = [], states = [], intervals = new Map(), timeouts = new Map();
+  const effects = [], states = [], intervals = new Map(), timeouts = new Map(), sdkEvents = new Map(), styles = new Map(), classes = new Set();
   const calls = { auth: 0, identity: 0, clear: 0, ready: 0, expand: 0 };
   let nextTimer = 0, rejectIdentity = false, stateIndex = 0, mounted = false;
   const window = new EventTarget();
   Object.assign(window, {
-    innerHeight: 700,
+    innerHeight: 700, innerWidth: 390,
     setInterval(callback) { intervals.set(++nextTimer, callback); return nextTimer; },
     clearInterval(id) { intervals.delete(id); },
     setTimeout(callback) { timeouts.set(++nextTimer, callback); return nextTimer; },
     clearTimeout(id) { timeouts.delete(id); },
-    Telegram: { WebApp: { initData, ready() { calls.ready++; }, expand() { calls.expand++; }, onEvent() {}, offEvent() {} } },
+    Telegram: { WebApp: { initData, ready() { calls.ready++; }, expand() { calls.expand++; }, onEvent(name, callback) { sdkEvents.set(name, callback); }, offEvent(name) { sdkEvents.delete(name); } } },
   });
   const document = new EventTarget();
-  Object.assign(document, { visibilityState: 'visible', documentElement: { style: { setProperty() {} } }, body: { classList: { add() {}, remove() {}, toggle() {} } } });
+  Object.assign(document, { visibilityState: 'visible', documentElement: { style: { setProperty(name, value) { styles.set(name, value); }, getPropertyValue(name) { return styles.get(name) || ''; }, removeProperty(name) { styles.delete(name); } } }, body: { classList: { add(...names) { names.forEach((name) => classes.add(name)); }, remove(...names) { names.forEach((name) => classes.delete(name)); }, toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); } } } });
   const react = {
     createElement: (type, props, ...children) => ({ type, props, children }),
     useState(initial) { const index = stateIndex++; if (!mounted) states[index] = initial; return [states[index], (next) => { states[index] = typeof next === 'function' ? next(states[index]) : next; }]; },
@@ -183,6 +186,7 @@ function miniLifecycle({ initData = 'signed', authFails = false } = {}) {
     if (name === 'react') return react;
     if (name === 'antd') return { ConfigProvider: 'ConfigProvider', Space: 'Space', Spin: 'Spin', Button: 'Button', Alert: 'Alert', Typography: { Title: 'Title', Text: 'Text' }, theme: {} };
     if (name === './lib/api') return api;
+    if (name === './lib/telegramMiniTheme') return themeContext.exports;
     if (name === './pages/AIOpsPage') return { __esModule: true, default: 'AIOpsPage' };
     return {};
   } });
@@ -192,7 +196,7 @@ function miniLifecycle({ initData = 'signed', authFails = false } = {}) {
   assert.equal(effects.length, 2);
   const cleanups = effects.map((effect) => effect());
   const cleanup = () => cleanups.forEach((clean) => clean());
-  return { calls, states, intervals, timeouts, window, document, cleanup, offline(value) { rejectIdentity = value; }, render() { stateIndex = 0; return context.exports.default(); } };
+  return { calls, states, intervals, timeouts, sdkEvents, styles, classes, window, document, cleanup, offline(value) { rejectIdentity = value; }, render() { stateIndex = 0; return context.exports.default(); } };
 }
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -261,4 +265,44 @@ test('background and transient verification keep the identical chat subtree posi
   ui.window.dispatchEvent(new Event('forest-mini-auth-invalid'));
   assert.equal(workspace(), false, 'revoked sessions must actually remove all chat content');
   ui.cleanup();
+});
+
+test('Telegram theme changes update tokens and host colors without remounting or reauthenticating chat', async () => {
+  const ui = miniLifecycle(); await settle();
+  const key = ui.render().children[0].children[0].children[0].props.key;
+  const hostColors = [];
+  Object.assign(ui.window.Telegram.WebApp, {
+    colorScheme: 'dark', themeParams: { bg_color: '#121820', button_color: '#09a77b', button_text_color: '#fff' },
+    setHeaderColor(value) { hostColors.push(['header', value]); },
+    setBackgroundColor(value) { hostColors.push(['background', value]); },
+    setBottomBarColor(value) { hostColors.push(['bottom', value]); },
+  });
+  ui.sdkEvents.get('themeChanged')();
+  const next = ui.render();
+  assert.equal(next.props.theme.token.colorPrimary, '#09a77b');
+  assert.equal(next.props.theme.token.colorBgBase, '#121820');
+  assert.match(next.children[0].props.className, /is-dark/);
+  assert.equal(ui.styles.get('--tg-theme-button-color'), '#09a77b');
+  assert.equal(hostColors.length, 3);
+  assert.equal(next.children[0].children[0].children[0].props.key, key);
+  assert.equal(ui.calls.auth, 1);
+  ui.window.Telegram.WebApp.setHeaderColor = () => { throw new Error('unsupported'); };
+  assert.doesNotThrow(() => ui.sdkEvents.get('themeChanged')());
+  ui.cleanup();
+  assert.equal(ui.sdkEvents.size, 0);
+  assert.equal(ui.styles.has('--tg-theme-button-color'), false);
+});
+
+test('keyboard viewport hides navigation only while editing and cleans its body state', async () => {
+  const ui = miniLifecycle(); await settle();
+  ui.document.activeElement = { tagName: 'TEXTAREA' };
+  ui.window.Telegram.WebApp.viewportHeight = 400;
+  ui.sdkEvents.get('viewportChanged')();
+  assert.equal(ui.classes.has('telegram-mini-keyboard-open'), true);
+  assert.equal(ui.styles.get('--mini-viewport-height'), '400px');
+  ui.document.activeElement = null;
+  ui.document.dispatchEvent(new Event('focusout'));
+  assert.equal(ui.classes.has('telegram-mini-keyboard-open'), false);
+  ui.cleanup();
+  assert.equal(ui.classes.has('telegram-mini-body'), false);
 });

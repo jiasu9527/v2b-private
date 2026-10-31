@@ -1,24 +1,434 @@
-body.telegram-mini-body{margin:0;overflow:hidden;background:var(--tg-theme-bg-color,#f5f7fb)}
-body.telegram-mini-identity-blocked>:not(#root){visibility:hidden!important;pointer-events:none!important}
-.telegram-mini-app{height:var(--mini-viewport-height,100dvh);box-sizing:border-box;padding:var(--mini-safe-top,0) var(--mini-safe-right,0) max(var(--mini-safe-bottom,0px),env(safe-area-inset-bottom,0px)) var(--mini-safe-left,0);overflow:auto;background:var(--tg-theme-bg-color,#f5f7fb);color:var(--tg-theme-text-color,#222)}
-.telegram-mini-state{padding:24px 20px;max-width:560px;margin:auto}
-.telegram-mini-workspace{height:100%;min-height:0}.telegram-mini-workspace[hidden]{display:none!important}
-.telegram-mini-app .ai-ops-page.ai-ops-mini-page{padding:8px;min-height:0;box-sizing:border-box}
-.telegram-mini-app .ai-ops-page.ai-ops-mini-page.ai-ops-page-chat{height:100%;min-height:0}
-.telegram-mini-app .ai-ops-mini-page>.content-heading{display:none}
-.telegram-mini-app .ai-ops-page-body{margin:0;min-height:0}
-.telegram-mini-app .ai-ops-page-stack{gap:8px}
-.telegram-mini-app .ai-ops-page-stack>.ant-space{font-size:12px}
-.telegram-mini-app .ai-ops-conversation{padding:10px;min-height:0}
-.telegram-mini-app .ai-ops-chat-layout{grid-template-columns:minmax(0,1fr);gap:0}
-.telegram-mini-app .ai-ops-messages{height:auto;min-height:0;flex:1}
-.telegram-mini-app .ai-ops-composer{padding-bottom:0}
-.telegram-mini-app .ai-ops-composer textarea{max-height:min(125px,25dvh)!important}
-.telegram-mini-app .ai-ops-composer-hint{font-size:10px}
-.telegram-mini-app.is-dark .ai-ops-conversation,.telegram-mini-app.is-dark .ai-ops-sessions,.telegram-mini-app.is-dark .ai-ops-markdown table{background:#17191d;border-color:#343943}
-.telegram-mini-app.is-dark .ai-ops-message-user{background:#1c2b43}
-.telegram-mini-app.is-dark .ai-ops-pre,.telegram-mini-app.is-dark .ai-ops-markdown-code,.telegram-mini-app.is-dark .ai-ops-markdown code,.telegram-mini-app.is-dark .ai-ops-markdown th{background:#252a32;color:#dfe4ed;border-color:#343943}
-.telegram-mini-app.is-dark .ai-ops-page .ant-alert-info{background:#202832;border-color:#3a4556}
-.telegram-mini-app.is-dark .ai-ops-page .ant-alert-info .ant-alert-message,.telegram-mini-app.is-dark .ai-ops-page .ant-alert-info .ant-alert-description{color:#dfe4ed}
-.telegram-mini-app.is-dark .ai-ops-process-item{color:#c9d1de}
-@media(max-width:575.98px){.telegram-mini-app .ai-ops-conversation-controls{grid-template-columns:minmax(0,1fr) 106px}.telegram-mini-app .ai-ops-empty{padding:8px}.telegram-mini-app .ai-ops-page.ai-ops-mini-page{padding:5px}.telegram-mini-app .ai-ops-page-chat .ai-ops-tabs>.ant-tabs-nav{margin-bottom:5px}}
+/* Mini App-only theme tokens also reach Ant Design portals mounted in body. */
+body.telegram-mini-body {
+  --mini-bg: var(--tg-theme-bg-color, #ffffff);
+  --mini-surface: var(--tg-theme-section-bg-color, var(--tg-theme-bg-color, #ffffff));
+  --mini-chat-bg: var(--tg-theme-secondary-bg-color, #f2f3f5);
+  --mini-text: var(--tg-theme-text-color, #202124);
+  --mini-hint: var(--tg-theme-hint-color, #858991);
+  --mini-accent: var(--tg-theme-button-color, #617685);
+  --mini-button-text: var(--tg-theme-button-text-color, #ffffff);
+  --mini-link: var(--tg-theme-link-color, var(--mini-accent));
+  --mini-danger: var(--tg-theme-destructive-text-color, #c74b50);
+  --mini-line: var(--tg-theme-section-separator-color, #e7e9eb);
+  --mini-soft: var(--tg-theme-secondary-bg-color, #f2f3f5);
+  --mini-accent-soft: var(--tg-theme-section-separator-color, #e7e9eb);
+  --mini-mask: rgba(0, 0, 0, .38);
+  --mini-safe-bottom-space: max(var(--mini-safe-bottom, 0px), env(safe-area-inset-bottom, 0px));
+  margin: 0;
+  overflow: hidden;
+  background: var(--mini-chat-bg) !important;
+  color: var(--mini-text);
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Keep opaque theme colors available on older Telegram WebViews. */
+@supports (color: color-mix(in srgb, black, white)) {
+  body.telegram-mini-body {
+    --mini-line: color-mix(in srgb, var(--mini-text) 9%, transparent);
+    --mini-soft: color-mix(in srgb, var(--mini-text) 5%, var(--mini-surface));
+    --mini-accent-soft: color-mix(in srgb, var(--mini-accent) 13%, var(--mini-surface));
+    --mini-mask: color-mix(in srgb, var(--mini-text) 30%, transparent);
+  }
+}
+
+/* An invalid identity must hide and disable every portal, not just the page. */
+body.telegram-mini-identity-blocked > :not(#root) {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.telegram-mini-app {
+  height: var(--mini-viewport-height, 100dvh);
+  max-width: 1000px;
+  margin-inline: auto;
+  padding: var(--mini-safe-top, 0px) var(--mini-safe-right, 0px) 0 var(--mini-safe-left, 0px);
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--mini-chat-bg);
+  color: var(--mini-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+.telegram-mini-app .telegram-mini-state {
+  height: 100%;
+  max-width: 520px;
+  margin: auto;
+  padding: 32px 22px calc(24px + var(--mini-safe-bottom-space));
+  box-sizing: border-box;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+}
+
+.telegram-mini-app .telegram-mini-workspace { height: 100%; min-height: 0; }
+.telegram-mini-app .telegram-mini-workspace[hidden] { display: none !important; }
+.telegram-mini-app .ai-ops-page.ai-ops-mini-page {
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.telegram-mini-app .ai-ops-mini-page > .content-heading { display: none; }
+.telegram-mini-app .ai-ops-page-body { flex: 1; min-height: 0; min-width: 0; margin: 0; overflow: hidden; }
+.telegram-mini-app .ai-ops-page-stack { height: 100%; min-height: 0; gap: 0; }
+.telegram-mini-app .ai-ops-page-stack > .ant-alert { flex: 0 0 auto; margin: 8px 12px; }
+.telegram-mini-app .mini-ops-main { flex: 1; min-height: 0; height: 100%; margin: 0; }
+.telegram-mini-app .mini-ops-main > .ant-tabs-nav { display: none; }
+.telegram-mini-app .mini-ops-main > .ant-tabs-content-holder { min-height: 0; overflow: hidden; }
+.telegram-mini-app .mini-ops-main > .ant-tabs-content-holder > .ant-tabs-content { height: 100%; }
+.telegram-mini-app .mini-ops-main .ant-tabs-tabpane-active {
+  height: 100%;
+  min-width: 0;
+  padding: 14px 12px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
+}
+.telegram-mini-app .ai-ops-page-chat .mini-ops-main .ant-tabs-tabpane-active { padding: 0; overflow: hidden; }
+
+/* A small app bar and a Telegram-style bottom navigation replace admin tabs. */
+.telegram-mini-app .mini-ops-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 auto;
+  min-height: 50px;
+  padding: 8px 16px;
+  box-sizing: border-box;
+  background: var(--tg-theme-header-bg-color, var(--mini-bg));
+  border-bottom: 1px solid var(--mini-line);
+}
+.telegram-mini-app .mini-ops-header > :first-child { min-width: 0; }
+.telegram-mini-app .mini-ops-header h1,
+.telegram-mini-app .mini-ops-header h2,
+.telegram-mini-app .mini-ops-header strong { margin: 0; color: var(--mini-text); font-size: 17px; font-weight: 650; }
+.telegram-mini-app .mini-ops-header .ant-space { gap: 6px !important; flex-wrap: wrap; justify-content: flex-end; }
+.telegram-mini-app .mini-ops-header .ant-tag { margin: 0; padding-inline: 6px; font-size: 10px; border: 0; background: var(--mini-soft); color: var(--mini-hint); }
+.telegram-mini-app .mini-ops-header .ant-typography-secondary { font-size: 11px; }
+.telegram-mini-app .mini-ops-status { display: inline-flex; align-items: center; gap: 5px; margin-left: 10px; color: var(--mini-hint); font-size: 11px; }
+.telegram-mini-app .mini-ops-status::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--mini-accent); }
+.telegram-mini-app .mini-ops-status.is-unavailable::before { background: var(--mini-hint); }
+.telegram-mini-app .mini-ops-nav {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-around;
+  flex: 0 0 auto;
+  gap: 4px;
+  padding: 4px 10px calc(4px + var(--mini-safe-bottom-space));
+  background: var(--tg-theme-bottom-bar-bg-color, var(--mini-bg));
+  border-top: 1px solid var(--mini-line);
+}
+.telegram-mini-app .mini-ops-nav button {
+  appearance: none;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 44px;
+  min-height: 48px;
+  max-width: 150px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--mini-hint);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.3;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.telegram-mini-app .mini-ops-nav button > .anticon { font-size: 21px; }
+.telegram-mini-app .mini-ops-nav button.is-active,
+.telegram-mini-app .mini-ops-nav button[aria-current='page'] { color: var(--mini-accent); background: var(--mini-accent-soft); }
+.telegram-mini-app .mini-ops-nav button:focus-visible,
+.telegram-mini-app button:focus-visible { outline: 2px solid var(--mini-accent); outline-offset: 2px; }
+
+/* Conversation headers stay compact, with long model names ellipsized. */
+.telegram-mini-app .ai-ops-chat-layout { display: flex; height: 100%; min-height: 0; gap: 0; }
+.telegram-mini-app .ai-ops-chat-layout > .ai-ops-sessions { display: none; }
+.telegram-mini-app .ai-ops-conversation {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--mini-chat-bg);
+  box-shadow: none;
+}
+.telegram-mini-app .ai-ops-conversation-head { flex: 0 0 auto; flex-direction: column; align-items: stretch; margin: 0; padding: 6px 12px 8px; gap: 4px; background: var(--mini-bg); }
+.telegram-mini-app .mini-ops-session-head { display: flex; align-items: center; gap: 6px; min-height: 44px; }
+.telegram-mini-app .mini-ops-session-head > .ant-typography { flex: 1; min-width: 0; margin: 0; font-size: 13px; }
+.telegram-mini-app .mini-ops-session-actions { display: flex; align-items: center; flex: 0 0 auto; gap: 0; }
+.telegram-mini-app .mini-ops-session-head .ant-tag { border: 0; margin: 0; background: var(--mini-accent-soft); color: var(--mini-accent); font-size: 10px; }
+.telegram-mini-app .mini-ops-session-head .ant-btn { flex: 0 0 44px; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; color: var(--mini-hint); }
+.telegram-mini-app .mini-ops-session-head .ant-btn .anticon { font-size: 18px; }
+.telegram-mini-app .mini-ops-quick-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+.telegram-mini-app .mini-ops-quick-controls .mini-ops-model-select { flex: 1; width: 0; min-width: 0; }
+.telegram-mini-app .mini-ops-quick-controls .mini-ops-access-select { flex: 0 0 112px; width: 112px; }
+.telegram-mini-app .mini-ops-quick-controls > .ant-btn { flex: 0 0 44px; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; background: var(--mini-soft); color: var(--mini-hint); }
+.telegram-mini-app .mini-ops-quick-controls .ant-select { height: 44px; }
+.telegram-mini-app .mini-ops-quick-controls .ant-select-selector { border: 0 !important; border-radius: 22px !important; padding-inline: 12px !important; background: var(--mini-soft) !important; box-shadow: none !important; font-size: 12px; }
+.telegram-mini-app .mini-ops-quick-controls .ant-select-selection-item { overflow: hidden; text-overflow: ellipsis; }
+.telegram-mini-app .ai-ops-access-owner { margin: 6px 12px 0; padding: 8px 10px; border-radius: 12px; background: var(--mini-surface); }
+
+/* Chat bubbles use Telegram colors rather than desktop/admin brand colors. */
+.telegram-mini-app .ai-ops-messages {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  max-height: none;
+  padding: 14px 12px 18px;
+  gap: 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--mini-line) transparent;
+}
+.telegram-mini-app .ai-ops-turn { gap: 10px; }
+.telegram-mini-app .ai-ops-message {
+  width: fit-content;
+  max-width: 94%;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 16px;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  color: var(--mini-text);
+  box-shadow: none;
+}
+.telegram-mini-app .ai-ops-message-assistant { align-self: flex-start; background: var(--mini-surface); border-bottom-left-radius: 5px; }
+.telegram-mini-app .ai-ops-message-user { align-self: flex-end; max-width: 88%; background: var(--mini-accent-soft); border-bottom-right-radius: 5px; }
+.telegram-mini-app .ai-ops-message-meta { gap: 8px; margin-bottom: 3px; color: var(--mini-hint); font-size: 10px; line-height: 16px; }
+.telegram-mini-app .ai-ops-message-meta > span { color: var(--mini-hint); font-weight: 500; }
+.telegram-mini-app .ai-ops-message-meta > time { margin-left: auto; color: var(--mini-hint); font-size: 10px; }
+.telegram-mini-app .ai-ops-text { margin: 3px 0 0; font-size: 14px; line-height: 1.65; }
+.telegram-mini-app .ai-ops-markdown { margin-top: 4px; font-size: 14px; line-height: 1.7; }
+body.telegram-mini-body .ai-ops-markdown a { color: var(--mini-link); }
+.telegram-mini-app .ai-ops-markdown ul,
+.telegram-mini-app .ai-ops-markdown ol { padding-left: 20px; }
+body.telegram-mini-body .ai-ops-pre,
+body.telegram-mini-body .ai-ops-markdown-code { margin-block: 8px; padding: 10px; border: 0; border-radius: 10px; background: var(--mini-soft); color: var(--mini-text); font-size: 12px; }
+body.telegram-mini-body .ai-ops-markdown code { background: var(--mini-soft); color: inherit; }
+body.telegram-mini-body .ai-ops-markdown-code code { background: transparent; }
+.telegram-mini-app .ai-ops-markdown-table { max-width: 100%; overflow: auto; -webkit-overflow-scrolling: touch; }
+body.telegram-mini-body .ai-ops-markdown table { background: var(--mini-surface); }
+body.telegram-mini-body .ai-ops-markdown th { background: var(--mini-soft); }
+body.telegram-mini-body .ai-ops-markdown th,
+body.telegram-mini-body .ai-ops-markdown td { padding: 8px 10px; border-color: var(--mini-line); }
+.telegram-mini-app .ai-ops-stream-cursor { background: var(--mini-accent); }
+.telegram-mini-app .ai-ops-process { width: fit-content; max-width: 100%; padding: 0 3px; color: var(--mini-hint); font-size: 11px; }
+.telegram-mini-app .ai-ops-process > summary { min-height: 44px; line-height: 24px; padding-block: 10px; box-sizing: border-box; }
+.telegram-mini-app .ai-ops-process > summary::marker { color: var(--mini-hint); }
+.telegram-mini-app .ai-ops-process-status { color: var(--mini-hint); font-size: 10px; }
+.telegram-mini-app .ai-ops-process-status.is-failed { color: var(--mini-danger); }
+.telegram-mini-app .ai-ops-process-review { min-height: 44px; margin-block: -10px; padding-inline: 8px; color: var(--mini-accent); }
+.telegram-mini-app .ai-ops-process-content { margin: 0; padding: 0 10px; border-radius: 12px; background: var(--mini-surface); }
+.telegram-mini-app .ai-ops-process-item { color: var(--mini-text); font-size: 12px; }
+.telegram-mini-app .ai-ops-process-item + .ai-ops-process-item { border-color: var(--mini-line); }
+.telegram-mini-app .ai-ops-empty { max-width: 390px; margin: auto; padding: 24px 18px; color: var(--mini-hint); }
+.telegram-mini-app .ai-ops-empty > .anticon { color: var(--mini-accent); font-size: 34px; }
+.telegram-mini-app .ai-ops-empty h3 { color: var(--mini-text); font-size: 17px; font-weight: 600; }
+.telegram-mini-app .ai-ops-empty p { font-size: 13px; line-height: 1.8; }
+
+/* One rounded input row; stop occupies the same reachable send-button slot. */
+.telegram-mini-app .ai-ops-composer.mini-ops-composer { flex: 0 0 auto; gap: 5px; margin: 0; padding: 8px 10px; border: 0; background: var(--mini-chat-bg); }
+.telegram-mini-app .mini-ops-composer-row { display: flex; align-items: flex-end; gap: 7px; min-width: 0; }
+.telegram-mini-app .mini-ops-composer textarea.ant-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 46px;
+  max-height: min(144px, 28dvh) !important;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 23px !important;
+  background: var(--mini-surface);
+  color: var(--mini-text);
+  box-shadow: none;
+  font-size: 16px;
+  line-height: 22px;
+  resize: none;
+  overflow-y: auto !important;
+}
+.telegram-mini-app .mini-ops-composer textarea.ant-input::placeholder { color: var(--mini-hint); font-size: 14px; }
+.telegram-mini-app .mini-ops-composer .mini-ops-send-button { flex: 0 0 46px; width: 46px; min-width: 46px; height: 46px; padding: 0; border: 0; border-radius: 50%; background: var(--mini-accent); color: var(--mini-button-text); box-shadow: none; }
+.telegram-mini-app .mini-ops-send-button .anticon { font-size: 20px; }
+.telegram-mini-app .mini-ops-composer .mini-ops-send-button.ant-btn-dangerous { background: var(--mini-danger); color: var(--mini-button-text); }
+.telegram-mini-app .mini-ops-composer .mini-ops-send-button:disabled { background: var(--mini-soft); color: var(--mini-hint); }
+.telegram-mini-app .mini-ops-composer-hint,
+.telegram-mini-app .mini-ops-composer-notice,
+.telegram-mini-app .ai-ops-composer-hint { padding-inline: 5px; color: var(--mini-hint); font-size: 10px; line-height: 1.5; }
+
+/* Portal components inherit the same Telegram palette, including dark themes. */
+body.telegram-mini-body .ant-typography { color: var(--mini-text); }
+body.telegram-mini-body .ant-typography-secondary,
+body.telegram-mini-body .ant-form-item-extra,
+body.telegram-mini-body .ant-empty-description { color: var(--mini-hint); }
+body.telegram-mini-body .ant-btn { min-height: 44px; border-radius: 12px; box-shadow: none; }
+body.telegram-mini-body .ant-btn-default { border-color: var(--mini-line); background: var(--mini-surface); color: var(--mini-text); }
+/* Override the desktop monochrome !important skin only inside the Mini App. */
+body.telegram-mini-body .ant-btn-primary { border-color: var(--mini-accent) !important; background: var(--mini-accent) !important; color: var(--mini-button-text) !important; }
+body.telegram-mini-body .ant-btn-primary.ant-btn-dangerous { border-color: var(--mini-danger) !important; background: var(--mini-danger) !important; }
+body.telegram-mini-body .ant-btn-primary:disabled,
+body.telegram-mini-body .ant-btn-primary.ant-btn-disabled { border-color: transparent !important; background: var(--mini-soft) !important; color: var(--mini-hint) !important; }
+body.telegram-mini-body a,
+body.telegram-mini-body a:hover,
+body.telegram-mini-body .ant-typography a,
+body.telegram-mini-body .ant-typography a:hover,
+body.telegram-mini-body .ant-btn-link:hover,
+body.telegram-mini-body .ant-btn-link { color: var(--mini-link); }
+body.telegram-mini-body .ant-btn-text { color: var(--mini-text); }
+body.telegram-mini-body .ant-btn-dangerous:not(.ant-btn-primary) { color: var(--mini-danger); }
+body.telegram-mini-body .ant-switch.ant-switch-checked { background: var(--mini-accent); }
+body.telegram-mini-body .ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled) { color: var(--mini-accent); border-color: var(--mini-accent); }
+body.telegram-mini-body .ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled)::before { background-color: var(--mini-accent); }
+body.telegram-mini-body .ant-radio-group-solid .ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled) { background: var(--mini-accent); color: var(--mini-button-text); }
+body.telegram-mini-body .ant-radio-checked .ant-radio-inner,
+body.telegram-mini-body .ant-checkbox-checked .ant-checkbox-inner { border-color: var(--mini-accent); background: var(--mini-accent); }
+body.telegram-mini-body .ant-checkbox-indeterminate .ant-checkbox-inner::after { background: var(--mini-accent); }
+body.telegram-mini-body .ant-pagination .ant-pagination-item-active { border-color: var(--mini-accent); background: var(--mini-accent-soft); }
+body.telegram-mini-body .ant-pagination .ant-pagination-item-active a { color: var(--mini-accent); }
+body.telegram-mini-body .ant-pagination a,
+body.telegram-mini-body .ant-pagination-item-link { color: var(--mini-text); }
+body.telegram-mini-body .ant-tabs .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn { color: var(--mini-accent); }
+body.telegram-mini-body .ant-tabs .ant-tabs-ink-bar { background: var(--mini-accent); }
+body.telegram-mini-body .ant-input,
+body.telegram-mini-body .ant-input-affix-wrapper,
+body.telegram-mini-body .ant-input-number,
+body.telegram-mini-body .ant-select-selector { border-color: var(--mini-line) !important; background: var(--mini-surface) !important; color: var(--mini-text); border-radius: 12px !important; }
+body.telegram-mini-body .ant-input-affix-wrapper > .ant-input { background: transparent !important; }
+body.telegram-mini-body .ant-input:focus,
+body.telegram-mini-body .ant-input-focused,
+body.telegram-mini-body .ant-input-affix-wrapper-focused,
+body.telegram-mini-body .ant-select-focused .ant-select-selector,
+body.telegram-mini-body .ant-input-number-focused { border-color: var(--mini-accent) !important; box-shadow: 0 0 0 2px var(--mini-accent-soft) !important; }
+body.telegram-mini-body .ant-input::placeholder,
+body.telegram-mini-body .ant-input-number-input::placeholder,
+body.telegram-mini-body .ant-select-selection-placeholder { color: var(--mini-hint); }
+body.telegram-mini-body .ant-select-dropdown,
+body.telegram-mini-body .ant-dropdown-menu,
+body.telegram-mini-body .ant-popover-inner { background: var(--mini-surface); color: var(--mini-text); border: 1px solid var(--mini-line); border-radius: 14px; }
+body.telegram-mini-body .ant-select-item { min-height: 44px; display: flex; align-items: center; color: var(--mini-text); border-radius: 9px; }
+body.telegram-mini-body .ant-select-item-option-selected:not(.ant-select-item-option-disabled) { background: var(--mini-accent-soft); color: var(--mini-accent); }
+body.telegram-mini-body .ant-select-item-option-active:not(.ant-select-item-option-disabled) { background: var(--mini-soft); }
+body.telegram-mini-body .ant-select-item-option-disabled { color: var(--mini-hint); }
+body.telegram-mini-body .ant-modal-content,
+body.telegram-mini-body .ant-modal-header,
+body.telegram-mini-body .ant-drawer-content,
+body.telegram-mini-body .ant-drawer-header { background: var(--mini-bg); color: var(--mini-text); }
+body.telegram-mini-body .ant-modal-content { border-radius: 20px; padding: 20px 16px; }
+/* Fixed portals use the visual viewport too: iOS may keep the layout viewport
+   full-height while the software keyboard covers its lower half. */
+body.telegram-mini-body .ant-modal-wrap,
+body.telegram-mini-body .ant-drawer { height: var(--mini-viewport-height, 100dvh); bottom: auto; }
+body.telegram-mini-body .ant-modal-title,
+body.telegram-mini-body .ant-drawer-title,
+body.telegram-mini-body .ant-form-item-label > label { color: var(--mini-text); }
+body.telegram-mini-body .ant-modal-close,
+body.telegram-mini-body .ant-drawer-close { width: 44px; height: 44px; margin: 0; color: var(--mini-hint); }
+body.telegram-mini-body .ant-modal-mask,
+body.telegram-mini-body .ant-drawer-mask { background: var(--mini-mask); }
+body.telegram-mini-body .ant-drawer-header { padding: 10px 14px; border-bottom-color: var(--mini-line); }
+body.telegram-mini-body .ant-drawer-body { padding: 16px; }
+body.telegram-mini-body .mini-ops-history-drawer .ant-drawer-content,
+body.telegram-mini-body .mini-ops-settings-drawer .ant-drawer-content { border-radius: 22px 22px 0 0; }
+body.telegram-mini-body .mini-ops-history-drawer .ant-drawer-content-wrapper,
+body.telegram-mini-body .mini-ops-settings-drawer .ant-drawer-content-wrapper { width: 100% !important; max-width: 100% !important; max-height: calc(var(--mini-viewport-height, 100dvh) - var(--mini-safe-top, 0px) - 16px); box-shadow: none; }
+body.telegram-mini-body .mini-ops-settings-drawer .ant-drawer-body,
+body.telegram-mini-body .mini-ops-history-drawer .ant-drawer-body { padding-bottom: calc(20px + var(--mini-safe-bottom-space)); overscroll-behavior: contain; }
+body.telegram-mini-body .mini-ops-settings-drawer .ant-form-item { margin-bottom: 18px; }
+body.telegram-mini-body .mini-ops-settings-drawer .ant-select { width: 100%; height: 44px; }
+body.telegram-mini-body .mini-ops-settings-drawer .ant-drawer-content-wrapper { max-height: min(85dvh, calc(var(--mini-viewport-height, 100dvh) - var(--mini-safe-top, 0px) - 16px)); }
+body.telegram-mini-body .mini-ops-setting-row { display: flex; flex-direction: column; gap: 8px; }
+body.telegram-mini-body .mini-ops-setting-row > label { color: var(--mini-text); font-size: 13px; font-weight: 500; }
+body.telegram-mini-body .mini-ops-history-drawer .ai-ops-session-history { height: 100%; min-height: 0; }
+body.telegram-mini-body .mini-ops-history-drawer .ai-ops-session-history > .ant-space,
+body.telegram-mini-body .mini-ops-history-drawer .ai-ops-session-history > .ant-typography { flex: 0 0 auto; }
+body.telegram-mini-body .mini-ops-history-drawer .ai-ops-session-list { flex: 1; min-height: 0; max-height: none; overflow: auto; overscroll-behavior: contain; }
+body.telegram-mini-body .ai-ops-session { margin: 4px 0; border: 0; border-radius: 12px; }
+body.telegram-mini-body .ai-ops-session.is-active { background: var(--mini-accent-soft); }
+body.telegram-mini-body .ai-ops-session > button:first-child { padding: 12px; min-height: 60px; }
+body.telegram-mini-body .ai-ops-session span { color: var(--mini-hint); font-size: 11px; }
+body.telegram-mini-body .ai-ops-session strong { font-size: 13px; color: var(--mini-text); }
+
+/* Management screens remain functional, with horizontally scrollable data. */
+.telegram-mini-app .ant-card { background: var(--mini-surface) !important; border: 0; border-radius: 16px; box-shadow: none; }
+.telegram-mini-app .ant-card-head { padding-inline: 14px; border-color: var(--mini-line); }
+.telegram-mini-app .ant-card-body { padding: 14px; }
+.telegram-mini-app .ant-table-wrapper { min-width: 0; overflow-x: auto; border-radius: 12px; }
+.telegram-mini-app .ant-table { background: var(--mini-surface); color: var(--mini-text); }
+.telegram-mini-app .ant-table-thead > tr > th { background: var(--mini-soft); color: var(--mini-hint); border-color: var(--mini-line); font-size: 12px; }
+.telegram-mini-app .ant-table-tbody > tr > td { border-color: var(--mini-line); padding: 12px 10px; }
+.telegram-mini-app .ant-table-tbody > tr.ant-table-row:hover > td { background: var(--mini-soft); }
+.telegram-mini-app .ant-form-item { margin-bottom: 18px; }
+.telegram-mini-app .ai-ops-relay { padding: 14px; border: 0; border-radius: 14px; background: var(--mini-surface); }
+.telegram-mini-app .ai-ops-relay-settings { border-color: var(--mini-line); }
+.telegram-mini-app .ai-ops-page .ant-alert-info { background: var(--mini-accent-soft); border-color: transparent; border-radius: 12px; }
+.telegram-mini-app .ai-ops-page .ant-alert-info .ant-alert-message,
+.telegram-mini-app .ai-ops-page .ant-alert-info .ant-alert-description { color: var(--mini-text); }
+.telegram-mini-app .ai-knowledge-list { background: var(--mini-surface); border: 0; border-radius: 16px; }
+.telegram-mini-app .ai-knowledge-row + .ai-knowledge-row { border-color: var(--mini-line); }
+.telegram-mini-app .ai-knowledge-title > button { min-height: 44px; color: var(--mini-text); }
+.telegram-mini-app .ai-knowledge-summary { color: var(--mini-text); }
+body.telegram-mini-body .ai-knowledge-meta { color: var(--mini-hint); }
+body.telegram-mini-body .ai-knowledge-detail-summary { background: var(--mini-soft); border-radius: 12px; color: var(--mini-text); }
+body.telegram-mini-body .ai-knowledge-modal .ant-modal-body { max-height: calc(var(--mini-viewport-height, 100dvh) - 180px); }
+
+/* Keyboard-aware viewport is provided by the SDK wrapper, not guessed by UA. */
+body.telegram-mini-body.telegram-mini-keyboard-open { --mini-safe-bottom-space: 0px; }
+body.telegram-mini-body.telegram-mini-keyboard-open .mini-ops-nav,
+.telegram-mini-app.is-keyboard-open .mini-ops-nav { display: none; }
+body.telegram-mini-body.telegram-mini-keyboard-open .mini-ops-composer,
+.telegram-mini-app.is-keyboard-open .mini-ops-composer { padding-bottom: 6px; }
+body.telegram-mini-body.telegram-mini-keyboard-open .mini-ops-header,
+.telegram-mini-app.is-keyboard-open .mini-ops-header { min-height: 40px; padding-block: 4px; }
+
+@media (max-width: 359px) {
+  .telegram-mini-app .mini-ops-header { padding-inline: 12px; gap: 6px; }
+  .telegram-mini-app .mini-ops-header .ant-tag { font-size: 9px; }
+  .telegram-mini-app .ai-ops-conversation-head { padding-inline: 8px; }
+  .telegram-mini-app .mini-ops-quick-controls { gap: 4px; }
+  .telegram-mini-app .mini-ops-quick-controls .mini-ops-access-select { flex-basis: 100px; width: 100px; }
+  .telegram-mini-app .mini-ops-quick-controls .ant-select-selector { padding-inline: 10px !important; font-size: 11px; }
+  .telegram-mini-app .ai-ops-messages { padding-inline: 8px; }
+  .telegram-mini-app .ai-ops-message { max-width: 97%; padding: 9px 10px; }
+  .telegram-mini-app .ai-ops-message-user { max-width: 92%; }
+  .telegram-mini-app .mini-ops-composer { padding-inline: 8px; }
+}
+
+@media (min-width: 768px) {
+  .telegram-mini-app .mini-ops-header { padding-inline: 24px; }
+  .telegram-mini-app .ai-ops-conversation-head { padding-inline: 24px; }
+  .telegram-mini-app .ai-ops-messages { padding-inline: 24px; }
+  .telegram-mini-app .ai-ops-message { max-width: 85%; }
+  .telegram-mini-app .ai-ops-message-user { max-width: 75%; }
+  .telegram-mini-app .mini-ops-composer { padding-inline: 24px; }
+  .telegram-mini-app .mini-ops-main .ant-tabs-tabpane-active { padding: 20px 24px; }
+  .telegram-mini-app .ai-ops-page-chat .mini-ops-main .ant-tabs-tabpane-active { padding: 0; }
+  body.telegram-mini-body .mini-ops-history-drawer .ant-drawer-content-wrapper,
+  body.telegram-mini-body .mini-ops-settings-drawer .ant-drawer-content-wrapper { max-width: 720px !important; margin-inline: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .telegram-mini-app .ai-ops-stream-cursor { animation: none; }
+}
