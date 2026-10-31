@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -93,6 +96,37 @@ func TestAITicketGlobalReadPostgres(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	t.Run("actual provider global call reads all open tickets without identity or reply narrowing", func(t *testing.T) {
+		const arguments = `{"status":"open","reply_status":"all","limit":50,"offset":0}`
+		relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			raw, err := io.ReadAll(io.LimitReader(r.Body, maxProviderRequestBytes+1))
+			if err != nil {
+				t.Error("cannot read local model fixture request", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			ticketContractAssertWire(t, raw)
+			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": providerMessage{Role: "assistant", ToolCalls: []ToolCall{{ID: "global-pg-fixture", Type: "function", Function: ToolFunction{Name: "tickets_list_global", Arguments: arguments}}}}, "finish_reason": "tool_calls"}}})
+		}))
+		defer relay.Close()
+		if _, err := f.s.SaveConfig(ctx, f.admin, ConfigSaveRequest{Enabled: true, BaseURL: relay.URL + "/v1", APIKey: "fixture-local-only", Models: DefaultModels}); err != nil {
+			t.Fatal(err)
+		}
+		for _, actor := range []int64{f.admin, f.staff} {
+			response, err := f.s.complete(ctx, DefaultModels[0], []providerMessage{{Role: "system", Content: ticketWorkflowPrompt}, {Role: "user", Content: "查询全站未关闭工单，包括已回复和待回复，不限制用户。"}})
+			if err != nil || len(response.ToolCalls) != 1 || response.ToolCalls[0].Function.Name != "tickets_list_global" || response.ToolCalls[0].Function.Arguments != arguments {
+				t.Fatal("local model global request contract failed", response, err)
+			}
+			outcome, err := f.s.callTool(ctx, actor, sessions[actor].ID, response.ToolCalls[0])
+			var page pageDTO[aiTicketDTO]
+			if err != nil || outcome.Pending || outcome.ActionID != 0 || json.Unmarshal([]byte(outcome.Content), &page) != nil {
+				t.Fatal("provider global call failed in real ticket runtime", outcome, err)
+			}
+			if page.Total != 4 || page.Truncated || page.NextOffset != nil || !reflect.DeepEqual(page.Items, []aiTicketDTO{tickets[3], tickets[2], tickets[1], tickets[0]}) {
+				t.Fatal("global query lost replied tickets or restricted one customer", page)
+			}
+		}
+	})
 	for _, actor := range []int64{f.admin, f.staff} {
 		t.Run(fmt.Sprintf("global list and message pages actor=%d", actor), func(t *testing.T) {
 			found := []aiTicketDTO{}
@@ -168,6 +202,46 @@ func TestAITicketGlobalReadPostgres(t *testing.T) {
 			if closed.Total != 1 || !reflect.DeepEqual(closed.Items, []aiTicketDTO{tickets[4]}) {
 				t.Fatal("closed filter incorrect", closed)
 			}
+			for _, test := range []struct {
+				status, reply string
+				want          []aiTicketDTO
+			}{
+				{"all", "all", []aiTicketDTO{tickets[4], tickets[3], tickets[2], tickets[1], tickets[0]}},
+				{"open", "all", []aiTicketDTO{tickets[3], tickets[2], tickets[1], tickets[0]}},
+				{"open", "pending", []aiTicketDTO{tickets[2], tickets[0]}},
+				{"open", "replied", []aiTicketDTO{tickets[3], tickets[1]}},
+				{"closed", "all", []aiTicketDTO{tickets[4]}},
+				{"closed", "pending", []aiTicketDTO{}},
+			} {
+				found := []aiTicketDTO{}
+				offset := 0
+				for {
+					var page pageDTO[aiTicketDTO]
+					call(t, actor, sessions[actor].ID, "tickets_list_global", map[string]any{"status": test.status, "reply_status": test.reply, "limit": 2, "offset": offset}, &page)
+					if page.Total != int64(len(test.want)) || page.Offset != offset || page.Limit != 2 {
+						t.Fatal("global explicit status or pagination changed", test, page)
+					}
+					found = append(found, page.Items...)
+					if !page.Truncated {
+						if page.NextOffset != nil {
+							t.Fatal("global final page continued", page)
+						}
+						break
+					}
+					if page.NextOffset == nil || *page.NextOffset <= offset || offset > 5 {
+						t.Fatal("global tool cursor did not progress", page)
+					}
+					offset = *page.NextOffset
+				}
+				if !reflect.DeepEqual(found, test.want) {
+					t.Fatal("global explicit filter changed results", test, found)
+				}
+			}
+			var precise pageDTO[aiTicketDTO]
+			call(t, actor, sessions[actor].ID, "tickets_list", map[string]any{"user_id": users[0], "email": "", "status": 0, "reply_status": 0, "limit": 50, "offset": 0}, &precise)
+			if precise.Total != 1 || !reflect.DeepEqual(precise.Items, []aiTicketDTO{tickets[0]}) {
+				t.Fatal("legacy precise customer query silently became global", precise)
+			}
 		})
 	}
 	t.Run("operator and own session authorization remain enforced", func(t *testing.T) {
@@ -175,7 +249,7 @@ func TestAITicketGlobalReadPostgres(t *testing.T) {
 			actor, sessionID int64
 			want             error
 		}{{f.user, sessions[f.staff].ID, ErrForbidden}, {f.staff, sessions[f.other].ID, ErrNotFound}, {f.staff, sessions[f.admin].ID, ErrNotFound}} {
-			for _, tool := range []struct{ name, arguments string }{{"tickets_list", `{"status":0,"limit":2}`}, {"ticket_get", fmt.Sprintf(`{"ticket_id":%d,"limit":2}`, tickets[0].ID)}, {"ticket_message_get", fmt.Sprintf(`{"ticket_id":%d,"message_id":%d}`, tickets[0].ID, messages[tickets[0].ID][0].ID)}} {
+			for _, tool := range []struct{ name, arguments string }{{"tickets_list_global", `{"status":"open","reply_status":"all","limit":2,"offset":0}`}, {"tickets_list", `{"status":0,"limit":2}`}, {"ticket_get", fmt.Sprintf(`{"ticket_id":%d,"limit":2}`, tickets[0].ID)}, {"ticket_message_get", fmt.Sprintf(`{"ticket_id":%d,"message_id":%d}`, tickets[0].ID, messages[tickets[0].ID][0].ID)}} {
 				_, err := f.s.callTool(ctx, test.actor, test.sessionID, ToolCall{ID: "forbidden-read", Function: ToolFunction{Name: tool.name, Arguments: tool.arguments}})
 				if !errors.Is(err, test.want) {
 					t.Fatal("unauthorized global ticket read", tool.name, test, err)

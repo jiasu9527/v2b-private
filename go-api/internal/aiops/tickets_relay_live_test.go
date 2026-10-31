@@ -71,9 +71,9 @@ func TestAITicketGlobalRelayLive(t *testing.T) {
 		messages = append(messages, result)
 		return result.ToolCalls[0]
 	}
-	call := invoke("global_open_tickets", "tickets_list")
+	call := invoke("global_open_tickets", "tickets_list_global")
 	args, err := decodeTicketArgs(call.Function.Name, call.Function.Arguments)
-	if err != nil || args.Status == nil || *args.Status != 0 || args.UserID != 0 || args.Email != "" || args.Offset != 0 {
+	if err != nil || args.Status == nil || *args.Status != 0 || args.ReplyStatus != nil || args.UserID != 0 || args.Email != "" || args.Offset != 0 {
 		t.Fatal("global open tickets query added a user restriction or wrong status")
 	}
 	messages = append(messages, providerMessage{Role: "tool", ToolCallID: call.ID, Content: `{"items":[{"id":987654,"user_id":987650,"email":"fixture@example.test","subject":"提现申请","status":0,"reply_status":0,"created_at":1793203200,"updated_at":1793203200}],"total":1,"limit":50,"offset":0,"truncated":false}`})

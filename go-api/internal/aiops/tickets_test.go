@@ -15,7 +15,28 @@ func TestAITicketToolArgumentValidation(t *testing.T) {
 		name, args string
 		valid      bool
 	}{
+		{"tickets_list_global", `{"status":"open","reply_status":"all","limit":50,"offset":0}`, true},
+		{"tickets_list_global", `{"status":"all","reply_status":"all","limit":1,"offset":10000}`, true},
+		{"tickets_list_global", `{"status":"closed","reply_status":"replied","limit":20,"offset":1}`, true},
+		{"tickets_list_global", `{"status":"open","reply_status":"pending","limit":20,"offset":0}`, true},
+		{"tickets_list_global", `{"status":"open","reply_status":"all","limit":50}`, false},
+		{"tickets_list_global", `{"status":"open","limit":50,"offset":0}`, false},
+		{"tickets_list_global", `{"reply_status":"all","limit":50,"offset":0}`, false},
+		{"tickets_list_global", `{"status":"open","reply_status":"all","offset":0}`, false},
+		{"tickets_list_global", `{"status":"open","reply_status":"all","limit":0,"offset":0}`, false},
+		{"tickets_list_global", `{"status":"open","reply_status":"all","limit":51,"offset":0}`, false},
+		{"tickets_list_global", `{"status":"open","reply_status":"all","limit":50,"offset":-1}`, false},
+		{"tickets_list_global", `{"status":"open","reply_status":"all","limit":50,"offset":10001}`, false},
+		{"tickets_list_global", `{"status":"open","reply_status":"all","limit":"50","offset":0}`, false},
+		{"tickets_list_global", `{"status":0,"reply_status":"all","limit":50,"offset":0}`, false},
+		{"tickets_list_global", `{"status":"open","reply_status":0,"limit":50,"offset":0}`, false},
+		{"tickets_list_global", `{"status":"unknown","reply_status":"all","limit":50,"offset":0}`, false},
+		{"tickets_list_global", `{"status":"open","reply_status":"unknown","limit":50,"offset":0}`, false},
+		{"tickets_list_global", `{"status":"open","reply_status":null,"limit":50,"offset":0}`, false},
+		{"tickets_list_global", `{"status":"open","reply_status":"all","limit":50,"offset":0,"user_id":1}`, false},
+		{"tickets_list_global", `{"status":"open","reply_status":"all","limit":50,"offset":0,"email":""}`, false},
 		{"tickets_list", `{"status":0,"limit":2}`, true},
+		{"tickets_list", `{"user_id":1,"email":"","status":0,"reply_status":0,"limit":50,"offset":0}`, true},
 		{"tickets_list", `{"status":0,"user_id":0}`, false},
 		{"tickets_list", `{"status":0,"user_id":null}`, false},
 		{"tickets_list", `{"status":0,"email":null}`, false},
@@ -76,9 +97,12 @@ func TestAITicketMissingEmailKeepsExactQueryPredicate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var page pageDTO[aiTicketDTO]
+	var page aiTicketListDTO
 	if json.Unmarshal([]byte(v.Content), &page) != nil || page.Total != 0 || len(page.Items) != 0 {
 		t.Fatal("missing email expanded search")
+	}
+	if page.Query.Scope != "filtered_users" || page.Query.Email != "missing@example.test" || page.Query.UserID != 0 || page.Query.Status != "all" || page.Query.ReplyStatus != "all" || page.EmptyReason != "no_matching_tickets" {
+		t.Fatal("empty email search lost its scope diagnostics", page)
 	}
 	if err = mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

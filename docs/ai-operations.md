@@ -122,7 +122,13 @@ API Key 只写不读，留空保留；**修改中转地址必须重新输入 Key
 
 #### 全站工单与提现申请
 
-`tickets_list` 不要求用户 ID 或邮箱：`{"status":0,"limit":50}` 查询全站未关闭工单，`{}` 查询全部状态；`user_id`、`email` 仅用于可选精确筛选，不需要时省略。按返回 `next_offset` 继续读取，列表按稳定的工单 ID 倒序排列。查询仍是实时数据，期间新增或关闭工单可能改变结果，不能宣称为某一时点的数据库快照。
+全站查询优先使用 `tickets_list_global`：`{"status":"open","reply_status":"all","limit":50,"offset":0}` 查询所有用户的未关闭工单，包括已回复但未关闭的工单。四项均必填：`status` 为 `all/open/closed`，`reply_status` 为 `all/pending/replied`，`limit` 为 1–50，`offset` 为 0–10000。这个工具不接受用户 ID 或邮箱，即使中转要求填完全部字段，也不需要编造用户身份或用 `0` 代替“全部”。只有明确查询待回复时才选 `pending`。
+
+原 `tickets_list` 保留兼容：`{"status":0,"limit":50}` 仍可查询全站未关闭工单，`{}` 查询全部状态；`user_id`、`email` 是可选精确筛选，同时填写时取交集。`user_id:1` 永远只查询用户 1，不会静默改成全站。所有工单工具显式发送 `strict:false`，避免可选字段在支持该标志的中转上被默认强制化。
+
+列表结果新增 `query`，显示实际 `scope`（`all_users/filtered_users`）、状态和生效的身份筛选；空页附带 `empty_reason`，区分无匹配、偏移超出总数和查询期间数据变化。空结果不能据此推断全站没有工单。按返回 `next_offset` 继续读取，列表按稳定的工单 ID 倒序排列。查询仍是实时数据，期间新增或关闭工单可能改变结果，不能宣称为某一时点的数据库快照。
+
+同一轮对话中，只有完整空结果且筛选／分页和结果没有变化的工单列表才参与重复纠错：首次正常读取，重复时提醒模型核对范围；提醒后仍仅重复已有空查询，则保存已查范围与未完成说明并结束无效循环。新筛选、新结果、正常翻页或其他工具不会受该重复计数限制，下次用户发言重新计算。这不是恢复完全访问的总工具轮数或运行时长上限，也不会自动扩大用户指定范围或重试写操作。
 
 取得工单 ID 后调用 `ticket_get`，按 `messages.next_offset` 读取消息列表。单条消息预览最多 2,000 字，返回 `total_characters`、`truncated` 和 `next_content_offset`；需要余文时调用 `ticket_message_get`，传 `ticket_id`、`message_id`、`content_offset`，可选 `content_limit`（默认及最多 2,000 字），按返回 `next_content_offset` 继续，偏移按 Unicode 字符计数。不能把消息预览当成完整申请。
 

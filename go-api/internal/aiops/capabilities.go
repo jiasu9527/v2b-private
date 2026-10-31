@@ -61,6 +61,7 @@ var toolCapabilities = map[string]toolCapability{
 	"propose_entry_auto_split":   {domainEntries, "entry_auto_split"},
 	"propose_entry_split":        {domainEntries, "entry_split"},
 	"tickets_list":               {domainTickets, ""},
+	"tickets_list_global":        {domainTickets, ""},
 	"ticket_get":                 {domainTickets, ""},
 	"ticket_message_get":         {domainTickets, ""},
 	"ticket_settings":            {domainTickets, ""},
