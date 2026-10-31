@@ -131,6 +131,9 @@ func (b *TelegramBridge) sweepTelegram(ctx context.Context) error {
 	if _, err = tx.ExecContext(ctx, `DELETE FROM v2_ai_telegram_code WHERE expires_at<$1`, time.Now().Unix()); err != nil {
 		return err
 	}
+	if err = b.sweepTelegramMiniTx(ctx, tx); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

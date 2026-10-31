@@ -38,12 +38,12 @@ function ActionDetails({ action }: { action: AIAction }) {
   </Space>;
 }
 
-export default function AIOpsPage() {
+export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {}) {
   const [tab, setTab] = useState('chat');
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyNewButton = useRef<HTMLButtonElement>(null);
   const screens = Grid.useBreakpoint();
-  const compact = screens.lg === false;
+  const compact = miniApp || screens.lg === false;
   const [config, setConfig] = useState<AIConfig>(initialConfig);
   const [sessions, setSessions] = useState<AISession[]>([]);
   const [servers, setServers] = useState<AIServer[]>([]);
@@ -120,7 +120,7 @@ export default function AIOpsPage() {
     setServers(responseList(response));
   };
   const changeTab = (next: string) => {
-    if (next === 'settings' && !isAdmin) return;
+    if (next === 'settings' && !isAdmin || miniApp && next === 'telegram') return;
     setTab(next);
     if (next === 'servers') void loadServers().catch((e) => fail(e, '读取服务器列表失败'));
   };
@@ -444,7 +444,7 @@ export default function AIOpsPage() {
   </Form></Card><Card title="数据清理" size="small"><Paragraph>清空会话只删除聊天、消息及相关操作记录，保留中转配置、服务器凭据和共享知识。重置全部 AI 数据会同时清除上述全部数据并停止进行中的 AI 任务；已经在远程服务器启动的命令不能保证撤回或回滚。有远程操作正在执行时，删除、清空和重置会被拒绝，需等操作完成或进入“结果待核对”状态后再处理。</Paragraph><Space wrap><Button danger disabled={!!busy} onClick={() => setConfirmation({ kind: 'clear' })}>清空全部会话</Button><Button danger type="primary" disabled={!!busy} onClick={() => { setResetText(''); setConfirmation({ kind: 'reset' }); }}>重置全部 AI 数据</Button></Space></Card></Space> : null;
   const titles = { delete: '删除当前会话', clear: '清空全部会话', reset: '重置全部 AI 数据', 'server-delete': '删除服务器配置' };
   const pageStatus = <Space wrap><Tag color={config.enabled && config.has_api_key ? 'success' : 'default'}>{!loaded ? '加载中' : config.enabled ? config.has_api_key ? '已启用' : '缺少 API Key' : '未启用'}</Tag><Button icon={<ReloadOutlined />} loading={loading} disabled={!!busy} onClick={() => void load()}>刷新</Button></Space>;
-  return <div className={`legacy-page ai-ops-page${tab === 'chat' ? ' ai-ops-page-chat' : ''}`}><div className="content-heading">AI 运维</div><div className="ai-ops-page-body"><div className="ai-ops-page-stack">{(compact || tab !== 'chat') && pageStatus}{error && <Alert type="error" showIcon message="读取失败" description={error} />}<Tabs className="ai-ops-tabs" tabBarExtraContent={!compact && tab === 'chat' ? { left: <Text strong className="ai-ops-desktop-title">AI 运维</Text>, right: pageStatus } : undefined} activeKey={tab} onChange={changeTab} items={[{ key: 'chat', label: '运维对话', children: chat }, { key: 'servers', label: '服务器', children: serverPanel }, { key: 'knowledge', label: '共享知识', children: <AIOpsKnowledge active={tab === 'knowledge'} isAdmin={isAdmin} actorID={actorID} /> }, { key: 'telegram', label: 'Telegram', children: <AIOpsTelegram active={tab === 'telegram'} isAdmin={isAdmin} actorID={actorID} /> }, ...(isAdmin ? [{ key: 'settings', label: '设置', children: settings }] : [])]} /></div></div>
+  return <div className={`legacy-page ai-ops-page${miniApp ? ' ai-ops-mini-page' : ''}${tab === 'chat' ? ' ai-ops-page-chat' : ''}`}><div className="content-heading">AI 运维</div><div className="ai-ops-page-body"><div className="ai-ops-page-stack">{(compact || tab !== 'chat') && pageStatus}{error && <Alert type="error" showIcon message="读取失败" description={error} />}<Tabs className="ai-ops-tabs" tabBarExtraContent={!compact && tab === 'chat' ? { left: <Text strong className="ai-ops-desktop-title">AI 运维</Text>, right: pageStatus } : undefined} activeKey={tab} onChange={changeTab} items={[{ key: 'chat', label: '运维对话', children: chat }, { key: 'servers', label: '服务器', children: serverPanel }, { key: 'knowledge', label: '共享知识', children: <AIOpsKnowledge active={tab === 'knowledge'} isAdmin={isAdmin} actorID={actorID} /> }, ...(!miniApp ? [{ key: 'telegram', label: 'Telegram', children: <AIOpsTelegram active={tab === 'telegram'} isAdmin={isAdmin} actorID={actorID} /> }] : []), ...(isAdmin ? [{ key: 'settings', label: '设置', children: settings }] : [])]} /></div></div>
     <Modal title={editing ? `编辑服务器 · ${editing.name}` : '登记服务器'} open={serverOpen} onCancel={closeServer} onOk={saveServer} confirmLoading={busy === 'server'} okText="保存服务器" cancelButtonProps={{ disabled: !!busy }} closable={!busy} maskClosable={!busy} destroyOnHidden width={720}>
       <Alert type="warning" showIcon message="凭据与连接身份绑定" description="修改地址、端口、用户名或主机指纹后，必须重新输入密码或私钥；旧的密码、私钥和口令都不会沿用。" style={{ marginBottom: 16 }} />
       <Form form={serverForm} layout="vertical" disabled={!!busy} onValuesChange={(changed) => { if ('host' in changed || 'port' in changed) { fingerprintSequence.current += 1; setFingerprint(null); setFingerprintLoading(false); } }}>

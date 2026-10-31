@@ -36,7 +36,7 @@ func handleAITelegram(w http.ResponseWriter, r *http.Request, sessions session.S
 	switch action {
 	case "status":
 		expected = http.MethodGet
-	case "config", "binding-code", "webhook":
+	case "config", "binding-code", "webhook", "mini-app":
 		if actor.IsAdmin != 1 {
 			handleAIOpsError(w, aiops.ErrForbidden)
 			return
@@ -100,6 +100,19 @@ func handleAITelegram(w http.ResponseWriter, r *http.Request, sessions session.S
 			err = aiops.ErrUnavailable
 		} else {
 			result, err = panel.SetTelegramWebhook(ctx, "")
+		}
+	case "mini-app":
+		var req struct{}
+		if !decodeSupportJSON(w, r, &req) {
+			return
+		}
+		installer, ok := panel.(interface {
+			InstallTelegramMiniApp(context.Context) (map[string]any, error)
+		})
+		if !ok {
+			err = aiops.ErrUnavailable
+		} else {
+			result, err = installer.InstallTelegramMiniApp(ctx)
 		}
 	}
 	if err != nil {

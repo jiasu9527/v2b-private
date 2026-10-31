@@ -138,6 +138,15 @@ func handleAIOpsStream(w http.ResponseWriter, r *http.Request, sessions session.
 			stop()
 			return
 		case <-ticker.C:
+			// Mini App tokens are scoped to a live Telegram binding. Revalidate
+			// before every emitted draft, not only when loading a full snapshot.
+			if scoped, ok := sessions.(interface{ RevalidateEveryStreamTick() bool }); ok && scoped.RevalidateEveryStreamTick() {
+				identity, authErr := sessions.Authenticate(ctx, token, false)
+				if authErr != nil || identity == nil || identity.ID != actor || (identity.IsAdmin == 0 && identity.IsStaff == 0) {
+					writeEvent("error", map[string]any{"session_id": id, "code": "auth_invalid", "message": "Telegram 运维授权已失效，请从 Bot 重新打开"})
+					return
+				}
+			}
 			draft, err := drafts.GetDraft(ctx, actor, id)
 			if err != nil {
 				writeEvent("error", map[string]any{"session_id": id, "message": "会话不存在、权限已变化或连接暂不可用，请刷新核对"})

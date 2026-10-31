@@ -237,6 +237,12 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 		adminPrefix := "/api/v1/" + strings.Trim(strings.TrimSpace(cfg.AdminPath), "/")
 
 		switch {
+		case r.URL.Path == "/ai-ops-mini" || r.URL.Path == "/ai-ops-mini/":
+			renderTelegramMiniShell(w, r, cfg)
+			return
+		case strings.HasPrefix(r.URL.Path, "/api/v1/ai-ops-mini/"):
+			handleAITelegramMini(w, r, state.aiTelegram, state.aiOps, strings.TrimPrefix(r.URL.Path, "/api/v1/ai-ops-mini/"))
+			return
 		case strings.HasPrefix(r.URL.Path, adminPrefix+"/ai-ops/telegram/"):
 			handleAITelegram(w, r, state.session, state.aiTelegram, state.admin, strings.TrimPrefix(r.URL.Path, adminPrefix+"/ai-ops/telegram/"))
 			return

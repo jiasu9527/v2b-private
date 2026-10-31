@@ -29,6 +29,7 @@ type telegramHTTPFixtureTransport struct {
 }
 
 func (*telegramHTTPFixtureTransport) Identity() (string, bool) { return "42", true }
+func (*telegramHTTPFixtureTransport) MiniBotToken() string     { return "42:fixture-token" }
 func (f *telegramHTTPFixtureTransport) Send(_ context.Context, _ int64, text string, _ [][]aiops.TelegramButton) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -1,0 +1,24 @@
+body.telegram-mini-body{margin:0;overflow:hidden;background:var(--tg-theme-bg-color,#f5f7fb)}
+body.telegram-mini-identity-blocked>:not(#root){visibility:hidden!important;pointer-events:none!important}
+.telegram-mini-app{height:var(--mini-viewport-height,100dvh);box-sizing:border-box;padding:var(--mini-safe-top,0) var(--mini-safe-right,0) max(var(--mini-safe-bottom,0px),env(safe-area-inset-bottom,0px)) var(--mini-safe-left,0);overflow:auto;background:var(--tg-theme-bg-color,#f5f7fb);color:var(--tg-theme-text-color,#222)}
+.telegram-mini-state{padding:24px 20px;max-width:560px;margin:auto}
+.telegram-mini-workspace{height:100%;min-height:0}.telegram-mini-workspace[hidden]{display:none!important}
+.telegram-mini-app .ai-ops-page.ai-ops-mini-page{padding:8px;min-height:0;box-sizing:border-box}
+.telegram-mini-app .ai-ops-page.ai-ops-mini-page.ai-ops-page-chat{height:100%;min-height:0}
+.telegram-mini-app .ai-ops-mini-page>.content-heading{display:none}
+.telegram-mini-app .ai-ops-page-body{margin:0;min-height:0}
+.telegram-mini-app .ai-ops-page-stack{gap:8px}
+.telegram-mini-app .ai-ops-page-stack>.ant-space{font-size:12px}
+.telegram-mini-app .ai-ops-conversation{padding:10px;min-height:0}
+.telegram-mini-app .ai-ops-chat-layout{grid-template-columns:minmax(0,1fr);gap:0}
+.telegram-mini-app .ai-ops-messages{height:auto;min-height:0;flex:1}
+.telegram-mini-app .ai-ops-composer{padding-bottom:0}
+.telegram-mini-app .ai-ops-composer textarea{max-height:min(125px,25dvh)!important}
+.telegram-mini-app .ai-ops-composer-hint{font-size:10px}
+.telegram-mini-app.is-dark .ai-ops-conversation,.telegram-mini-app.is-dark .ai-ops-sessions,.telegram-mini-app.is-dark .ai-ops-markdown table{background:#17191d;border-color:#343943}
+.telegram-mini-app.is-dark .ai-ops-message-user{background:#1c2b43}
+.telegram-mini-app.is-dark .ai-ops-pre,.telegram-mini-app.is-dark .ai-ops-markdown-code,.telegram-mini-app.is-dark .ai-ops-markdown code,.telegram-mini-app.is-dark .ai-ops-markdown th{background:#252a32;color:#dfe4ed;border-color:#343943}
+.telegram-mini-app.is-dark .ai-ops-page .ant-alert-info{background:#202832;border-color:#3a4556}
+.telegram-mini-app.is-dark .ai-ops-page .ant-alert-info .ant-alert-message,.telegram-mini-app.is-dark .ai-ops-page .ant-alert-info .ant-alert-description{color:#dfe4ed}
+.telegram-mini-app.is-dark .ai-ops-process-item{color:#c9d1de}
+@media(max-width:575.98px){.telegram-mini-app .ai-ops-conversation-controls{grid-template-columns:minmax(0,1fr) 106px}.telegram-mini-app .ai-ops-empty{padding:8px}.telegram-mini-app .ai-ops-page.ai-ops-mini-page{padding:5px}.telegram-mini-app .ai-ops-page-chat .ai-ops-tabs>.ant-tabs-nav{margin-bottom:5px}}

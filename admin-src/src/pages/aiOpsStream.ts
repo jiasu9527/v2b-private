@@ -1,4 +1,4 @@
-import { clearAuth, getAdminPath, getAuth } from '../lib/api';
+import { aiOpsRequestHeaders, aiOpsRequestURL, clearAuth, invalidateTelegramMiniSession, isTelegramMiniApp } from '../lib/api';
 
 export type AIStreamEvent = { event: string; data: unknown };
 
@@ -30,19 +30,23 @@ export function aiStreamParser(emit: (event: AIStreamEvent) => void) {
 }
 
 export async function aiReadSessionStream(id: number, signal: AbortSignal, emit: (event: AIStreamEvent) => void): Promise<void> {
-  const response = await fetch(`/api/v1/${getAdminPath()}/ai-ops/session/stream?id=${encodeURIComponent(id)}`, {
-    headers: { Authorization: getAuth(), Accept: 'text/event-stream' },
-    credentials: 'same-origin', cache: 'no-store', signal,
+  const response = await fetch(`${aiOpsRequestURL('/ai-ops/session/stream')}?id=${encodeURIComponent(id)}`, {
+    headers: { ...aiOpsRequestHeaders(), Accept: 'text/event-stream' },
+    credentials: isTelegramMiniApp() ? 'omit' : 'same-origin', cache: 'no-store', signal,
   });
   if (response.status === 401) {
-    clearAuth(); window.dispatchEvent(new Event('forest-auth-invalid'));
+    if (isTelegramMiniApp()) invalidateTelegramMiniSession();
+    else { clearAuth(); window.dispatchEvent(new Event('forest-auth-invalid')); }
   }
   if (!response.ok || !response.headers.get('content-type')?.includes('text/event-stream') || !response.body) throw new Error('实时连接不可用，将继续自动刷新');
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let ended = false;
   const consume = aiStreamParser((event) => {
-    if (event.event === 'error') throw new Error('实时连接已中断，将继续自动刷新');
+    if (event.event === 'error') {
+      if (isTelegramMiniApp() && (event.data as { code?: string })?.code === 'auth_invalid') invalidateTelegramMiniSession();
+      throw new Error('实时连接已中断，将继续自动刷新');
+    }
     emit(event); if (event.event === 'end') ended = true;
   });
   try {

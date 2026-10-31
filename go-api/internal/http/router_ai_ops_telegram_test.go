@@ -65,6 +65,8 @@ func TestAITelegramHTTPManagementPermissionsAndValidation(t *testing.T) {
 		{"POST", "revoke", `{"actor_id":8}`, admin, 200, 1},
 		{"POST", "revoke", `{"actor_id":8}{}`, admin, 400, 0},
 		{"POST", "webhook", `{}`, staff, 403, 0},
+		{"POST", "mini-app", `{}`, staff, 403, 0},
+		{"POST", "mini-app", `{"url":"https://attacker.example"}`, admin, 400, 0},
 		{"POST", "webhook", `{"telegram_bot_token":"do-not-accept"}`, admin, 400, 0},
 		{"GET", "config", "", admin, 405, 0},
 		{"POST", "status", `{}`, admin, 405, 0},

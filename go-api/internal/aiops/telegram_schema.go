@@ -27,7 +27,7 @@ func ensureTelegramSchema(ctx context.Context, tx *sql.Tx) error {
 			return fmt.Errorf("ensure AI Telegram schema: %w", err)
 		}
 	}
-	return nil
+	return ensureTelegramMiniSchema(ctx, tx)
 }
 
 // All bridge dispatch, revocation and delivery share this lock across backend

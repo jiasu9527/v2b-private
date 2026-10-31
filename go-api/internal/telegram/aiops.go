@@ -93,6 +93,20 @@ func (t *aiTransport) Identity() (string, bool) {
 	return telegramBotIdentity(strings.TrimSpace(cfg.TelegramBotToken))
 }
 
+// MiniBotToken is an internal, optional authentication capability. It must
+// never be serialized or returned by a public status/configuration endpoint.
+func (t *aiTransport) MiniBotToken() string {
+	if t == nil || t.service == nil {
+		return ""
+	}
+	cfg := t.service.currentConfig()
+	token := strings.TrimSpace(cfg.TelegramBotToken)
+	if _, ok := telegramBotIdentity(token); !cfg.TelegramBotEnable || !ok {
+		return ""
+	}
+	return token
+}
+
 func (t *aiTransport) Send(ctx context.Context, chatID int64, text string, buttons [][]aiops.TelegramButton) (int64, error) {
 	return t.deliver(ctx, "sendMessage", chatID, 0, text, buttons, false)
 }
@@ -269,7 +283,7 @@ func (s *Service) handleAIWebhook(ctx context.Context, payload map[string]any) (
 func legacyTelegramInput(message map[string]any, text string) bool {
 	command, _ := parseWebhookCommand(text)
 	switch command {
-	case "/bind", "/unbind", "/traffic", "/getlatesturl", "/start", "/monitor":
+	case "/bind", "/unbind", "/traffic", "/getlatesturl", "/start", "/monitor", "/aiapp", "/miniapp":
 		return true
 	}
 	if _, ok := clientEntryMonitorActionForText(text); ok {

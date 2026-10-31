@@ -16,6 +16,7 @@ export default function AIOpsTelegram({ active, isAdmin, actorID }: { active: bo
   const [code, setCode] = useState<(AITelegramBindingCode & { actor_id: number }) | null>(null);
   const [revoking, setRevoking] = useState<AITelegramBinding | null>(null);
   const [revokeError, setRevokeError] = useState('');
+  const [miniAppURL, setMiniAppURL] = useState('');
   const [now, setNow] = useState(Date.now());
   const [configForm] = Form.useForm<AITelegramConfig>();
   const [bindingForm] = Form.useForm<{ actor_id: number }>();
@@ -100,6 +101,19 @@ export default function AIOpsTelegram({ active, isAdmin, actorID }: { active: bo
     } catch (cause: any) { if (alive.current) message.error(cause?.message || '更新 Webhook 失败'); }
     finally { finish(); }
   };
+  const installMiniApp = async () => {
+    if (!isAdmin || !status?.bot_ready || !begin('mini-app')) return;
+    try {
+      const response = await apiJsonPost('/ai-ops/telegram/mini-app', {});
+      if (!alive.current) return;
+      const value = response?.data;
+      const url = new URL(value?.url);
+      if (value?.installed !== true || url.protocol !== 'https:' || url.pathname !== '/ai-ops-mini' || url.username || url.password || url.search || url.hash) throw new Error('小程序菜单安装状态未确认，请刷新核对');
+      setMiniAppURL(url.href);
+      message.success('Bot 小程序菜单已安装，请从 Telegram 打开');
+    } catch (cause: any) { if (alive.current) message.error(cause?.message || '安装小程序菜单失败'); }
+    finally { finish(); }
+  };
   const revoke = async () => {
     if (!revoking || !revoking.active || !isAdmin && revoking.actor_id !== actorID || !begin('revoke')) return;
     const targetID = revoking.actor_id;
@@ -167,6 +181,12 @@ export default function AIOpsTelegram({ active, isAdmin, actorID }: { active: bo
             <Form.Item name="actor_id" label="后台操作人 ID" rules={[{ required: true, message: '请输入后台操作人 ID' }, { validator: async (_, value) => { aiTelegramActorID(value); } }]}><InputNumber min={1} max={Number.MAX_SAFE_INTEGER} precision={0} placeholder="管理员／员工 ID" style={{ width: 210 }} /></Form.Item>
             <Form.Item><Button type="primary" loading={busy === 'code'} onClick={() => void generateCode()}>生成绑定码</Button></Form.Item>
           </Form>
+        </Card>}
+        {isAdmin && <Card size="small" title="Telegram 小程序">
+          <Paragraph>在现有 Bot 中安装“AI 运维”小程序菜单，直接使用网页对话、切换模型和管理运维任务。优先使用 Telegram Webhook 地址，未配置时使用网站地址；对应域名需能访问后端小程序页面和接口，不需要填写新的 URL。</Paragraph>
+          <Paragraph type="secondary">首次使用仍需通过一次性绑定码授权；绑定后从 Bot 菜单打开即可登录，无需输入后台密码。关闭小程序不会停止已经提交的后台任务。</Paragraph>
+          <Button type="primary" disabled={!status?.bot_ready || !!busy || loading} loading={busy === 'mini-app'} onClick={() => void installMiniApp()}>安装／更新小程序菜单</Button>
+          {miniAppURL && <Paragraph style={{ marginTop: 12, marginBottom: 0 }}>已安装入口：<Text code copyable={{ text: miniAppURL }}>{miniAppURL}</Text></Paragraph>}
         </Card>}
         <Card size="small" title={isAdmin ? '后台账号与 Telegram 绑定' : '我的 Telegram 绑定'}>
           {!isAdmin && <Paragraph type="secondary">仅显示本人的绑定。请向管理员领取一次性绑定命令；你可以随时撤销自己的绑定。</Paragraph>}

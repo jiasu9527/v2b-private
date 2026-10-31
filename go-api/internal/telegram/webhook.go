@@ -108,6 +108,9 @@ func (s *Service) HandleWebhook(ctx context.Context, payload map[string]any) err
 	if !ok {
 		return nil
 	}
+	if command, _ := parseWebhookCommand(message.Text); command == "/aiapp" || command == "/miniapp" {
+		return s.handleMiniAppCommand(ctx, message, messagePayload)
+	}
 
 	handled, err := s.handleReplyMessage(ctx, message)
 	if err != nil || handled {

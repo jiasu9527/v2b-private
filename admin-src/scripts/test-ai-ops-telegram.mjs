@@ -61,13 +61,13 @@ test('actual staff component hides admin settings, code creation, Webhook mutati
   assert.match(html, /我的 Telegram 绑定/);
   assert.match(html, /own@example\.test/);
   assert.match(html, /撤销绑定/);
-  assert.doesNotMatch(html, /other@example\.test|888888|生成一次性绑定码|生成绑定码|保存 Telegram 设置|更新 Webhook/);
+  assert.doesNotMatch(html, /other@example\.test|888888|生成一次性绑定码|生成绑定码|保存 Telegram 设置|更新 Webhook|安装／更新小程序菜单/);
   assert.match(html, /当前使用设置/);
 });
 
 test('actual administrator component includes all bindings, configuration, code generation and Webhook update', () => {
   const html = renderTelegram(true);
-  for (const text of ['own@example.test', 'other@example.test', '生成一次性绑定码', '生成绑定码', '保存 Telegram 设置', '更新 Webhook']) assert.ok(html.includes(text), text);
+  for (const text of ['own@example.test', 'other@example.test', '生成一次性绑定码', '生成绑定码', '保存 Telegram 设置', '更新 Webhook', '安装／更新小程序菜单']) assert.ok(html.includes(text), text);
   assert.match(html, /不代表 Webhook 已验证/);
   assert.match(html, /完整操作卡发送成功后可在 Bot 私聊中点击批准或拒绝/);
   assert.match(html, /不会自动停止已有任务/);
@@ -84,7 +84,7 @@ test('mutations have role guards, codes stay ephemeral, revocation confirms task
   assert.match(component, /code\.expires_at \* 1000 - now/);
   assert.match(component, /将停止该绑定正在进行的 Telegram AI 任务/);
   assert.doesNotMatch(component, /localStorage|sessionStorage|console\.|Input\.Password/);
-  for (const endpoint of ['status', 'config', 'binding-code', 'revoke', 'webhook']) assert.ok(component.includes(`/ai-ops/telegram/${endpoint}`));
+  for (const endpoint of ['status', 'config', 'binding-code', 'revoke', 'webhook', 'mini-app']) assert.ok(component.includes(`/ai-ops/telegram/${endpoint}`));
   assert.match(page, /key: 'telegram', label: 'Telegram', children: <AIOpsTelegram active=\{tab === 'telegram'\} isAdmin=\{isAdmin\} actorID=\{actorID\}/);
   assert.match(page, /session\.source === 'telegram' && <Tag color="blue">TG<\/Tag>/);
   assert.doesNotMatch(component, /\/session\/create|\/chat\/send/);

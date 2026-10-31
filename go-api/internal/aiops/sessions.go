@@ -259,8 +259,10 @@ func (s *Service) deleteData(ctx context.Context, actorID, id int64, reset bool)
 	defer tx.Rollback()
 	// Telegram dispatch takes this lock before entering the AI state lock.
 	// Use the same order so cleanup cannot race an accepted bot request.
-	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(2026103101)`); err != nil {
-		return err
+	if ctx.Value(miniTGGuardKey{}) != true {
+		if err = lockTelegramBridge(ctx, tx); err != nil {
+			return err
+		}
 	}
 	if err = lockAIStateExclusive(ctx, tx); err != nil {
 		return err

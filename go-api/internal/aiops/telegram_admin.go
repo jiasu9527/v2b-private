@@ -196,6 +196,9 @@ func (b *TelegramBridge) RevokeBinding(ctx context.Context, actor, target int64)
 // Stop is durable: existing AI workers on every process already poll these
 // stop flags. Request IDs recover a SendMessage commit whose inbox ack was lost.
 func stopTelegramBindingsTx(ctx context.Context, tx *sql.Tx, actor int64) error {
+	if err := stopTelegramMiniBindingsTx(ctx, tx, actor); err != nil {
+		return err
+	}
 	for _, q := range []string{
 		`UPDATE v2_ai_turn SET stop_requested=TRUE WHERE status='running' AND EXISTS(SELECT 1 FROM v2_ai_telegram_inbox i WHERE ($1=0 OR i.actor_id=$1) AND (i.turn_id=v2_ai_turn.id OR (i.actor_id=v2_ai_turn.actor_id AND i.request_id=v2_ai_turn.request_id)))`,
 		`UPDATE v2_ai_action SET stop_requested=TRUE WHERE status='running' AND session_id IN(SELECT t.session_id FROM v2_ai_turn t JOIN v2_ai_telegram_inbox i ON i.turn_id=t.id OR (i.actor_id=t.actor_id AND i.request_id=t.request_id) WHERE $1=0 OR i.actor_id=$1)`,
@@ -213,6 +216,9 @@ func stopTelegramBindingsTx(ctx context.Context, tx *sql.Tx, actor int64) error 
 // Called while holding the Telegram advisory lock, before deleting sessions.
 // Keep update tombstones so webhook retries cannot recreate deleted tasks.
 func purgeTelegramSessionData(ctx context.Context, tx *sql.Tx, id int64, reset bool) error {
+	if err := purgeTelegramMiniSessionData(ctx, tx, id); err != nil {
+		return err
+	}
 	if reset {
 		if err := stopTelegramBindingsTx(ctx, tx, 0); err != nil {
 			return err

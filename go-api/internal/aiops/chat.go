@@ -139,6 +139,10 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 			title = title[:80]
 		}
 		out.Session, err = insertSession(ctx, tx, actorID, string(title), req.Model)
+		if err == nil && ctx.Value(telegramMiniSourceKey{}) == true {
+			_, err = tx.ExecContext(ctx, `UPDATE v2_ai_session SET source='telegram' WHERE id=$1`, out.Session.ID)
+			out.Session.Source = "telegram"
+		}
 	} else {
 		out.Session, err = scanSession(tx.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM v2_ai_session WHERE id=$1 FOR UPDATE NOWAIT`, req.SessionID))
 		var pgerr *pgconn.PgError

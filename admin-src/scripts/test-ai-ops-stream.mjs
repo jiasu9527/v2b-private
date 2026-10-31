@@ -27,8 +27,8 @@ test('SSE ignores unknown events and rejects malformed or oversized frames',()=>
  assert.throws(()=>aiStreamParser(()=>{})('a'.repeat(16*1024*1024+1)),/超出限制/);
 });
 test('stream credentials are only an Authorization header and readers abort on disposal',()=>{
- assert.match(streamSource,/Authorization: getAuth\(\)/);
- assert.match(streamSource,/credentials: 'same-origin', cache: 'no-store', signal/);
+ assert.match(streamSource,/aiOpsRequestHeaders\(\)/);
+ assert.match(streamSource,/credentials: isTelegramMiniApp\(\) \? 'omit' : 'same-origin', cache: 'no-store', signal/);
  assert.doesNotMatch(streamSource,/auth_data|EventSource|localStorage|sessionStorage/);
  assert.match(streamSource,/reader.cancel\(\)/);
 });
