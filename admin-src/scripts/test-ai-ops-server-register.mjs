@@ -8,8 +8,12 @@ import ts from 'typescript';
 
 const source = await readFile(new URL('../src/pages/AIOpsActionSummary.tsx', import.meta.url), 'utf8');
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX } });
+const identity = {};
+const identitySource = await readFile(new URL('../src/pages/aiOpsServerIdentity.ts', import.meta.url), 'utf8');
+new Function('exports', ts.transpileModule(identitySource, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText)(identity);
+const require = createRequire(import.meta.url);
 const module = { exports: {} };
-new Function('require', 'exports', 'module', outputText)(createRequire(import.meta.url), module.exports, module);
+new Function('require', 'exports', 'module', outputText)((name) => name === './aiOpsServerIdentity' ? identity : require(name), module.exports, module);
 const { default: Summary, aiActionNames } = module.exports;
 const action = {
   kind: 'server_register', status: 'pending', payload: {
@@ -32,6 +36,14 @@ test('first-use fingerprints do not claim independent verification and supplied 
   const supplied = render({ ...action, payload: { ...action.payload, trust_source: 'provided' } });
   assert.ok(supplied.includes('使用提供的固定指纹；后续连接必须匹配。'));
   assert.ok(!supplied.includes('首次连接记录'));
+});
+
+test('registration summaries preserve full long names and format IPv6 identities unambiguously', () => {
+  const name = '美国洛杉矶-长名称落地服务器-'.repeat(5);
+  const html = render({ ...action, payload: { ...action.payload, name, host: '2001:db8::20' } });
+  assert.ok(html.includes(name));
+  assert.ok(html.includes('ops@[2001:db8::20]:2222'));
+  assert.ok(html.includes('class="ai-ops-wrap"'));
 });
 
 test('completed registrations report encrypted storage and absent credentials are not invented', () => {

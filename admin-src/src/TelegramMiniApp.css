@@ -361,6 +361,17 @@ body.telegram-mini-body .ai-ops-session span { color: var(--mini-hint); font-siz
 body.telegram-mini-body .ai-ops-session strong { font-size: 13px; color: var(--mini-text); }
 
 /* Management screens remain functional, with horizontally scrollable data. */
+.telegram-mini-app .ai-ops-server-card { border: 0; border-radius: 16px; }
+.telegram-mini-app .ai-ops-server-name { color: var(--mini-text); }
+.telegram-mini-app .ai-ops-server-toolbar .ant-input-affix-wrapper { min-height: 44px; }
+.telegram-mini-app .ai-ops-server-card .ai-ops-server-fingerprint > summary { min-height: 44px; box-sizing: border-box; display: list-item; padding-block: 12px; }
+body.telegram-mini-body .ai-ops-modal .ant-modal-title { padding-right: 36px; }
+body.telegram-mini-body .ai-ops-modal .ant-modal { top: max(12px,var(--mini-safe-top,0px)); margin-inline: auto; padding-bottom: 12px; }
+body.telegram-mini-body .ai-ops-modal .ant-modal-content { display: flex; flex-direction: column; max-height: calc(var(--mini-viewport-height,100dvh) - max(12px,var(--mini-safe-top,0px)) - max(12px,var(--mini-safe-bottom-space))); }
+body.telegram-mini-body .ai-ops-modal .ant-modal-header,
+body.telegram-mini-body .ai-ops-modal .ant-modal-footer { flex-shrink: 0; }
+body.telegram-mini-body .ai-ops-modal .ant-modal-body { min-height: 0; max-height: none; overflow: auto; overscroll-behavior: contain; }
+body.telegram-mini-body .mini-ops-settings-drawer .ai-ops-dialog-model.ant-select { height: auto; }
 .telegram-mini-app .ant-card { background: var(--mini-surface) !important; border: 0; border-radius: 16px; box-shadow: none; }
 .telegram-mini-app .ant-card-head { padding-inline: 14px; border-color: var(--mini-line); }
 .telegram-mini-app .ant-card-body { padding: 14px; }

@@ -1,5 +1,6 @@
 import { Alert, Descriptions, Table, Typography } from 'antd';
 import type { AIAction } from './aiOpsModel';
+import { aiServerConnection } from './aiOpsServerIdentity';
 
 export const aiActionNames: Record<string, string> = {
   ssh_command: '服务器命令', server_register: '登记 SSH 服务器', entry_host: '修改入口地址', node_change: '修改节点',
@@ -70,8 +71,8 @@ export default function AIOpsActionSummary({ action }: { action: AIAction }) {
     </>;
   }
   if (action.kind === 'server_register') return <Descriptions size="small" column={1}>
-    <Descriptions.Item label="服务器名称">{String(p.name || '—')}</Descriptions.Item>
-    <Descriptions.Item label="连接身份"><Typography.Text code>{String(p.username || '')}@{String(p.host || '')}:{String(p.port || 22)}</Typography.Text></Descriptions.Item>
+    <Descriptions.Item label="服务器名称"><span className="ai-ops-wrap">{String(p.name || '—')}</span></Descriptions.Item>
+    <Descriptions.Item label="连接身份"><Typography.Text className="ai-ops-wrap" code>{aiServerConnection({ username: String(p.username || ''), host: String(p.host || ''), port: Number(p.port || 22) })}</Typography.Text></Descriptions.Item>
     <Descriptions.Item label="凭据">{[p.has_password && `密码${action.status === 'succeeded' ? '已加密保存' : '已安全暂存'}`, p.has_private_key && `私钥${action.status === 'succeeded' ? '已加密保存' : '已安全暂存'}`].filter(Boolean).join('；') || '未提供'}</Descriptions.Item>
     <Descriptions.Item label="主机指纹"><Typography.Text code>{String(p.host_key_sha256 || '—')}</Typography.Text></Descriptions.Item>
     <Descriptions.Item label="指纹来源">{p.trust_source === 'first_use' ? '首次连接记录的指纹，未经独立验证；后续连接必须匹配。' : '使用提供的固定指纹；后续连接必须匹配。'}</Descriptions.Item>

@@ -209,7 +209,7 @@ test('each conversation turn has one collapsed activity group and approval still
   assert.doesNotMatch(page,/<Collapse|defaultActiveKey|activeKey=\{\[|<details[^>]*\bopen[=>\s]/);
   assert.match(page,/\(item\.role === 'user' \|\| item\.role === 'assistant'\) && item\.content\.trim\(\)/);
   assert.match(page,/className="ai-ops-process-review"/);
-  const modal=page.slice(page.indexOf('<Modal title={review?.decision'));
+  const modal=page.slice(page.indexOf('title={review?.decision'));
   assert.match(modal,/<ActionDetails action=\{review.action\}/);
 });
 
