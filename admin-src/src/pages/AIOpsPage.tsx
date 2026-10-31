@@ -42,7 +42,7 @@ function ActionDetails({ action }: { action: AIAction }) {
 export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {}) {
   const [tab, setTab] = useState('chat');
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [miniSettingsOpen, setMiniSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const historyNewButton = useRef<HTMLButtonElement>(null);
   const knowledgeBack = useRef<(() => boolean) | null>(null);
   const screens = Grid.useBreakpoint();
@@ -104,7 +104,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
       if (review) { setReview(null); setConfirmedOutput(false); }
       else if (confirmation) { setConfirmation(null); setResetText(''); }
       else if (serverOpen) closeServer();
-      else if (miniSettingsOpen) setMiniSettingsOpen(false);
+      else if (settingsOpen) setSettingsOpen(false);
       else if (historyOpen) setHistoryOpen(false);
       else if (tab === 'knowledge' && knowledgeBack.current?.()) return;
       else if (tab !== 'chat') setTab('chat');
@@ -114,12 +114,12 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
       try { button.hide?.(); } catch { /* The ordinary in-page navigation remains available. */ }
     };
     try {
-      if (historyOpen || miniSettingsOpen || serverOpen || review || confirmation || tab !== 'chat') button.show?.();
+      if (historyOpen || settingsOpen || serverOpen || review || confirmation || tab !== 'chat') button.show?.();
       else button.hide?.();
       button.onClick(goBack);
     } catch { detach(); return; }
     return detach;
-  }, [miniApp, historyOpen, miniSettingsOpen, serverOpen, review, confirmation, tab, busy]);
+  }, [miniApp, historyOpen, settingsOpen, serverOpen, review, confirmation, tab, busy]);
 
   const applySnapshot = (value: AISessionDetail) => {
     if (!alive.current || selectedRef.current !== value.session.id || !aiCanReadSession(value.session, actorID, isAdmin)) return;
@@ -418,10 +418,9 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
     <section className="ai-ops-conversation">
       <div className="ai-ops-conversation-head">
         {miniApp ? <>
-          <div className="mini-ops-session-head"><Text strong ellipsis>{detail?.session.title || (selectedID ? '读取会话中…' : '新的运维对话')}</Text><div className="mini-ops-session-actions"><Button type="text" shape="circle" aria-label="历史会话" icon={<HistoryOutlined />} onClick={() => setHistoryOpen(true)} /><Button type="text" shape="circle" aria-label="新对话" icon={<PlusOutlined />} onClick={newSession} /><Button className="mini-ops-dialog-settings" type="text" shape="circle" aria-label="对话设置" icon={<SlidersOutlined />} onClick={() => setMiniSettingsOpen(true)} /></div></div>
+          <div className="mini-ops-session-head"><Text strong ellipsis>{detail?.session.title || (selectedID ? '读取会话中…' : '新的运维对话')}</Text><div className="mini-ops-session-actions"><Button type="text" shape="circle" aria-label="历史会话" icon={<HistoryOutlined />} onClick={() => setHistoryOpen(true)} /><Button type="text" shape="circle" aria-label="新对话" icon={<PlusOutlined />} onClick={newSession} /><Button className="mini-ops-dialog-settings" type="text" shape="circle" aria-label="对话设置" icon={<SlidersOutlined />} onClick={() => setSettingsOpen(true)} /></div></div>
         </> : <>
-        <div className="ai-ops-conversation-title">{detail?.session.source === 'telegram' && <Tag color="blue">TG</Tag>}<Text strong ellipsis>{detail?.session.title || (selectedID ? '读取会话中…' : '新的运维对话')}</Text>{compact && <div className="ai-ops-mobile-actions"><Button type="text" size="small" aria-label="历史会话" icon={<HistoryOutlined />} onClick={() => setHistoryOpen(true)}>历史</Button><Button type="text" size="small" icon={<PlusOutlined />} onClick={newSession}>新对话</Button></div>}</div>
-        <div className={`ai-ops-conversation-controls${isAdmin ? '' : ' ai-ops-conversation-controls-staff'}`}><Select className="ai-ops-model-select" aria-label="选择 AI 模型" value={model} onChange={setModel} disabled={!!busy || aiSessionBusy(detail)} options={config.models.map((value) => ({ value, label: value }))} />{isAdmin && <Select<AIReasoningChoice> className="ai-ops-reasoning-select" aria-label="推理强度" value={reasoningChoice} onChange={(value) => { reasoningEdited.current = true; setReasoningEffort(value); }} disabled={!!busy || aiSessionBusy(detail) || (selectedID > 0 && !detail)} options={[{ value: 'default', label: aiReasoningDefaultLabel(config, model) }, ...AI_REASONING_OPTIONS]} />}<Select<AIAccessMode> className="ai-ops-access-select" aria-label="AI 访问权限" value={accessMode} onChange={(mode) => void changeAccess(mode)} loading={busy === 'access'} disabled={!!busy || (selectedID > 0 && !detail)} options={[{ value: 'standard', label: '逐次确认' }, { value: 'full', label: '完全访问', disabled: aiSessionBusy(detail) && accessMode !== 'full' }]} /></div>
+        <div className="ai-ops-conversation-title">{detail?.session.source === 'telegram' && <Tag color="blue">TG</Tag>}<Text strong ellipsis>{detail?.session.title || (selectedID ? '读取会话中…' : '新的运维对话')}</Text><div className="ai-ops-mobile-actions ai-ops-title-actions">{compact && <><Button type="text" shape="circle" aria-label="历史会话" icon={<HistoryOutlined />} onClick={() => setHistoryOpen(true)} /><Button type="text" shape="circle" aria-label="新对话" icon={<PlusOutlined />} onClick={newSession} /></>}<Button className="ai-ops-dialog-settings" type="text" shape="circle" aria-label="对话设置" title="对话设置" icon={<SlidersOutlined />} onClick={() => setSettingsOpen(true)} /></div></div>
         </>}
       </div>
       {foreignFullAccess && <div className="ai-ops-access-owner"><Text type="secondary">操作人 #{detail?.session.full_access_by || '未知'} 的授权不可沿用；请切换权限或由你启用。</Text><Button size="small" disabled={!!busy || aiSessionBusy(detail)} onClick={() => void changeAccess('full')}>由我启用完全访问</Button></div>}
@@ -479,17 +478,17 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
       }} placeholder={compact ? '描述问题或操作需求…' : '描述问题或操作需求；Enter 发送，Shift+Enter 换行'} autoSize={{ minRows: compact ? 2 : 3, maxRows: compact ? 4 : 8 }} maxLength={12000} disabled={busy === 'send' || aiSessionBusy(detail)} /><div className="ai-ops-composer-actions"><div className="ai-ops-send-controls"><Button type="primary" icon={<SendOutlined />} loading={busy === 'send'} disabled={!draft.trim() || unavailable || !!busy || aiSessionBusy(detail) || foreignFullAccess || (selectedID > 0 && !detail)} onClick={() => void send()}>发送</Button>{aiSessionBusy(detail) && <Button danger icon={<StopOutlined />} loading={busy === 'stop'} disabled={!!busy && busy !== 'stop'} onClick={() => void stop()}>停止</Button>}</div><Text className="ai-ops-composer-hint" type="secondary">{unavailable ? isAdmin ? '请先在设置中启用 AI 并保存中转 API Key。' : '请联系管理员启用 AI 运维。' : compact ? 'Enter 发送 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行 · 工具详情默认折叠'}</Text></div></div>}
     </section>
     <Drawer title="历史会话" aria-label="历史会话" placement={miniApp ? 'bottom' : 'left'} rootClassName={miniApp ? 'mini-ops-history-drawer' : 'ai-ops-history-drawer'} width="min(360px, 90vw)" height={miniApp ? '80%' : undefined} open={compact && historyOpen} onClose={() => setHistoryOpen(false)} destroyOnHidden>{compact && sessionHistory}</Drawer>
-    {miniApp && <Drawer title="对话设置" aria-label="对话设置" placement="bottom" rootClassName="mini-ops-settings-drawer" height="auto" open={miniSettingsOpen} onClose={() => setMiniSettingsOpen(false)} destroyOnHidden>
+    <Drawer title="对话设置" aria-label="对话设置" placement={compact ? 'bottom' : 'right'} rootClassName={miniApp ? 'mini-ops-settings-drawer' : 'ai-ops-settings-drawer'} width={360} height={compact ? 'auto' : undefined} open={settingsOpen} onClose={() => setSettingsOpen(false)} destroyOnHidden>
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <Text type="secondary">{selectedID ? `会话 #${selectedID}` : '新会话'} · {accessMode === 'full' ? '完全访问' : '逐次确认'}</Text>
-        <div className="mini-ops-setting-row"><label htmlFor="mini-model">模型</label><Select id="mini-model" aria-label="选择 AI 模型" value={model} onChange={setModel} disabled={!loaded || !!busy || aiSessionBusy(detail)} options={config.models.map((value) => ({ value, label: value }))} /></div>
-        <div className="mini-ops-setting-row"><label htmlFor="mini-access">访问权限</label><Select<AIAccessMode> id="mini-access" aria-label="AI 访问权限" value={accessMode} onChange={(mode) => void changeAccess(mode)} loading={busy === 'access'} disabled={!loaded || !!busy || (selectedID > 0 && !detail)} options={[{ value: 'standard', label: '逐次确认' }, { value: 'full', label: '完全访问', disabled: aiSessionBusy(detail) && accessMode !== 'full' }]} /></div>
-        {isAdmin && <div className="mini-ops-setting-row"><label htmlFor="mini-reasoning-effort">推理强度</label><Select<AIReasoningChoice> id="mini-reasoning-effort" aria-label="推理强度" value={reasoningChoice} onChange={(value) => { reasoningEdited.current = true; setReasoningEffort(value); }} disabled={!!busy || aiSessionBusy(detail) || (selectedID > 0 && !detail)} options={[{ value: 'default', label: aiReasoningDefaultLabel(config, model) }, ...AI_REASONING_OPTIONS]} /></div>}
-        <Text type="secondary">{accessMode === 'full' ? 'AI 可按当前任务持续执行运维操作；切换为逐次确认可撤回自动执行权限。' : '涉及修改的操作先显示完整内容，由你确认后执行。'} 关闭小程序不会停止后台任务。</Text>
+        <div className="ai-ops-setting-row mini-ops-setting-row"><label htmlFor="ai-dialog-model">模型</label><Select id="ai-dialog-model" aria-label="选择 AI 模型" value={model} onChange={setModel} disabled={!loaded || !!busy || aiSessionBusy(detail)} options={config.models.map((value) => ({ value, label: value }))} /></div>
+        <div className="ai-ops-setting-row mini-ops-setting-row"><label htmlFor="ai-dialog-access">访问权限</label><Select<AIAccessMode> id="ai-dialog-access" aria-label="AI 访问权限" value={accessMode} onChange={(mode) => void changeAccess(mode)} loading={busy === 'access'} disabled={!loaded || !!busy || (selectedID > 0 && !detail)} options={[{ value: 'standard', label: '逐次确认' }, { value: 'full', label: '完全访问', disabled: aiSessionBusy(detail) && accessMode !== 'full' }]} /></div>
+        {isAdmin && <div className="ai-ops-setting-row mini-ops-setting-row"><label htmlFor="ai-dialog-reasoning">推理强度</label><Select<AIReasoningChoice> id="ai-dialog-reasoning" aria-label="推理强度" value={reasoningChoice} onChange={(value) => { reasoningEdited.current = true; setReasoningEffort(value); }} disabled={!!busy || aiSessionBusy(detail) || (selectedID > 0 && !detail)} options={[{ value: 'default', label: aiReasoningDefaultLabel(config, model) }, ...AI_REASONING_OPTIONS]} /></div>}
+        <Text type="secondary">{accessMode === 'full' ? 'AI 可按当前任务持续执行运维操作；切换为逐次确认可撤回自动执行权限。' : '涉及修改的操作先显示完整内容，由你确认后执行。'} {miniApp ? '关闭小程序' : '关闭页面'}不会停止后台任务。</Text>
         <Button icon={<ReloadOutlined />} loading={loading} disabled={!!busy} onClick={() => void load()}>刷新会话与配置</Button>
         {aiSessionBusy(detail) && <Button danger icon={<StopOutlined />} loading={busy === 'stop'} disabled={!!busy && busy !== 'stop'} onClick={() => void stop()}>停止当前任务</Button>}
       </Space>
-    </Drawer>}
+    </Drawer>
   </div>;
   const serverPanel = <Space direction="vertical" size="middle" style={{ width: '100%' }}><Alert type="info" showIcon message="服务器凭据仅保存到后端，不发给模型" description="可通过聊天粘贴连接资料，也可在此表单登记。表单需填写已核对的 SSH 主机指纹；聊天未提供指纹时，会记录首次连接指纹，后续连接必须匹配。逐次确认模式下，每条服务器命令和部署操作均须批准；在对话窗口选择完全访问后，AI 可按当前任务连续执行。" /><Button type="primary" icon={<PlusOutlined />} disabled={!!busy} onClick={() => openServer(null)}>登记服务器</Button><Table<AIServer> rowKey="id" size="small" dataSource={servers} scroll={{ x: 1100 }} columns={[
     { title: '名称', dataIndex: 'name', width: 160, render: (name, server) => <><strong>{name}</strong><div>#{server.id}</div></> },

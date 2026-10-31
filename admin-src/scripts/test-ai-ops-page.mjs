@@ -72,7 +72,7 @@ test('reasoning choices restore per session, survive incoming snapshots while ed
 
 test('staff have no reasoning selector and retry requests always use inherited defaults, including legacy explicit sessions', () => {
   assert.match(page, /const reasoningChoice: AIReasoningChoice = isAdmin \? reasoningEffort : 'default';/);
-  assert.match(page, /\{isAdmin && <Select<AIReasoningChoice> className="ai-ops-reasoning-select"/);
+  assert.match(page, /\{isAdmin && <div className="ai-ops-setting-row mini-ops-setting-row">[\s\S]*?<Select<AIReasoningChoice>[^>]*aria-label="推理强度"/);
   const send = page.slice(page.indexOf('const send ='), page.indexOf('const saveConfig'));
   assert.match(send, /sendRetry.reasoningEffort === reasoningChoice/);
   assert.match(send, /reasoningEffort: reasoningChoice/);
@@ -293,8 +293,8 @@ test('new chats default to full access while existing standard mode and exact re
 test('running work exposes stop and permits revocation, while automatic actions identify the grant instead of manual approval', () => {
   assert.match(page, /apiJsonPost\('\/ai-ops\/chat\/stop', \{ id \}\)/);
   assert.match(page, /aiSessionBusy\(detail\) && <Button danger icon=\{<StopOutlined/);
-  const select = page.split('aria-label="AI 访问权限"')[1].split('</Space>')[0];
-  assert.match(select, /disabled=\{!!busy \|\| \(selectedID > 0 && !detail\)\}/);
+  const select = page.split('aria-label="AI 访问权限"')[1].split('/></div>')[0];
+  assert.match(select, /disabled=\{!loaded \|\| !!busy \|\| \(selectedID > 0 && !detail\)\}/);
   assert.match(select, /value: 'standard', label: '逐次确认'/);
   assert.match(page, /action.approval_mode === 'full_access' \? '完全访问授权：' : '人工批准：'/);
 });

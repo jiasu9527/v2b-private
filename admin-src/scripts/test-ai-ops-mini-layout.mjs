@@ -15,11 +15,11 @@ new Function('exports', compile(model))(helpers);
 const ast = ts.createSourceFile('AIOpsPage.tsx', page, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const component = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'AIOpsPage');
 const stateNames = component.body.statements.flatMap((node) => ts.isVariableStatement(node) ? node.declarationList.declarations.filter((decl) => ts.isArrayBindingPattern(decl.name) && ts.isCallExpression(decl.initializer) && decl.initializer.expression.getText(ast) === 'useState').map((decl) => decl.name.elements[0].name.getText(ast)) : []);
-assert.ok(stateNames.includes('miniSettingsOpen'));
+assert.ok(stateNames.includes('settingsOpen'));
 const config = { enabled: true, models: ['fixture-model'], has_api_key: true, base_url: '' };
 const idle = { session: { id: 21, title: '入口排查', model: 'fixture-model', created_by: 7, access_mode: 'full', full_access_by: 7, status: 'idle' }, messages: [], turns: [], actions: [] };
 
-function render({ miniApp = true, admin = true, states = {} } = {}) {
+function render({ miniApp = true, admin = true, states = {}, screens = { lg: true }, controls = [] } = {}) {
   let index = 0;
   const values = { config, loaded: true, model: 'fixture-model', ...states };
   const react = { ...React, useState(initial) { const name = stateNames[index++]; return React.useState(Object.hasOwn(values, name) ? values[name] : initial); } };
@@ -27,7 +27,11 @@ function render({ miniApp = true, admin = true, states = {} } = {}) {
   const exports = {};
   const resolve = (name) => {
     if (name === 'react') return react;
-    if (name === 'antd') return { ...antd, Drawer: ({ open, children, ...props }) => open ? React.createElement('section', { 'aria-label': props['aria-label'], className: props.rootClassName }, children) : null };
+    if (name === 'antd') return {
+      ...antd, Grid: { ...antd.Grid, useBreakpoint: () => screens },
+      Select: (props) => { controls.push(props); return React.createElement(antd.Select, props); },
+      Drawer: ({ open, children, ...props }) => open ? React.createElement('section', { 'aria-label': props['aria-label'], className: props.rootClassName, 'data-placement': props.placement }, children) : null,
+    };
     if (name === '../lib/api') return { getAdminUserInfo: () => ({ id: 7, is_admin: admin ? 1 : 0, is_staff: admin ? 0 : 1 }) };
     if (name === './aiOpsModel') return helpers;
     if (name.startsWith('./')) return { __esModule: true, default: () => null, aiActionNames: {} };
@@ -56,13 +60,13 @@ test('mini chat uses one compact title row and hides selectors behind its settin
 });
 
 test('staff mini navigation and conversation settings never expose admin model configuration or reasoning', () => {
-  const html = render({ admin: false, states: { miniSettingsOpen: true } });
+  const html = render({ admin: false, states: { settingsOpen: true } });
   assert.doesNotMatch(html, /<span>设置<\/span>|aria-label="推理强度"|模型中转设置|Telegram/);
   assert.match(html, /mini-ops-settings-drawer/);
   assert.match(html, /aria-label="选择 AI 模型"/);
   assert.match(html, /aria-label="AI 访问权限"/);
   assert.match(html, /逐次确认|完全访问/);
-  const admin = render({ states: { miniSettingsOpen: true } });
+  const admin = render({ states: { settingsOpen: true } });
   assert.match(admin, /aria-label="推理强度"/);
   assert.match(admin, /mini-ops-setting-row/);
 });
@@ -87,17 +91,71 @@ test('ordinary web rendering retains its original title, top tabs, toolbar and s
   assert.match(html, /已启用/);
   assert.match(html, /<span>发送<\/span>/);
   assert.doesNotMatch(html, /mini-ops-nav|mini-ops-header|mini-ops-composer/);
+  assert.match(html, /ai-ops-dialog-settings/);
+  assert.match(html, /aria-label="对话设置"/);
+  assert.doesNotMatch(html, /aria-label="选择 AI 模型"|aria-label="AI 访问权限"|aria-label="推理强度"/);
+});
+
+
+test('web conversation settings open in a side drawer on desktop and a bottom drawer on mobile', () => {
+  for (const [screens, placement] of [[{ lg: true }, 'right'], [{ lg: false }, 'bottom']]) {
+    const html = render({ miniApp: false, screens, states: { settingsOpen: true } });
+    assert.match(html, new RegExp(`<section aria-label="对话设置" class="ai-ops-settings-drawer" data-placement="${placement}">`));
+    for (const label of ['选择 AI 模型', 'AI 访问权限', '推理强度']) assert.ok(html.includes(`aria-label="${label}"`));
+    assert.match(html, /ai-ops-setting-row/);
+    assert.doesNotMatch(html, /mini-ops-settings-drawer/);
+  }
+  const mini = render({ states: { settingsOpen: true } });
+  assert.match(mini, /<section aria-label="对话设置" class="mini-ops-settings-drawer" data-placement="bottom">/);
+});
+
+test('staff web settings expose model and access choices but never administrator reasoning controls', () => {
+  for (const screens of [{ lg: true }, { lg: false }]) {
+    const html = render({ miniApp: false, admin: false, screens, states: { settingsOpen: true } });
+    assert.match(html, /ai-ops-settings-drawer/);
+    assert.match(html, /aria-label="选择 AI 模型"/);
+    assert.match(html, /aria-label="AI 访问权限"/);
+    assert.doesNotMatch(html, /aria-label="推理强度"|模型中转设置/);
+  }
+});
+
+test('shared conversation settings retain busy/loading guards and let running full access be revoked', () => {
+  const running = { ...idle, session: { ...idle.session, status: 'running' }, turns: [{ id: 31, status: 'running' }] };
+  for (const miniApp of [false, true]) {
+    const inspect = (states) => {
+      const controls = [];
+      render({ miniApp, states: { settingsOpen: true, ...states }, controls });
+      return Object.fromEntries(controls.map((item) => [item['aria-label'], item]));
+    };
+    const idleChoices = inspect({ selectedID: 21, detail: idle });
+    for (const label of ['选择 AI 模型', 'AI 访问权限', '推理强度']) assert.equal(!!idleChoices[label].disabled, false, label);
+    const working = inspect({ selectedID: 21, detail: running });
+    assert.equal(working['选择 AI 模型'].disabled, true);
+    assert.equal(working['推理强度'].disabled, true);
+    assert.equal(working['AI 访问权限'].disabled, false, 'current full access can be revoked without stopping the conversation');
+    assert.equal(working['AI 访问权限'].options.find((item) => item.value === 'standard').disabled, undefined);
+    const standard = inspect({ selectedID: 21, detail: { ...running, session: { ...running.session, access_mode: 'standard' } } });
+    assert.equal(standard['AI 访问权限'].options.find((item) => item.value === 'full').disabled, true, 'running standard tasks cannot be silently escalated');
+    const busy = inspect({ selectedID: 21, detail: idle, busy: 'access' });
+    for (const label of ['选择 AI 模型', 'AI 访问权限', '推理强度']) assert.equal(busy[label].disabled, true, label);
+    const loading = inspect({ selectedID: 21, detail: null });
+    assert.equal(loading['AI 访问权限'].disabled, true);
+    assert.equal(loading['推理强度'].disabled, true);
+    const initializing = inspect({ loaded: false });
+    assert.equal(initializing['选择 AI 模型'].disabled, true);
+    assert.equal(initializing['AI 访问权限'].disabled, true);
+  }
 });
 
 const backEffect = component.body.statements.find((node) => ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && node.expression.expression.getText(ast) === 'useEffect' && node.getText(ast).includes('BackButton')).expression.arguments[0].getText(ast);
-const bindBack = new Function('env', compile(`const {miniApp, historyOpen, miniSettingsOpen, serverOpen, review, confirmation, tab, busy, knowledgeBack, window, setReview, setConfirmedOutput, setConfirmation, setResetText, closeServer, setMiniSettingsOpen, setHistoryOpen, setTab} = env; return (${backEffect})();`));
+const bindBack = new Function('env', compile(`const {miniApp, historyOpen, settingsOpen, serverOpen, review, confirmation, tab, busy, knowledgeBack, window, setReview, setConfirmedOutput, setConfirmation, setResetText, closeServer, setSettingsOpen, setHistoryOpen, setTab} = env; return (${backEffect})();`));
 
 test('SDK BackButton closes overlays or returns to chat, unregisters on cleanup and never stops a task', () => {
-  for (const [state, expected] of [[{ historyOpen: true }, 'history'], [{ miniSettingsOpen: true }, 'settings'], [{ tab: 'servers' }, 'chat'], [{ review: {} }, 'review'], [{ serverOpen: true }, 'server']]) {
+  for (const [state, expected] of [[{ historyOpen: true }, 'history'], [{ settingsOpen: true }, 'settings'], [{ tab: 'servers' }, 'chat'], [{ review: {} }, 'review'], [{ serverOpen: true }, 'server']]) {
     const calls = []; let handler;
-    const env = { miniApp: true, historyOpen: false, miniSettingsOpen: false, serverOpen: false, review: null, confirmation: null, tab: 'chat', busy: '', knowledgeBack: { current: null }, ...state,
+    const env = { miniApp: true, historyOpen: false, settingsOpen: false, serverOpen: false, review: null, confirmation: null, tab: 'chat', busy: '', knowledgeBack: { current: null }, ...state,
       window: { Telegram: { WebApp: { BackButton: { show: () => calls.push('show'), hide: () => calls.push('hide'), onClick: (fn) => { handler = fn; }, offClick: (fn) => assert.equal(fn, handler) } } } },
-      closeServer: () => calls.push('server'), setHistoryOpen: () => calls.push('history'), setMiniSettingsOpen: () => calls.push('settings'), setTab: () => calls.push('chat'), setReview: () => calls.push('review'), setConfirmedOutput() {},
+      closeServer: () => calls.push('server'), setHistoryOpen: () => calls.push('history'), setSettingsOpen: () => calls.push('settings'), setTab: () => calls.push('chat'), setReview: () => calls.push('review'), setConfirmedOutput() {},
     };
     const cleanup = bindBack(env);
     assert.equal(calls[0], 'show'); handler(); assert.equal(calls[1], expected);
@@ -133,7 +191,7 @@ test('Mini message times use HH:mm with a complete datetime, while the ordinary 
 test('Mini SDK BackButton lets knowledge overlays consume back before switching away', () => {
   let handler;
   const calls = [];
-  const cleanup = bindBack({ miniApp: true, historyOpen: false, miniSettingsOpen: false, serverOpen: false, review: null, confirmation: null, tab: 'knowledge', busy: '',
+  const cleanup = bindBack({ miniApp: true, historyOpen: false, settingsOpen: false, serverOpen: false, review: null, confirmation: null, tab: 'knowledge', busy: '',
     knowledgeBack: { current: () => { calls.push('knowledge-overlay'); return true; } },
     window: { Telegram: { WebApp: { BackButton: { show() {}, hide() {}, onClick(fn) { handler = fn; }, offClick() {} } } } },
     setTab: () => calls.push('chat'),
