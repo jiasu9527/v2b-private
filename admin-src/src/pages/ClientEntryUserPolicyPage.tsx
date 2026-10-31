@@ -43,6 +43,7 @@ import { attachEntryCollections, effectiveEntryResolveHost, entryCollectionResol
 import { buildVisibleServerOptions, memberKey, splitMemberKey, type ClientEntryServerOption } from './clientEntryHelpers';
 import { splitUserIDRange as singleUserIDRange, splitUAConditions } from './clientEntrySplitConditions';
 import { useSplitBackupIPPool } from './clientEntryBackupPool';
+import EntryEvidencePanel from './EntryEvidencePanel';
 
 type ConditionField = 'user_id' | 'email' | 'registration_days' | 'ua' | 'plan_id';
 
@@ -1695,7 +1696,7 @@ export default function ClientEntryUserPolicyPage({ embedded = false }: { embedd
   const [simulatorOpen, setSimulatorOpen] = useState(false);
   const [collections, setCollections] = useState<EntryCollection[]>([]);
   const [loadError, setLoadError] = useState('');
-  const [view, setView] = useState<'manage' | 'sort'>('manage');
+  const [view, setView] = useState<'manage' | 'sort' | 'evidence'>(() => new URLSearchParams(location.hash.split('?')[1] || location.search).get('evidence') === '1' ? 'evidence' : 'manage');
   const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([]);
   const [collectionEditorOpen, setCollectionEditorOpen] = useState(false);
   const [editingCollection, setEditingCollection] = useState<EntryCollection | undefined>();
@@ -1987,7 +1988,7 @@ export default function ClientEntryUserPolicyPage({ embedded = false }: { embedd
       {loadError ? <Alert type="error" showIcon message="入口规则或合集加载失败" description={`${loadError}。已暂停展示与编辑，请重新加载。`} action={<Button onClick={load}>重新加载</Button>} /> : <>
         <Card className="block-card entry-workspace" styles={{ body: { padding: 0 } }}>
           <div className="entry-toolbar">
-            <div className="entry-toolbar-top">
+            {view !== 'evidence' && <div className="entry-toolbar-top">
               <Space wrap>
                 <PolicyEditor onDone={load} serverOptions={serverOptions}><Button type="primary" icon={<PlusOutlined />} disabled={sortSaving}>新增规则</Button></PolicyEditor>
                 <Button icon={<PlusOutlined />} disabled={sortSaving} onClick={() => editCollection()}>新建合集</Button>
@@ -1998,9 +1999,9 @@ export default function ClientEntryUserPolicyPage({ embedded = false }: { embedd
                 <Button icon={<CopyOutlined />} disabled={!entryHosts.length || sortSaving} onClick={copyAllEntryHosts}>复制所有入口</Button>
                 <Button disabled={sortSaving} onClick={load}>刷新</Button>
               </Space>
-            </div>
+            </div>}
             <div className="entry-view-row">
-              <Segmented value={view} disabled={sortSaving} options={[{ value: 'manage', label: '合集管理' }, { value: 'sort', label: '全局排序' }]} onChange={(value) => { setView(value as 'manage' | 'sort'); setDraggingKey(null); }} />
+              <Segmented value={view} disabled={sortSaving} options={[{ value: 'manage', label: '合集管理' }, { value: 'sort', label: '全局排序' }, { value: 'evidence', label: '异常排查' }]} onChange={(value) => { setView(value as 'manage' | 'sort' | 'evidence'); setDraggingKey(null); }} />
               <Typography.Text type="secondary">{rows.length} 条规则 · {collections.length} 个合集 · {ungroupedRows.length} 条独立规则</Typography.Text>
             </div>
             {view === 'manage' ? <>
@@ -2012,9 +2013,9 @@ export default function ClientEntryUserPolicyPage({ embedded = false }: { embedd
                 {hasFilters && <Button type="link" onClick={resetFilters}>重置</Button>}
               </div>
               <div className="entry-view-help"><Typography.Text type="secondary">{hasFilters ? `找到 ${filteredRows.length} 条规则；符合条件的合集已展开。` : '合集统一管理入口与解析设置；展开行可查看完整条件、节点和备注。'} 匹配先后请在「全局排序」调整。</Typography.Text></div>
-            </> : <div className="entry-view-help"><Typography.Text type="secondary">完整显示全部 {rows.length} 条规则，按顺序从上到下匹配。拖动左侧手柄，或使用「移动到…」调整位置。</Typography.Text>{sortSaving && <Tag color="processing">正在保存，请稍候</Tag>}</div>}
+            </> : view === 'sort' ? <div className="entry-view-help"><Typography.Text type="secondary">完整显示全部 {rows.length} 条规则，按顺序从上到下匹配。拖动左侧手柄，或使用「移动到…」调整位置。</Typography.Text>{sortSaving && <Tag color="processing">正在保存，请稍候</Tag>}</div> : null}
           </div>
-          {view === 'sort' ? <Table
+          {view === 'evidence' ? <EntryEvidencePanel rows={rows} onRulesChanged={load} /> : view === 'sort' ? <Table
             className="forest-table entry-compact-table entry-sort-table" rowKey={displayRowKey} tableLayout="fixed" size="middle"
             columns={sortColumns} dataSource={rows} pagination={false} scroll={{ x: 1000 }}
             rowClassName={(row) => `sortable-row ${draggingKey === displayRowKey(row) ? 'dragging-row' : ''}`}

@@ -16,6 +16,7 @@ import (
 	"forest/go-api/internal/appleid"
 	"forest/go-api/internal/background"
 	"forest/go-api/internal/config"
+	"forest/go-api/internal/entryevidence"
 	"forest/go-api/internal/guest"
 	httpapi "forest/go-api/internal/http"
 	"forest/go-api/internal/nodeapi"
@@ -44,6 +45,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("open postgres: %v", err)
 	}
+	var evidenceStore *entryevidence.Store
 	if db != nil {
 		defer func() {
 			_ = db.Close()
@@ -53,6 +55,13 @@ func main() {
 		// served, then leave a durable marker so restarts are cheap and idempotent.
 		if err := postgres.EnsureClientEntrySchema(ctx, db); err != nil {
 			log.Fatalf("ensure client entry schema: %v", err)
+		}
+		evidenceStore = entryevidence.NewStore(db)
+		if err := evidenceStore.EnsureSchema(ctx); err != nil {
+			log.Fatalf("ensure entry delivery evidence schema: %v", err)
+		}
+		if err := postgres.EnsureEntryEvidenceCasesSchema(ctx, db); err != nil {
+			log.Fatalf("ensure entry investigation schema: %v", err)
 		}
 		if err := postgres.EnsureSupportSchema(ctx, db); err != nil {
 			log.Fatalf("ensure support schema: %v", err)
@@ -126,6 +135,13 @@ func main() {
 		migrationService = usermigration.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig)
 		paymentService = payment.NewDBService(cfg, db, userDBService).WithExternalOrderManager(appleIDService).WithRuntimeConfig(runtimeConfig)
 		adminDBService := admin.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache).WithOnlineGeoResolver(onlineGeo)
+		evidenceCtx, stopEvidence := context.WithCancel(ctx)
+		evidenceDone := make(chan struct{})
+		go func() {
+			defer close(evidenceDone)
+			adminDBService.RunEntryEvidenceMaintenance(evidenceCtx, evidenceStore)
+		}()
+		defer func() { stopEvidence(); <-evidenceDone }()
 		migrationService.WithMailDispatcher(adminDBService, jobQueue)
 		if err := initializeDNSFailoverBeforeServe(ctx, adminDBService); err != nil {
 			log.Fatalf("initialize DNS failover schema: %v", err)
@@ -157,6 +173,7 @@ func main() {
 		Addr: cfg.Addr,
 		Handler: httpapi.NewRouter(
 			cfg,
+			httpapi.WithEntryEvidenceStore(evidenceStore),
 			httpapi.WithRuntimeConfig(runtimeConfig),
 			httpapi.WithReadyCheck(dbReadyCheck(db)),
 			httpapi.WithGuestService(guest.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig)),

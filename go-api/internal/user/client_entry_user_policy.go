@@ -7,10 +7,14 @@ import (
 	"strings"
 
 	"forest/go-api/internal/cliententry"
+	"forest/go-api/internal/entryevidence"
 	"forest/go-api/internal/subscribelink"
 )
 
 type clientEntryUserPolicy struct {
+	AssignedGroupID    int64
+	UpdatedAt          int64
+	AssignedUpdatedAt  int64
 	ID                 int64
 	Mode               string
 	Action             string
@@ -31,7 +35,9 @@ func (s *DBService) loadClientEntryUserPolicies(ctx context.Context, userID int6
 	rows, err := s.queryRowsAsMaps(ctx, `SELECT p.id, p.mode, p.action, p.conditions, p.entry_host,
 COALESCE(split_group.resolve_entry_host, p.resolve_entry_host) AS resolve_entry_host, p.extra_nodes, p.extra_nodes_position,
 COALESCE(split_group.entry_host, '') AS assigned_entry_host,
-m.server_type, m.server_id, m.sort AS member_sort
+m.server_type, m.server_id, m.sort AS member_sort,
+COALESCE(split_group.id, 0) AS assigned_group_id, p.updated_at,
+COALESCE(split_group.updated_at, 0) AS assigned_updated_at
 FROM v2_client_entry_user_policy p
 JOIN v2_client_entry_user_policy_member m ON m.policy_id = p.id
 LEFT JOIN v2_client_entry_user_policy_split_assignment split_assignment
@@ -80,6 +86,9 @@ ORDER BY CASE WHEN p.mode = 'split' THEN COALESCE(split_group.global_sort, p.sor
 			}
 			policy = &clientEntryUserPolicy{
 				ID:                 id,
+				AssignedGroupID:    mapInt64(row["assigned_group_id"]),
+				UpdatedAt:          mapInt64(row["updated_at"]),
+				AssignedUpdatedAt:  mapInt64(row["assigned_updated_at"]),
 				Mode:               mode,
 				Action:             action,
 				EntryHost:          strings.TrimSpace(fmt.Sprint(row["entry_host"])),
@@ -128,9 +137,17 @@ func applyClientEntryUserPolicies(servers []map[string]any, subject cliententry.
 func applyClientEntryUserPoliciesWithResolver(ctx context.Context, servers []map[string]any, subject cliententry.Subject, policies []clientEntryUserPolicy, resolver *clientEntryHostResolver) []map[string]any {
 	result := make([]map[string]any, 0, len(servers))
 	matchedPolicyIDs := make(map[int64]struct{})
+	collector := entryevidence.FromContext(ctx)
+	revisions := map[int64]string{}
+	if collector != nil {
+		for _, policy := range policies {
+			revisions[policy.ID] = entryevidence.Revision(policy)
+		}
+	}
 	for _, server := range servers {
 		serverType := strings.ToLower(strings.TrimSpace(fmt.Sprint(server["type"])))
 		serverID := mapInt64(server["id"])
+		trace := entryevidence.Node{ServerType: serverType, ServerID: serverID, Source: "default", SourceHost: fmt.Sprint(server["host"])}
 		entryOnly := mapInt64(server["client_entry_only"]) != 0
 		delete(server, "client_entry_only")
 		hide := false
@@ -152,11 +169,17 @@ func applyClientEntryUserPoliciesWithResolver(ctx context.Context, servers []map
 			}
 			matchedPolicyIDs[policy.ID] = struct{}{}
 			granted = true
+			trace.PolicyID, trace.GroupID = policy.ID, policy.AssignedGroupID
+			trace.RuleRevision, trace.Source = revisions[policy.ID], "policy"
+			if policy.Mode == "split" {
+				trace.Source = "split"
+			}
 			if policy.Action == cliententry.ActionOverride {
 				entryHost := policy.EntryHost
 				if policy.Mode == "split" {
 					entryHost = policy.AssignedEntryHost
 				}
+				trace.SourceHost = entryHost
 				if policy.ResolveEntryHost && resolver != nil {
 					selectionKey := fmt.Sprintf("%d:%d", subject.UserID, policy.ID)
 					entryHost = resolver.Resolve(ctx, entryHost, selectionKey)
@@ -170,6 +193,9 @@ func applyClientEntryUserPoliciesWithResolver(ctx context.Context, servers []map
 		if hide || !granted {
 			continue
 		}
+		trace.DeliveredHost, trace.Port = fmt.Sprint(server["host"]), fmt.Sprint(server["port"])
+		trace.Resolved = trace.SourceHost != trace.DeliveredHost
+		collector.Observe(trace)
 		result = append(result, server)
 	}
 	for _, policy := range policies {
@@ -188,6 +214,7 @@ func applyClientEntryUserPoliciesWithResolver(ctx context.Context, servers []map
 			extra["id"] = -((policy.ID * 1000) + int64(index+1))
 			extra["client_entry_user_policy"] = 1
 			extra["client_entry_user_policy_id"] = policy.ID
+			collector.Observe(entryevidence.Node{ServerType: fmt.Sprint(extra["type"]), ServerID: mapInt64(extra["id"]), PolicyID: policy.ID, GroupID: policy.AssignedGroupID, RuleRevision: revisions[policy.ID], Source: "extra", SourceHost: fmt.Sprint(extra["host"]), DeliveredHost: fmt.Sprint(extra["host"]), Port: fmt.Sprint(extra["port"])})
 			extraServers = append(extraServers, extra)
 		}
 		if policy.ExtraNodesPosition == subscribelink.PositionBefore {

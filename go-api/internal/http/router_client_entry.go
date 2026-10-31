@@ -12,6 +12,7 @@ import (
 	"forest/go-api/internal/admin"
 	"forest/go-api/internal/cliententry"
 	"forest/go-api/internal/config"
+	"forest/go-api/internal/entryevidence"
 	"forest/go-api/internal/platform/addrutil"
 	"forest/go-api/internal/session"
 	usersvc "forest/go-api/internal/user"
@@ -28,6 +29,8 @@ const (
 )
 
 func handleUserForestRuntimeProfile(w http.ResponseWriter, r *http.Request, cfg config.Config, sessionService session.Service, userService usersvc.Service, resolver clientEntryRemoteResolver) bool {
+	w, r, finish := beginEntryDelivery(w, r, "forest_runtime")
+	defer finish()
 	identity, ok := authenticateRequest(w, r, sessionService, false)
 	if !ok {
 		return true
@@ -37,6 +40,7 @@ func handleUserForestRuntimeProfile(w http.ResponseWriter, r *http.Request, cfg 
 		return true
 	}
 
+	entryevidence.FromContext(r.Context()).SetUser(identity.ID, "")
 	subscribe, err := userService.Subscribe(r.Context(), identity.ID)
 	if err != nil {
 		return handleUserError(w, err)
@@ -56,11 +60,14 @@ func handleUserForestRuntimeProfile(w http.ResponseWriter, r *http.Request, cfg 
 	if capability := strings.TrimSpace(r.URL.Query().Get("cap")); capability != "" {
 		payload["capability"] = capability
 	}
+	entryevidence.FromContext(r.Context()).Coverage("not_emitted", "provider_configuration")
 	writeJSON(w, http.StatusOK, map[string]any{"data": payload})
 	return true
 }
 
 func handleClientForestEntryProvider(w http.ResponseWriter, r *http.Request, cfg config.Config, userService usersvc.Service, resolver clientEntryRemoteResolver) bool {
+	w, r, finish := beginEntryDelivery(w, r, "forest_provider")
+	defer finish()
 	userID, ok := authenticateClientUser(w, r, userService)
 	if !ok {
 		return true
@@ -81,6 +88,7 @@ func handleClientForestEntryProvider(w http.ResponseWriter, r *http.Request, cfg
 		return true
 	}
 
+	entryevidence.FromContext(r.Context()).SetUser(userID, "")
 	subscribe, err := userService.Subscribe(r.Context(), userID)
 	if err != nil {
 		return handleUserError(w, err)
@@ -845,6 +853,7 @@ func parseClientEntryMatchItem(raw string) (string, int64, bool) {
 }
 
 func buildForestEntryProviderProxies(ctx context.Context, userUUID string, servers []map[string]any, group usersvc.ClientEntryGroup, resolver clientEntryRemoteResolver) []any {
+	collector := entryevidence.FromContext(ctx)
 	effectiveIPs := effectiveClientEntryGroupIPs(ctx, group, resolver)
 	proxies := make([]any, 0, len(servers)*len(effectiveIPs))
 	for _, server := range servers {
@@ -861,8 +870,20 @@ func buildForestEntryProviderProxies(ctx context.Context, userUUID string, serve
 				continue
 			}
 			proxies = append(proxies, proxy)
+			if collector != nil {
+				trace := entryevidence.Node{ServerType: serverString(server, "type"), ServerID: serverInt64(server, "id"), Source: "provider", ProviderID: group.ID, SourceHost: ip, DeliveredHost: stringValue(proxy["server"])}
+				trace.RuleRevision = entryevidence.Revision(struct {
+					GroupID   int64
+					UpdatedAt int64
+					Members   []usersvc.ClientEntryGroupMember
+					IPs       []usersvc.ClientEntryGroupIP
+				}{group.ID, group.UpdatedAt, group.Members, effectiveIPs})
+				collector.Observe(trace)
+				emitEntryServer(collector, server, stringValue(proxy["server"]), entryProxyPort(proxy, "port", "ports"))
+			}
 		}
 	}
+	collector.Coverage("complete", "server_write_completed")
 	return proxies
 }
 

@@ -1692,6 +1692,22 @@ export default function DNSFailoverEntryMonitorTab({ active }: EntryMonitorTabPr
       width: 180,
       render: formatTime,
     },
+    {
+      title: '关联排查',
+      key: 'evidence',
+      width: 145,
+      render: (_: any, result: any) => {
+        if (!result.host) return '—';
+        const policyID = numberValue(result.policy_id);
+        const target = drafts[policyID]?.targets.find((item) => item.id === numberValue(result.target_id));
+        const match = /^policy:[1-9]\d*:split-group:([1-9]\d*)$/.exec(String(target?.source_key || ''));
+        const to = Math.floor(timestampMilliseconds(result.reported_at) / 1000) || Math.floor(Date.now() / 1000);
+        const query = new URLSearchParams({ evidence: '1', host: String(result.host), port: String(result.port || DEFAULT_ENTRY_MONITOR_PORT), from: String(Math.max(1, to - 86400)), to: String(to + 1) });
+        if (policyID > 0) query.set('policy_id', String(policyID));
+        if (match) query.set('group_id', match[1]);
+        return <Button type="link" size="small" href={`#/server/client-entry-user-policy?${query.toString()}`} title="以检测时刻前24小时为初始窗口，可在排查页面调整；不是自动判定故障开始时间">查看关联下发</Button>;
+      },
+    },
   ];
 
   return <Spin spinning={loading}>

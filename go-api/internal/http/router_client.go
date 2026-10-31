@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"forest/go-api/internal/config"
+	"forest/go-api/internal/entryevidence"
 	"forest/go-api/internal/nodeapi"
 	"forest/go-api/internal/subscribelink"
 	usersvc "forest/go-api/internal/user"
@@ -44,11 +45,14 @@ func handleClientAppGetVersion(w http.ResponseWriter, r *http.Request, cfg confi
 }
 
 func handleClientAppGetConfig(w http.ResponseWriter, r *http.Request, cfg config.Config, service usersvc.Service) bool {
+	w, r, finish := beginEntryDelivery(w, r, "app_clash")
+	defer finish()
 	userID, ok := authenticateClientUser(w, r, service)
 	if !ok {
 		return true
 	}
 
+	entryevidence.FromContext(r.Context()).SetUser(userID, "")
 	subscribe, err := service.Subscribe(r.Context(), userID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
@@ -61,7 +65,7 @@ func handleClientAppGetConfig(w http.ResponseWriter, r *http.Request, cfg config
 		return true
 	}
 
-	body, err := buildClashStandardProfile(cfg, "custom.app.clash.yaml", "app.clash.yaml", subscribe.UUID, servers)
+	body, err := buildClashStandardProfile(cfg, "custom.app.clash.yaml", "app.clash.yaml", subscribe.UUID, servers, entryevidence.FromContext(r.Context()))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
 		return true
@@ -74,6 +78,8 @@ func handleClientAppGetConfig(w http.ResponseWriter, r *http.Request, cfg config
 }
 
 func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Config, service usersvc.Service) bool {
+	w, r, finish := beginEntryDelivery(w, r, "subscription")
+	defer finish()
 	r = withClientSubscribePathToken(cfg, r)
 	r = withRecoveredClientSubscribeQuery(r)
 	blocked, guardReason := handleSubscribeGuard(w, r, cfg, service)
@@ -88,6 +94,7 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 		return true
 	}
 
+	entryevidence.FromContext(r.Context()).SetUser(userID, "")
 	subscribe, err := service.Subscribe(r.Context(), userID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
@@ -108,7 +115,7 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 	if isSingboxSubscribeFlag(flag) {
 		writeSubscribeDownloadHeadersWithExtension(w, cfg, ".json")
 		customFile, defaultFile := singBoxTemplateFiles(flag)
-		body, err := buildSingBoxProfile(cfg, customFile, defaultFile, subscribe.UUID, servers)
+		body, err := buildSingBoxProfile(cfg, customFile, defaultFile, subscribe.UUID, servers, entryevidence.FromContext(r.Context()))
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
 			return true
@@ -129,7 +136,7 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 			customFile = "custom.surfboard.conf"
 			defaultFile = "default.surfboard.conf"
 		}
-		body, err := buildSurgeProfile(cfg, customFile, defaultFile, subscribeURL, subscribeDomain, subscribe, subscribe.UUID, servers)
+		body, err := buildSurgeProfile(cfg, customFile, defaultFile, subscribeURL, subscribeDomain, subscribe, subscribe.UUID, servers, entryevidence.FromContext(r.Context()))
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
 			return true
@@ -140,7 +147,7 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 
 	if isClashLikeSubscribeFlag(flag) {
 		writeSubscribeDownloadHeaders(w, cfg)
-		body, err := buildClashStandardProfile(cfg, "custom.clash.yaml", "default.clash.yaml", subscribe.UUID, servers)
+		body, err := buildClashStandardProfile(cfg, "custom.clash.yaml", "default.clash.yaml", subscribe.UUID, servers, entryevidence.FromContext(r.Context()))
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
 			return true
@@ -152,6 +159,7 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 	}
 
 	if isShadowrocketModuleSubscribeFlag(flag) {
+		entryevidence.FromContext(r.Context()).Coverage("not_emitted", "module_no_nodes")
 		writeSubscribeDownloadHeadersWithExtension(w, cfg, ".module")
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		writePlainText(w, http.StatusOK, buildShadowrocketDoHModule(cfg))
@@ -159,11 +167,11 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 	}
 
 	if isShadowrocketSubscribeFlag(flag) {
-		writePlainText(w, http.StatusOK, buildShadowrocketPayload(subscribe, servers))
+		writePlainText(w, http.StatusOK, buildShadowrocketPayload(subscribe, servers, entryevidence.FromContext(r.Context())))
 		return true
 	}
 
-	writePlainText(w, http.StatusOK, buildGeneralSubscribePayload(subscribe.UUID, servers))
+	writePlainText(w, http.StatusOK, buildGeneralSubscribePayload(subscribe.UUID, servers, entryevidence.FromContext(r.Context())))
 	return true
 }
 
@@ -572,6 +580,7 @@ func prependLegacySubscribeInfoServers(cfg config.Config, flag string, subscribe
 func cloneSubscribeInfoServer(template map[string]any, name string) map[string]any {
 	item := copyMap(template)
 	item["name"] = name
+	item["_entry_evidence_info"] = true
 	return item
 }
 

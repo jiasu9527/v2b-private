@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"forest/go-api/internal/cliententry"
+	"forest/go-api/internal/entryevidence"
 	"forest/go-api/internal/subscribelink"
 )
 
@@ -62,6 +63,7 @@ func (s *DBService) Servers(ctx context.Context, userID int64, ua string) ([]map
 	if err != nil {
 		return nil, err
 	}
+	entryevidence.FromContext(ctx).SetUser(userRow.ID, userRow.Email)
 	now := time.Now().Unix()
 	if !knowledgeUserAvailable(userRow.Banned, userRow.TransferEnable, userRow.ExpiredAt, now) {
 		return []map[string]any{}, nil

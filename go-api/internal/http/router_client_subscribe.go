@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"forest/go-api/internal/config"
+	"forest/go-api/internal/entryevidence"
 	"forest/go-api/internal/nodeapi"
 	"forest/go-api/internal/subscribelink"
 	usersvc "forest/go-api/internal/user"
@@ -22,11 +23,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func buildGeneralSubscribePayload(userUUID string, servers []map[string]any) string {
+func buildGeneralSubscribePayload(userUUID string, servers []map[string]any, collectors ...*entryevidence.Collector) string {
+	collector := entryCollector(collectors)
 	var builder strings.Builder
 	for _, server := range servers {
-		builder.WriteString(buildSubscribeURI(userUUID, server))
+		uri := buildSubscribeURI(userUUID, server)
+		builder.WriteString(uri)
+		if uri != "" {
+			emitEntryURI(collector, server)
+		}
 	}
+	collector.Coverage("complete", "server_write_completed")
 	return base64.StdEncoding.EncodeToString([]byte(builder.String()))
 }
 
@@ -47,22 +54,30 @@ func buildShadowrocketDoHModule(cfg config.Config) string {
 	}, "\n")
 }
 
-func buildShadowrocketPayload(subscribe usersvc.Subscribe, servers []map[string]any) string {
+func buildShadowrocketPayload(subscribe usersvc.Subscribe, servers []map[string]any, collectors ...*entryevidence.Collector) string {
+	collector := entryCollector(collectors)
 	var builder strings.Builder
 	builder.WriteString(buildShadowrocketStatusLine(subscribe))
 	for _, server := range servers {
 		if raw := subscribelink.RawURI(server); raw != "" {
 			builder.WriteString(strings.TrimRight(raw, "\r\n"))
 			builder.WriteString("\r\n")
+			emitEntryURI(collector, server)
 			continue
 		}
 		serverType, normalized := normalizeSubscribeServer(server)
 		if serverType == "vmess" {
 			builder.WriteString(buildShadowrocketVmessURI(subscribe.UUID, normalized))
+			emitEntryURI(collector, server)
 			continue
 		}
-		builder.WriteString(buildSubscribeURI(subscribe.UUID, normalized))
+		uri := buildSubscribeURI(subscribe.UUID, normalized)
+		builder.WriteString(uri)
+		if uri != "" {
+			emitEntryURI(collector, server)
+		}
 	}
+	collector.Coverage("complete", "server_write_completed")
 	return base64.StdEncoding.EncodeToString([]byte(builder.String()))
 }
 
@@ -147,7 +162,8 @@ func buildShadowrocketVmessURI(userUUID string, server map[string]any) string {
 	return "vmess://" + userinfo + "?" + params.Encode() + "\r\n"
 }
 
-func buildClashStandardProfile(cfg config.Config, customFile, defaultFile, userUUID string, servers []map[string]any) (string, error) {
+func buildClashStandardProfile(cfg config.Config, customFile, defaultFile, userUUID string, servers []map[string]any, collectors ...*entryevidence.Collector) (string, error) {
+	collector := entryCollector(collectors)
 	template, err := loadRuleTemplate(cfg, customFile, defaultFile)
 	if err != nil {
 		return "", err
@@ -161,9 +177,13 @@ func buildClashStandardProfile(cfg config.Config, customFile, defaultFile, userU
 			continue
 		}
 		proxies = append(proxies, proxy)
+		emitEntryServer(collector, server, stringValue(proxy["server"]), entryProxyPort(proxy, "port", "ports"))
 		names = append(names, stringValue(proxy["name"]))
 	}
 
+	if len(asAnySlice(template["proxies"])) > 0 || len(nestedMap(template, "proxy-providers")) > 0 {
+		collector.Coverage("partial", "template_static_nodes")
+	}
 	template["proxies"] = appendAnySlice(asAnySlice(template["proxies"]), proxies...)
 	if err := mergeProxyGroups(template, names); err != nil {
 		return "", err
@@ -178,6 +198,7 @@ func buildClashStandardProfile(cfg config.Config, customFile, defaultFile, userU
 	if appName == "" {
 		appName = "Forest"
 	}
+	collector.Coverage("complete", "server_write_completed")
 	return strings.ReplaceAll(string(raw), "$app_name", appName), nil
 }
 
@@ -225,7 +246,8 @@ func loadRuleTemplateRaw(cfg config.Config, customFile, defaultFile string) ([]b
 	return raw, nil
 }
 
-func buildSurgeProfile(cfg config.Config, customFile, defaultFile, subscribeURL, subscribeDomain string, subscribe usersvc.Subscribe, userUUID string, servers []map[string]any) (string, error) {
+func buildSurgeProfile(cfg config.Config, customFile, defaultFile, subscribeURL, subscribeDomain string, subscribe usersvc.Subscribe, userUUID string, servers []map[string]any, collectors ...*entryevidence.Collector) (string, error) {
+	collector := entryCollector(collectors)
 	raw, err := loadRuleTemplateRaw(cfg, customFile, defaultFile)
 	if err != nil {
 		return "", err
@@ -239,6 +261,9 @@ func buildSurgeProfile(cfg config.Config, customFile, defaultFile, subscribeURL,
 			continue
 		}
 		proxies = append(proxies, line)
+		if strings.Contains(string(raw), "$proxies") {
+			emitEntrySurge(collector, server)
+		}
 		groupNames = append(groupNames, serverString(normalizeSubscribeServerOnly(server), "name"))
 	}
 
@@ -247,12 +272,19 @@ func buildSurgeProfile(cfg config.Config, customFile, defaultFile, subscribeURL,
 		groupValue = "DIRECT"
 	}
 
+	if !strings.Contains(string(raw), "$proxies") {
+		collector.Coverage("partial", "template_missing_node_slot")
+	}
+	if hasStaticSurgeProxies(string(raw)) {
+		collector.Coverage("partial", "template_static_nodes")
+	}
 	content := string(raw)
 	content = strings.ReplaceAll(content, "$subs_link", subscribeURL)
 	content = strings.ReplaceAll(content, "$subs_domain", subscribeDomain)
 	content = strings.ReplaceAll(content, "$proxies", strings.Join(proxies, ""))
 	content = strings.ReplaceAll(content, "$proxy_group", groupValue)
 	content = strings.ReplaceAll(content, "$subscribe_info", buildSurgeSubscribeInfo(cfg, subscribe))
+	collector.Coverage("complete", "server_write_completed")
 	return content, nil
 }
 
@@ -463,7 +495,8 @@ func filterEmptyStrings(values []string) []string {
 	return filtered
 }
 
-func buildSingBoxProfile(cfg config.Config, customFile, defaultFile, userUUID string, servers []map[string]any) (string, error) {
+func buildSingBoxProfile(cfg config.Config, customFile, defaultFile, userUUID string, servers []map[string]any, collectors ...*entryevidence.Collector) (string, error) {
+	collector := entryCollector(collectors)
 	raw, err := loadRuleTemplateRaw(cfg, customFile, defaultFile)
 	if err != nil {
 		return "", err
@@ -482,12 +515,16 @@ func buildSingBoxProfile(cfg config.Config, customFile, defaultFile, userUUID st
 			continue
 		}
 		proxies = append(proxies, proxy)
+		emitEntryServer(collector, server, stringValue(proxy["server"]), entryProxyPort(proxy, "server_port", "server_ports"))
 		tags = append(tags, stringValue(proxy["tag"]))
 	}
 
 	outbounds := asAnySlice(template["outbounds"])
 	for _, outboundValue := range outbounds {
 		outbound, ok := outboundValue.(map[string]any)
+		if ok && stringValue(outbound["server"]) != "" {
+			collector.Coverage("partial", "template_static_nodes")
+		}
 		if !ok || !shouldInjectSingBoxProxyTags(outbound) {
 			continue
 		}
@@ -509,6 +546,7 @@ func buildSingBoxProfile(cfg config.Config, customFile, defaultFile, userUUID st
 	if err != nil {
 		return "", fmt.Errorf("marshal sing-box profile: %w", err)
 	}
+	collector.Coverage("complete", "server_write_completed")
 	return string(rendered), nil
 }
 

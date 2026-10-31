@@ -196,6 +196,7 @@ export default function SubscribeGuardSearch({ onUserDetail, onMatchDetail, stat
           <Col xs={24} lg={12}><Form.Item label=" "><Space wrap>
             <Button htmlType="submit" type="primary" loading={loading} icon={<SearchOutlined />}>查询</Button>
             <Button onClick={reset}>重置</Button>
+            <Button href="#/server/client-entry-user-policy?evidence=1">查询实际下发证据</Button>
             <Button onClick={() => patchDraft({ start_at: dayjs().subtract(24, 'hour').unix(), end_at: dayjs().unix() })}>最近 24 小时</Button>
             <Button onClick={() => patchDraft({ start_at: dayjs().subtract(7, 'day').unix(), end_at: dayjs().unix() })}>最近 7 天</Button>
           </Space></Form.Item></Col>

@@ -22,6 +22,7 @@ import (
 	"forest/go-api/internal/aiops"
 	"forest/go-api/internal/appleid"
 	"forest/go-api/internal/config"
+	"forest/go-api/internal/entryevidence"
 	"forest/go-api/internal/guest"
 	"forest/go-api/internal/nodeapi"
 	"forest/go-api/internal/passport"
@@ -59,6 +60,11 @@ type routerState struct {
 	clientEntryRemote clientEntryRemoteResolver
 	aiOps             aiOpsService
 	aiTelegram        aiTelegramService
+	entryEvidence     *entryevidence.Store
+}
+
+func WithEntryEvidenceStore(store *entryevidence.Store) Option {
+	return func(state *routerState) { state.entryEvidence = store }
 }
 
 var managedServerRouterTypes = map[string]struct{}{
@@ -230,6 +236,9 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 	fileServer := http.FileServer(http.Dir(cfg.PublicDir))
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if state.entryEvidence != nil {
+			r = r.WithContext(entryevidence.WithStore(r.Context(), state.entryEvidence))
+		}
 		cfg := cfg
 		if state.runtime != nil {
 			cfg = state.runtime.CurrentConfig()
@@ -797,6 +806,9 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminClientEntryGroupDrop(w, r, state.session, state.admin) {
 				return
 			}
+		case strings.HasPrefix(r.URL.Path, adminPrefix+"/server/client-entry-user-policy/investigations/"):
+			handleEntryEvidence(w, r, state.session, state.admin, state.entryEvidence, strings.TrimPrefix(r.URL.Path, adminPrefix+"/server/client-entry-user-policy/investigations/"))
+			return
 		case strings.HasPrefix(r.URL.Path, adminPrefix+"/server/client-entry-user-policy/collection/"):
 			if handleAdminClientEntryCollection(w, r, state.session, state.admin, strings.TrimPrefix(r.URL.Path, adminPrefix+"/server/client-entry-user-policy/collection/")) {
 				return
@@ -2228,9 +2240,14 @@ func handleUserRedeemGiftcard(w http.ResponseWriter, r *http.Request, sessionSer
 }
 
 func handleUserServerFetch(w http.ResponseWriter, r *http.Request, sessionService session.Service, userService usersvc.Service) bool {
+	w, r, finish := beginEntryDelivery(w, r, "server_json")
+	defer finish()
 	identity, ok := authenticateRequest(w, r, sessionService, false)
 	if !ok {
 		return true
+	}
+	if collector := entryevidence.FromContext(r.Context()); collector != nil {
+		collector.SetUser(identity.ID, identity.Email)
 	}
 	if userService == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "user service unavailable"})
@@ -2247,6 +2264,7 @@ func handleUserServerFetch(w http.ResponseWriter, r *http.Request, sessionServic
 		return true
 	}
 	w.Header().Set("ETag", `"`+etag+`"`)
+	emitEntryJSON(r.Context(), data)
 	writeJSON(w, http.StatusOK, map[string]any{"data": data})
 	return true
 }

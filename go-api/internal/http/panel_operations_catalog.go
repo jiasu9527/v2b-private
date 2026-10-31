@@ -14,6 +14,7 @@ import (
 func panelOperationCatalog() []aiops.PanelOperation {
 	out := append(panelCoreOperations(), panelNetworkOperations()...)
 	out = append(out, panelBusinessOperations()...)
+	out = append(out, panelEntryEvidenceOperations()...)
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }

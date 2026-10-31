@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"forest/go-api/internal/cliententry"
+	"forest/go-api/internal/entryevidence"
 	"forest/go-api/internal/subscribelink"
 )
 
@@ -215,6 +216,7 @@ func applySupportEntryOverrides(ctx context.Context, servers []map[string]any, p
 		byPolicy[p.ID] = p
 	}
 	selected := map[int64]SupportEntryTarget{}
+	versions := map[int64]int64{}
 	for _, record := range records {
 		source, ok := byPolicy[record.SourcePolicyID]
 		if !ok || source.Action == cliententry.ActionHide {
@@ -222,6 +224,7 @@ func applySupportEntryOverrides(ctx context.Context, servers []map[string]any, p
 		}
 		if target, status := supportEntryOverrideTarget(record, source.Members, targets, now); status == "active" {
 			selected[record.SourcePolicyID] = target
+			versions[record.SourcePolicyID] = record.Version
 		}
 	}
 	for _, server := range servers {
@@ -238,6 +241,12 @@ func applySupportEntryOverrides(ctx context.Context, servers []map[string]any, p
 			host = resolver.Resolve(ctx, host, fmt.Sprintf("%d:%d", userID, policyID))
 		}
 		server["host"] = host
+		if collector := entryevidence.FromContext(ctx); collector != nil {
+			collector.Override(entryevidence.Node{ServerType: fmt.Sprint(server["type"]), ServerID: mapInt64(server["id"]), PolicyID: target.PolicyID, GroupID: target.GroupID, RuleRevision: entryevidence.Revision(struct {
+				Target  SupportEntryTarget
+				Version int64
+			}{target, versions[policyID]}), Source: "support_override", SourceHost: target.EntryHost, DeliveredHost: host, Port: fmt.Sprint(server["port"]), Resolved: host != target.EntryHost})
+		}
 	}
 	return servers
 }
