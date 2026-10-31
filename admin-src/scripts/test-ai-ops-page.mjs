@@ -233,8 +233,8 @@ test('draft snapshots are monotonic, session-scoped, and never duplicate final a
 test('streaming follows only a reader at the bottom; idle sessions use polling fallback', () => {
   assert.equal(extra.aiNearBottom(0,500,2000),false);
   assert.equal(extra.aiNearBottom(1450,500,2000),true);
-  assert.match(page,/pane && followOutput.current/);
-  assert.match(page,/onScroll=.*aiNearBottom/);
+  assert.match(page,/watchAIChatScroll\(\(\) => messageViewport.current, followOutput\)/);
+  assert.match(page,/onScroll=.*chatScroll.current\?\.onScroll/);
   assert.match(page,/const streamWanted = tab === 'chat'.*aiSessionBusy/);
   assert.match(page,/if \(!streamWanted\) return/);
   assert.match(page,/streamActive.current \|\| pollRunning/);

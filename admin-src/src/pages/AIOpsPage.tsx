@@ -1,8 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Descriptions, Drawer, Form, Grid, Input, InputNumber, Modal, Select, Space, Spin, Switch, Tabs, Tag, Typography, message } from 'antd';
 import { BookOutlined, CloudServerOutlined, DeleteOutlined, HistoryOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SendOutlined, SettingOutlined, SlidersOutlined, StopOutlined } from '@ant-design/icons';
 import { apiGet, apiJsonPost, getAdminUserInfo } from '../lib/api';
-import { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, AI_DEFAULT_FAILOVER_TIMEOUT, AI_REASONING_OPTIONS, aiFallbackRelayForms, aiPrepareFallbackRelays, aiReasoningDefaults, aiReasoningDefaultLabel, aiSessionReasoning, aiAccessMode, aiCanReadSession, aiOwnsFullAccess, aiMergeSessionAccess, aiActionStatus, aiApplyDraft, aiCanApprove, aiConversationTurns, aiFingerprintMatches, aiLatestTurn, aiToolResultName, aiMergeSnapshot, aiNearBottom, aiParseModels, aiRequestID, aiSessionBusy, aiShouldSendKey, aiVisibleDraft, type AIAccessMode, type AIReasoningChoice, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
+import { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, AI_DEFAULT_FAILOVER_TIMEOUT, AI_REASONING_OPTIONS, aiFallbackRelayForms, aiPrepareFallbackRelays, aiReasoningDefaults, aiReasoningDefaultLabel, aiSessionReasoning, aiAccessMode, aiCanReadSession, aiOwnsFullAccess, aiMergeSessionAccess, aiActionStatus, aiApplyDraft, aiCanApprove, aiConversationTurns, aiFingerprintMatches, aiLatestTurn, aiToolResultName, aiMergeSnapshot, aiParseModels, aiRequestID, aiSessionBusy, aiShouldSendKey, aiVisibleDraft, type AIAccessMode, type AIReasoningChoice, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
 import { aiReadSessionStream } from './aiOpsStream';
 import { aiReadMiniSession, aiWriteMiniSession, aiClearMiniSession, aiPickMiniSession } from './aiOpsMiniSession';
 import AIOpsMarkdown from './AIOpsMarkdown';
@@ -12,6 +12,7 @@ import AIOpsKnowledge from './AIOpsKnowledge';
 import AIOpsTelegram from './AIOpsTelegram';
 import AIOpsServersPanel from './AIOpsServersPanel';
 import { aiServerConnection } from './aiOpsServerIdentity';
+import { watchAIChatScroll } from './aiOpsChatScroll';
 import './AIOpsPage.css';
 
 const { Text, Paragraph } = Typography;
@@ -91,9 +92,14 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
   const refreshedRegistrations = useRef(new Set<string>());
   const fingerprintSequence = useRef(0);
   const pollRunning = useRef(false);
-  const messageViewport = useRef<HTMLDivElement>(null);
+  const messageViewport = useRef<HTMLDivElement | null>(null);
   const streamActive = useRef(false);
   const followOutput = useRef(true);
+  const chatScroll = useRef<ReturnType<typeof watchAIChatScroll> | null>(null);
+  const mountMessageViewport = useCallback((pane: HTMLDivElement | null) => {
+    messageViewport.current = pane;
+    if (pane) chatScroll.current?.refresh();
+  }, []);
   const composing = useRef(false);
   const compositionEndedAt = useRef(0);
   useEffect(() => { if (!compact) setHistoryOpen(false); }, [compact]);
@@ -263,11 +269,18 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
   }, [selectedID, streamWanted]);
   const visibleDraft = aiVisibleDraft(detail);
   useEffect(() => {
-    // Follow only while already at the bottom; reading earlier messages must
-    // not be interrupted by a streamed token or another administrator's action.
-    const pane = messageViewport.current;
-    if (pane && followOutput.current) pane.scrollTop = pane.scrollHeight;
-  }, [detail?.messages.length, detail?.actions.length, visibleDraft?.draft_content]);
+    // Includes native Telegram BackButton navigation, not only changeTab().
+    // Returning to chat or opening another session starts at the latest output.
+    if (tab !== 'chat') return;
+    const scroll = watchAIChatScroll(() => messageViewport.current, followOutput);
+    chatScroll.current = scroll;
+    return () => { scroll.dispose(); chatScroll.current = null; };
+  }, [tab, selectedID]);
+  useEffect(() => {
+    // Poll/stream updates and same-length message replacements follow only if
+    // the reader has not scrolled up. Hidden tabs have no active controller.
+    chatScroll.current?.refresh();
+  }, [tab, selectedID, detail?.messages, detail?.actions, visibleDraft?.draft_content]);
   const selectSession = (session: AISession, fetchDetail = true) => {
     if (!aiCanReadSession(session, actorID, isAdmin)) return;
     miniResumeDone.current = true;
@@ -426,7 +439,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
         </>}
       </div>
       {foreignFullAccess && <div className="ai-ops-access-owner"><Text type="secondary">操作人 #{detail?.session.full_access_by || '未知'} 的授权不可沿用；请切换权限或由你启用。</Text><Button size="small" disabled={!!busy || aiSessionBusy(detail)} onClick={() => void changeAccess('full')}>由我启用完全访问</Button></div>}
-      <div className="ai-ops-messages" ref={messageViewport} onScroll={() => { const pane = messageViewport.current; if (pane) followOutput.current = aiNearBottom(pane.scrollTop, pane.clientHeight, pane.scrollHeight); }}>
+      <div className="ai-ops-messages" ref={mountMessageViewport} onScroll={() => chatScroll.current?.onScroll()}>
         {!detail && !selectedID && <div className="ai-ops-empty"><MessageOutlined /><h3>告诉 AI 需要处理什么</h3><p>例如：调整入口规则的 UA 和用户范围、修改节点连接端口、检测指定入口，或在已登记服务器上安装落地／中转服务。</p></div>}
         {selectedID > 0 && !detail && <Spin />}
         {detail?.messages_truncated && <Text type="secondary">当前显示最近 400 条消息，较早记录仍保留；AI 会自动整理发送给模型的上下文。</Text>}
