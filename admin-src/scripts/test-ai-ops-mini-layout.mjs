@@ -37,9 +37,10 @@ function render({ miniApp = true, admin = true, states = {} } = {}) {
   return renderToStaticMarkup(React.createElement(exports.default, { miniApp }));
 }
 
-test('mini page renders bottom navigation and a compact header without web toolbar or top tabs', () => {
+test('mini chat uses one compact title row and hides selectors behind its settings button', () => {
   const html = render();
-  assert.match(html, /mini-ops-header/);
+  assert.doesNotMatch(html, /mini-ops-header|mini-ops-quick-controls|aria-label="选择 AI 模型"|aria-label="AI 访问权限"|aria-label="推理强度"/);
+  assert.match(html, /mini-ops-session-head/);
   assert.match(html, /mini-ops-nav/);
   assert.match(html, /aria-label="运维导航"/);
   assert.match(html, /aria-current="page"/);
@@ -50,12 +51,16 @@ test('mini page renders bottom navigation and a compact header without web toolb
   assert.match(html, /aria-label="对话设置"/);
   assert.match(html, /mini-ops-composer-row/);
   assert.match(html, /aria-label="发送消息"/);
+  const servers = render({ states: { tab: 'servers' } });
+  assert.match(servers, /mini-ops-header/);
 });
 
 test('staff mini navigation and conversation settings never expose admin model configuration or reasoning', () => {
   const html = render({ admin: false, states: { miniSettingsOpen: true } });
   assert.doesNotMatch(html, /<span>设置<\/span>|aria-label="推理强度"|模型中转设置|Telegram/);
   assert.match(html, /mini-ops-settings-drawer/);
+  assert.match(html, /aria-label="选择 AI 模型"/);
+  assert.match(html, /aria-label="AI 访问权限"/);
   assert.match(html, /逐次确认|完全访问/);
   const admin = render({ states: { miniSettingsOpen: true } });
   assert.match(admin, /aria-label="推理强度"/);

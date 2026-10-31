@@ -4,6 +4,7 @@ import { BookOutlined, CloudServerOutlined, DeleteOutlined, HistoryOutlined, Mes
 import { apiGet, apiJsonPost, getAdminUserInfo } from '../lib/api';
 import { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, AI_DEFAULT_FAILOVER_TIMEOUT, AI_REASONING_OPTIONS, aiFallbackRelayForms, aiPrepareFallbackRelays, aiReasoningDefaults, aiReasoningDefaultLabel, aiSessionReasoning, aiAccessMode, aiCanReadSession, aiOwnsFullAccess, aiMergeSessionAccess, aiActionStatus, aiApplyDraft, aiCanApprove, aiConversationTurns, aiFingerprintMatches, aiLatestTurn, aiToolResultName, aiMergeSnapshot, aiNearBottom, aiParseModels, aiRequestID, aiSessionBusy, aiShouldSendKey, aiVisibleDraft, type AIAccessMode, type AIReasoningChoice, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
 import { aiReadSessionStream } from './aiOpsStream';
+import { aiReadMiniSession, aiWriteMiniSession, aiClearMiniSession, aiPickMiniSession } from './aiOpsMiniSession';
 import AIOpsMarkdown from './AIOpsMarkdown';
 import AIOpsActionSummary, { aiActionNames } from './AIOpsActionSummary';
 import AIOpsRelaySettings from './AIOpsRelaySettings';
@@ -52,6 +53,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
   const [selectedID, setSelectedID] = useState(0);
   const selectedRef = useRef(0);
   const selectionSequence = useRef(0);
+  const miniResumeDone = useRef(false);
   const [detail, setDetail] = useState<AISessionDetail | null>(null);
   const [model, setModel] = useState(AI_DEFAULT_MODELS[0]);
   const [reasoningEffort, setReasoningEffort] = useState<AIReasoningChoice>('default');
@@ -121,6 +123,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
 
   const applySnapshot = (value: AISessionDetail) => {
     if (!alive.current || selectedRef.current !== value.session.id || !aiCanReadSession(value.session, actorID, isAdmin)) return;
+    if (miniApp) aiWriteMiniSession(actorID, value.session.id);
     if (!reasoningEdited.current) setReasoningEffort(aiSessionReasoning(value.session));
     setDetail((previous) => aiMergeSnapshot(previous, { ...value, turns: value.turns || [], actions: value.actions || [] }));
     setSessions((items) => items.map((item) => item.id === value.session.id ? aiMergeSessionAccess(item, value.session) : item));
@@ -148,13 +151,16 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
   };
   const changeTab = (next: string) => {
     if (next === 'settings' && !isAdmin || miniApp && next === 'telegram') return;
+    if (miniApp) miniResumeDone.current = true;
     setTab(next);
     if (next === 'servers') void loadServers().catch((e) => fail(e, '读取服务器列表失败'));
   };
   const loadLists = async () => {
     const [sessionResult] = await Promise.all([apiGet('/ai-ops/sessions', {}, { cache: 'no-store' }), loadServers()]);
     if (!alive.current) return;
-    setSessions((items) => responseList(sessionResult).filter((session) => aiCanReadSession(session, actorID, isAdmin)).map((session) => aiMergeSessionAccess(items.find((item) => item.id === session.id), session)));
+    const readable = responseList(sessionResult).filter((session) => aiCanReadSession(session, actorID, isAdmin));
+    setSessions((items) => readable.map((session) => aiMergeSessionAccess(items.find((item) => item.id === session.id), session)));
+    return readable as AISession[];
   };
   const applyConfig = (next: AIConfig) => {
     if (!next || !Array.isArray(next.models)) throw new Error('AI 配置数据格式不正确');
@@ -163,13 +169,26 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
     setModel((current) => next.models.includes(current) ? current : next.models[0] || AI_DEFAULT_MODELS[0]);
   };
   const load = async (refreshConfig = true) => {
+    const selection = selectionSequence.current;
     setLoading(true);
     try {
-      await loadLists();
+      const availableSessions = await loadLists();
+      if (!alive.current) return;
       if (refreshConfig) {
         const response = await apiGet('/ai-ops/config', {}, { cache: 'no-store' });
         if (!alive.current) return;
         applyConfig(response?.data as AIConfig);
+      }
+      // A missing/deleted resumed detail must not permanently lock new chats.
+      // Selected-but-unloaded sessions retain their own existing send guard.
+      if (miniApp) setLoaded(true);
+      // Restore only once after authenticated data has arrived. Manual new/
+      // history/navigation choices made during loading always take precedence.
+      if (miniApp && !miniResumeDone.current && selection === selectionSequence.current && !selectedRef.current) {
+        miniResumeDone.current = true;
+        const previous = aiPickMiniSession(availableSessions || [], actorID, isAdmin, aiReadMiniSession(actorID));
+        if (previous) selectSession(previous, false);
+        else aiClearMiniSession(actorID);
       }
       if (selectedRef.current) await loadDetail(selectedRef.current);
       if (alive.current) { setLoaded(true); setError(''); }
@@ -247,14 +266,15 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
     const pane = messageViewport.current;
     if (pane && followOutput.current) pane.scrollTop = pane.scrollHeight;
   }, [detail?.messages.length, detail?.actions.length, visibleDraft?.draft_content]);
-  const selectSession = (session: AISession) => {
+  const selectSession = (session: AISession, fetchDetail = true) => {
     if (!aiCanReadSession(session, actorID, isAdmin)) return;
+    miniResumeDone.current = true;
     reasoningEdited.current = false; setReasoningEffort(aiSessionReasoning(session));
     followOutput.current = true;
     selectionSequence.current += 1; selectedRef.current = session.id; setSelectedID(session.id); setDetail(null); setDraft(''); setSendRetry(null); setNewAccessMode(AI_DEFAULT_ACCESS_MODE); setModel(session.model); setTab('chat');
-    void loadDetail(session.id).catch((e) => fail(e, '读取会话失败'));
+    if (fetchDetail) void loadDetail(session.id).catch((e) => fail(e, '读取会话失败'));
   };
-  const newSession = () => { followOutput.current = true; reasoningEdited.current = false; setReasoningEffort('default'); selectionSequence.current += 1; selectedRef.current = 0; detailSequence.current += 1; setSelectedID(0); setDetail(null); setNewAccessMode(AI_DEFAULT_ACCESS_MODE); setDraft(''); setSendRetry(null); setTab('chat'); };
+  const newSession = () => { miniResumeDone.current = true; followOutput.current = true; reasoningEdited.current = false; setReasoningEffort('default'); selectionSequence.current += 1; selectedRef.current = 0; detailSequence.current += 1; setSelectedID(0); setDetail(null); setNewAccessMode(AI_DEFAULT_ACCESS_MODE); setDraft(''); setSendRetry(null); setTab('chat'); };
   const accessMode = selectedID ? aiAccessMode(detail?.session) : newAccessMode;
   const foreignFullAccess = !!detail && aiAccessMode(detail.session) === 'full' && !aiOwnsFullAccess(detail.session, actorID);
   const changeAccess = async (mode: AIAccessMode) => {
@@ -376,6 +396,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
       if (confirmation.kind === 'reset') await apiJsonPost('/ai-ops/reset', { confirm: true, confirm_text: 'RESET_AI_DATA' });
       if (confirmation.kind === 'server-delete') await apiJsonPost('/ai-ops/server/delete', { id: confirmation.server!.id, version: confirmation.server!.version, confirm: true });
       if (!alive.current) return;
+      if (miniApp && confirmation.kind !== 'server-delete' && (confirmation.kind !== 'delete' || aiReadMiniSession(actorID) === confirmation.session!.id)) aiClearMiniSession(actorID);
       if (confirmation.kind !== 'server-delete' && (confirmation.kind !== 'delete' || confirmation.session!.id === selectedRef.current)) { newSession(); setTab(tab); }
       setConfirmation(null); setResetText(''); message.success('已完成清理'); await load(confirmation.kind === 'reset');
     } catch (e) { fail(e, '清理失败'); }
@@ -397,8 +418,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
     <section className="ai-ops-conversation">
       <div className="ai-ops-conversation-head">
         {miniApp ? <>
-          <div className="mini-ops-session-head"><Text strong ellipsis>{detail?.session.title || (selectedID ? '读取会话中…' : '新的运维对话')}</Text><div className="mini-ops-session-actions"><Button type="text" shape="circle" aria-label="历史会话" icon={<HistoryOutlined />} onClick={() => setHistoryOpen(true)} /><Button type="text" shape="circle" aria-label="新对话" icon={<PlusOutlined />} onClick={newSession} /></div></div>
-          <div className="mini-ops-quick-controls"><Select className="mini-ops-model-select" aria-label="选择 AI 模型" value={model} onChange={setModel} disabled={!!busy || aiSessionBusy(detail)} options={config.models.map((value) => ({ value, label: value }))} /><Select<AIAccessMode> className="mini-ops-access-select" aria-label="AI 访问权限" value={accessMode} onChange={(mode) => void changeAccess(mode)} loading={busy === 'access'} disabled={!!busy || (selectedID > 0 && !detail)} options={[{ value: 'standard', label: '逐次确认' }, { value: 'full', label: '完全访问', disabled: aiSessionBusy(detail) && accessMode !== 'full' }]} /><Button className="mini-ops-dialog-settings" type="text" shape="circle" aria-label="对话设置" icon={<SlidersOutlined />} onClick={() => setMiniSettingsOpen(true)} /></div>
+          <div className="mini-ops-session-head"><Text strong ellipsis>{detail?.session.title || (selectedID ? '读取会话中…' : '新的运维对话')}</Text><div className="mini-ops-session-actions"><Button type="text" shape="circle" aria-label="历史会话" icon={<HistoryOutlined />} onClick={() => setHistoryOpen(true)} /><Button type="text" shape="circle" aria-label="新对话" icon={<PlusOutlined />} onClick={newSession} /><Button className="mini-ops-dialog-settings" type="text" shape="circle" aria-label="对话设置" icon={<SlidersOutlined />} onClick={() => setMiniSettingsOpen(true)} /></div></div>
         </> : <>
         <div className="ai-ops-conversation-title">{detail?.session.source === 'telegram' && <Tag color="blue">TG</Tag>}<Text strong ellipsis>{detail?.session.title || (selectedID ? '读取会话中…' : '新的运维对话')}</Text>{compact && <div className="ai-ops-mobile-actions"><Button type="text" size="small" aria-label="历史会话" icon={<HistoryOutlined />} onClick={() => setHistoryOpen(true)}>历史</Button><Button type="text" size="small" icon={<PlusOutlined />} onClick={newSession}>新对话</Button></div>}</div>
         <div className={`ai-ops-conversation-controls${isAdmin ? '' : ' ai-ops-conversation-controls-staff'}`}><Select className="ai-ops-model-select" aria-label="选择 AI 模型" value={model} onChange={setModel} disabled={!!busy || aiSessionBusy(detail)} options={config.models.map((value) => ({ value, label: value }))} />{isAdmin && <Select<AIReasoningChoice> className="ai-ops-reasoning-select" aria-label="推理强度" value={reasoningChoice} onChange={(value) => { reasoningEdited.current = true; setReasoningEffort(value); }} disabled={!!busy || aiSessionBusy(detail) || (selectedID > 0 && !detail)} options={[{ value: 'default', label: aiReasoningDefaultLabel(config, model) }, ...AI_REASONING_OPTIONS]} />}<Select<AIAccessMode> className="ai-ops-access-select" aria-label="AI 访问权限" value={accessMode} onChange={(mode) => void changeAccess(mode)} loading={busy === 'access'} disabled={!!busy || (selectedID > 0 && !detail)} options={[{ value: 'standard', label: '逐次确认' }, { value: 'full', label: '完全访问', disabled: aiSessionBusy(detail) && accessMode !== 'full' }]} /></div>
@@ -453,7 +473,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
       {miniApp ? <div className="ai-ops-composer mini-ops-composer"><div className="mini-ops-composer-row"><Input.TextArea aria-label="运维消息" value={draft} onChange={(e) => setDraft(e.target.value)} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; compositionEndedAt.current = Date.now(); }} onKeyDown={(event) => {
         if (!aiShouldSendKey({ key: event.key, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey, repeat: event.repeat, isComposing: event.nativeEvent.isComposing, keyCode: event.keyCode }, composing.current || Date.now() - compositionEndedAt.current < 50)) return;
         event.preventDefault(); void send();
-      }} placeholder={aiSessionBusy(detail) ? 'AI 正在处理…' : '发送消息…'} autoSize={{ minRows: 1, maxRows: 4 }} maxLength={12000} disabled={busy === 'send' || aiSessionBusy(detail)} />{aiSessionBusy(detail) ? <Button className="mini-ops-send-button is-stop" shape="circle" type="primary" danger aria-label="停止当前任务" icon={<StopOutlined />} loading={busy === 'stop'} disabled={!!busy && busy !== 'stop'} onClick={() => void stop()} /> : <Button className="mini-ops-send-button" shape="circle" type="primary" aria-label="发送消息" icon={<SendOutlined />} loading={busy === 'send'} disabled={!draft.trim() || unavailable || !!busy || foreignFullAccess || (selectedID > 0 && !detail)} onClick={() => void send()} />}</div>{unavailable && <Text className="mini-ops-composer-notice" type="secondary">{isAdmin ? '请在设置中启用 AI 并保存 API Key' : '请联系管理员启用 AI 运维'}</Text>}</div> : <div className="ai-ops-composer"><Input.TextArea aria-label="运维消息" value={draft} onChange={(e) => setDraft(e.target.value)} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; compositionEndedAt.current = Date.now(); }} onKeyDown={(event) => {
+      }} placeholder={aiSessionBusy(detail) ? 'AI 正在处理…' : '发送消息…'} autoSize={{ minRows: 1, maxRows: 4 }} maxLength={12000} disabled={!loaded || busy === 'send' || aiSessionBusy(detail)} />{aiSessionBusy(detail) ? <Button className="mini-ops-send-button is-stop" shape="circle" type="primary" danger aria-label="停止当前任务" icon={<StopOutlined />} loading={busy === 'stop'} disabled={!!busy && busy !== 'stop'} onClick={() => void stop()} /> : <Button className="mini-ops-send-button" shape="circle" type="primary" aria-label="发送消息" icon={<SendOutlined />} loading={busy === 'send'} disabled={!draft.trim() || unavailable || !!busy || foreignFullAccess || (selectedID > 0 && !detail)} onClick={() => void send()} />}</div>{unavailable && <Text className="mini-ops-composer-notice" type="secondary">{isAdmin ? '请在设置中启用 AI 并保存 API Key' : '请联系管理员启用 AI 运维'}</Text>}</div> : <div className="ai-ops-composer"><Input.TextArea aria-label="运维消息" value={draft} onChange={(e) => setDraft(e.target.value)} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; compositionEndedAt.current = Date.now(); }} onKeyDown={(event) => {
         if (!aiShouldSendKey({ key: event.key, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey, repeat: event.repeat, isComposing: event.nativeEvent.isComposing, keyCode: event.keyCode }, composing.current || Date.now() - compositionEndedAt.current < 50)) return;
         event.preventDefault(); void send();
       }} placeholder={compact ? '描述问题或操作需求…' : '描述问题或操作需求；Enter 发送，Shift+Enter 换行'} autoSize={{ minRows: compact ? 2 : 3, maxRows: compact ? 4 : 8 }} maxLength={12000} disabled={busy === 'send' || aiSessionBusy(detail)} /><div className="ai-ops-composer-actions"><div className="ai-ops-send-controls"><Button type="primary" icon={<SendOutlined />} loading={busy === 'send'} disabled={!draft.trim() || unavailable || !!busy || aiSessionBusy(detail) || foreignFullAccess || (selectedID > 0 && !detail)} onClick={() => void send()}>发送</Button>{aiSessionBusy(detail) && <Button danger icon={<StopOutlined />} loading={busy === 'stop'} disabled={!!busy && busy !== 'stop'} onClick={() => void stop()}>停止</Button>}</div><Text className="ai-ops-composer-hint" type="secondary">{unavailable ? isAdmin ? '请先在设置中启用 AI 并保存中转 API Key。' : '请联系管理员启用 AI 运维。' : compact ? 'Enter 发送 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行 · 工具详情默认折叠'}</Text></div></div>}
@@ -462,6 +482,8 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
     {miniApp && <Drawer title="对话设置" aria-label="对话设置" placement="bottom" rootClassName="mini-ops-settings-drawer" height="auto" open={miniSettingsOpen} onClose={() => setMiniSettingsOpen(false)} destroyOnHidden>
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <Text type="secondary">{selectedID ? `会话 #${selectedID}` : '新会话'} · {accessMode === 'full' ? '完全访问' : '逐次确认'}</Text>
+        <div className="mini-ops-setting-row"><label htmlFor="mini-model">模型</label><Select id="mini-model" aria-label="选择 AI 模型" value={model} onChange={setModel} disabled={!loaded || !!busy || aiSessionBusy(detail)} options={config.models.map((value) => ({ value, label: value }))} /></div>
+        <div className="mini-ops-setting-row"><label htmlFor="mini-access">访问权限</label><Select<AIAccessMode> id="mini-access" aria-label="AI 访问权限" value={accessMode} onChange={(mode) => void changeAccess(mode)} loading={busy === 'access'} disabled={!loaded || !!busy || (selectedID > 0 && !detail)} options={[{ value: 'standard', label: '逐次确认' }, { value: 'full', label: '完全访问', disabled: aiSessionBusy(detail) && accessMode !== 'full' }]} /></div>
         {isAdmin && <div className="mini-ops-setting-row"><label htmlFor="mini-reasoning-effort">推理强度</label><Select<AIReasoningChoice> id="mini-reasoning-effort" aria-label="推理强度" value={reasoningChoice} onChange={(value) => { reasoningEdited.current = true; setReasoningEffort(value); }} disabled={!!busy || aiSessionBusy(detail) || (selectedID > 0 && !detail)} options={[{ value: 'default', label: aiReasoningDefaultLabel(config, model) }, ...AI_REASONING_OPTIONS]} /></div>}
         <Text type="secondary">{accessMode === 'full' ? 'AI 可按当前任务持续执行运维操作；切换为逐次确认可撤回自动执行权限。' : '涉及修改的操作先显示完整内容，由你确认后执行。'} 关闭小程序不会停止后台任务。</Text>
         <Button icon={<ReloadOutlined />} loading={loading} disabled={!!busy} onClick={() => void load()}>刷新会话与配置</Button>
@@ -495,7 +517,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
     ...(isAdmin ? [{ key: 'settings', label: '设置', icon: <SettingOutlined /> }] : []),
   ];
   const miniStatus = !loaded ? '连接中' : unavailable ? '未就绪' : aiSessionBusy(detail) ? '正在处理' : '随时开始';
-  return <div className={`legacy-page ai-ops-page${miniApp ? ' ai-ops-mini-page' : ''}${tab === 'chat' ? ' ai-ops-page-chat' : ''}`}>{miniApp ? <header className="mini-ops-header"><div><Text strong>AI 运维</Text><span className={`mini-ops-status${unavailable ? ' is-unavailable' : ''}`} role="status">{miniStatus}</span></div>{tab !== 'chat' && aiSessionBusy(detail) && <Button type="text" danger shape="circle" aria-label="停止当前任务" icon={<StopOutlined />} loading={busy === 'stop'} disabled={!!busy && busy !== 'stop'} onClick={() => void stop()} />}</header> : <div className="content-heading">AI 运维</div>}<div className="ai-ops-page-body"><div className="ai-ops-page-stack">{!miniApp && (compact || tab !== 'chat') && pageStatus}{error && <Alert type="error" showIcon message="读取失败" description={error} />}<Tabs className={`ai-ops-tabs${miniApp ? ' mini-ops-main' : ''}`} renderTabBar={miniApp ? () => null : undefined} tabBarExtraContent={!compact && tab === 'chat' ? { left: <Text strong className="ai-ops-desktop-title">AI 运维</Text>, right: pageStatus } : undefined} activeKey={tab} onChange={changeTab} items={[{ key: 'chat', label: '运维对话', children: chat }, { key: 'servers', label: '服务器', children: serverPanel }, { key: 'knowledge', label: '共享知识', children: <AIOpsKnowledge active={tab === 'knowledge'} isAdmin={isAdmin} actorID={actorID} miniBackHandler={miniApp ? knowledgeBack : undefined} /> }, ...(!miniApp ? [{ key: 'telegram', label: 'Telegram', children: <AIOpsTelegram active={tab === 'telegram'} isAdmin={isAdmin} actorID={actorID} /> }] : []), ...(isAdmin ? [{ key: 'settings', label: '设置', children: settings }] : [])]} /></div></div>{miniApp && <nav className="mini-ops-nav" aria-label="运维导航">{miniNavigation.map((item) => <button type="button" key={item.key} className={tab === item.key ? 'is-active' : ''} aria-current={tab === item.key ? 'page' : undefined} onClick={() => changeTab(item.key)}>{item.icon}<span>{item.label}</span></button>)}</nav>}
+  return <div className={`legacy-page ai-ops-page${miniApp ? ' ai-ops-mini-page' : ''}${tab === 'chat' ? ' ai-ops-page-chat' : ''}`}>{miniApp ? tab !== 'chat' && <header className="mini-ops-header"><div><Text strong>AI 运维</Text><span className={`mini-ops-status${unavailable ? ' is-unavailable' : ''}`} role="status">{miniStatus}</span></div>{tab !== 'chat' && aiSessionBusy(detail) && <Button type="text" danger shape="circle" aria-label="停止当前任务" icon={<StopOutlined />} loading={busy === 'stop'} disabled={!!busy && busy !== 'stop'} onClick={() => void stop()} />}</header> : <div className="content-heading">AI 运维</div>}<div className="ai-ops-page-body"><div className="ai-ops-page-stack">{!miniApp && (compact || tab !== 'chat') && pageStatus}{error && <Alert type="error" showIcon message="读取失败" description={error} />}<Tabs className={`ai-ops-tabs${miniApp ? ' mini-ops-main' : ''}`} renderTabBar={miniApp ? () => null : undefined} tabBarExtraContent={!compact && tab === 'chat' ? { left: <Text strong className="ai-ops-desktop-title">AI 运维</Text>, right: pageStatus } : undefined} activeKey={tab} onChange={changeTab} items={[{ key: 'chat', label: '运维对话', children: chat }, { key: 'servers', label: '服务器', children: serverPanel }, { key: 'knowledge', label: '共享知识', children: <AIOpsKnowledge active={tab === 'knowledge'} isAdmin={isAdmin} actorID={actorID} miniBackHandler={miniApp ? knowledgeBack : undefined} /> }, ...(!miniApp ? [{ key: 'telegram', label: 'Telegram', children: <AIOpsTelegram active={tab === 'telegram'} isAdmin={isAdmin} actorID={actorID} /> }] : []), ...(isAdmin ? [{ key: 'settings', label: '设置', children: settings }] : [])]} /></div></div>{miniApp && <nav className="mini-ops-nav" aria-label="运维导航">{miniNavigation.map((item) => <button type="button" key={item.key} className={tab === item.key ? 'is-active' : ''} aria-current={tab === item.key ? 'page' : undefined} onClick={() => changeTab(item.key)}>{item.icon}<span>{item.label}</span></button>)}</nav>}
     <Modal title={editing ? `编辑服务器 · ${editing.name}` : '登记服务器'} open={serverOpen} onCancel={closeServer} onOk={saveServer} confirmLoading={busy === 'server'} okText="保存服务器" cancelButtonProps={{ disabled: !!busy }} closable={!busy} maskClosable={!busy} destroyOnHidden width={720}>
       <Alert type="warning" showIcon message="凭据与连接身份绑定" description="修改地址、端口、用户名或主机指纹后，必须重新输入密码或私钥；旧的密码、私钥和口令都不会沿用。" style={{ marginBottom: 16 }} />
       <Form form={serverForm} layout="vertical" disabled={!!busy} onValuesChange={(changed) => { if ('host' in changed || 'port' in changed) { fingerprintSequence.current += 1; setFingerprint(null); setFingerprintLoading(false); } }}>
