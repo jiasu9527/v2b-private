@@ -10,6 +10,35 @@ import (
 const defaultSSHTimeoutSeconds = 120
 const maxSSHTimeoutSeconds = 1800
 
+// Recheck synchronously before each reconnect and before exec. The watcher is
+// still needed to interrupt an in-flight handshake/command, but its polling
+// interval must not allow a canceled action to start a new connection.
+func (s *Service) requireSSHActionActive(ctx context.Context, a Action) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.requireOperator(ctx, a.ApprovedBy); err != nil {
+		return err
+	}
+	if err := s.requireSessionAccess(ctx, a.ApprovedBy, a.SessionID); err != nil {
+		return err
+	}
+	if a.ApprovalMode == "full_access" {
+		if err := s.requireFullAccess(ctx, a.ApprovedBy, a.SessionID, a.AuthorizationTurnID); err != nil {
+			return err
+		}
+	}
+	var active bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_ai_action a JOIN v2_ai_config c ON c.id=1 WHERE a.id=$1 AND a.session_id=$2 AND a.status='running' AND NOT a.stop_requested AND c.enabled)`, a.ID, a.SessionID).Scan(&active)
+	if err != nil {
+		return err
+	}
+	if !active {
+		return ErrForbidden
+	}
+	return nil
+}
+
 func normalizeSSHTimeout(seconds int) (int, error) {
 	if seconds == 0 {
 		return defaultSSHTimeoutSeconds, nil

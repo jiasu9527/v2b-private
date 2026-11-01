@@ -754,7 +754,9 @@ func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, 
 					}
 				}
 				if err == nil {
-					result := s.runSSHWithProgress(ctx, v, p.Command, func(output string) { s.persistSSHProgress(ctx, a.ID, output) })
+					result := s.runSSHWithGuard(ctx, v, p.Command, func(output string) { s.persistSSHProgress(ctx, a.ID, output) }, func(checkCtx context.Context) error {
+						return s.requireSSHActionActive(checkCtx, a)
+					})
 					output = result.Output
 					exitCode = result.ExitCode
 					if result.Err == nil {

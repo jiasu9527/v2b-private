@@ -326,7 +326,7 @@ func pinnedHostKey(expected string) ssh.HostKeyCallback {
 	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		actual := ssh.FingerprintSHA256(key)
 		if subtle.ConstantTimeCompare([]byte(expected), []byte(actual)) != 1 {
-			return errors.New("SSH 主机指纹不匹配，连接已拒绝")
+			return errSSHHostKeyMismatch
 		}
 		return nil
 	}
@@ -487,6 +487,16 @@ func (s *Service) runSSH(ctx context.Context, v sshSecretServer, command string)
 }
 
 func (s *Service) runSSHWithProgress(ctx context.Context, v sshSecretServer, command string, progress func(string)) sshRunResult {
+	return s.runSSHWithGuard(ctx, v, command, progress, nil)
+}
+
+func (s *Service) runSSHWithGuard(ctx context.Context, v sshSecretServer, command string, progress func(string), guard func(context.Context) error) sshRunResult {
+	// Preserve the default lifetime for direct callers as well as action workers.
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultSSHTimeoutSeconds*time.Second)
+		defer cancel()
+	}
 	if !takeSSHSlot(ctx) {
 		return sshRunResult{Err: ErrBusy}
 	}
@@ -520,36 +530,27 @@ func (s *Service) runSSHWithProgress(ctx context.Context, v sshSecretServer, com
 		auth = append(auth, ssh.PublicKeys(signer))
 		secrets = append(secrets, k, pass)
 	}
-	address := net.JoinHostPort(v.Host, strconv.Itoa(v.Port))
-	conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", address)
-	if err != nil {
-		return sshRunResult{Err: errors.New("SSH 连接失败，命令未发送")}
-	}
-	defer conn.Close()
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		deadline = time.Now().Add(120 * time.Second)
-	}
-	handshakeDeadline := time.Now().Add(10 * time.Second)
-	if deadline.Before(handshakeDeadline) {
-		handshakeDeadline = deadline
-	}
-	_ = conn.SetDeadline(handshakeDeadline)
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stop()
-	cc, channels, requests, err := ssh.NewClientConn(conn, address, &ssh.ClientConfig{User: v.Username, Auth: auth, HostKeyCallback: pinnedHostKey(v.HostKeySHA256), Timeout: 10 * time.Second})
-	if err != nil {
-		return sshRunResult{Err: errors.New("SSH 认证或主机指纹验证失败，命令未发送")}
-	}
-	_ = conn.SetDeadline(deadline)
-	client := ssh.NewClient(cc, channels, requests)
-	defer client.Close()
-	session, err := client.NewSession()
-	if err != nil {
-		return sshRunResult{Err: errors.New("SSH 会话创建失败，命令未发送")}
-	}
-	defer session.Close()
 	out := &cappedSSHOutput{limit: 32 << 10}
+	report := func(message string) {
+		_, _ = out.Write([]byte(message + "\n"))
+		if progress != nil {
+			progress(out.safeString(secrets, false))
+		}
+	}
+	session, cleanup, err := connectSSHSession(ctx, v, auth, report, guard)
+	if err != nil {
+		return sshRunResult{Output: out.safeString(secrets, true), Err: err}
+	}
+	defer cleanup()
+	if ctx.Err() != nil {
+		return sshRunResult{Output: out.safeString(secrets, true), Err: &sshConnectionFailure{code: "canceled"}}
+	}
+	if guard != nil && guard(ctx) != nil {
+		return sshRunResult{Output: out.safeString(secrets, true), Err: &sshConnectionFailure{code: "authorization"}}
+	}
+	if ctx.Err() != nil {
+		return sshRunResult{Output: out.safeString(secrets, true), Err: &sshConnectionFailure{code: "canceled"}}
+	}
 	session.Stdout = out
 	session.Stderr = out
 	session.Stdin = nil
