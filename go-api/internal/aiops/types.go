@@ -142,8 +142,9 @@ type ToolDefinition struct {
 	Function ToolFunctionDefinition `json:"function"`
 }
 type ToolOutcome struct {
-	ActionID    int64
-	Content     string
-	Pending     bool
-	SSHExitCode *int `json:"-"`
+	ActionID      int64
+	Content       string
+	Pending       bool
+	SSHExitCode   *int              `json:"-"`
+	PanelRecovery panelRecoveryKind `json:"-"`
 }

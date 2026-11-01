@@ -1,11 +1,13 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"forest/go-api/internal/admin"
+	"forest/go-api/internal/dnspod"
 	"forest/go-api/internal/session"
 )
 
@@ -102,13 +104,13 @@ func handleAdminDNSPodRecordList(w http.ResponseWriter, r *http.Request, session
 		return true
 	}
 	if strings.TrimSpace(inputs["domain"]) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "请选择域名"})
+		writeDNSPodValidationError(w, r, "请选择域名")
 		return true
 	}
 	current, pageSize := dnsPodPagination(inputs)
 	domainID, valid := optionalDNSPodInt(inputs["domain_id"])
 	if !valid {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "域名 ID 无效"})
+		writeDNSPodValidationError(w, r, "域名 ID 无效")
 		return true
 	}
 	result, err := service.ListDNSPodRecords(r.Context(), admin.DNSPodRecordListRequest{
@@ -116,7 +118,7 @@ func handleAdminDNSPodRecordList(w http.ResponseWriter, r *http.Request, session
 		Subdomain: inputs["subdomain"], RecordType: inputs["record_type"], RecordLine: inputs["record_line"],
 	})
 	if err != nil {
-		return handleAdminError(w, err)
+		return handleDNSPodError(w, r, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": result.Records, "total": result.Total, "request_id": result.RequestID})
 	return true
@@ -153,17 +155,17 @@ func handleAdminDNSPodRecordLines(w http.ResponseWriter, r *http.Request, sessio
 		return true
 	}
 	if strings.TrimSpace(inputs["domain"]) == "" || strings.TrimSpace(inputs["record_type"]) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "域名和记录类型不能为空"})
+		writeDNSPodValidationError(w, r, "域名和记录类型不能为空")
 		return true
 	}
 	domainID, valid := optionalDNSPodInt(inputs["domain_id"])
 	if !valid {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "域名 ID 无效"})
+		writeDNSPodValidationError(w, r, "域名 ID 无效")
 		return true
 	}
 	result, err := service.ListDNSPodRecordLines(r.Context(), inputs["domain"], domainID, inputs["domain_grade"], inputs["record_type"])
 	if err != nil {
-		return handleAdminError(w, err)
+		return handleDNSPodError(w, r, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": result.Lines, "request_id": result.RequestID})
 	return true
@@ -182,35 +184,35 @@ func handleAdminDNSPodRecordSave(w http.ResponseWriter, r *http.Request, session
 	}
 	recordID, valid := optionalDNSPodInt(inputs["record_id"])
 	if !valid {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "记录 ID 无效"})
+		writeDNSPodValidationError(w, r, "记录 ID 无效")
 		return true
 	}
 	domainID, valid := optionalDNSPodInt(inputs["domain_id"])
 	if !valid {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "域名 ID 无效"})
+		writeDNSPodValidationError(w, r, "域名 ID 无效")
 		return true
 	}
 	ttl, valid := optionalDNSPodInt(inputs["ttl"])
 	if !valid {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "TTL 无效"})
+		writeDNSPodValidationError(w, r, "TTL 无效")
 		return true
 	}
 	mx, valid := optionalDNSPodInt(inputs["mx"])
 	if !valid {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "MX 优先级无效"})
+		writeDNSPodValidationError(w, r, "MX 优先级无效")
 		return true
 	}
 	var weight *int64
 	if strings.TrimSpace(inputs["weight"]) != "" {
 		value, valid := optionalDNSPodInt(inputs["weight"])
 		if !valid {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"message": "权重无效"})
+			writeDNSPodValidationError(w, r, "权重无效")
 			return true
 		}
 		weight = &value
 	}
 	if strings.TrimSpace(inputs["domain"]) == "" || strings.TrimSpace(inputs["record_type"]) == "" || strings.TrimSpace(inputs["value"]) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "域名、记录类型和记录值不能为空"})
+		writeDNSPodValidationError(w, r, "域名、记录类型和记录值不能为空")
 		return true
 	}
 	result, err := service.SaveDNSPodRecord(r.Context(), admin.DNSPodRecordSaveRequest{
@@ -219,7 +221,7 @@ func handleAdminDNSPodRecordSave(w http.ResponseWriter, r *http.Request, session
 		TTL: ttl, MX: mx, Weight: weight,
 	})
 	if err != nil {
-		return handleAdminError(w, err)
+		return handleDNSPodError(w, r, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": result})
 	return true
@@ -239,11 +241,11 @@ func handleAdminDNSPodRecordDelete(w http.ResponseWriter, r *http.Request, sessi
 	recordID, err := strconv.ParseInt(strings.TrimSpace(inputs["record_id"]), 10, 64)
 	domainID, valid := optionalDNSPodInt(inputs["domain_id"])
 	if err != nil || !valid || recordID <= 0 || strings.TrimSpace(inputs["domain"]) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "域名或记录 ID 无效"})
+		writeDNSPodValidationError(w, r, "域名或记录 ID 无效")
 		return true
 	}
 	if err := service.DeleteDNSPodRecord(r.Context(), inputs["domain"], domainID, recordID); err != nil {
-		return handleAdminError(w, err)
+		return handleDNSPodError(w, r, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": true})
 	return true
@@ -264,14 +266,34 @@ func handleAdminDNSPodRecordStatus(w http.ResponseWriter, r *http.Request, sessi
 	domainID, valid := optionalDNSPodInt(inputs["domain_id"])
 	status := strings.ToUpper(strings.TrimSpace(inputs["status"]))
 	if err != nil || !valid || recordID <= 0 || strings.TrimSpace(inputs["domain"]) == "" || (status != "ENABLE" && status != "DISABLE") {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "域名、记录 ID 或状态无效"})
+		writeDNSPodValidationError(w, r, "域名、记录 ID 或状态无效")
 		return true
 	}
 	if err := service.SetDNSPodRecordStatus(r.Context(), inputs["domain"], domainID, recordID, status); err != nil {
-		return handleAdminError(w, err)
+		return handleDNSPodError(w, r, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": true})
 	return true
+}
+
+func handleDNSPodError(w http.ResponseWriter, r *http.Request, err error) bool {
+	var preflight *dnspod.PreflightError
+	if errors.As(err, &preflight) {
+		capturePanelOperationPreflight(r.Context(), preflight.Code)
+		status := http.StatusUnprocessableEntity
+		if preflight.Code == "dns_preflight_failed" {
+			status = http.StatusServiceUnavailable
+		}
+		// Only the type's locally defined message is exposed, never its cause.
+		writeJSON(w, status, map[string]any{"message": preflight.Error()})
+		return true
+	}
+	return handleAdminError(w, err)
+}
+
+func writeDNSPodValidationError(w http.ResponseWriter, r *http.Request, message string) {
+	capturePanelOperationPreflight(r.Context(), "dns_invalid_arguments")
+	writeJSON(w, http.StatusBadRequest, map[string]any{"message": message})
 }
 
 func requireDNSPodAdmin(w http.ResponseWriter, r *http.Request, sessions session.Service, service admin.Service) bool {
@@ -297,7 +319,7 @@ func requireHTTPMethod(w http.ResponseWriter, r *http.Request, allowed string) b
 func readDNSPodInputs(w http.ResponseWriter, r *http.Request) (map[string]string, bool) {
 	inputs, err := readInputs(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		writeDNSPodValidationError(w, r, "DNS 请求参数格式无效")
 		return nil, false
 	}
 	return inputs, true

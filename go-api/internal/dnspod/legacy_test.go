@@ -2,6 +2,7 @@ package dnspod
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -159,7 +160,8 @@ func TestLegacyClientRequiresDomainIDForRecordList(t *testing.T) {
 
 	client := NewLegacyClient("1,token", WithLegacyEndpoint(server.URL))
 	_, err := client.DescribeRecordList(context.Background(), DescribeRecordListRequest{Domain: "example.com", Limit: 20})
-	if err == nil || !strings.Contains(err.Error(), "域名 ID") {
+	var preflight *PreflightError
+	if !errors.As(err, &preflight) || preflight.Code != "dns_invalid_arguments" {
 		t.Fatalf("expected actionable domain ID error, got %v", err)
 	}
 	if called {
@@ -432,7 +434,8 @@ func TestLegacyClientDoesNotUseNumericLineNameAsModifyFallback(t *testing.T) {
 		Domain: "example.com", DomainID: 6, RecordID: 8, SubDomain: "www", RecordType: "A",
 		RecordLine: "3=0", RecordLineID: "3=0", Value: "192.0.2.2",
 	})
-	if err == nil || !strings.Contains(err.Error(), "无法识别记录线路") {
+	var preflight *PreflightError
+	if !errors.As(err, &preflight) || preflight.Code != "dns_record_line_unavailable" || !strings.Contains(preflight.Err.Error(), "无法识别记录线路") {
 		t.Fatalf("expected numeric line rejection, got %v", err)
 	}
 }

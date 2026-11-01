@@ -299,6 +299,10 @@ func automaticActionOutcome(a Action) (ToolOutcome, error) {
 		out.SSHExitCode = &code
 		return out, nil
 	}
+	if recovery := panelActionRecovery(a); recovery != panelRecoveryNone {
+		out.PanelRecovery = recovery
+		return out, nil
+	}
 	if a.Status != "succeeded" {
 		return out, &automaticActionFailure{actionID: a.ID, status: a.Status, message: clip(a.Error, 1000)}
 	}
@@ -393,6 +397,10 @@ func automaticActionSummary(a Action) string {
 		}
 		if recoverable {
 			summary["recovery_instruction"] = sshExitRecoveryInstruction
+		} else if recovery := panelActionRecovery(a); recovery == panelRecoveryPreflight {
+			summary["recovery_instruction"] = panelPreflightRecoveryInstruction
+		} else if recovery == panelRecoveryReadOnly {
+			summary["recovery_instruction"] = panelReadOnlyRecoveryInstruction
 		} else if a.Status == "unknown" {
 			summary["recovery_instruction"] = "执行结果未知，可能已部分执行；停止后续写入并核对当前状态，禁止自动重试。"
 		}

@@ -411,7 +411,7 @@ func safeAIError(e error) error {
 	var panelError *PanelOperationError
 	if errors.As(e, &panelError) {
 		code, message := panelOperationErrorText(panelError)
-		return &PanelOperationError{Status: panelError.Status, Code: code, Message: message}
+		return &PanelOperationError{Status: panelError.Status, Code: code, Message: message, NotExecuted: panelError.NotExecuted && strings.HasPrefix(code, "dns_")}
 	}
 	if errors.Is(e, admin.ErrAIEntrySplitInvalid) {
 		return e

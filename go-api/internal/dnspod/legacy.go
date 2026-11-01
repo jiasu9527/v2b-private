@@ -244,7 +244,7 @@ func (c *LegacyClient) DescribeDomainList(ctx context.Context, request DescribeD
 
 func (c *LegacyClient) DescribeRecordList(ctx context.Context, request DescribeRecordListRequest) (DescribeRecordListResult, error) {
 	if request.DomainID <= 0 {
-		return DescribeRecordListResult{}, errors.New("DNSPod 国际版 Token API 需要有效的域名 ID 才能读取解析记录")
+		return DescribeRecordListResult{}, &PreflightError{Code: "dns_invalid_arguments", Err: errors.New("DNSPod 国际版 Token API 需要有效的域名 ID 才能读取解析记录")}
 	}
 	values := url.Values{}
 	setLegacyDomain(values, request.Domain, request.DomainID)
@@ -505,18 +505,18 @@ func (c *LegacyClient) CreateRecord(ctx context.Context, request RecordMutationR
 
 func (c *LegacyClient) ModifyRecord(ctx context.Context, request RecordMutationRequest) (RecordMutationResult, error) {
 	if request.RecordID <= 0 {
-		return RecordMutationResult{}, errors.New("DNSPod 记录 ID 无效")
+		return RecordMutationResult{}, &PreflightError{Code: "dns_invalid_arguments", Err: errors.New("DNSPod 记录 ID 无效")}
 	}
 	return c.mutateRecord(ctx, "Record.Modify", request)
 }
 
 func (c *LegacyClient) mutateRecord(ctx context.Context, action string, request RecordMutationRequest) (RecordMutationResult, error) {
 	if request.DomainID <= 0 {
-		return RecordMutationResult{}, errors.New("DNSPod 国际版 Token API 需要有效的域名 ID")
+		return RecordMutationResult{}, &PreflightError{Code: "dns_invalid_arguments", Err: errors.New("DNSPod 国际版 Token API 需要有效的域名 ID")}
 	}
 	recordLine, err := c.resolveLegacyRecordLine(ctx, request)
 	if err != nil {
-		return RecordMutationResult{}, err
+		return RecordMutationResult{}, &PreflightError{Code: "dns_record_line_unavailable", Err: err}
 	}
 	values := url.Values{
 		"domain_id":   {strconv.FormatInt(request.DomainID, 10)},
@@ -740,7 +740,7 @@ func legacyLineLabelAlias(value string) string {
 
 func (c *LegacyClient) DeleteRecord(ctx context.Context, request DeleteRecordRequest) error {
 	if request.DomainID <= 0 || request.RecordID <= 0 {
-		return errors.New("DNSPod 国际版 Token API 需要有效的域名 ID 和记录 ID")
+		return &PreflightError{Code: "dns_invalid_arguments", Err: errors.New("DNSPod 国际版 Token API 需要有效的域名 ID 和记录 ID")}
 	}
 	_, err := c.call(ctx, "Record.Remove", url.Values{
 		"domain_id": {strconv.FormatInt(request.DomainID, 10)}, "record_id": {strconv.FormatInt(request.RecordID, 10)},
@@ -750,7 +750,7 @@ func (c *LegacyClient) DeleteRecord(ctx context.Context, request DeleteRecordReq
 
 func (c *LegacyClient) ModifyRecordStatus(ctx context.Context, request ModifyRecordStatusRequest) error {
 	if request.DomainID <= 0 || request.RecordID <= 0 {
-		return errors.New("DNSPod 国际版 Token API 需要有效的域名 ID 和记录 ID")
+		return &PreflightError{Code: "dns_invalid_arguments", Err: errors.New("DNSPod 国际版 Token API 需要有效的域名 ID 和记录 ID")}
 	}
 	status := "disable"
 	if strings.EqualFold(request.Status, "ENABLE") || strings.EqualFold(request.Status, "enable") {

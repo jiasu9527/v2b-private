@@ -126,3 +126,26 @@ func TestAIPanelOperationErrorPreservesSafeCategory(t *testing.T) {
 		}
 	}
 }
+
+func TestAIPanelPreflightErrorRequiresTrustedMarkerAndSafeCode(t *testing.T) {
+	for _, code := range []string{"dns_invalid_arguments", "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed"} {
+		t.Run(code, func(t *testing.T) {
+			trusted := &PanelOperationError{Status: 500, Code: code, Message: "RAW_SECRET_SENTINEL", NotExecuted: true}
+			out := toolErrorContent(safeAIError(trusted))
+			if !strings.Contains(out, `"code":"`+code+`"`) || !strings.Contains(out, "未发送写请求") || strings.Contains(out, "RAW_SECRET") {
+				t.Fatalf("lost trusted preflight diagnosis or leaked cause: %s", out)
+			}
+			trusted.NotExecuted = false
+			out = toolErrorContent(safeAIError(trusted))
+			if !strings.Contains(out, `"code":"backend_error"`) || strings.Contains(out, "未发送写请求") || strings.Contains(out, "RAW_SECRET") {
+				t.Fatalf("untrusted code claimed preflight: %s", out)
+			}
+		})
+	}
+	for _, code := range []string{"", "dns_UNKNOWN_SECRET", "invalid_arguments", "RAW_SECRET"} {
+		out := toolErrorContent(safeAIError(&PanelOperationError{Status: 500, Code: code, Message: "RAW_SECRET", NotExecuted: true}))
+		if !strings.Contains(out, `"code":"backend_error"`) || strings.Contains(out, "RAW_SECRET") || strings.Contains(out, "未发送写请求") {
+			t.Fatalf("unknown code granted a safe execution classification: %s", out)
+		}
+	}
+}

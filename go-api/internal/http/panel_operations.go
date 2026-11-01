@@ -233,6 +233,11 @@ func (p *panelOperations) Execute(ctx context.Context, actor aiops.PanelOperatio
 		req.Form = values
 	}
 	recorder := &panelOperationResponse{header: http.Header{}, status: 200}
+	// Capture only locally typed, pre-dispatch errors through an unexported
+	// context key. Response headers/bodies (including upstream JSON) are data,
+	// not evidence that a write was never sent.
+	preflight := &panelOperationPreflightCapture{}
+	req = req.WithContext(context.WithValue(req.Context(), panelOperationPreflightKey{}, preflight))
 	router.ServeHTTP(recorder, req)
 	if recorder.overflow {
 		return nil, fmt.Errorf("后台响应超过 4 MiB，结果未返回；操作可能已完成，禁止自动重试写入，请缩小查询范围核对")
@@ -241,6 +246,9 @@ func (p *panelOperations) Execute(ctx context.Context, actor aiops.PanelOperatio
 		return nil, ctx.Err()
 	}
 	if recorder.status < 200 || recorder.status >= 300 {
+		if preflight.code != "" {
+			return nil, &aiops.PanelOperationError{Status: recorder.status, Code: preflight.code, NotExecuted: true}
+		}
 		// Do not expose SQL, config contents, upstream bodies or submitted secrets
 		// via a backend error. The operation and HTTP code are enough to retry reads.
 		return nil, &aiops.PanelOperationError{Status: recorder.status}
@@ -270,6 +278,18 @@ func (p *panelOperations) Execute(ctx context.Context, actor aiops.PanelOperatio
 		return nil, err
 	}
 	return restorePanelExplicitCredentials(op.Path, op.Method, includeServerCredential, response, sanitized)
+}
+
+type panelOperationPreflightKey struct{}
+type panelOperationPreflightCapture struct{ code string }
+
+func capturePanelOperationPreflight(ctx context.Context, code string) {
+	switch code {
+	case "dns_invalid_arguments", "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed":
+		if capture, ok := ctx.Value(panelOperationPreflightKey{}).(*panelOperationPreflightCapture); ok {
+			capture.code = code
+		}
+	}
 }
 
 type panelOperationSession struct {

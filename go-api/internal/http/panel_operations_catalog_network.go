@@ -83,17 +83,25 @@ func panelNetworkOperations() []aiops.PanelOperation {
 			fields = poFields("domain_grade")
 		case "dns.record_lines":
 			fields = poFields("domain domain_id:i domain_grade record_type")
+			fields["domain_grade"] = poText("域名实际套餐等级，对应 dns.domains 的 Grade；省略时后端只读查询补齐，不能猜测免费套餐")
+			x.desc += "；domain使用完整准确域名，domain_id对应dns.domains的DomainId，domain_grade对应Grade；返回的线路名称与ID应成对使用"
 		case "dns.domains":
 			fields = poMerge(poSmallPage(), poFields("keyword type"))
 		case "dns.records":
 			fields = poMerge(poSmallPage(), poFields("domain domain_id:i keyword subdomain record_type record_line"))
+			x.desc += "；domain使用完整准确域名，domain_id对应dns.domains的DomainId，省略时后端只读查询补齐；新建前及结果未知后先按subdomain查询核对"
 		}
 		add(x.name, "dns", x.desc, "GET", x.path, false, false, fields)
 	}
 	dnsAuth := poFields("secret_id secret_key edition auth_type api_token verify:b clear:b")
 	add("dns.config_save", "dns", "保存DNSPod连接设置；凭据只写不回显", "POST", "/dns/config/save", true, false, dnsAuth)
 	add("dns.config_test", "dns", "测试已保存或提交的DNSPod连接凭据", "POST", "/dns/config/test", false, false, poFields("secret_id secret_key edition auth_type api_token"))
-	add("dns.record_save", "dns", "创建或更新DNS记录；更新传record_id，value为目标地址", "POST", "/dns/record/save", true, false, poFields("record_id:i domain_id:i ttl:i mx:i weight:i domain record_type value domain_grade sub_domain record_line record_line_id"), "domain", "record_type", "value")
+	dnsRecord := poFields("record_id:i domain_id:i ttl:i mx:i weight:i domain record_type value domain_grade sub_domain record_line record_line_id")
+	dnsRecord["domain_id"] = poInt("dns.domains返回的DomainId，必须与domain精确匹配；省略时后端只读补齐")
+	dnsRecord["domain_grade"] = poText("dns.domains返回的真实Grade；缺省由后端查询，付费Global等线路不能使用猜测的免费等级")
+	dnsRecord["record_line"] = poText("dns.record_lines返回的实际线路名称，与record_line_id成对使用；不要用不存在的线路代替用户要求")
+	dnsRecord["record_line_id"] = poText("dns.record_lines返回的对应LineId，不能跨域名或套餐猜测")
+	add("dns.record_save", "dns", "创建或更新DNS记录；更新传record_id，value为目标地址。先查询域名DomainId/Grade、实际可用线路及现有记录，再创建；后端核实域名并补齐元数据。明确未执行的前置错误可查询后修正参数；结果未知时只读核对，不要重复创建或继续修改依赖该记录的入口", "POST", "/dns/record/save", true, false, dnsRecord, "domain", "record_type", "value")
 	add("dns.record_delete", "dns", "删除指定DNS记录", "POST", "/dns/record/delete", true, false, poFields("record_id:i domain_id:i domain"), "record_id")
 	add("dns.record_status", "dns", "启用或停用DNS记录，status沿用DNSPod ENABLE/DISABLE", "POST", "/dns/record/status", true, false, poFields("record_id:i domain_id:i domain status"), "record_id", "status")
 	df := "/dns-failover"

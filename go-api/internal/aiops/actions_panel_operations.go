@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"forest/go-api/internal/admin"
@@ -201,7 +202,7 @@ func (s *Service) executePanelOperation(ctx context.Context, a Action, snapshot 
 	if err != nil {
 		var nodeValidation *admin.ManagedServerValidationError
 		if errors.As(err, &nodeValidation) {
-			return "failed", "", "节点参数校验未通过，未执行节点保存：" + nodeValidation.Error()
+			return "failed", panelPreflightOutput("node_invalid_arguments"), "节点参数校验未通过，未执行节点保存：" + nodeValidation.Error()
 		}
 		if errors.Is(err, ErrForbidden) || errors.Is(err, ErrValidation) || errors.Is(err, ErrNotFound) {
 			return "failed", "", "后台操作被权限或参数校验拒绝，未完成"
@@ -209,6 +210,12 @@ func (s *Service) executePanelOperation(ctx context.Context, a Action, snapshot 
 		var panelError *PanelOperationError
 		if errors.As(err, &panelError) {
 			code, message := panelOperationErrorText(panelError)
+			// This marker originates in the private HTTP adapter, never from an
+			// upstream response body or a model-supplied status. Failures after
+			// dispatch remain unknown regardless of their HTTP status.
+			if panelError.NotExecuted && strings.HasPrefix(code, "dns_") {
+				return "failed", panelPreflightOutput(code), message
+			}
 			return "unknown", "", fmt.Sprintf("后台操作返回 HTTP %d（%s）：%s；可能已部分执行，请核对结果，禁止自动重试", panelError.Status, code, message)
 		}
 		return "unknown", "", "后台操作返回异常，可能已部分执行；请核对结果，禁止自动重试"
@@ -222,4 +229,9 @@ func (s *Service) executePanelOperation(ctx context.Context, a Action, snapshot 
 		return "succeeded", "后台操作已完成，但结果保存失败；请查询业务现状，不要重复执行", ""
 	}
 	return "succeeded", output, ""
+}
+
+func panelPreflightOutput(code string) string {
+	data, _ := json.Marshal(map[string]string{"execution_state": "not_executed", "code": code, "recovery": "panel_preflight"})
+	return string(data)
 }

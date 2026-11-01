@@ -244,18 +244,22 @@ func (s *DBService) ListDNSPodDomains(ctx context.Context, request DNSPodDomainL
 }
 
 func (s *DBService) ListDNSPodRecords(ctx context.Context, request DNSPodRecordListRequest) (dnspod.DescribeRecordListResult, error) {
-	domain := strings.TrimSpace(request.Domain)
+	domain := dnsPodDomainName(request.Domain)
 	if domain == "" {
-		return dnspod.DescribeRecordListResult{}, errors.New("请选择域名")
+		return dnspod.DescribeRecordListResult{}, dnsPodPreflight("dns_invalid_arguments", errors.New("请选择域名"))
 	}
 	client, err := s.dnspodClient()
+	if err != nil {
+		return dnspod.DescribeRecordListResult{}, dnsPodPreflight("dns_preflight_failed", err)
+	}
+	metadata, err := resolveDNSPodDomain(ctx, client, domain, request.DomainID, false)
 	if err != nil {
 		return dnspod.DescribeRecordListResult{}, err
 	}
 	current, pageSize := normalizeDNSPodPage(request.Current, request.PageSize)
 	return client.DescribeRecordList(ctx, dnspod.DescribeRecordListRequest{
 		Domain:     domain,
-		DomainID:   request.DomainID,
+		DomainID:   metadata.DomainID,
 		Subdomain:  strings.TrimSpace(request.Subdomain),
 		RecordType: strings.ToUpper(strings.TrimSpace(request.RecordType)),
 		RecordLine: strings.TrimSpace(request.RecordLine),
@@ -278,34 +282,33 @@ func (s *DBService) ListDNSPodRecordTypes(ctx context.Context, domainGrade strin
 }
 
 func (s *DBService) ListDNSPodRecordLines(ctx context.Context, domain string, domainID int64, domainGrade, recordType string) (dnspod.DescribeRecordLineListResult, error) {
-	domain = strings.TrimSpace(domain)
-	domainGrade = strings.TrimSpace(domainGrade)
+	domain = dnsPodDomainName(domain)
 	recordType = strings.ToUpper(strings.TrimSpace(recordType))
 	if domain == "" || recordType == "" {
-		return dnspod.DescribeRecordLineListResult{}, errors.New("域名和记录类型不能为空")
-	}
-	if domainGrade == "" {
-		domainGrade = "DP_FREE"
+		return dnspod.DescribeRecordLineListResult{}, dnsPodPreflight("dns_invalid_arguments", errors.New("域名和记录类型不能为空"))
 	}
 	client, err := s.dnspodClient()
+	if err != nil {
+		return dnspod.DescribeRecordLineListResult{}, dnsPodPreflight("dns_preflight_failed", err)
+	}
+	metadata, err := resolveDNSPodDomain(ctx, client, domain, domainID, true)
 	if err != nil {
 		return dnspod.DescribeRecordLineListResult{}, err
 	}
 	return client.DescribeRecordLineList(ctx, dnspod.DescribeRecordLineListRequest{
-		Domain: domain, DomainID: domainID, DomainGrade: domainGrade, RecordType: recordType,
+		Domain: domain, DomainID: metadata.DomainID, DomainGrade: metadata.Grade, RecordType: recordType,
 	})
 }
 
 func (s *DBService) SaveDNSPodRecord(ctx context.Context, request DNSPodRecordSaveRequest) (dnspod.RecordMutationResult, error) {
-	request.Domain = strings.TrimSpace(request.Domain)
-	request.DomainGrade = strings.TrimSpace(request.DomainGrade)
+	request.Domain = dnsPodDomainName(request.Domain)
 	request.SubDomain = strings.TrimSpace(request.SubDomain)
 	request.RecordType = strings.ToUpper(strings.TrimSpace(request.RecordType))
 	request.RecordLine = strings.TrimSpace(request.RecordLine)
 	request.RecordLineID = strings.TrimSpace(request.RecordLineID)
 	request.Value = strings.TrimSpace(request.Value)
 	if request.Domain == "" || request.RecordType == "" || request.Value == "" {
-		return dnspod.RecordMutationResult{}, errors.New("域名、记录类型和记录值不能为空")
+		return dnspod.RecordMutationResult{}, dnsPodPreflight("dns_invalid_arguments", errors.New("域名、记录类型和记录值不能为空"))
 	}
 	if request.SubDomain == "" {
 		request.SubDomain = "@"
@@ -313,15 +316,19 @@ func (s *DBService) SaveDNSPodRecord(ctx context.Context, request DNSPodRecordSa
 	if request.RecordLine == "" && request.RecordLineID == "" {
 		request.RecordLine = "默认"
 	}
-	if request.TTL < 0 || request.MX < 0 || (request.Weight != nil && *request.Weight < 0) {
-		return dnspod.RecordMutationResult{}, errors.New("TTL、MX 和权重不能小于 0")
+	if request.DomainID < 0 || request.RecordID < 0 || request.TTL < 0 || request.MX < 0 || (request.Weight != nil && *request.Weight < 0) {
+		return dnspod.RecordMutationResult{}, dnsPodPreflight("dns_invalid_arguments", errors.New("ID、TTL、MX 和权重不能小于 0"))
 	}
 	client, err := s.dnspodClient()
+	if err != nil {
+		return dnspod.RecordMutationResult{}, dnsPodPreflight("dns_preflight_failed", err)
+	}
+	metadata, err := resolveDNSPodDomain(ctx, client, request.Domain, request.DomainID, true)
 	if err != nil {
 		return dnspod.RecordMutationResult{}, err
 	}
 	mutation := dnspod.RecordMutationRequest{
-		Domain: request.Domain, DomainID: request.DomainID, DomainGrade: request.DomainGrade, RecordID: request.RecordID, SubDomain: request.SubDomain,
+		Domain: request.Domain, DomainID: metadata.DomainID, DomainGrade: metadata.Grade, RecordID: request.RecordID, SubDomain: request.SubDomain,
 		RecordType: request.RecordType, RecordLine: request.RecordLine, RecordLineID: request.RecordLineID,
 		Value: request.Value, TTL: request.TTL, MX: request.MX, Weight: request.Weight,
 	}
@@ -332,31 +339,39 @@ func (s *DBService) SaveDNSPodRecord(ctx context.Context, request DNSPodRecordSa
 }
 
 func (s *DBService) DeleteDNSPodRecord(ctx context.Context, domain string, domainID, recordID int64) error {
-	domain = strings.TrimSpace(domain)
+	domain = dnsPodDomainName(domain)
 	if domain == "" || recordID <= 0 {
-		return errors.New("域名或记录 ID 无效")
+		return dnsPodPreflight("dns_invalid_arguments", errors.New("域名或记录 ID 无效"))
 	}
 	client, err := s.dnspodClient()
 	if err != nil {
+		return dnsPodPreflight("dns_preflight_failed", err)
+	}
+	metadata, err := resolveDNSPodDomain(ctx, client, domain, domainID, false)
+	if err != nil {
 		return err
 	}
-	return client.DeleteRecord(ctx, dnspod.DeleteRecordRequest{Domain: domain, DomainID: domainID, RecordID: recordID})
+	return client.DeleteRecord(ctx, dnspod.DeleteRecordRequest{Domain: domain, DomainID: metadata.DomainID, RecordID: recordID})
 }
 
 func (s *DBService) SetDNSPodRecordStatus(ctx context.Context, domain string, domainID, recordID int64, status string) error {
-	domain = strings.TrimSpace(domain)
+	domain = dnsPodDomainName(domain)
 	status = strings.ToUpper(strings.TrimSpace(status))
 	if domain == "" || recordID <= 0 {
-		return errors.New("域名或记录 ID 无效")
+		return dnsPodPreflight("dns_invalid_arguments", errors.New("域名或记录 ID 无效"))
 	}
 	if status != "ENABLE" && status != "DISABLE" {
-		return errors.New("记录状态只能是 ENABLE 或 DISABLE")
+		return dnsPodPreflight("dns_invalid_arguments", errors.New("记录状态只能是 ENABLE 或 DISABLE"))
 	}
 	client, err := s.dnspodClient()
 	if err != nil {
+		return dnsPodPreflight("dns_preflight_failed", err)
+	}
+	metadata, err := resolveDNSPodDomain(ctx, client, domain, domainID, false)
+	if err != nil {
 		return err
 	}
-	return client.ModifyRecordStatus(ctx, dnspod.ModifyRecordStatusRequest{Domain: domain, DomainID: domainID, RecordID: recordID, Status: status})
+	return client.ModifyRecordStatus(ctx, dnspod.ModifyRecordStatusRequest{Domain: domain, DomainID: metadata.DomainID, RecordID: recordID, Status: status})
 }
 
 type dnspodCredentials struct {

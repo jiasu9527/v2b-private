@@ -30,11 +30,13 @@ type PanelOperationActor struct {
 }
 
 // Only adapter-generated error categories are exposed, never an HTTP response
-// body or arbitrary service error. Status retains whether a request was sent.
+// body or arbitrary service error. HTTP status alone cannot prove whether a
+// mutation ran. NotExecuted is set only by trusted in-process preflight code.
 type PanelOperationError struct {
-	Status  int
-	Code    string
-	Message string
+	Status      int
+	Code        string
+	Message     string
+	NotExecuted bool
 }
 
 func (e *PanelOperationError) Error() string {
@@ -43,6 +45,18 @@ func (e *PanelOperationError) Error() string {
 }
 
 func panelOperationErrorText(e *PanelOperationError) (string, string) {
+	if e.NotExecuted {
+		switch e.Code {
+		case "dns_invalid_arguments":
+			return e.Code, "DNS 参数未通过校验，未发送写请求；请查询域名与线路信息后修正参数"
+		case "dns_domain_metadata":
+			return e.Code, "未能确认域名的 ID 和套餐等级，未发送写请求；请查询 dns.domains，核对准确域名、DomainId 与 Grade"
+		case "dns_record_line_unavailable":
+			return e.Code, "未能确认所选 DNS 线路，未发送写请求；请用 dns.record_lines 查询该域名实际可用线路，核对套餐等级及线路名称和 ID"
+		case "dns_preflight_failed":
+			return e.Code, "DNS 写入前检查失败，未发送写请求；请查询 DNS 配置、域名和线路现状，排除原因后再提交修正请求"
+		}
+	}
 	switch e.Status {
 	case 400, 422:
 		return "invalid_arguments", "后台操作参数未通过校验，请按该操作的参数说明修正"

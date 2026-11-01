@@ -25,7 +25,7 @@ func panelOperationToolDefinitions() []ToolDefinition {
 	add("panel_query", "执行目录中只读的后台查询，不能执行写操作。返回数据经敏感字段处理；大结果返回result_id和正文片段，必须用panel_result_read继续读取。", properties(), "operation", "parameters")
 	p := properties()
 	p["reason"] = text("变更原因与影响；不能包含密码、密钥或其他凭据")
-	add("propose_panel_operation", "提议目录中的后台写操作。逐次确认模式等待审核，完全访问模式自动执行；严格使用参数schema，不猜测参数。参数加密保存，执行结果可通过result_id续读。失败或结果未知不得自动重试。支付配置不允许，即使完全访问也不能调用。", p, "operation", "parameters", "reason")
+	add("propose_panel_operation", "提议目录中的后台写操作。逐次确认模式等待审核，完全访问模式自动执行；严格使用参数schema，不猜测参数。参数加密保存，执行结果可通过result_id续读。明确返回not_executed/panel_preflight时可先查询、修正参数再提交，禁止原样重复；结果unknown时本轮仅允许只读核对，不能重复创建或继续依赖该结果的变更。支付配置不允许，即使完全访问也不能调用。", p, "operation", "parameters", "reason")
 	add("panel_result_read", "读取本会话后台操作的大结果。content_offset与content_limit按Unicode字符，返回next_content_offset作为下一次content_offset直到truncated=false；所有片段拼接后是完整JSON。结果保存30分钟，过期可重新执行只读查询，不能为取结果重复写操作。", map[string]any{"result_id": integer(1, 9007199254740991), "content_offset": integer(0, 9007199254740991), "content_limit": integer(1, 2000)}, "result_id")
 	return definitions
 }

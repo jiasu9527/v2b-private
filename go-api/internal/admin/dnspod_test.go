@@ -128,7 +128,7 @@ func TestDBServiceDNSPodOperationsValidateAndDelegate(t *testing.T) {
 	t.Setenv("DNSPOD_SECRET_ID", "id")
 	t.Setenv("DNSPOD_SECRET_KEY", "key")
 	fake := &fakeDNSPodAPI{
-		domains: dnspod.DescribeDomainListResult{Domains: []dnspod.Domain{{Name: "example.com"}}, Total: 1},
+		domains: dnspod.DescribeDomainListResult{Domains: []dnspod.Domain{{DomainID: 6, Name: "example.com", Grade: "DPG_Enterprise"}}, Total: 1},
 		records: dnspod.DescribeRecordListResult{Records: []dnspod.Record{{RecordID: 8, Name: "www"}}, Total: 1},
 	}
 	gotEdition := ""
