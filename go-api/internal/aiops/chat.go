@@ -579,7 +579,9 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 			} else if canCall {
 				namespacedCall := call
 				namespacedCall.ID = fmt.Sprintf("turn:%d:round:%d:%s", turnID, round+1, call.ID)
-				result, err = s.callTool(ctx, actorID, sessionID, namespacedCall)
+				result, err = s.callToolWithRetry(ctx, actorID, sessionID, namespacedCall, func(check context.Context) error {
+					return s.requireToolTurnActive(check, actorID, sessionID, turnID, full)
+				})
 				if err != nil {
 					result = ToolOutcome{Content: toolErrorContent(err)}
 				}

@@ -247,7 +247,7 @@ func (p *panelOperations) Execute(ctx context.Context, actor aiops.PanelOperatio
 	}
 	if recorder.status < 200 || recorder.status >= 300 {
 		if preflight.code != "" {
-			return nil, &aiops.PanelOperationError{Status: recorder.status, Code: preflight.code, NotExecuted: true}
+			return nil, &aiops.PanelOperationError{Status: recorder.status, Code: preflight.code, NotExecuted: true, Retryable: preflight.retryable}
 		}
 		// Do not expose SQL, config contents, upstream bodies or submitted secrets
 		// via a backend error. The operation and HTTP code are enough to retry reads.
@@ -281,13 +281,17 @@ func (p *panelOperations) Execute(ctx context.Context, actor aiops.PanelOperatio
 }
 
 type panelOperationPreflightKey struct{}
-type panelOperationPreflightCapture struct{ code string }
+type panelOperationPreflightCapture struct {
+	code      string
+	retryable bool
+}
 
-func capturePanelOperationPreflight(ctx context.Context, code string) {
+func capturePanelOperationPreflight(ctx context.Context, code string, retryable bool) {
 	switch code {
 	case "dns_invalid_arguments", "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed":
 		if capture, ok := ctx.Value(panelOperationPreflightKey{}).(*panelOperationPreflightCapture); ok {
 			capture.code = code
+			capture.retryable = retryable && code != "dns_invalid_arguments"
 		}
 	}
 }

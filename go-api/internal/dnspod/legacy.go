@@ -185,7 +185,7 @@ func (c *LegacyClient) callOnce(ctx context.Context, action string, values url.V
 		return nil, fmt.Errorf("读取 DNSPod 国际版响应失败：%w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("DNSPod 国际版接口返回 HTTP %d：%s", response.StatusCode, strings.TrimSpace(string(raw)))
+		return nil, &HTTPError{Status: response.StatusCode}
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	decoder.UseNumber()

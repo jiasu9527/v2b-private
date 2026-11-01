@@ -37,6 +37,9 @@ type PanelOperationError struct {
 	Code        string
 	Message     string
 	NotExecuted bool
+	// Retryable is set only by trusted in-process preflight classification.
+	// It must never be inferred from an upstream response body or status alone.
+	Retryable bool
 }
 
 func (e *PanelOperationError) Error() string {

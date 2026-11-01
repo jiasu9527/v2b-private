@@ -141,94 +141,115 @@ func safeAIErrorOrNil(err error) error {
 }
 
 func (s *Service) executePanelOperation(ctx context.Context, a Action, snapshot string) (string, string, string) {
-	fail := func() (string, string, string) {
-		return "failed", "", "后台操作权限、参数或目录已变化，未执行"
-	}
-	payload, parameters, err := s.decodePanelOperationPayload(a.Payload)
-	if err != nil {
-		return fail()
-	}
-	runtime := s.getPanelOperations()
-	operation, err := findPanelOperation(runtime, payload.Operation)
-	if err != nil || !operation.Mutating || panelOperationSnapshot(operation, parameters) != snapshot {
-		return fail()
-	}
-	origin, err := panelActor(ctx, s.db, a.ActorID, false)
-	if err != nil {
-		return fail()
-	}
-	actor, err := panelActor(ctx, s.db, a.ApprovedBy, false)
-	if err != nil || (operation.AdminOnly && (!origin.IsAdmin || !actor.IsAdmin)) {
-		return fail()
-	}
-	if operation.AdminOnly {
-		if panelAdminSession(ctx, s.db, a.SessionID, false) != nil {
+	for attempt := 1; ; attempt++ {
+		fail := func() (string, string, string) {
+			return "failed", "", "后台操作权限、参数或目录已变化，未执行"
+		}
+		payload, parameters, err := s.decodePanelOperationPayload(a.Payload)
+		if err != nil {
 			return fail()
 		}
-	}
-	if s.requireSessionAccess(ctx, origin.ID, a.SessionID) != nil || s.requireSessionAccess(ctx, actor.ID, a.SessionID) != nil {
-		return fail()
-	}
-	if runtime.Validate(ctx, origin, operation.Name, parameters) != nil || runtime.Validate(ctx, actor, operation.Name, parameters) != nil {
-		return fail()
-	}
-	origin, err = panelActor(ctx, s.db, a.ActorID, false)
-	if err != nil {
-		return fail()
-	}
-	actor, err = panelActor(ctx, s.db, a.ApprovedBy, false)
-	if err != nil || (operation.AdminOnly && (!origin.IsAdmin || !actor.IsAdmin)) {
-		return fail()
-	}
-	if operation.AdminOnly {
-		if panelAdminSession(ctx, s.db, a.SessionID, false) != nil {
+		runtime := s.getPanelOperations()
+		operation, err := findPanelOperation(runtime, payload.Operation)
+		if err != nil || !operation.Mutating || panelOperationSnapshot(operation, parameters) != snapshot {
 			return fail()
 		}
-	}
-	// Approval preserves the approver's identity for audit, but must not grant
-	// an employee proposal broader database scope through an admin approver.
-	effectiveActor := PanelOperationActor{ID: actor.ID, IsAdmin: origin.IsAdmin && actor.IsAdmin}
-	if runtime.Validate(ctx, effectiveActor, operation.Name, parameters) != nil {
-		return fail()
-	}
-	var active bool
-	if err = s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_ai_action a JOIN v2_ai_config c ON c.id=1 WHERE a.id=$1 AND a.status='running' AND NOT a.stop_requested AND c.enabled)`, a.ID).Scan(&active); err != nil || !active || ctx.Err() != nil {
-		return fail()
-	}
-	if a.ApprovalMode == "full_access" && s.requireFullAccess(ctx, actor.ID, a.SessionID, a.AuthorizationTurnID) != nil {
-		return fail()
-	}
-	data, err := runtime.Execute(ctx, effectiveActor, operation.Name, parameters)
-	if err != nil {
-		var nodeValidation *admin.ManagedServerValidationError
-		if errors.As(err, &nodeValidation) {
-			return "failed", panelPreflightOutput("node_invalid_arguments"), "节点参数校验未通过，未执行节点保存：" + nodeValidation.Error()
+		origin, err := s.retryPanelActor(ctx, a.ActorID)
+		if err != nil {
+			return fail()
 		}
-		if errors.Is(err, ErrForbidden) || errors.Is(err, ErrValidation) || errors.Is(err, ErrNotFound) {
-			return "failed", "", "后台操作被权限或参数校验拒绝，未完成"
+		actor, err := s.retryPanelActor(ctx, a.ApprovedBy)
+		if err != nil || (operation.AdminOnly && (!origin.IsAdmin || !actor.IsAdmin)) {
+			return fail()
 		}
-		var panelError *PanelOperationError
-		if errors.As(err, &panelError) {
-			code, message := panelOperationErrorText(panelError)
-			// This marker originates in the private HTTP adapter, never from an
-			// upstream response body or a model-supplied status. Failures after
-			// dispatch remain unknown regardless of their HTTP status.
-			if panelError.NotExecuted && strings.HasPrefix(code, "dns_") {
-				return "failed", panelPreflightOutput(code), message
+		if operation.AdminOnly {
+			if s.retryPanelAdminSession(ctx, a.SessionID) != nil {
+				return fail()
 			}
-			return "unknown", "", fmt.Sprintf("后台操作返回 HTTP %d（%s）：%s；可能已部分执行，请核对结果，禁止自动重试", panelError.Status, code, message)
 		}
-		return "unknown", "", "后台操作返回异常，可能已部分执行；请核对结果，禁止自动重试"
+		if retryStateRead(ctx, func(check context.Context) error {
+			if err := s.requireSessionAccess(check, origin.ID, a.SessionID); err != nil {
+				return err
+			}
+			return s.requireSessionAccess(check, actor.ID, a.SessionID)
+		}) != nil {
+			return fail()
+		}
+		if runtime.Validate(ctx, origin, operation.Name, parameters) != nil || runtime.Validate(ctx, actor, operation.Name, parameters) != nil {
+			return fail()
+		}
+		origin, err = s.retryPanelActor(ctx, a.ActorID)
+		if err != nil {
+			return fail()
+		}
+		actor, err = s.retryPanelActor(ctx, a.ApprovedBy)
+		if err != nil || (operation.AdminOnly && (!origin.IsAdmin || !actor.IsAdmin)) {
+			return fail()
+		}
+		if operation.AdminOnly {
+			if s.retryPanelAdminSession(ctx, a.SessionID) != nil {
+				return fail()
+			}
+		}
+		// Approval preserves the approver's identity for audit, but must not grant
+		// an employee proposal broader database scope through an admin approver.
+		effectiveActor := PanelOperationActor{ID: actor.ID, IsAdmin: origin.IsAdmin && actor.IsAdmin}
+		if runtime.Validate(ctx, effectiveActor, operation.Name, parameters) != nil {
+			return fail()
+		}
+		var active bool
+		err = retryStateRead(ctx, func(check context.Context) error {
+			return s.db.QueryRowContext(check, `SELECT EXISTS(SELECT 1 FROM v2_ai_action a JOIN v2_ai_config c ON c.id=1 WHERE a.id=$1 AND a.status='running' AND NOT a.stop_requested AND c.enabled)`, a.ID).Scan(&active)
+		})
+		if err != nil || !active || ctx.Err() != nil {
+			return fail()
+		}
+		if a.ApprovalMode == "full_access" && s.requireFullAccess(ctx, actor.ID, a.SessionID, a.AuthorizationTurnID) != nil {
+			return fail()
+		}
+		data, err := runtime.Execute(ctx, effectiveActor, operation.Name, parameters)
+		if err != nil {
+			var nodeValidation *admin.ManagedServerValidationError
+			if errors.As(err, &nodeValidation) {
+				return "failed", panelPreflightOutput("node_invalid_arguments"), "节点参数校验未通过，未执行节点保存：" + nodeValidation.Error()
+			}
+			if errors.Is(err, ErrForbidden) || errors.Is(err, ErrValidation) || errors.Is(err, ErrNotFound) {
+				return "failed", "", "后台操作被权限或参数校验拒绝，未完成"
+			}
+			var panelError *PanelOperationError
+			if errors.As(err, &panelError) {
+				code, message := panelOperationErrorText(panelError)
+				// This marker originates in the private HTTP adapter, never from an
+				// upstream response body or a model-supplied status. Failures after
+				// dispatch remain unknown regardless of their HTTP status.
+				if panelError.NotExecuted && strings.HasPrefix(code, "dns_") {
+					if panelError.Retryable && oneOf(code, "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed") && attempt < operationMaxAttempts {
+						if err := readToolRetryDelay(ctx, attempt); err != nil {
+							return "failed", panelPreflightOutput(code), "写前查询重试已取消，未发送 DNS 修改"
+						}
+						// Re-enter all checks with the same encrypted payload and
+						// action ID. Never retry a response without proof of no write.
+						continue
+					}
+					if panelError.Retryable && attempt == operationMaxAttempts {
+						message += "（写前查询已自动尝试 3 次，未发送 DNS 修改）"
+					}
+					return "failed", panelPreflightOutput(code), message
+				}
+				return "unknown", "", fmt.Sprintf("后台操作返回 HTTP %d（%s）：%s；可能已部分执行，请核对结果，禁止自动重试", panelError.Status, code, message)
+			}
+			return "unknown", "", "后台操作返回异常，可能已部分执行；请核对结果，禁止自动重试"
+		}
+		// Preserve an explicit successful mutation result even if its output cannot
+		// be saved; never invite the model to repeat a write to recover its output.
+		resultCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		output, err := s.savePanelResult(resultCtx, actor.ID, a.SessionID, operation.Name, data, true)
+		if err != nil {
+			return "succeeded", "后台操作已完成，但结果保存失败；请查询业务现状，不要重复执行", ""
+		}
+		return "succeeded", output, ""
 	}
-	// Preserve an explicit successful mutation result even if its output cannot
-	// be saved; never invite the model to repeat a write to recover its output.
-	resultCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	output, err := s.savePanelResult(resultCtx, actor.ID, a.SessionID, operation.Name, data, true)
-	if err != nil {
-		return "succeeded", "后台操作已完成，但结果保存失败；请查询业务现状，不要重复执行", ""
-	}
-	return "succeeded", output, ""
 }
 
 func panelPreflightOutput(code string) string {

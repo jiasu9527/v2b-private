@@ -167,7 +167,7 @@ func (c *Client) call(ctx context.Context, action string, payload any, result an
 		return fmt.Errorf("read DNSPod response: %w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("DNSPod 接口返回 HTTP %d：%s", response.StatusCode, strings.TrimSpace(string(raw)))
+		return &HTTPError{Status: response.StatusCode}
 	}
 	var envelope struct {
 		Response json.RawMessage `json:"Response"`

@@ -14,6 +14,12 @@ const maxSSHTimeoutSeconds = 1800
 // still needed to interrupt an in-flight handshake/command, but its polling
 // interval must not allow a canceled action to start a new connection.
 func (s *Service) requireSSHActionActive(ctx context.Context, a Action) error {
+	return retryStateRead(ctx, func(check context.Context) error {
+		return s.requireActionActiveOnce(check, a)
+	})
+}
+
+func (s *Service) requireActionActiveOnce(ctx context.Context, a Action) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

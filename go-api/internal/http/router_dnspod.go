@@ -279,7 +279,7 @@ func handleAdminDNSPodRecordStatus(w http.ResponseWriter, r *http.Request, sessi
 func handleDNSPodError(w http.ResponseWriter, r *http.Request, err error) bool {
 	var preflight *dnspod.PreflightError
 	if errors.As(err, &preflight) {
-		capturePanelOperationPreflight(r.Context(), preflight.Code)
+		capturePanelOperationPreflight(r.Context(), preflight.Code, preflight.Retryable())
 		status := http.StatusUnprocessableEntity
 		if preflight.Code == "dns_preflight_failed" {
 			status = http.StatusServiceUnavailable
@@ -292,7 +292,7 @@ func handleDNSPodError(w http.ResponseWriter, r *http.Request, err error) bool {
 }
 
 func writeDNSPodValidationError(w http.ResponseWriter, r *http.Request, message string) {
-	capturePanelOperationPreflight(r.Context(), "dns_invalid_arguments")
+	capturePanelOperationPreflight(r.Context(), "dns_invalid_arguments", false)
 	writeJSON(w, http.StatusBadRequest, map[string]any{"message": message})
 }
 

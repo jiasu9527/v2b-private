@@ -443,7 +443,7 @@ func requireActionSessionTx(ctx context.Context, tx *sql.Tx, sessionID int64) er
 func (s *Service) changeAction(ctx context.Context, actorID, sessionID, id int64, approve bool) (Action, error) {
 	return s.changeActionAuthorized(ctx, actorID, sessionID, id, approve, 0)
 }
-func (s *Service) changeActionAuthorized(ctx context.Context, actorID, sessionID, id int64, approve bool, autoTurnID int64) (Action, error) {
+func (s *Service) changeActionAuthorizedOnce(ctx context.Context, actorID, sessionID, id int64, approve bool, autoTurnID int64) (Action, error) {
 	var empty Action
 	if id <= 0 || sessionID <= 0 {
 		return empty, ErrValidation
@@ -466,6 +466,9 @@ func (s *Service) changeActionAuthorized(ctx context.Context, actorID, sessionID
 		return empty, err
 	}
 	if err = requireActionSessionTx(ctx, tx, sessionID); err != nil {
+		if errors.Is(err, ErrBusy) {
+			return empty, &actionApprovalLockBusy{}
+		}
 		return empty, err
 	}
 	a, err := scanAction(tx.QueryRowContext(ctx, `SELECT `+actionColumns+` FROM v2_ai_action WHERE id=$1 AND session_id=$2 FOR UPDATE`, id, sessionID))
@@ -690,24 +693,23 @@ func applyPanelAction(ctx context.Context, tx *sql.Tx, a Action) error {
 func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, a Action, snapshot string) {
 	defer func() { cancel(); s.mu.Lock(); delete(s.workers, -a.ID); s.mu.Unlock(); s.wg.Done() }()
 	if !actionCapabilityAllowed(a.Kind) {
-		finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer finishCancel()
-		_, _ = s.db.ExecContext(finishCtx, `UPDATE v2_ai_action SET status='failed',error='AI 无此业务操作权限，未执行操作',completed_at=$2,updated_at=$2 WHERE id=$1 AND status='running'`, a.ID, time.Now().Unix())
+		_ = s.persistActionCompletion(a, "failed", "", "AI 无此业务操作权限，未执行操作", nil)
 		return
 	}
 	go s.watchAction(ctx, cancel, a.ID)
 	status, output, problem := "failed", "", "操作执行失败，可能已部分执行；请人工检查"
 	var exitCode *int
-	if s.requireOperator(ctx, a.ApprovedBy) != nil || s.requireSessionAccess(ctx, a.ApprovedBy, a.SessionID) != nil {
-		finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer finishCancel()
-		_, _ = s.db.ExecContext(finishCtx, `UPDATE v2_ai_action SET status='failed',error='运维权限已变化，未执行操作',completed_at=$2,updated_at=$2 WHERE id=$1 AND status='running'`, a.ID, time.Now().Unix())
+	if retryStateRead(ctx, func(check context.Context) error {
+		if err := s.requireOperator(check, a.ApprovedBy); err != nil {
+			return err
+		}
+		return s.requireSessionAccess(check, a.ApprovedBy, a.SessionID)
+	}) != nil {
+		_ = s.persistActionCompletion(a, "failed", "", "运维权限已变化，未执行操作", nil)
 		return
 	}
 	if a.ApprovalMode == "full_access" && s.requireFullAccess(ctx, a.ApprovedBy, a.SessionID, a.AuthorizationTurnID) != nil {
-		finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer finishCancel()
-		_, _ = s.db.ExecContext(finishCtx, `UPDATE v2_ai_action SET status='failed',error='完全访问授权已撤回，未执行操作',completed_at=$2,updated_at=$2 WHERE id=$1 AND status='running'`, a.ID, time.Now().Unix())
+		_ = s.persistActionCompletion(a, "failed", "", "完全访问授权已撤回，未执行操作", nil)
 		return
 	}
 
@@ -780,7 +782,12 @@ func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, 
 			if runner, ok := s.panel.(interface {
 				StartClientEntryMonitorRunForPoliciesWithMessage(context.Context, []int64, int64, int64, int64, string) (int64, error)
 			}); ok {
-				id, err := runner.StartClientEntryMonitorRunForPoliciesWithMessage(ctx, p.PolicyIDs, a.ApprovedBy, 0, 0, fmt.Sprintf("ai-action:%d", a.ID))
+				id, err := s.startIdempotentDetection(ctx, a, func(check context.Context) (int64, error) {
+					if !s.monitorActionStillCurrent(check, p.PolicyIDs, snapshot) {
+						return 0, ErrConflict
+					}
+					return runner.StartClientEntryMonitorRunForPoliciesWithMessage(check, p.PolicyIDs, a.ApprovedBy, 0, 0, fmt.Sprintf("ai-action:%d", a.ID))
+				})
 				if err == nil {
 					status = "succeeded"
 					output = fmt.Sprintf("检测任务已受理，run_id=%d；检测结果继续遵循后台自动化配置", id)
@@ -795,17 +802,20 @@ func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, 
 		}
 	}
 	// UPDATE only: session reset/deletion cannot be undone by a late completion.
-	finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer finishCancel()
-	_, _ = s.db.ExecContext(finishCtx, `UPDATE v2_ai_action SET status=$2,output=$3,error=$4,completed_at=$5,updated_at=$5,exit_code=$6 WHERE id=$1 AND status='running'`, a.ID, status, output, problem, time.Now().Unix(), exitCode)
+	_ = s.persistActionCompletion(a, status, output, problem, exitCode)
 }
 
 func (s *Service) monitorActionStillCurrent(ctx context.Context, ids []int64, expected string) bool {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return false
-	}
-	defer tx.Rollback()
-	_, actual, err := loadMonitorSnapshot(ctx, tx, ids)
-	return err == nil && actual == expected
+	return retryStateRead(ctx, func(check context.Context) error {
+		tx, err := s.db.BeginTx(check, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		_, actual, err := loadMonitorSnapshot(check, tx, ids)
+		if err == nil && actual != expected {
+			return ErrConflict
+		}
+		return err
+	}) == nil
 }

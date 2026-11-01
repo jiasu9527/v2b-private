@@ -404,6 +404,14 @@ func oneOf(s string, v ...string) bool {
 	return false
 }
 func safeAIError(e error) error {
+	var readExhausted *readToolRetryExhausted
+	if errors.As(e, &readExhausted) {
+		return readExhausted
+	}
+	var unavailable *safeUnavailableError
+	if errors.As(e, &unavailable) {
+		return unavailable
+	}
 	var nodeValidation *admin.ManagedServerValidationError
 	if errors.As(e, &nodeValidation) {
 		return nodeValidation
@@ -411,7 +419,9 @@ func safeAIError(e error) error {
 	var panelError *PanelOperationError
 	if errors.As(e, &panelError) {
 		code, message := panelOperationErrorText(panelError)
-		return &PanelOperationError{Status: panelError.Status, Code: code, Message: message, NotExecuted: panelError.NotExecuted && strings.HasPrefix(code, "dns_")}
+		notExecuted := panelError.NotExecuted && strings.HasPrefix(code, "dns_")
+		retryable := notExecuted && panelError.Retryable && oneOf(code, "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed")
+		return &PanelOperationError{Status: panelError.Status, Code: code, Message: message, NotExecuted: notExecuted, Retryable: retryable}
 	}
 	if errors.Is(e, admin.ErrAIEntrySplitInvalid) {
 		return e
@@ -430,7 +440,7 @@ func safeAIError(e error) error {
 	if errors.Is(e, context.Canceled) {
 		return context.Canceled
 	}
-	return ErrUnavailable
+	return &safeUnavailableError{retryable: retryableReadToolError(context.Background(), e)}
 }
 
 // Only fixed error categories reach the model. SQL, network error bodies and
@@ -439,7 +449,10 @@ func toolErrorContent(err error) string {
 	code, message := "unavailable", "当前查询暂不可用，请核对后台服务状态；不要连续重复请求"
 	var nodeValidation *admin.ManagedServerValidationError
 	var panelError *PanelOperationError
+	var readExhausted *readToolRetryExhausted
 	switch {
+	case errors.As(err, &readExhausted):
+		code, message = "read_retry_exhausted", readExhausted.Error()
 	case errors.As(err, &nodeValidation):
 		code, message = "invalid_arguments", "节点参数校验未通过，未执行节点保存："+nodeValidation.Error()+"。请查询参考节点并按操作定义补齐或修正参数，不要猜测协议或重复提交相同参数"
 	case errors.As(err, &panelError):

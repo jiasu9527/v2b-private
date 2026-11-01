@@ -102,7 +102,7 @@ func TestDNSPodDomainMetadataRefusesIncompleteOrConflictingIdentity(t *testing.T
 			service := testDNSPodMetadataService(t, api)
 			_, err := service.SaveDNSPodRecord(context.Background(), DNSPodRecordSaveRequest{Domain: "example.com", DomainID: tc.id, DomainGrade: "DPG_Free", RecordType: "A", Value: "192.0.2.2"})
 			var preflight *dnspod.PreflightError
-			if !errors.As(err, &preflight) || preflight.Code != "dns_domain_metadata" || api.mutationCalls != 0 {
+			if !errors.As(err, &preflight) || preflight.Code != "dns_domain_metadata" || preflight.Retryable() || api.mutationCalls != 0 {
 				t.Fatalf("unsafe metadata result: err=%v writes=%d", err, api.mutationCalls)
 			}
 		})
@@ -164,7 +164,7 @@ func TestDNSPodMissingCredentialsIsPreflight(t *testing.T) {
 	t.Setenv("DNSPOD_SECRET_KEY", "")
 	_, err := service.SaveDNSPodRecord(context.Background(), DNSPodRecordSaveRequest{Domain: "example.com", RecordType: "A", Value: "192.0.2.2"})
 	var preflight *dnspod.PreflightError
-	if !errors.As(err, &preflight) || preflight.Code != "dns_preflight_failed" {
+	if !errors.As(err, &preflight) || preflight.Code != "dns_preflight_failed" || preflight.Retryable() {
 		t.Fatalf("missing configuration: %v", err)
 	}
 }
@@ -266,6 +266,10 @@ func TestDNSPodLegacyMetadataToProviderEndToEnd(t *testing.T) {
 			if tc.wantCode != "" {
 				if !errors.As(err, &preflight) || preflight.Code != tc.wantCode || strings.Contains(err.Error(), "provider-sensitive-detail") {
 					t.Fatalf("preflight err=%v", err)
+				}
+				wantRetryable := tc.failureMode == "disconnect" || tc.failureMode == "http500"
+				if preflight.Retryable() != wantRetryable {
+					t.Fatalf("preflight retryable=%v want=%v", preflight.Retryable(), wantRetryable)
 				}
 			} else if tc.failurePath != "" {
 				if err == nil || errors.As(err, &preflight) {

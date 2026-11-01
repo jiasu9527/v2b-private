@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +17,19 @@ import (
 	"forest/go-api/internal/config"
 	platformpostgres "forest/go-api/internal/platform/postgres"
 )
+
+type lostProbeReplyPanel struct {
+	*admin.DBService
+	calls atomic.Int32
+}
+
+func (p *lostProbeReplyPanel) StartAIEntryProbeRun(ctx context.Context, selection admin.AIEntryProbeSelection, actor int64, key, snapshot string) (int64, error) {
+	id, err := p.DBService.StartAIEntryProbeRun(ctx, selection, actor, key, snapshot)
+	if err == nil && p.calls.Add(1) == 1 {
+		return 0, io.ErrUnexpectedEOF // committed run, reply lost
+	}
+	return id, err
+}
 
 func TestAIEntryProbeSelectionPostgres(t *testing.T) {
 	dsn := os.Getenv("FOREST_AIOPS_TEST_DSN")
@@ -35,7 +50,8 @@ func TestAIEntryProbeSelectionPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	panel := admin.NewDBService(config.Config{}, db)
-	s := NewService(config.Config{AppKey: "probe-fixture-key"}, db, panel)
+	flaky := &lostProbeReplyPanel{DBService: panel}
+	s := NewService(config.Config{AppKey: "probe-fixture-key"}, db, flaky)
 	defer s.Close()
 	if err = s.ensureSchema(ctx); err != nil {
 		t.Fatal(err)
@@ -123,6 +139,12 @@ func TestAIEntryProbeSelectionPostgres(t *testing.T) {
 	}
 	if a.Status != "succeeded" {
 		t.Fatalf("dispatch %+v", a)
+	}
+	if flaky.calls.Load() != 2 {
+		t.Fatal("lost probe reply was not resolved using the same request key", flaky.calls.Load())
+	}
+	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_client_entry_monitor_run WHERE requested_by_user_id=$1`, actor).Scan(&count); err != nil || count != 1 {
+		t.Fatal("retry created duplicate detection runs", count, err)
 	}
 	var runID int64
 	var fingerprint string

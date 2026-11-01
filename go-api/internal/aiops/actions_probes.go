@@ -51,7 +51,9 @@ func (s *Service) captureProbeAction(ctx context.Context, tx *sql.Tx, spec actio
 }
 
 func (s *Service) executeProbeAction(ctx context.Context, a Action, snapshot string) (status, output, problem string) {
-	if err := s.requireOperator(ctx, a.ApprovedBy); err != nil {
+	if err := retryStateRead(ctx, func(check context.Context) error {
+		return s.requireOperator(check, a.ApprovedBy)
+	}); err != nil {
 		return "failed", "", "运维权限已变化，未发起检测"
 	}
 	var p probeActionPayload
@@ -64,7 +66,9 @@ func (s *Service) executeProbeAction(ctx context.Context, a Action, snapshot str
 	if !ok {
 		return "failed", "", "检测服务不可用，未发送任务"
 	}
-	id, err := service.StartAIEntryProbeRun(ctx, p.Selection, a.ApprovedBy, fmt.Sprintf("ai-entry-probe:%d", a.ID), snapshot)
+	id, err := s.startIdempotentDetection(ctx, a, func(check context.Context) (int64, error) {
+		return service.StartAIEntryProbeRun(check, p.Selection, a.ApprovedBy, fmt.Sprintf("ai-entry-probe:%d", a.ID), snapshot)
+	})
 	if err == nil {
 		return "succeeded", fmt.Sprintf("检测任务已受理，run_id=%d；请使用 entry_probe_result 查询本次目标×探针结果。未上报不能判定正常；上报仍遵循原自动切换/二分设置。", id), ""
 	}

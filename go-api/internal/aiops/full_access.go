@@ -36,6 +36,11 @@ func (s *Service) requireFullAccessTx(ctx context.Context, tx *sql.Tx, actor, se
 	return err
 }
 func (s *Service) requireFullAccess(ctx context.Context, actor, session, turn int64) error {
+	return retryStateRead(ctx, func(check context.Context) error {
+		return s.requireFullAccessOnce(check, actor, session, turn)
+	})
+}
+func (s *Service) requireFullAccessOnce(ctx context.Context, actor, session, turn int64) error {
 	var ok bool
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_ai_turn t JOIN v2_ai_session s ON s.id=t.session_id JOIN v2_user u ON u.id=t.actor_id JOIN v2_ai_config c ON c.id=1 WHERE t.id=$1 AND t.session_id=$2 AND t.actor_id=$3 AND t.access_mode='full' AND t.status='running' AND NOT t.stop_requested AND t.expires_at>$4 AND s.access_mode='full' AND s.full_access_by=$3 AND (u.is_admin=1 OR (u.is_staff=1 AND s.created_by=u.id)) AND u.banned=0 AND c.enabled)`, turn, session, actor, time.Now().Unix()).Scan(&ok)
 	if err != nil {
@@ -192,7 +197,9 @@ func (s *Service) watchTurn(ctx context.Context, cancel context.CancelFunc, acto
 			return
 		case <-ticker.C:
 			if full && !time.Now().Before(nextRenewal) {
-				if err := s.renewFullAccessTurn(ctx, actor, session, turn); err != nil {
+				if err := retryStateRead(ctx, func(check context.Context) error {
+					return s.renewFullAccessTurn(check, actor, session, turn)
+				}); err != nil {
 					if !errors.Is(err, ErrBusy) {
 						cancel()
 						return
@@ -205,18 +212,7 @@ func (s *Service) watchTurn(ctx context.Context, cancel context.CancelFunc, acto
 					continue
 				}
 			}
-			check, done := context.WithTimeout(ctx, 3*time.Second)
-			var err error
-			if full {
-				err = s.requireFullAccess(check, actor, session, turn)
-			} else {
-				var alive bool
-				err = s.db.QueryRowContext(check, `SELECT EXISTS(SELECT 1 FROM v2_ai_turn t JOIN v2_ai_session s ON s.id=t.session_id JOIN v2_user u ON u.id=t.actor_id JOIN v2_ai_config c ON c.id=1 WHERE t.id=$1 AND t.session_id=$2 AND t.actor_id=$3 AND t.status='running' AND NOT t.stop_requested AND t.expires_at>$4 AND (u.is_admin=1 OR (u.is_staff=1 AND s.created_by=u.id)) AND u.banned=0 AND c.enabled)`, turn, session, actor, time.Now().Unix()).Scan(&alive)
-				if err == nil && !alive {
-					err = ErrForbidden
-				}
-			}
-			done()
+			err := s.requireToolTurnActive(ctx, actor, session, turn, full)
 			if err != nil {
 				cancel()
 				return
@@ -278,7 +274,11 @@ func (s *Service) automaticActionResult(ctx context.Context, actor, session, tur
 		if err = s.requireFullAccess(ctx, actor, session, turn); err != nil {
 			return out, err
 		}
-		a, err = scanAction(s.db.QueryRowContext(ctx, `SELECT `+actionColumns+` FROM v2_ai_action WHERE id=$1 AND session_id=$2`, result.ActionID, session))
+		err = retryStateRead(ctx, func(check context.Context) error {
+			var readErr error
+			a, readErr = scanAction(s.db.QueryRowContext(check, `SELECT `+actionColumns+` FROM v2_ai_action WHERE id=$1 AND session_id=$2`, result.ActionID, session))
+			return readErr
+		})
 		if err != nil {
 			return out, err
 		}
@@ -362,9 +362,9 @@ func (s *Service) watchAction(ctx context.Context, cancel context.CancelFunc, id
 			return
 		case <-ticker.C:
 			var running bool
-			check, done := context.WithTimeout(ctx, 3*time.Second)
-			err := s.db.QueryRowContext(check, `SELECT EXISTS(SELECT 1 FROM v2_ai_action a JOIN v2_ai_session s ON s.id=a.session_id JOIN v2_user u ON u.id=a.approved_by JOIN v2_ai_config c ON c.id=1 WHERE a.id=$1 AND a.status='running' AND NOT a.stop_requested AND u.banned=0 AND (u.is_admin=1 OR (u.is_staff=1 AND s.created_by=u.id)) AND c.enabled)`, id).Scan(&running)
-			done()
+			err := retryStateRead(ctx, func(check context.Context) error {
+				return s.db.QueryRowContext(check, `SELECT EXISTS(SELECT 1 FROM v2_ai_action a JOIN v2_ai_session s ON s.id=a.session_id JOIN v2_user u ON u.id=a.approved_by JOIN v2_ai_config c ON c.id=1 WHERE a.id=$1 AND a.status='running' AND NOT a.stop_requested AND u.banned=0 AND (u.is_admin=1 OR (u.is_staff=1 AND s.created_by=u.id)) AND c.enabled)`, id).Scan(&running)
+			})
 			if err != nil || !running {
 				cancel()
 				return

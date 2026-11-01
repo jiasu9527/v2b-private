@@ -1,5 +1,13 @@
 package dnspod
 
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"syscall"
+)
+
 // PreflightError proves that a DNS write was not sent. Only local validation,
 // credential loading, and read-only prerequisite lookups may return this type.
 // Never wrap an error returned after a mutation request has been dispatched.
@@ -29,4 +37,38 @@ func (e *PreflightError) Unwrap() error {
 		return nil
 	}
 	return e.Err
+}
+
+// Retryable only classifies failures of read-only prerequisites. A transient
+// provider error alone does not prove that repeating a mutation is safe.
+func (e *PreflightError) Retryable() bool {
+	if e == nil || e.Err == nil || errors.Is(e.Err, context.Canceled) {
+		return false
+	}
+	switch e.Code {
+	case "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed":
+	default:
+		return false
+	}
+	var response *HTTPError
+	if errors.As(e.Err, &response) && response != nil {
+		switch response.Status {
+		case 408, 429, 500, 502, 503, 504:
+			return true
+		default:
+			return false
+		}
+	}
+	var network net.Error
+	if errors.As(e.Err, &network) && (network.Timeout() || network.Temporary()) {
+		return true
+	}
+	for _, cause := range []error{io.EOF, io.ErrUnexpectedEOF, net.ErrClosed,
+		syscall.ECONNRESET, syscall.ECONNABORTED, syscall.ECONNREFUSED,
+		syscall.EPIPE, syscall.ETIMEDOUT, syscall.EHOSTUNREACH, syscall.ENETUNREACH} {
+		if errors.Is(e.Err, cause) {
+			return true
+		}
+	}
+	return false
 }
