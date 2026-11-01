@@ -48,11 +48,60 @@ type Filter struct {
 	To           int64  `json:"to"`
 	PolicyID     int64  `json:"policy_id"`
 	GroupID      int64  `json:"group_id"`
+	CollectionID int64  `json:"collection_id"`
+	ProviderID   int64  `json:"provider_id"`
+	ServerID     int64  `json:"server_id"`
+	ServerType   string `json:"server_type"`
+	Transport    string `json:"transport"`
+	RuleRevision string `json:"rule_revision"`
+	Version      string `json:"version"`
 	Host         string `json:"host"`
 	Port         string `json:"port"`
 	CompleteOnly bool   `json:"complete_only"`
 	Limit        int    `json:"limit"`
 	Offset       int    `json:"offset"`
+}
+type DeliveryStatistics struct {
+	Users    int64 `json:"users"`
+	Requests int64 `json:"requests"`
+	FirstAt  int64 `json:"first_at"`
+	LastAt   int64 `json:"last_at"`
+}
+type DeliveryUser struct {
+	UserID       int64  `json:"user_id"`
+	EmailAtEvent string `json:"email_at_event"`
+	FirstAt      int64  `json:"first_at"`
+	LastAt       int64  `json:"last_at"`
+	Requests     int64  `json:"requests"`
+}
+type DeliveryUsersPage struct {
+	Items  []DeliveryUser `json:"items"`
+	Total  int64          `json:"total"`
+	Limit  int            `json:"limit"`
+	Offset int            `json:"offset"`
+}
+type DeliveryVersion struct {
+	Version       string `json:"version"`
+	PolicyID      int64  `json:"policy_id"`
+	GroupID       int64  `json:"group_id"`
+	ProviderID    int64  `json:"provider_id"`
+	CollectionID  int64  `json:"collection_id"`
+	RuleRevision  string `json:"rule_revision"`
+	SourceHost    string `json:"source_host"`
+	DeliveredHost string `json:"delivered_host"`
+	Port          string `json:"port"`
+	Source        string `json:"source"`
+	Resolved      bool   `json:"resolved"`
+	Users         int64  `json:"users"`
+	Requests      int64  `json:"requests"`
+	FirstAt       int64  `json:"first_at"`
+	LastAt        int64  `json:"last_at"`
+}
+type DeliveryVersionsPage struct {
+	Items  []DeliveryVersion `json:"items"`
+	Total  int64             `json:"total"`
+	Limit  int               `json:"limit"`
+	Offset int               `json:"offset"`
 }
 type Page struct {
 	Items  []Record `json:"items"`

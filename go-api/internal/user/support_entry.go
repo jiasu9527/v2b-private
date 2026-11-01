@@ -23,13 +23,15 @@ type SupportEntryQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 type SupportEntryTarget struct {
-	Key              string                   `json:"key"`
-	Name             string                   `json:"name"`
-	PolicyID         int64                    `json:"policy_id"`
-	GroupID          int64                    `json:"group_id,omitempty"`
-	EntryHost        string                   `json:"entry_host"`
-	ResolveEntryHost bool                     `json:"resolve_entry_host"`
-	Members          []ClientEntryGroupMember `json:"-"`
+	CollectionID      int64                    `json:"-"`
+	CollectionVersion int64                    `json:"-"`
+	Key               string                   `json:"key"`
+	Name              string                   `json:"name"`
+	PolicyID          int64                    `json:"policy_id"`
+	GroupID           int64                    `json:"group_id,omitempty"`
+	EntryHost         string                   `json:"entry_host"`
+	ResolveEntryHost  bool                     `json:"resolve_entry_host"`
+	Members           []ClientEntryGroupMember `json:"-"`
 }
 type SupportEntryOverride struct {
 	SourcePolicyID int64  `json:"source_policy_id"`
@@ -104,11 +106,16 @@ type SupportEntryPreview struct {
 func LoadSupportEntryTargets(ctx context.Context, q SupportEntryQuerier) ([]SupportEntryTarget, error) {
 	rows, err := q.QueryContext(ctx, `SELECT p.id,p.name,COALESCE(g.id,0),COALESCE(g.name,''),
  CASE WHEN p.mode = 'split' THEN g.entry_host ELSE p.entry_host END,
- COALESCE(g.resolve_entry_host,p.resolve_entry_host),m.server_type,m.server_id
+ COALESCE(g.resolve_entry_host,p.resolve_entry_host),m.server_type,m.server_id,
+ COALESCE(collection.id,0),COALESCE(collection.version,0)
 FROM v2_client_entry_user_policy p
 LEFT JOIN v2_client_entry_user_policy_split_group g ON p.mode = 'split' AND g.policy_id = p.id
  AND NOT EXISTS (SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = g.id)
 JOIN v2_client_entry_user_policy_member m ON m.policy_id = p.id
+LEFT JOIN v2_client_entry_collection_member collection_member
+ ON (p.mode = 'standard' AND collection_member.policy_id = p.id)
+ OR (p.mode = 'split' AND collection_member.split_group_id = g.id)
+LEFT JOIN v2_client_entry_collection collection ON collection.id = collection_member.collection_id
 WHERE p.enabled = 1 AND p.action = 'override'
  AND (p.mode = 'standard' OR (p.mode = 'split' AND g.id IS NOT NULL))
  AND TRIM(CASE WHEN p.mode = 'split' THEN g.entry_host ELSE p.entry_host END) <> ''
@@ -123,7 +130,7 @@ ORDER BY p.sort,p.id,g.sort,g.id,m.sort,m.id`)
 		var target SupportEntryTarget
 		var groupName, serverType string
 		var resolve, serverID int64
-		if err := rows.Scan(&target.PolicyID, &target.Name, &target.GroupID, &groupName, &target.EntryHost, &resolve, &serverType, &serverID); err != nil {
+		if err := rows.Scan(&target.PolicyID, &target.Name, &target.GroupID, &groupName, &target.EntryHost, &resolve, &serverType, &serverID, &target.CollectionID, &target.CollectionVersion); err != nil {
 			return nil, err
 		}
 		target.Key = fmt.Sprintf("policy:%d", target.PolicyID)
@@ -242,10 +249,11 @@ func applySupportEntryOverrides(ctx context.Context, servers []map[string]any, p
 		}
 		server["host"] = host
 		if collector := entryevidence.FromContext(ctx); collector != nil {
-			collector.Override(entryevidence.Node{ServerType: fmt.Sprint(server["type"]), ServerID: mapInt64(server["id"]), PolicyID: target.PolicyID, GroupID: target.GroupID, RuleRevision: entryevidence.Revision(struct {
-				Target  SupportEntryTarget
-				Version int64
-			}{target, versions[policyID]}), Source: "support_override", SourceHost: target.EntryHost, DeliveredHost: host, Port: fmt.Sprint(server["port"]), Resolved: host != target.EntryHost})
+			collector.Override(entryevidence.Node{ServerType: fmt.Sprint(server["type"]), ServerID: mapInt64(server["id"]), PolicyID: target.PolicyID, GroupID: target.GroupID, CollectionID: target.CollectionID, RuleRevision: entryevidence.Revision(struct {
+				Target                          SupportEntryTarget
+				Version                         int64
+				CollectionID, CollectionVersion int64
+			}{target, versions[policyID], target.CollectionID, target.CollectionVersion}), Source: "support_override", SourceHost: target.EntryHost, DeliveredHost: host, Port: fmt.Sprint(server["port"]), Resolved: host != target.EntryHost})
 		}
 	}
 	return servers

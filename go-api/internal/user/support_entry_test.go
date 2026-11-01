@@ -129,7 +129,7 @@ func TestSupportEntryTargetLoaderGroupsLeafReferencesWithoutConditionsOrExtras(t
 		t.Fatal(err)
 	}
 	defer db.Close()
-	mock.ExpectQuery(`(?s)SELECT p.id,p.name.*NOT EXISTS .*child.parent_id = g.id.*p.enabled = 1 AND p.action = 'override'`).WillReturnRows(sqlmock.NewRows([]string{"id", "name", "group_id", "group_name", "entry_host", "resolve", "type", "server_id"}).AddRow(10, "Rule", 0, "", "old.example", 0, "vmess", 1).AddRow(10, "Rule", 0, "", "old.example", 0, "vless", 2).AddRow(20, "Split", 30, "Leaf", "leaf.example", 1, "vmess", 1))
+	mock.ExpectQuery(`(?s)SELECT p.id,p.name.*NOT EXISTS .*child.parent_id = g.id.*p.enabled = 1 AND p.action = 'override'`).WillReturnRows(sqlmock.NewRows([]string{"id", "name", "group_id", "group_name", "entry_host", "resolve", "type", "server_id", "collection_id", "collection_version"}).AddRow(10, "Rule", 0, "", "old.example", 0, "vmess", 1, 7, 2).AddRow(10, "Rule", 0, "", "old.example", 0, "vless", 2, 7, 2).AddRow(20, "Split", 30, "Leaf", "leaf.example", 1, "vmess", 1, 8, 3))
 	targets, err := LoadSupportEntryTargets(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
@@ -175,7 +175,7 @@ func TestServersSupportOverrideRunsAfterPermissionFiltering(t *testing.T) {
 				}
 			}
 			mock.ExpectQuery(`SELECT source_policy_id,COALESCE\(target_policy_id,0\)`).WithArgs(int64(100)).WillReturnRows(sqlmock.NewRows([]string{"source", "target", "group", "key", "active", "expiry", "version"}).AddRow(7, 20, 0, "policy:20", 1, 0, 1))
-			mock.ExpectQuery(`SELECT p.id,p.name,COALESCE\(g.id,0\)`).WillReturnRows(sqlmock.NewRows([]string{"id", "name", "group", "group_name", "host", "resolve", "type", "server_id"}).AddRow(20, "B", 0, "", "manual.example", 0, "vmess", 11))
+			mock.ExpectQuery(`SELECT p.id,p.name,COALESCE\(g.id,0\)`).WillReturnRows(sqlmock.NewRows([]string{"id", "name", "group", "group_name", "host", "resolve", "type", "server_id", "collection_id", "collection_version"}).AddRow(20, "B", 0, "", "manual.example", 0, "vmess", 11, 0, 0))
 			expectSubscribeActivityForVisibilityTest(mock, 100)
 			result, err := service.Servers(context.Background(), 100, "ClashMeta")
 			if err != nil {

@@ -101,7 +101,7 @@ func TestAIPanelRecoveryReadOnlyFailClosed(t *testing.T) {
 			t.Fatal("operation alias bypassed side-effect exclusion", path)
 		}
 	}
-	for _, name := range []string{"dns.config", "dns.domains", "dns.records", "dns.record_types", "dns.record_lines", "nodes.list", "node_groups.list", "node_routes.list", "entry_rules.list", "entry_rules.simulate", "entry_split.users", "entry_collections.list", "entry_monitors.runs", "ip_pool.list", "users.detail", "orders.list", "orders.detail", "plans.list", "notices.list", "tickets.list", "config.read"} {
+	for _, name := range []string{"entry_evidence.delivery_stats", "entry_evidence.delivery_users", "entry_evidence.delivery_versions", "dns.config", "dns.domains", "dns.records", "dns.record_types", "dns.record_lines", "nodes.list", "node_groups.list", "node_routes.list", "entry_rules.list", "entry_rules.simulate", "entry_split.users", "entry_collections.list", "entry_monitors.runs", "ip_pool.list", "users.detail", "orders.list", "orders.detail", "plans.list", "notices.list", "tickets.list", "config.read"} {
 		for _, mutating := range []bool{false, true} {
 			runtime.ops = []PanelOperation{fixtureOperation(name, "/fixture/read", mutating, false)}
 			args, _ := json.Marshal(map[string]any{"operation": name, "parameters": map[string]any{}})

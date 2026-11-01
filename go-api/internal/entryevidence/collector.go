@@ -194,7 +194,10 @@ func safeNode(n Node) Node {
 	}
 	if n.Resolved {
 		_, err := netip.ParseAddr(n.DeliveredHost)
-		n.Resolved = err == nil && n.SourceHost != n.DeliveredHost
+		_, sourceErr := netip.ParseAddr(n.SourceHost)
+		// Canonicalizing an IPv6 literal is not a DNS resolution. Recheck the
+		// final emitted address, rather than trusting the pre-render endpoint.
+		n.Resolved = err == nil && sourceErr != nil && n.SourceHost != "" && n.SourceHost != n.DeliveredHost
 	}
 	return n
 }

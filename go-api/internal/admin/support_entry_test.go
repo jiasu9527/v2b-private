@@ -149,7 +149,7 @@ func expectSupportPreview(mock sqlmock.Sqlmock, f supportMembershipFixture) {
 	}
 	policies.AddRow(10, "Default", "standard", "override", `[]`, "auto.example", "", 0, "vmess", 1)
 	mock.ExpectQuery(`SELECT p.id,p.name,p.mode,p.action,p.conditions,p.entry_host`).WithArgs(int64(5)).WillReturnRows(policies)
-	mock.ExpectQuery(`SELECT p.id,p.name,COALESCE\(g.id,0\)`).WillReturnRows(sqlmock.NewRows([]string{"id", "name", "group", "group_name", "host", "resolve", "type", "server_id"}).AddRow(20, "VIP", 0, "", "target.example", 0, "vmess", 1))
+	mock.ExpectQuery(`SELECT p.id,p.name,COALESCE\(g.id,0\)`).WillReturnRows(sqlmock.NewRows([]string{"id", "name", "group", "group_name", "host", "resolve", "type", "server_id", "collection_id", "collection_version"}).AddRow(20, "VIP", 0, "", "target.example", 0, "vmess", 1, 0, 0))
 	records := sqlmock.NewRows([]string{"source", "target", "group", "key", "active", "expiry", "version"})
 	if f.legacy {
 		records.AddRow(10, 20, 0, "policy:20", 1, 0, 1)

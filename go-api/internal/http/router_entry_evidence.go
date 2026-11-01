@@ -35,6 +35,12 @@ type entryEvidenceReader interface {
 	SaveSettings(context.Context, int) (entryevidence.Settings, error)
 }
 
+type entryDeliveryStatisticsReader interface {
+	Statistics(context.Context, entryevidence.Filter) (entryevidence.DeliveryStatistics, error)
+	Users(context.Context, entryevidence.Filter) (entryevidence.DeliveryUsersPage, error)
+	Versions(context.Context, entryevidence.Filter) (entryevidence.DeliveryVersionsPage, error)
+}
+
 func handleEntryEvidence(w http.ResponseWriter, r *http.Request, sessions session.Service, service admin.Service, store entryEvidenceReader, action string) {
 	// A nil optional *Store becomes non-nil when assigned to this interface.
 	if concrete, ok := store.(*entryevidence.Store); ok && concrete == nil {
@@ -44,7 +50,7 @@ func handleEntryEvidence(w http.ResponseWriter, r *http.Request, sessions sessio
 	w.Header().Set("Vary", "Authorization")
 	method := http.MethodGet
 	switch action {
-	case "status", "deliveries", "candidates", "cases", "case", "context":
+	case "status", "deliveries", "delivery-stats", "delivery-users", "delivery-versions", "candidates", "cases", "case", "context":
 	case "freeze", "split-preview", "split-execute", "case-update", "case-delete", "settings":
 		method = http.MethodPost
 	default:
@@ -105,6 +111,47 @@ func handleEntryEvidence(w http.ResponseWriter, r *http.Request, sessions sessio
 		var page entryevidence.Page
 		page, err = store.List(ctx, filter)
 		result = map[string]any{"items": page.Items, "total": page.Total, "current": filter.Offset/filter.Limit + 1, "page_size": filter.Limit, "warnings": []string{"此处展示真实采集的节点元数据。coverage 不完整、304 或响应失败的记录不能视为本次已完整下发。"}}
+	case "delivery-stats", "delivery-users", "delivery-versions":
+		reader, ok := store.(entryDeliveryStatisticsReader)
+		if store == nil || !ok {
+			handleEntryEvidenceError(w, admin.ErrUnavailable)
+			return
+		}
+		var filter entryevidence.Filter
+		filter, err = parseEntryDeliveryFilter(r.URL.Query())
+		if err != nil {
+			break
+		}
+		// Statistics never accept incomplete/error responses as confirmed
+		// delivery, even if a caller explicitly sends complete_only=false.
+		filter.CompleteOnly = true
+		var data map[string]any
+		switch action {
+		case "delivery-stats":
+			var stats entryevidence.DeliveryStatistics
+			stats, err = reader.Statistics(ctx, filter)
+			data = map[string]any{"users": stats.Users, "requests": stats.Requests, "first_at": stats.FirstAt, "last_at": stats.LastAt}
+		case "delivery-users":
+			var page entryevidence.DeliveryUsersPage
+			page, err = reader.Users(ctx, filter)
+			data = map[string]any{"items": page.Items, "total": page.Total, "current": filter.Offset/filter.Limit + 1, "page_size": filter.Limit}
+		case "delivery-versions":
+			var page entryevidence.DeliveryVersionsPage
+			page, err = reader.Versions(ctx, filter)
+			data = map[string]any{"items": page.Items, "total": page.Total, "current": filter.Offset/filter.Limit + 1, "page_size": filter.Limit}
+		}
+		if err != nil {
+			break
+		}
+		var status entryevidence.Status
+		status, err = store.Status(ctx)
+		if err != nil {
+			break
+		}
+		data["keep_days"], data["available_from"], data["available_to"] = status.KeepDays, status.FirstAt, status.LastAt
+		data["warnings"] = entryDeliveryStatisticsWarnings(status)
+		data["query"] = filter
+		result = data
 	default:
 		cases, ok := service.(entryEvidenceCases)
 		if !ok {
@@ -262,13 +309,28 @@ func parseEntryEvidenceQuery(q url.Values) (admin.EntryEvidenceQueryRequest, err
 }
 
 func parseEntryDeliveryFilter(q url.Values) (entryevidence.Filter, error) {
-	out := entryevidence.Filter{Host: strings.TrimSpace(q.Get("host")), Port: strings.TrimSpace(q.Get("port")), UA: strings.TrimSpace(q.Get("ua")), Email: strings.TrimSpace(q.Get("account"))}
-	for name, dst := range map[string]*int64{"from": &out.From, "to": &out.To, "policy_id": &out.PolicyID, "group_id": &out.GroupID, "user_id": &out.UserID} {
+	out := entryevidence.Filter{Host: strings.TrimSpace(q.Get("host")), Port: strings.TrimSpace(q.Get("port")), UA: strings.TrimSpace(q.Get("ua")), Email: strings.TrimSpace(q.Get("account")), ServerType: strings.TrimSpace(q.Get("server_type")), RuleRevision: strings.TrimSpace(q.Get("rule_revision")), Version: strings.TrimSpace(q.Get("version")), Transport: strings.TrimSpace(q.Get("transport"))}
+	for _, name := range []string{"host", "port", "ua", "account", "server_type", "rule_revision", "version", "transport", "kind", "complete_only"} {
+		if len(q[name]) > 1 {
+			return out, admin.ErrEntryEvidenceInvalid
+		}
+	}
+	for name, dst := range map[string]*int64{"from": &out.From, "to": &out.To, "policy_id": &out.PolicyID, "group_id": &out.GroupID, "user_id": &out.UserID, "collection_id": &out.CollectionID, "provider_id": &out.ProviderID} {
 		value, err := evidenceQueryInt(q, name, 0)
 		if err != nil {
 			return out, err
 		}
 		*dst = value
+	}
+	if values, exists := q["server_id"]; exists {
+		if len(values) != 1 || values[0] == "" {
+			return out, admin.ErrEntryEvidenceInvalid
+		}
+		value, err := strconv.ParseInt(values[0], 10, 64)
+		if err != nil || value == 0 {
+			return out, admin.ErrEntryEvidenceInvalid
+		}
+		out.ServerID = value
 	}
 	if kind := q.Get("kind"); kind != "" {
 		id, err := evidenceQueryInt(q, "target_id", 0)
@@ -277,8 +339,14 @@ func parseEntryDeliveryFilter(q url.Values) (entryevidence.Filter, error) {
 		}
 		switch kind {
 		case "policy":
+			if _, explicit := q["policy_id"]; explicit && out.PolicyID != id {
+				return out, admin.ErrEntryEvidenceInvalid
+			}
 			out.PolicyID = id
 		case "split_group":
+			if _, explicit := q["group_id"]; explicit && out.GroupID != id {
+				return out, admin.ErrEntryEvidenceInvalid
+			}
 			out.GroupID = id
 		default:
 			return out, admin.ErrEntryEvidenceInvalid
@@ -307,6 +375,19 @@ func parseEntryDeliveryFilter(q url.Values) (entryevidence.Filter, error) {
 		return out, admin.ErrEntryEvidenceInvalid
 	}
 	return out, nil
+}
+
+func entryDeliveryStatisticsWarnings(status entryevidence.Status) []string {
+	warnings := []string{
+		"仅按保留期内的历史实际下发快照统计，不使用当前入口规则反推历史。用户和请求分别去重，同一次订阅中多个节点或合集成员不会重复计数。",
+		"只计入包含目标节点且响应完整、覆盖完整的 2xx 请求；拦截、生成失败、304 和不完整响应不计入。服务端返回不证明客户端已导入、使用或连接。",
+		"下发版本是实际记录的规则与入口快照，不是配置变更的独立轮次；首次记录时间不等于入口生效时间。旧记录无版本／合集归属时不能追补，同一快照重复使用不保证区分变更轮次。",
+		"仅覆盖到达后端的请求（包括后端缓存命中）；CDN、反向代理或客户端本地直接返回的缓存不经过后端，不能据此统计。无记录不等于用户没有获得过入口。",
+	}
+	if status.WriteFailures > 0 {
+		warnings = append(warnings, "当前后端进程曾有下发记录写入失败，结果存在缺口；保留期外或旧版本未采集的数据也无法补算。")
+	}
+	return warnings
 }
 
 func handleEntryEvidenceError(w http.ResponseWriter, err error) {

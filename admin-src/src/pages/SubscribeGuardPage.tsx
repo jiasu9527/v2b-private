@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Col, Form, Input, InputNumber, Modal, Popconfirm, Row, Segmented, Space, Spin, Statistic, Switch, Table, Tag, Typography, message } from 'antd';
 import SubscribeGuardSearch from './SubscribeGuardSearch';
+import SubscriptionDeliveryPanel from './SubscriptionDeliveryPanel';
 import { apiGet, apiPost, bytes, money, unwrapData } from '../lib/api';
 
 const textListFields = [
@@ -581,6 +582,7 @@ export default function SubscribeGuardPage() {
             <Col xs={24} lg={8}><Card size="small" title="Top UA"><Table size="small" rowKey="ua" pagination={false} columns={compactColumns('ua', 'UA')} dataSource={stats.top_uas || []} /></Card></Col>
           </Row>
           <SubscribeGuardSearch onUserDetail={showUserDetail} onMatchDetail={showListDetail} statusChange={userStatusChange} />
+          <SubscriptionDeliveryPanel />
           <Card
             className="mt-4"
             size="small"

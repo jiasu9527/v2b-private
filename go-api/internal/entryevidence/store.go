@@ -63,6 +63,18 @@ func (s *Store) Record(ctx context.Context, request Request, nodes []Node) (err 
 		request.Coverage = "partial"
 		request.CoverageReason = "node_limit"
 	}
+	// Enforce provenance at the persistence boundary as well as in the
+	// collector. Sanitized or missing endpoints must never become a complete
+	// delivery merely because a caller marked its response successful.
+	cleanNodes := make([]Node, len(nodes))
+	for i, node := range nodes {
+		cleanNodes[i] = safeNode(node)
+		if !validDeliveryNode(cleanNodes[i]) && request.Coverage == "complete" {
+			request.Coverage = "partial"
+			request.CoverageReason = "endpoint_metadata_incomplete"
+		}
+	}
+	nodes = cleanNodes
 	request.NodeCount = len(nodes)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -82,7 +94,7 @@ func (s *Store) Record(ctx context.Context, request Request, nodes []Node) (err 
 		values := make([]string, 0, end-start)
 		args := make([]any, 0, (end-start)*14)
 		for i := start; i < end; i++ {
-			node := safeNode(nodes[i])
+			node := nodes[i]
 			placeholders := make([]string, 14)
 			for column := range placeholders {
 				placeholders[column] = fmt.Sprintf("$%d", len(args)+column+1)
@@ -107,60 +119,12 @@ func scanRequest(row interface{ Scan(...any) error }) (Request, error) {
 }
 
 func (s *Store) List(ctx context.Context, f Filter) (Page, error) {
-	page := Page{Items: []Record{}, Limit: f.Limit, Offset: f.Offset}
-	if page.Limit == 0 {
-		page.Limit = 20
+	filter, err := buildDeliveryFilter(f, false)
+	page := Page{Items: []Record{}, Limit: filter.limit, Offset: f.Offset}
+	if err != nil {
+		return page, err
 	}
-	if page.Limit < 1 || page.Limit > 100 || f.Offset < 0 || f.Offset > 10000 || f.From < 0 || f.To < 0 || f.To > 0 && f.From >= f.To || f.UserID < 0 || f.PolicyID < 0 || f.GroupID < 0 {
-		return page, ErrValidation
-	}
-	if f.Host != "" && safeHost(f.Host) == "" || f.Port != "" && !safePort.MatchString(f.Port) {
-		return page, ErrValidation
-	}
-	where, args := []string{"TRUE"}, []any{}
-	add := func(expression string, value any) {
-		args = append(args, value)
-		where = append(where, fmt.Sprintf(expression, len(args)))
-	}
-	if f.UserID > 0 {
-		add("r.user_id=$%d", f.UserID)
-	}
-	if f.Email != "" {
-		add("LOWER(r.email_at_event)=$%d", strings.ToLower(strings.TrimSpace(f.Email)))
-	}
-	if f.UA != "" {
-		add("strpos(LOWER(r.ua),LOWER($%d))>0", bounded(f.UA, 1024))
-	}
-	if f.From > 0 {
-		add("r.completed_at >= $%d", f.From)
-	}
-	if f.To > 0 {
-		add("r.completed_at < $%d", f.To)
-	}
-	if f.CompleteOnly {
-		where = append(where, "r.response_complete=TRUE AND r.coverage='complete' AND r.status BETWEEN 200 AND 299")
-	}
-	nodeWhere := []string{"n.request_id=r.id"}
-	addNode := func(expression string, value any) {
-		args = append(args, value)
-		nodeWhere = append(nodeWhere, fmt.Sprintf(expression, len(args)))
-	}
-	if f.PolicyID > 0 {
-		addNode("n.policy_id=$%d", f.PolicyID)
-	}
-	if f.GroupID > 0 {
-		addNode("n.group_id=$%d", f.GroupID)
-	}
-	if f.Host != "" {
-		addNode("LOWER(n.delivered_host)=LOWER($%d)", safeHost(f.Host))
-	}
-	if f.Port != "" {
-		addNode("n.port=$%d", f.Port)
-	}
-	if len(nodeWhere) > 1 {
-		where = append(where, "EXISTS(SELECT 1 FROM v2_entry_delivery_node n WHERE "+strings.Join(nodeWhere, " AND ")+")")
-	}
-	clause := " FROM v2_entry_delivery_request r WHERE " + strings.Join(where, " AND ")
+	clause, args := filter.requestClause(), filter.args
 	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*)"+clause, args...).Scan(&page.Total); err != nil {
 		return page, err
 	}
