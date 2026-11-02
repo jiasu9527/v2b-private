@@ -15,7 +15,15 @@ new Function('exports', compile(model))(helpers);
 const serverIdentity = {};
 new Function('exports', compile(await readFile(new URL('../src/pages/aiOpsServerIdentity.ts', import.meta.url), 'utf8')))(serverIdentity);
 const composer = {};
-new Function('require', 'exports', compile(await readFile(new URL('../src/pages/AIOpsComposer.tsx', import.meta.url), 'utf8')))((name) => name === './aiOpsModel' ? helpers : require(name), composer);
+new Function('require', 'exports', compile(await readFile(new URL('../src/pages/AIOpsComposer.tsx', import.meta.url), 'utf8')))((name) => name === './aiOpsModel' ? helpers : name === './aiOpsComposerSize' ? { watchMiniComposerSize() { throw new Error('DOM sizing must not run during SSR'); } } : require(name), composer);
+const transcript = {};
+new Function('require', 'exports', compile(await readFile(new URL('../src/pages/AIOpsTranscript.tsx', import.meta.url), 'utf8')))((name) => {
+  if (name === './aiOpsModel') return helpers;
+  if (name === './aiOpsServerIdentity') return serverIdentity;
+  if (name === './AIOpsMarkdown' || name === './AIOpsActionSummary') return { __esModule: true, default: () => null, aiActionNames: {} };
+  if (name === 'react') return { ...React, useLayoutEffect() {} };
+  return require(name);
+}, transcript);
 const ast = ts.createSourceFile('AIOpsPage.tsx', page, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const component = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'AIOpsPage');
 const stateNames = component.body.statements.flatMap((node) => ts.isVariableStatement(node) ? node.declarationList.declarations.filter((decl) => ts.isArrayBindingPattern(decl.name) && ts.isCallExpression(decl.initializer) && decl.initializer.expression.getText(ast) === 'useState').map((decl) => decl.name.elements[0].name.getText(ast)) : []);
@@ -40,6 +48,7 @@ function render({ miniApp = true, admin = true, states = {}, screens = { lg: tru
     if (name === './aiOpsModel') return helpers;
     if (name === './aiOpsServerIdentity') return serverIdentity;
     if (name === './AIOpsComposer') return composer;
+    if (name === './AIOpsTranscript') return transcript;
     if (name.startsWith('./')) return { __esModule: true, default: () => null, aiActionNames: {} };
     return require(name);
   };

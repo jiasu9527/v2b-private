@@ -42,12 +42,23 @@ export default function TelegramMiniApp() {
     let stableHeight = window.innerHeight;
     let previousWidth = window.innerWidth;
     const previousColors = new Map<string, string>();
+    const appliedStyles = new Map<string, string>();
+    let viewportFrame: number | undefined;
+    let appliedTheme = '';
+    const writeStyle = (name: string, value: string) => {
+      if (appliedStyles.get(name) === value) return;
+      if (!previousColors.has(name)) previousColors.set(name, document.documentElement.style.getPropertyValue(name));
+      document.documentElement.style.setProperty(name, value);
+      appliedStyles.set(name, value);
+    };
     const updateTheme = () => {
       const next = telegramMiniTheme(webApp?.colorScheme, webApp?.themeParams);
+      const signature = JSON.stringify([next.dark, next.colors]);
+      if (signature === appliedTheme) return;
+      appliedTheme = signature;
       setPalette(next);
       for (const [name, value] of Object.entries(next.variables)) {
-        if (!previousColors.has(name)) previousColors.set(name, document.documentElement.style.getPropertyValue(name));
-        document.documentElement.style.setProperty(name, value);
+        writeStyle(name, value);
       }
       // Unsupported appearance APIs must never interrupt identity verification.
       const appearance = (version: string, method: ((value: string) => void) | undefined, value: string) => {
@@ -57,10 +68,10 @@ export default function TelegramMiniApp() {
       appearance('6.1', webApp?.setBackgroundColor, next.colors.secondary_bg_color);
       appearance('7.10', webApp?.setBottomBarColor, next.colors.bottom_bar_bg_color);
     };
-    const viewport = () => {
+    const applyViewport = () => {
       const visual = window.visualViewport?.height || window.innerHeight;
       const height = miniViewportHeight(webApp?.viewportHeight, visual);
-      if (height > 0) document.documentElement.style.setProperty('--mini-viewport-height', `${height}px`);
+      if (height > 0) writeStyle('--mini-viewport-height', `${height}px`);
       const active = document.activeElement as HTMLElement | null;
       const editing = active?.tagName === 'TEXTAREA' || (active?.tagName === 'INPUT' && !['button', 'checkbox', 'radio', 'submit'].includes((active as HTMLInputElement).type)) || !!active?.isContentEditable;
       if (Math.abs(window.innerWidth - previousWidth) > 80) stableHeight = height;
@@ -71,8 +82,17 @@ export default function TelegramMiniApp() {
       document.body.classList.toggle('telegram-mini-keyboard-open', !!editing && baseline - height > 120);
       for (const side of ['top', 'bottom', 'left', 'right'] as const) {
         const value = miniSafeInset(webApp?.safeAreaInset?.[side]) + miniSafeInset(webApp?.contentSafeAreaInset?.[side]);
-        document.documentElement.style.setProperty(`--mini-safe-${side}`, `${value}px`);
+        writeStyle(`--mini-safe-${side}`, `${value}px`);
       }
+    };
+    // Keyboard animation can emit the same size via the SDK, visualViewport
+    // and window resize. Apply only their latest combined state once per frame.
+    const viewport = () => {
+      if (!live || viewportFrame !== undefined) return;
+      viewportFrame = window.requestAnimationFrame(() => {
+        viewportFrame = undefined;
+        if (live) applyViewport();
+      });
     };
     const expire = () => {
       invalid = true; auth = null; clearAuth();
@@ -108,7 +128,7 @@ export default function TelegramMiniApp() {
     window.visualViewport?.addEventListener('resize', viewport);
     for (const event of ['viewportChanged', 'safeAreaChanged', 'contentSafeAreaChanged']) webApp?.onEvent?.(event, viewport);
     webApp?.onEvent?.('themeChanged', updateTheme);
-    viewport(); updateTheme(); webApp?.ready?.(); webApp?.expand?.();
+    applyViewport(); updateTheme(); webApp?.ready?.(); webApp?.expand?.();
 
     if (!webApp?.initData) setPhase('outside');
     else {
@@ -127,6 +147,7 @@ export default function TelegramMiniApp() {
     }
     return () => {
       live = false; controller.abort(); clearAuth(); verifyRef.current = () => undefined;
+      if (viewportFrame !== undefined) window.cancelAnimationFrame(viewportFrame);
       window.clearInterval(timer); window.clearTimeout(expiry);
       window.removeEventListener('forest-mini-auth-invalid', expire);
       document.removeEventListener('visibilitychange', visibility);

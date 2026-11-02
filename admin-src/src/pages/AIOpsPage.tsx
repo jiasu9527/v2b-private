@@ -1,47 +1,25 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Descriptions, Drawer, Form, Grid, Input, InputNumber, Modal, Select, Space, Spin, Switch, Tabs, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Checkbox, Drawer, Form, Grid, Input, InputNumber, Modal, Select, Space, Switch, Tabs, Tag, Typography, message } from 'antd';
 import { BookOutlined, CloudServerOutlined, DeleteOutlined, HistoryOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, SlidersOutlined, StopOutlined } from '@ant-design/icons';
 import { apiGet, apiJsonPost, getAdminUserInfo } from '../lib/api';
-import { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, AI_DEFAULT_FAILOVER_TIMEOUT, AI_REASONING_OPTIONS, aiFallbackRelayForms, aiPrepareFallbackRelays, aiReasoningDefaults, aiReasoningDefaultLabel, aiSessionReasoning, aiAccessMode, aiCanReadSession, aiOwnsFullAccess, aiMergeSessionAccess, aiActionStatus, aiApplyDraft, aiCanApprove, aiConversationTurns, aiFingerprintMatches, aiLatestTurn, aiToolResultName, aiMergeSnapshot, aiParseModels, aiRequestID, aiSessionBusy, aiVisibleDraft, type AIAccessMode, type AIReasoningChoice, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
+import { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, AI_DEFAULT_FAILOVER_TIMEOUT, AI_REASONING_OPTIONS, aiFallbackRelayForms, aiPrepareFallbackRelays, aiReasoningDefaults, aiReasoningDefaultLabel, aiSessionReasoning, aiAccessMode, aiCanReadSession, aiOwnsFullAccess, aiMergeSessionAccess, aiActionStatus, aiApplyDraft, aiCanApprove, aiFingerprintMatches, aiMergeSnapshot, aiParseModels, aiRequestID, aiSessionBusy, aiVisibleDraft, type AIAccessMode, type AIReasoningChoice, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
 import { aiReadSessionStream } from './aiOpsStream';
 import { aiReadMiniSession, aiWriteMiniSession, aiClearMiniSession, aiPickMiniSession } from './aiOpsMiniSession';
-import AIOpsMarkdown from './AIOpsMarkdown';
+import AIOpsTranscript, { ActionDetails, aiDisplayTime as time } from './AIOpsTranscript';
 import AIOpsComposer, { type AIOpsComposerHandle } from './AIOpsComposer';
-import AIOpsActionSummary, { aiActionNames } from './AIOpsActionSummary';
 import AIOpsRelaySettings from './AIOpsRelaySettings';
 import AIOpsKnowledge from './AIOpsKnowledge';
 import AIOpsTelegram from './AIOpsTelegram';
 import AIOpsServersPanel from './AIOpsServersPanel';
-import { aiServerConnection } from './aiOpsServerIdentity';
 import { watchAIChatScroll } from './aiOpsChatScroll';
+import { aiMergeSessionList } from './aiOpsModel';
 import './AIOpsPage.css';
 
 const { Text, Paragraph } = Typography;
 const initialConfig: AIConfig = { enabled: false, base_url: '', models: AI_DEFAULT_MODELS, has_api_key: false };
-const time = (value: number) => value ? new Date(value * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
-const statusLabels: Record<string, string> = { idle: '就绪', running: '处理中', pending: '待确认', succeeded: '已执行', completed: '已完成', failed: '失败', unknown: '结果待核对', rejected: '已拒绝', expired: '已过期', interrupted: '已中断', stopped: '已停止' };
-const statusColor = (status: string) => ['succeeded', 'completed'].includes(status) ? 'success' : ['running', 'pending'].includes(status) ? 'processing' : ['failed', 'unknown', 'interrupted'].includes(status) ? 'error' : 'default';
-const pretty = (value: unknown) => JSON.stringify(value ?? {}, null, 2);
 const responseList = (response: any): any[] => Array.isArray(response?.data) ? response.data : [];
 type Confirmation = { kind: 'delete' | 'clear' | 'reset' | 'server-delete'; session?: AISession; server?: AIServer };
 type Review = { action: AIAction; decision: 'approve' | 'reject' };
-
-function ActionDetails({ action }: { action: AIAction }) {
-  const payload = action.payload || {};
-  const command = typeof payload.command === 'string' ? payload.command : '';
-  return <Space className="ai-ops-action-details" direction="vertical" size="small" style={{ width: '100%' }}>
-    <Descriptions size="small" column={1}>
-      <Descriptions.Item label="操作">{aiActionNames[action.kind] || action.kind} · #{action.id}</Descriptions.Item>
-      {action.server_label && <Descriptions.Item label="操作对象">{action.server_label}</Descriptions.Item>}
-      {action.kind === 'ssh_command' && payload.host != null && <Descriptions.Item label="连接身份"><Text code>{aiServerConnection({ username: String(payload.username || ''), host: String(payload.host), port: Number(payload.port || 22) })}</Text></Descriptions.Item>}
-      {action.kind !== 'server_register' && payload.host_key_sha256 != null && <Descriptions.Item label="固定主机指纹"><Text code>{String(payload.host_key_sha256)}</Text></Descriptions.Item>}
-      <Descriptions.Item label="原因">{action.reason || '—'}</Descriptions.Item>
-      <Descriptions.Item label="有效至">{time(action.expires_at)}</Descriptions.Item>
-    </Descriptions>
-    <AIOpsActionSummary action={action} />
-    {action.kind !== 'server_register' && (command ? <><Text strong>{action.approval_mode === 'full_access' ? '完整执行命令' : '完整命令（逐次确认后执行）'}</Text><pre className="ai-ops-pre ai-ops-command">{command}</pre></> : <><Text strong>{action.kind === 'panel_operation' ? '操作参数（敏感值已隐藏）' : '完整变更参数 / 前后快照'}</Text><pre className="ai-ops-pre">{pretty(action.kind === 'panel_operation' ? payload.parameters_preview : payload)}</pre></>)}
-  </Space>;
-}
 
 export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {}) {
   const [tab, setTab] = useState('chat');
@@ -135,7 +113,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
     if (miniApp) aiWriteMiniSession(actorID, value.session.id);
     if (!reasoningEdited.current) setReasoningEffort(aiSessionReasoning(value.session));
     setDetail((previous) => aiMergeSnapshot(previous, { ...value, turns: value.turns || [], actions: value.actions || [] }));
-    setSessions((items) => items.map((item) => item.id === value.session.id ? aiMergeSessionAccess(item, value.session) : item));
+    setSessions((items) => aiMergeSessionList(items, value.session));
   };
 
   const fail = (e: any, fallback: string) => { if (alive.current && !e?.errorFields) message.error(e?.message || fallback); };
@@ -297,6 +275,8 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
     // the reader has not scrolled up. Hidden tabs have no active controller.
     chatScroll.current?.refresh();
   }, [tab, selectedID, detail?.messages, detail?.actions, visibleDraft?.draft_content]);
+  const reviewAction = useCallback((action: AIAction, decision: 'approve' | 'reject') => { setConfirmedOutput(false); setReview({ action, decision }); }, []);
+  const refreshTranscriptLayout = useCallback(() => { chatScroll.current?.refresh(); }, []);
   const selectSession = (session: AISession, fetchDetail = true) => {
     if (!aiCanReadSession(session, actorID, isAdmin)) return;
     miniResumeDone.current = true;
@@ -435,10 +415,8 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
   };
   const checkServer = (server: AIServer) => { newSession(); setDraft(`请检查已登记服务器 #${server.id}（${server.name}）的状态，仅使用固定只读诊断，不执行其他命令。`); };
   const deployServer = (server: AIServer) => { newSession(); setDraft(`我要在已登记服务器 #${server.id}（${server.name}，${server.host}）上部署或调整节点／中转服务。先检查系统、现有服务和端口，再按我补充的安装脚本与目标配置生成完整非交互命令，按本会话选择的权限模式执行。安装任务请设置足够的执行时间，完成后检查服务与连通性。\n\n部署需求：`); };
-  const conversationTurns = aiConversationTurns(detail);
-  const latestTurn = aiLatestTurn(detail?.turns || []);
   const unavailable = !config.enabled || !config.has_api_key;
-  const sessionHistory = <div className="ai-ops-session-history">
+  const sessionHistory = (!compact || historyOpen) && <div className="ai-ops-session-history">
     <Space wrap><Button ref={historyNewButton} icon={<PlusOutlined />} onClick={() => { newSession(); setHistoryOpen(false); }}>新对话</Button>{isAdmin && <Button danger type="text" disabled={!sessions.length || !!busy} onClick={() => setConfirmation({ kind: 'clear' })}>清空全部会话</Button>}</Space>
     <Paragraph type="secondary">{isAdmin ? '全部操作人的会话' : '我的会话'} · 最近 200 个</Paragraph>
     <div className="ai-ops-session-list">{sessions.map((session) => <div className={`ai-ops-session ${selectedID === session.id ? 'is-active' : ''}`} key={session.id}><button onClick={() => { selectSession(session); setHistoryOpen(false); }}><strong>{session.source === 'telegram' && <Tag color="blue">TG</Tag>}{session.title || `会话 #${session.id}`}</strong><span>{session.model}</span><span>{time(session.updated_at)} · 操作人 #{session.created_by} {session.status === 'running' ? '· 处理中' : ''}</span></button>{isAdmin && <Button type="text" danger aria-label={`删除会话 ${session.id}`} icon={<DeleteOutlined />} disabled={!!busy} onClick={() => setConfirmation({ kind: 'delete', session })} />}</div>)}</div>
@@ -456,49 +434,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
       </div>
       {foreignFullAccess && <div className="ai-ops-access-owner"><Text type="secondary">操作人 #{detail?.session.full_access_by || '未知'} 的授权不可沿用；请切换权限或由你启用。</Text><Button size="small" disabled={!!busy || aiSessionBusy(detail)} onClick={() => void changeAccess('full')}>由我启用完全访问</Button></div>}
       <div className="ai-ops-messages" ref={mountMessageViewport} onScroll={() => chatScroll.current?.onScroll()}>
-        {!detail && !selectedID && <div className="ai-ops-empty"><MessageOutlined /><h3>告诉 AI 需要处理什么</h3><p>例如：调整入口规则的 UA 和用户范围、修改节点连接端口、检测指定入口，或在已登记服务器上安装落地／中转服务。</p></div>}
-        {selectedID > 0 && !detail && <Spin />}
-        {detail?.messages_truncated && <Text type="secondary">当前显示最近 400 条消息，较早记录仍保留；AI 会自动整理发送给模型的上下文。</Text>}
-        {conversationTurns.map((group) => {
-          const processCount = group.messages.reduce((count, item) => count + (item.tool_calls?.length || 0) + (item.role === 'user' || item.role === 'assistant' ? 0 : 1), group.actions.length);
-          const pendingActions = group.actions.filter((action) => aiActionStatus(action, now) === 'pending');
-          const processState = pendingActions.length ? 'pending' : group.turn?.status === 'running' || group.actions.some((action) => action.status === 'running') ? 'running' : group.turn?.error || group.actions.some((action) => ['failed', 'unknown', 'interrupted'].includes(action.status)) ? 'failed' : '';
-          const process = processCount > 0 ? <details className="ai-ops-process" key="process">
-              <summary>
-                <span>处理过程 · {processCount} 项</span>
-                {processState && <span className={`ai-ops-process-status is-${processState}`}>{processState === 'failed' ? '有异常' : statusLabels[processState]}</span>}
-                {pendingActions.map((action) => <button key={action.id} type="button" className="ai-ops-process-review" aria-label={`审核操作 #${action.id}`} disabled={!!busy || aiSessionBusy(detail) || !aiCanApprove(action, config.enabled, now)} onClick={(event) => { event.preventDefault(); event.stopPropagation(); setConfirmedOutput(false); setReview({ action, decision: 'approve' }); }}>审核操作{pendingActions.length > 1 ? ` #${action.id}` : ''}</button>)}
-              </summary>
-              <div className="ai-ops-process-content">
-                {group.messages.map((item, index) => {
-                  const toolName = aiToolResultName(group.messages, index);
-                  return <React.Fragment key={item.id}>
-                    {item.tool_calls?.map((call) => <section key={call.id} className="ai-ops-process-item ai-ops-tool-call"><div className="ai-ops-process-item-head"><Text strong>工具调用 · {call.function.name}</Text><Text type="secondary">{time(item.created_at)}</Text></div><pre className="ai-ops-pre">{call.function.arguments}</pre></section>)}
-                    {item.role !== 'user' && item.role !== 'assistant' && <section className="ai-ops-process-item ai-ops-tool-result"><div className="ai-ops-process-item-head"><Text strong>{item.role === 'tool' ? `工具结果${toolName ? ` · ${toolName}` : ''}` : '系统详情'}</Text><Text type="secondary">{time(item.created_at)}</Text></div><pre className="ai-ops-pre">{item.content}</pre></section>}
-                  </React.Fragment>;
-                })}
-                {group.actions.map((action) => { const state = aiActionStatus(action, now); return <section key={action.id} className="ai-ops-process-item ai-ops-action">
-                  <div className="ai-ops-process-item-head"><Text strong>{action.approval_mode === 'full_access' ? '执行记录' : '操作确认'} #{action.id}</Text><Tag color={statusColor(state)}>{statusLabels[state] || state}</Tag>{(action.approved_by ?? 0) > 0 && <Text type="secondary">{action.approval_mode === 'full_access' ? '完全访问授权：' : '人工批准：'}操作人 #{action.approved_by}</Text>}{(action.rejected_by ?? 0) > 0 && <Text type="secondary">人工拒绝：操作人 #{action.rejected_by}</Text>}</div>
-                  <ActionDetails action={action} />
-                  {action.output && <><Text strong>执行输出（会进入模型上下文）</Text><pre className="ai-ops-pre">{action.output}</pre></>}
-                  {action.error && <Alert type="error" showIcon message={action.error} />}
-                  {state === 'pending' && <Space wrap><Button type="primary" disabled={!!busy || aiSessionBusy(detail) || !aiCanApprove(action, config.enabled, now)} onClick={() => { setConfirmedOutput(false); setReview({ action, decision: 'approve' }); }}>审核执行</Button><Button danger disabled={!!busy} onClick={() => { setConfirmedOutput(false); setReview({ action, decision: 'reject' }); }}>拒绝</Button><Text type="secondary">尚未执行，审核时会展开完整操作。</Text></Space>}
-                  {state === 'running' && action.kind === 'ssh_command' && <Text type="secondary">SSH 正在执行，最长 {Number(action.payload.timeout_seconds || 120)} 秒；执行输出会实时更新。</Text>}
-                </section>; })}
-              </div>
-            </details> : null;
-          const content: React.ReactNode[] = [];
-          let processAdded = false;
-          for (const item of group.messages) {
-            if (!processAdded && item.role !== 'user') { if (process) content.push(process); processAdded = true; }
-            if ((item.role === 'user' || item.role === 'assistant') && item.content.trim()) content.push(<article key={item.id} className={`ai-ops-message ai-ops-message-${item.role}`}><div className="ai-ops-message-meta"><span>{item.role === 'user' ? '操作人' : 'AI'}</span>{miniApp ? <time title={time(item.created_at)} dateTime={item.created_at ? new Date(item.created_at * 1000).toISOString() : undefined}>{item.created_at ? new Date(item.created_at * 1000).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'}</time> : <time>{time(item.created_at)}</time>}</div>{item.role === 'assistant' ? <AIOpsMarkdown content={item.content} /> : <pre className="ai-ops-text">{item.content}</pre>}</article>);
-          }
-          if (!processAdded && process) content.push(process);
-          if (visibleDraft?.id === group.turnID) content.push(<article key="draft" className="ai-ops-message ai-ops-message-assistant ai-ops-live-draft" aria-label="AI 实时回复"><div className="ai-ops-message-meta">AI · 正在回复</div><AIOpsMarkdown content={visibleDraft.draft_content || ''} /><span className="ai-ops-stream-cursor" aria-hidden="true" /></article>);
-          return <section className="ai-ops-turn" key={group.key} data-turn-id={group.turnID}>{content}</section>;
-        })}
-        {latestTurn?.error && <Alert type="error" showIcon message={`本轮${statusLabels[latestTurn.status] || latestTurn.status}`} description={latestTurn.error} />}
-        {aiSessionBusy(detail) && <Space><Spin size="small" /><Text type="secondary">{streamConnected ? '实时接收中…' : '正在处理，自动同步中…'} 可切换会话，不影响后台处理。</Text></Space>}
+        <AIOpsTranscript detail={detail} selectedID={selectedID} miniApp={miniApp} busy={!!busy} enabled={config.enabled} now={now} streamConnected={streamConnected} onReview={reviewAction} onLayout={refreshTranscriptLayout} />
       </div>
       <AIOpsComposer ref={composer} draftRef={draft} miniApp={miniApp} compact={compact} loaded={loaded} busy={busy} sessionBusy={aiSessionBusy(detail)} unavailable={unavailable} sendBlocked={foreignFullAccess || (selectedID > 0 && !detail)} isAdmin={isAdmin} onSend={(content) => void send(content)} onStop={() => void stop()} />
     </section>

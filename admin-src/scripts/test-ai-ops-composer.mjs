@@ -5,29 +5,32 @@ import ts from 'typescript';
 
 const source = await readFile(new URL('../src/pages/AIOpsComposer.tsx', import.meta.url), 'utf8');
 const page = await readFile(new URL('../src/pages/AIOpsPage.tsx', import.meta.url), 'utf8');
+const miniCss = await readFile(new URL('../src/TelegramMiniApp.css', import.meta.url), 'utf8');
 const compile = (value) => ts.transpileModule(value, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.React, esModuleInterop: true } }).outputText;
 const model = {};
 new Function('exports', compile(await readFile(new URL('../src/pages/aiOpsModel.ts', import.meta.url), 'utf8')))(model);
 
 // Run the actual component and handlers with a small synchronous hook host.
 // Browser performance/DOM behavior is checked separately against the built UI.
-function composer(initial = '', options = {}) {
+function composer(initial = '', options = {}, nativeSizing = false) {
   const slots = []; let cursor = 0; const sent = []; let stopped = 0;
   const react = {
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat() }),
     forwardRef: (render) => render,
-    useState(value) { const slot = cursor++; if (!(slot in slots)) slots[slot] = value; return [slots[slot], (next) => { slots[slot] = next; }]; },
+    useState(value) { const slot = cursor++; if (!(slot in slots)) slots[slot] = typeof value === 'function' ? value() : value; return [slots[slot], (next) => { slots[slot] = next; }]; },
     useRef(value) { const slot = cursor++; if (!(slot in slots)) slots[slot] = { current: value }; return slots[slot]; },
     useImperativeHandle(ref, create) { ref.current = create(); },
+    useEffect() {},
   };
   const exports = {};
-  new Function('require', 'exports', compile(source))((name) => {
+  new Function('require', 'exports', 'CSS', compile(source))((name) => {
     if (name === 'react') return react;
     if (name === 'antd') return { Button: 'button', Input: { TextArea: 'textarea' }, Typography: { Text: 'text' } };
     if (name === '@ant-design/icons') return { SendOutlined: 'send-icon', StopOutlined: 'stop-icon' };
     if (name === './aiOpsModel') return model;
+    if (name === './aiOpsComposerSize') return { watchMiniComposerSize() { assert.fail('size effects require the DOM harness'); } };
     assert.fail(name);
-  }, exports);
+  }, exports, { supports: (property, value) => nativeSizing && property === 'field-sizing' && value === 'content' });
   const ref = { current: null }, draftRef = { current: initial };
   const props = { draftRef, miniApp: true, compact: true, loaded: true, busy: '', sessionBusy: false, unavailable: false, sendBlocked: false, isAdmin: true, onSend: (content) => sent.push(content), onStop: () => stopped++, ...options };
   let tree;
@@ -105,6 +108,28 @@ test('same permission/loading guards apply to keyboard and button, and stop stay
   assert.equal(running.find('button').props['aria-label'], '停止当前任务');
   running.find('button').props.onClick();
   assert.equal(running.stopped(), 1);
+});
+
+test('native field sizing is progressive and legacy mobile resizing is frame-scheduled', () => {
+  const native = composer('', {}, true).find('textarea').props;
+  assert.equal(native.autoSize, false);
+  assert.equal(native.rows, 1);
+  assert.equal(native.className, 'mini-ops-native-size');
+  const legacy = composer('', {}, false).find('textarea').props;
+  assert.equal(legacy.autoSize, false);
+  assert.equal(legacy.rows, 1);
+  assert.equal(legacy.className, undefined);
+  assert.match(source, /if \(!miniApp \|\| nativeSize \|\| !input\) return/);
+  assert.match(source, /watchMiniComposerSize\(input\)/);
+  const desktop = composer('', { miniApp: false, compact: false }, true).find('textarea').props;
+  assert.deepEqual(desktop.autoSize, { minRows: 3, maxRows: 8 });
+  assert.equal(desktop.className, undefined);
+});
+
+test('mobile composer height changes are immediate instead of inheriting AntD transition-all', () => {
+  const style = miniCss.match(/\.telegram-mini-app \.mini-ops-composer textarea\.ant-input \{([^}]+)\}/)?.[1];
+  assert.ok(style);
+  assert.match(style, /transition:\s*none\s*;/);
 });
 
 test('idle conversations have no one-second transcript refresh; pending approvals still expire', () => {

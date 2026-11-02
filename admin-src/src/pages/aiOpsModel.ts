@@ -95,9 +95,50 @@ export function aiCanReadSession(session: AISession, actorID: number, isAdmin: b
 export function aiOwnsFullAccess(session: AISession | null | undefined, actorID: number): boolean {
   return aiAccessMode(session) === 'full' && actorID > 0 && session?.full_access_by === actorID;
 }
+
+// API snapshots are JSON values. Compare fields without serializing large tool
+// results, and keep unchanged records so transcript memoization can skip them.
+// IDs or timestamps alone are not enough: output can change within one second.
+function aiSnapshotEqual(previous: unknown, incoming: unknown): boolean {
+  if (Object.is(previous, incoming)) return true;
+  if (previous === null || incoming === null || typeof previous !== 'object' || typeof incoming !== 'object') return false;
+  if (Array.isArray(previous) || Array.isArray(incoming)) {
+    return Array.isArray(previous) && Array.isArray(incoming) && previous.length === incoming.length && previous.every((value, index) => aiSnapshotEqual(value, incoming[index]));
+  }
+  const keys = Object.keys(previous);
+  if (keys.length !== Object.keys(incoming).length) return false;
+  return keys.every((key) => Object.prototype.hasOwnProperty.call(incoming, key) && aiSnapshotEqual(previous[key], incoming[key]));
+}
+
+function aiReuseSnapshotItems<T extends { id: number }>(previous: T[], incoming: T[], merge?: (before: T | undefined, next: T) => T): T[] {
+  if (previous === incoming) return previous;
+  const byID = new Map(previous.map((item) => [item.id, item]));
+  let sameOrder = previous.length === incoming.length;
+  const next = incoming.map((item, index) => {
+    const before = byID.get(item.id);
+    const candidate = merge ? merge(before, item) : item;
+    const value = before && aiSnapshotEqual(before, candidate) ? before : candidate;
+    if (value !== previous[index]) sameOrder = false;
+    return value;
+  });
+  return sameOrder ? previous : next;
+}
+
 export function aiMergeSessionAccess(previous: AISession | null | undefined, incoming: AISession): AISession {
-  if (!previous || previous.id !== incoming.id || (previous.access_version || 0) <= (incoming.access_version || 0)) return incoming;
-  return { ...incoming, access_mode: previous.access_mode, access_version: previous.access_version, full_access_by: previous.full_access_by };
+  if (!previous || previous.id !== incoming.id) return incoming;
+  const next = (previous.access_version || 0) > (incoming.access_version || 0)
+    ? { ...incoming, access_mode: previous.access_mode, access_version: previous.access_version, full_access_by: previous.full_access_by }
+    : incoming;
+  return aiSnapshotEqual(previous, next) ? previous : next;
+}
+export function aiMergeSessionList(items: AISession[], incoming: AISession): AISession[] {
+  const index = items.findIndex((item) => item.id === incoming.id);
+  if (index < 0) return items;
+  const session = aiMergeSessionAccess(items[index], incoming);
+  if (session === items[index]) return items;
+  const next = items.slice();
+  next[index] = session;
+  return next;
 }
 export function aiLatestTurn(turns: AITurn[]): AITurn | undefined {
   return turns.reduce<AITurn | undefined>((latest, turn) => !latest || turn.id > latest.id ? turn : latest, undefined);
@@ -169,26 +210,45 @@ export function aiFingerprintMatches(observed: AIFingerprint | null, host: unkno
 }
 
 export type AIDraft = { session_id: number; turn_id: number; round: number; content: string; status?: string; version?: number };
+function aiApplyTurnDraft(turn: AITurn, draft: AIDraft): AITurn {
+  if (turn.status !== 'running' || typeof draft.content !== 'string' || !Number.isInteger(draft.round) || draft.round < 0) return turn;
+  const versioned = Number.isSafeInteger(draft.version) && draft.version! >= 0;
+  if (versioned ? draft.version! < (turn.draft_version || 0) : draft.round < (turn.draft_round || 0)) return turn;
+  let next: AITurn;
+  if (draft.status && draft.status !== 'running') next = { ...turn, status: draft.status, draft_content: '', draft_version: draft.version ?? turn.draft_version };
+  else {
+    if (!versioned && draft.round === (turn.draft_round || 0) && draft.content.length < (turn.draft_content || '').length) return turn;
+    next = { ...turn, draft_round: draft.round, draft_content: draft.content, draft_version: draft.version ?? turn.draft_version };
+  }
+  return aiSnapshotEqual(turn, next) ? turn : next;
+}
 export function aiApplyDraft(detail: AISessionDetail | null, draft: AIDraft): AISessionDetail | null {
   if (!detail || draft.session_id !== detail.session.id || typeof draft.content !== 'string' || !Number.isInteger(draft.round) || draft.round < 0) return detail;
-  const turn = detail.turns.find((item) => item.id === draft.turn_id);
-  if (!turn || turn.status !== 'running') return detail;
-  const versioned = Number.isSafeInteger(draft.version) && draft.version! >= 0;
-  if (versioned ? draft.version! < (turn.draft_version || 0) : draft.round < (turn.draft_round || 0)) return detail;
-  if (draft.status && draft.status !== 'running') return { ...detail, turns: detail.turns.map((item) => item.id === turn.id ? { ...item, status: draft.status!, draft_content: '', draft_version: draft.version ?? item.draft_version } : item) };
-  if (!versioned && draft.round === (turn.draft_round || 0) && draft.content.length < (turn.draft_content || '').length) return detail;
-  return { ...detail, turns: detail.turns.map((item) => item.id === turn.id ? { ...item, draft_round: draft.round, draft_content: draft.content, draft_version: draft.version ?? item.draft_version } : item) };
+  const index = detail.turns.findIndex((item) => item.id === draft.turn_id);
+  if (index < 0) return detail;
+  const turn = aiApplyTurnDraft(detail.turns[index], draft);
+  if (turn === detail.turns[index]) return detail;
+  const turns = detail.turns.slice();
+  turns[index] = turn;
+  return { ...detail, turns };
 }
 export function aiMergeSnapshot(previous: AISessionDetail | null, incoming: AISessionDetail): AISessionDetail {
   if (!previous || previous.session.id !== incoming.session.id) return incoming;
-  let next = { ...incoming, session: aiMergeSessionAccess(previous.session, incoming.session) };
-  for (const turn of previous.turns) {
-    const incomingTurn = incoming.turns.find((item) => item.id === turn.id);
-    if (!incomingTurn || turn.status !== 'running' || incomingTurn.status !== 'running') continue;
-    if (turn.draft_version !== undefined && turn.draft_version <= (incomingTurn.draft_version || 0)) continue;
-    if (turn.draft_content || turn.draft_version !== undefined) next = aiApplyDraft(next, { session_id: incoming.session.id, turn_id: turn.id, round: turn.draft_round || 0, content: turn.draft_content || '', version: turn.draft_version }) || next;
-  }
-  return next;
+  const turns = aiReuseSnapshotItems(previous.turns, incoming.turns, (turn, incomingTurn) => {
+    if (!turn || turn.status !== 'running' || incomingTurn.status !== 'running') return incomingTurn;
+    if (turn.draft_version !== undefined && turn.draft_version <= (incomingTurn.draft_version || 0)) return incomingTurn;
+    return turn.draft_content || turn.draft_version !== undefined
+      ? aiApplyTurnDraft(incomingTurn, { session_id: incoming.session.id, turn_id: turn.id, round: turn.draft_round || 0, content: turn.draft_content || '', version: turn.draft_version })
+      : incomingTurn;
+  });
+  const next = {
+    ...incoming,
+    session: aiMergeSessionAccess(previous.session, incoming.session),
+    messages: aiReuseSnapshotItems(previous.messages, incoming.messages),
+    actions: aiReuseSnapshotItems(previous.actions, incoming.actions),
+    turns,
+  };
+  return aiSnapshotEqual(previous, next) ? previous : next;
 }
 export function aiVisibleDraft(detail: AISessionDetail | null): AITurn | undefined {
   if (!detail) return undefined;

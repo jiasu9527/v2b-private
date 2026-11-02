@@ -155,8 +155,8 @@ test('mini entry bypasses web login, revalidates identity and never trusts unsig
 });
 
 function miniLifecycle({ initData = 'signed', authFails = false } = {}) {
-  const effects = [], states = [], intervals = new Map(), timeouts = new Map(), sdkEvents = new Map(), styles = new Map(), classes = new Set();
-  const calls = { auth: 0, identity: 0, clear: 0, ready: 0, expand: 0 };
+  const effects = [], states = [], intervals = new Map(), timeouts = new Map(), frames = new Map(), sdkEvents = new Map(), styles = new Map(), classes = new Set();
+  const calls = { auth: 0, identity: 0, clear: 0, ready: 0, expand: 0, styleWrites: 0 };
   let nextTimer = 0, rejectIdentity = false, stateIndex = 0, mounted = false;
   const window = new EventTarget();
   Object.assign(window, {
@@ -165,10 +165,12 @@ function miniLifecycle({ initData = 'signed', authFails = false } = {}) {
     clearInterval(id) { intervals.delete(id); },
     setTimeout(callback) { timeouts.set(++nextTimer, callback); return nextTimer; },
     clearTimeout(id) { timeouts.delete(id); },
+    requestAnimationFrame(callback) { frames.set(++nextTimer, callback); return nextTimer; },
+    cancelAnimationFrame(id) { frames.delete(id); },
     Telegram: { WebApp: { initData, ready() { calls.ready++; }, expand() { calls.expand++; }, onEvent(name, callback) { sdkEvents.set(name, callback); }, offEvent(name) { sdkEvents.delete(name); } } },
   });
   const document = new EventTarget();
-  Object.assign(document, { visibilityState: 'visible', documentElement: { style: { setProperty(name, value) { styles.set(name, value); }, getPropertyValue(name) { return styles.get(name) || ''; }, removeProperty(name) { styles.delete(name); } } }, body: { classList: { add(...names) { names.forEach((name) => classes.add(name)); }, remove(...names) { names.forEach((name) => classes.delete(name)); }, toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); } } } });
+  Object.assign(document, { visibilityState: 'visible', documentElement: { style: { setProperty(name, value) { calls.styleWrites++; styles.set(name, value); }, getPropertyValue(name) { return styles.get(name) || ''; }, removeProperty(name) { styles.delete(name); } } }, body: { classList: { add(...names) { names.forEach((name) => classes.add(name)); }, remove(...names) { names.forEach((name) => classes.delete(name)); }, toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); } } } });
   const react = {
     createElement: (type, props, ...children) => ({ type, props, children }),
     useState(initial) { const index = stateIndex++; if (!mounted) states[index] = initial; return [states[index], (next) => { states[index] = typeof next === 'function' ? next(states[index]) : next; }]; },
@@ -196,7 +198,7 @@ function miniLifecycle({ initData = 'signed', authFails = false } = {}) {
   assert.equal(effects.length, 2);
   const cleanups = effects.map((effect) => effect());
   const cleanup = () => cleanups.forEach((clean) => clean());
-  return { calls, states, intervals, timeouts, sdkEvents, styles, classes, window, document, cleanup, offline(value) { rejectIdentity = value; }, render() { stateIndex = 0; return context.exports.default(); } };
+  return { calls, states, intervals, timeouts, frames, sdkEvents, styles, classes, window, document, cleanup, flushFrames() { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach((callback) => callback()); }, offline(value) { rejectIdentity = value; }, render() { stateIndex = 0; return context.exports.default(); } };
 }
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -298,11 +300,52 @@ test('keyboard viewport hides navigation only while editing and cleans its body 
   ui.document.activeElement = { tagName: 'TEXTAREA' };
   ui.window.Telegram.WebApp.viewportHeight = 400;
   ui.sdkEvents.get('viewportChanged')();
+  ui.flushFrames();
   assert.equal(ui.classes.has('telegram-mini-keyboard-open'), true);
   assert.equal(ui.styles.get('--mini-viewport-height'), '400px');
   ui.document.activeElement = null;
   ui.document.dispatchEvent(new Event('focusout'));
+  ui.flushFrames();
   assert.equal(ui.classes.has('telegram-mini-keyboard-open'), false);
   ui.cleanup();
   assert.equal(ui.classes.has('telegram-mini-body'), false);
+});
+
+test('duplicate keyboard viewport events coalesce to one frame and unchanged CSS is not rewritten', async () => {
+  const ui = miniLifecycle(); await settle();
+  const initialWrites = ui.calls.styleWrites;
+  for (let i = 0; i < 20; i++) { ui.sdkEvents.get('viewportChanged')(); ui.window.dispatchEvent(new Event('resize')); }
+  assert.equal(ui.frames.size, 1);
+  assert.equal(ui.calls.styleWrites, initialWrites);
+  ui.flushFrames();
+  assert.equal(ui.calls.styleWrites, initialWrites);
+  ui.document.activeElement = { tagName: 'TEXTAREA' };
+  for (const height of [600, 550, 500, 400]) {
+    ui.window.Telegram.WebApp.viewportHeight = height;
+    ui.sdkEvents.get('viewportChanged')();
+  }
+  assert.equal(ui.frames.size, 1); ui.flushFrames();
+  assert.equal(ui.styles.get('--mini-viewport-height'), '400px');
+  assert.equal(ui.calls.styleWrites, initialWrites + 1);
+  assert.equal(ui.classes.has('telegram-mini-keyboard-open'), true);
+  ui.sdkEvents.get('viewportChanged')();
+  const late = [...ui.frames.values()][0];
+  ui.cleanup(); assert.equal(ui.frames.size, 0);
+  const finalWrites = ui.calls.styleWrites; late();
+  assert.equal(ui.calls.styleWrites, finalWrites);
+  assert.equal(ui.styles.has('--mini-viewport-height'), false);
+});
+
+test('unchanged theme notifications retain palette identity and skip root CSS and host writes', async () => {
+  const ui = miniLifecycle(); await settle();
+  const palette = ui.states[2], writes = ui.calls.styleWrites;
+  let hostWrites = 0;
+  Object.assign(ui.window.Telegram.WebApp, {
+    setHeaderColor() { hostWrites++; }, setBackgroundColor() { hostWrites++; }, setBottomBarColor() { hostWrites++; },
+  });
+  for (let i = 0; i < 10; i++) ui.sdkEvents.get('themeChanged')();
+  assert.equal(ui.states[2], palette);
+  assert.equal(ui.calls.styleWrites, writes);
+  assert.equal(hostWrites, 0);
+  ui.cleanup();
 });

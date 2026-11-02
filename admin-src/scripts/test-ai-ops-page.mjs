@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import ts from 'typescript';
 const source = await readFile(new URL('../src/pages/aiOpsModel.ts', import.meta.url), 'utf8');
+const transcript = await readFile(new URL('../src/pages/AIOpsTranscript.tsx', import.meta.url), 'utf8');
 const page = await readFile(new URL('../src/pages/AIOpsPage.tsx', import.meta.url), 'utf8');
 const composer = await readFile(new URL('../src/pages/AIOpsComposer.tsx', import.meta.url), 'utf8');
 const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
@@ -133,10 +134,11 @@ test('explicit server form credentials clear on save/close and chat sends only i
 });
 
 test('standard mode retains manual one-action approval with complete command and output disclosure', () => {
-  assert.match(page, /<pre className="ai-ops-pre ai-ops-command">\{command\}<\/pre>/);
+  assert.match(transcript, /<pre className="ai-ops-pre ai-ops-command">\{command\}<\/pre>/);
   assert.match(page, /逐次确认模式下，每条服务器命令和部署操作均须批准/);
   assert.match(page, /输出会进入对话并发往中转模型/);
-  assert.match(page, /setReview\(\{ action, decision: 'approve' \}\)/);
+  assert.match(transcript, /onReview\(action, 'approve'\)/);
+  assert.match(page, /setReview\(\{ action, decision \}\)/);
   assert.match(page, /!confirmedOutput \|\| !aiCanApprove/);
   assert.match(page, /apiJsonPost\(`\/ai-ops\/action\/\$\{review\.decision\}`/);
   assert.match(page, /session_id: review\.action\.session_id, id: review\.action\.id/);
@@ -174,14 +176,14 @@ test('latest turn selection is stable for descending API order and shows the new
   assert.equal(aiLatestTurn([recent, old]), recent);
   assert.equal(aiLatestTurn([old, recent]), recent);
   assert.equal(aiLatestTurn([]), undefined);
-  assert.match(page, /aiLatestTurn\(detail\?\.turns \|\| \[\]\)/);
+  assert.match(transcript, /aiLatestTurn\(detail\?\.turns \|\| \[\]\)/);
 });
 
 test('action cards expose optional approver/rejector IDs without showing zero or undefined IDs', () => {
   for (const field of ['approved_by', 'rejected_by']) {
     assert.ok(source.includes(`${field}?: number`));
-    assert.ok(page.includes(`(action.${field} ?? 0) > 0`));
-    assert.ok(page.includes(`操作人 #{action.${field}}`));
+    assert.ok(transcript.includes(`(action.${field} ?? 0) > 0`));
+    assert.ok(transcript.includes(`操作人 #{action.${field}}`));
   }
 });
 
@@ -204,12 +206,13 @@ test('Enter sends only once; Shift+Enter, IME composition and held keys never se
 });
 
 test('each conversation turn has one collapsed activity group and approval still shows the full command', () => {
-  assert.match(page,/conversationTurns\.map/);
-  assert.equal((page.match(/<details\b/g) || []).length,1);
-  assert.match(page,/<details className="ai-ops-process" key="process">/);
-  assert.doesNotMatch(page,/<Collapse|defaultActiveKey|activeKey=\{\[|<details[^>]*\bopen[=>\s]/);
-  assert.match(page,/\(item\.role === 'user' \|\| item\.role === 'assistant'\) && item\.content\.trim\(\)/);
-  assert.match(page,/className="ai-ops-process-review"/);
+  assert.match(transcript,/conversationTurns\.map/);
+  assert.equal((transcript.match(/<details\b/g) || []).length,1);
+  assert.match(transcript,/<details className="ai-ops-process" onToggle=/);
+  assert.doesNotMatch(transcript,/<Collapse|defaultActiveKey|activeKey=\{\[|<details[^>]*\bopen[=>\s]/);
+  assert.match(transcript,/\(item\.role === 'user' \|\| item\.role === 'assistant'\) && item\.content\.trim\(\)/);
+  assert.match(transcript,/className="ai-ops-process-review"/);
+  assert.match(transcript,/\{open && <div className="ai-ops-process-content">/);
   const modal=page.slice(page.indexOf('title={review?.decision'));
   assert.match(modal,/<ActionDetails action=\{review.action\}/);
 });
@@ -297,7 +300,7 @@ test('running work exposes stop and permits revocation, while automatic actions 
   const select = page.split('aria-label="AI 访问权限"')[1].split('/></div>')[0];
   assert.match(select, /disabled=\{!loaded \|\| !!busy \|\| \(selectedID > 0 && !detail\)\}/);
   assert.match(select, /value: 'standard', label: '逐次确认'/);
-  assert.match(page, /action.approval_mode === 'full_access' \? '完全访问授权：' : '人工批准：'/);
+  assert.match(transcript, /action.approval_mode === 'full_access' \? '完全访问授权：' : '人工批准：'/);
 });
 
 test('tool result labels use their preceding batch within the same turn when providers reuse call IDs', () => {

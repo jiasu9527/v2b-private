@@ -255,9 +255,22 @@ body.telegram-mini-body .ai-ops-markdown td { padding: 8px 10px; border-color: v
   font-size: 16px;
   line-height: 22px;
   resize: none;
+  /* AntD transitions all properties by default; never animate input height. */
+  transition: none;
   overflow-y: auto !important;
 }
 .telegram-mini-app .mini-ops-composer textarea.ant-input::placeholder { color: var(--mini-hint); font-size: 14px; }
+/* Progressive enhancement: 1–4 rows at 22px plus 24px padding. Older
+   WebViews use the frame-scheduled offscreen mirror, not AntD autosizing. */
+@supports (field-sizing: content) {
+  .telegram-mini-app .mini-ops-composer textarea.ant-input.mini-ops-native-size {
+    field-sizing: content;
+    height: auto;
+    width: 0;
+    max-width: 100%;
+    max-height: min(112px, 28dvh) !important;
+  }
+}
 .telegram-mini-app .mini-ops-composer .mini-ops-send-button { flex: 0 0 46px; width: 46px; min-width: 46px; height: 46px; padding: 0; border: 0; border-radius: 50%; background: var(--mini-accent); color: var(--mini-button-text); box-shadow: none; }
 .telegram-mini-app .mini-ops-send-button .anticon { font-size: 20px; }
 .telegram-mini-app .mini-ops-composer .mini-ops-send-button.ant-btn-dangerous { background: var(--mini-danger); color: var(--mini-button-text); }
