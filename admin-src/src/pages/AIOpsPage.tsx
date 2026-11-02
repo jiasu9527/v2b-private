@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Descriptions, Drawer, Form, Grid, Input, InputNumber, Modal, Select, Space, Spin, Switch, Tabs, Tag, Typography, message } from 'antd';
-import { BookOutlined, CloudServerOutlined, DeleteOutlined, HistoryOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SendOutlined, SettingOutlined, SlidersOutlined, StopOutlined } from '@ant-design/icons';
+import { BookOutlined, CloudServerOutlined, DeleteOutlined, HistoryOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, SlidersOutlined, StopOutlined } from '@ant-design/icons';
 import { apiGet, apiJsonPost, getAdminUserInfo } from '../lib/api';
-import { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, AI_DEFAULT_FAILOVER_TIMEOUT, AI_REASONING_OPTIONS, aiFallbackRelayForms, aiPrepareFallbackRelays, aiReasoningDefaults, aiReasoningDefaultLabel, aiSessionReasoning, aiAccessMode, aiCanReadSession, aiOwnsFullAccess, aiMergeSessionAccess, aiActionStatus, aiApplyDraft, aiCanApprove, aiConversationTurns, aiFingerprintMatches, aiLatestTurn, aiToolResultName, aiMergeSnapshot, aiParseModels, aiRequestID, aiSessionBusy, aiShouldSendKey, aiVisibleDraft, type AIAccessMode, type AIReasoningChoice, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
+import { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, AI_DEFAULT_FAILOVER_TIMEOUT, AI_REASONING_OPTIONS, aiFallbackRelayForms, aiPrepareFallbackRelays, aiReasoningDefaults, aiReasoningDefaultLabel, aiSessionReasoning, aiAccessMode, aiCanReadSession, aiOwnsFullAccess, aiMergeSessionAccess, aiActionStatus, aiApplyDraft, aiCanApprove, aiConversationTurns, aiFingerprintMatches, aiLatestTurn, aiToolResultName, aiMergeSnapshot, aiParseModels, aiRequestID, aiSessionBusy, aiVisibleDraft, type AIAccessMode, type AIReasoningChoice, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
 import { aiReadSessionStream } from './aiOpsStream';
 import { aiReadMiniSession, aiWriteMiniSession, aiClearMiniSession, aiPickMiniSession } from './aiOpsMiniSession';
 import AIOpsMarkdown from './AIOpsMarkdown';
+import AIOpsComposer, { type AIOpsComposerHandle } from './AIOpsComposer';
 import AIOpsActionSummary, { aiActionNames } from './AIOpsActionSummary';
 import AIOpsRelaySettings from './AIOpsRelaySettings';
 import AIOpsKnowledge from './AIOpsKnowledge';
@@ -66,7 +67,9 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
   const actorID = Number(actor.id || 0);
   const isAdmin = Number(actor.is_admin) === 1;
   const reasoningChoice: AIReasoningChoice = isAdmin ? reasoningEffort : 'default';
-  const [draft, setDraft] = useState('');
+  const draft = useRef('');
+  const composer = useRef<AIOpsComposerHandle | null>(null);
+  const setDraft = useCallback((value: string) => { draft.current = value; composer.current?.setValue(value); }, []);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState('');
@@ -100,8 +103,6 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
     messageViewport.current = pane;
     if (pane) chatScroll.current?.refresh();
   }, []);
-  const composing = useRef(false);
-  const compositionEndedAt = useRef(0);
   useEffect(() => { if (!compact) setHistoryOpen(false); }, [compact]);
   useEffect(() => {
     if (!miniApp) return;
@@ -205,15 +206,30 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
   };
   useEffect(() => {
     alive.current = true; void load();
-    const tick = window.setInterval(() => setNow(Date.now()), 1000);
     const timer = window.setInterval(async () => {
       if (!selectedRef.current || streamActive.current || pollRunning.current || document.visibilityState === 'hidden') return;
       pollRunning.current = true;
       try { await loadDetail(selectedRef.current); } catch { /* Keep the last snapshot; explicit refresh shows errors. */ }
       finally { pollRunning.current = false; }
     }, 5000);
-    return () => { alive.current = false; detailSequence.current += 1; serverListSequence.current += 1; fingerprintSequence.current += 1; window.clearInterval(tick); window.clearInterval(timer); };
+    return () => { alive.current = false; detailSequence.current += 1; serverListSequence.current += 1; fingerprintSequence.current += 1; window.clearInterval(timer); };
   }, []);
+  useEffect(() => {
+    // No countdown is shown for completed conversations. Avoid rebuilding a
+    // long mobile transcript every second while the operator is typing. Still
+    // refresh stale clocks when an already-expired approval is loaded/opened.
+    const pending = [...(detail?.actions || []), ...(review ? [review.action] : [])].filter((action) => action.status === 'pending');
+    if (!pending.length) return;
+    const current = Date.now();
+    setNow(current);
+    if (!pending.some((action) => action.expires_at * 1000 > current)) return;
+    const tick = window.setInterval(() => {
+      const current = Date.now();
+      setNow(current);
+      if (!pending.some((action) => action.expires_at * 1000 > current)) window.clearInterval(tick);
+    }, 1000);
+    return () => window.clearInterval(tick);
+  }, [detail?.actions, review?.action]);
   useEffect(() => {
     if (!detail || detail.session.id !== selectedRef.current) return;
     const completed = detail.actions.filter((action) => action.kind === 'server_register' && action.status === 'succeeded' && action.session_id === detail.session.id && !refreshedRegistrations.current.has(`${action.session_id}:${action.id}`));
@@ -326,7 +342,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
     finally { finish(); }
   };
   const send = async (contentOverride?: string) => {
-    const content = contentOverride ?? draft;
+    const content = contentOverride ?? draft.current;
     if (!content.trim() || !config.enabled || !config.has_api_key || (selectedRef.current > 0 && !detail) || aiSessionBusy(detail) || foreignFullAccess || !begin('send')) return;
     followOutput.current = true;
     const originalID = selectedRef.current;
@@ -484,13 +500,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
         {latestTurn?.error && <Alert type="error" showIcon message={`本轮${statusLabels[latestTurn.status] || latestTurn.status}`} description={latestTurn.error} />}
         {aiSessionBusy(detail) && <Space><Spin size="small" /><Text type="secondary">{streamConnected ? '实时接收中…' : '正在处理，自动同步中…'} 可切换会话，不影响后台处理。</Text></Space>}
       </div>
-      {miniApp ? <div className="ai-ops-composer mini-ops-composer"><div className="mini-ops-composer-row"><Input.TextArea aria-label="运维消息" value={draft} onChange={(e) => setDraft(e.target.value)} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; compositionEndedAt.current = Date.now(); }} onKeyDown={(event) => {
-        if (!aiShouldSendKey({ key: event.key, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey, repeat: event.repeat, isComposing: event.nativeEvent.isComposing, keyCode: event.keyCode }, composing.current || Date.now() - compositionEndedAt.current < 50)) return;
-        event.preventDefault(); void send();
-      }} placeholder={aiSessionBusy(detail) ? 'AI 正在处理…' : '发送消息…'} autoSize={{ minRows: 1, maxRows: 4 }} maxLength={12000} disabled={!loaded || busy === 'send' || aiSessionBusy(detail)} />{aiSessionBusy(detail) ? <Button className="mini-ops-send-button is-stop" shape="circle" type="primary" danger aria-label="停止当前任务" icon={<StopOutlined />} loading={busy === 'stop'} disabled={!!busy && busy !== 'stop'} onClick={() => void stop()} /> : <Button className="mini-ops-send-button" shape="circle" type="primary" aria-label="发送消息" icon={<SendOutlined />} loading={busy === 'send'} disabled={!draft.trim() || unavailable || !!busy || foreignFullAccess || (selectedID > 0 && !detail)} onClick={() => void send()} />}</div>{unavailable && <Text className="mini-ops-composer-notice" type="secondary">{isAdmin ? '请在设置中启用 AI 并保存 API Key' : '请联系管理员启用 AI 运维'}</Text>}</div> : <div className="ai-ops-composer"><Input.TextArea aria-label="运维消息" value={draft} onChange={(e) => setDraft(e.target.value)} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; compositionEndedAt.current = Date.now(); }} onKeyDown={(event) => {
-        if (!aiShouldSendKey({ key: event.key, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey, repeat: event.repeat, isComposing: event.nativeEvent.isComposing, keyCode: event.keyCode }, composing.current || Date.now() - compositionEndedAt.current < 50)) return;
-        event.preventDefault(); void send();
-      }} placeholder={compact ? '描述问题或操作需求…' : '描述问题或操作需求；Enter 发送，Shift+Enter 换行'} autoSize={{ minRows: compact ? 2 : 3, maxRows: compact ? 4 : 8 }} maxLength={12000} disabled={busy === 'send' || aiSessionBusy(detail)} /><div className="ai-ops-composer-actions"><div className="ai-ops-send-controls"><Button type="primary" icon={<SendOutlined />} loading={busy === 'send'} disabled={!draft.trim() || unavailable || !!busy || aiSessionBusy(detail) || foreignFullAccess || (selectedID > 0 && !detail)} onClick={() => void send()}>发送</Button>{aiSessionBusy(detail) && <Button danger icon={<StopOutlined />} loading={busy === 'stop'} disabled={!!busy && busy !== 'stop'} onClick={() => void stop()}>停止</Button>}</div><Text className="ai-ops-composer-hint" type="secondary">{unavailable ? isAdmin ? '请先在设置中启用 AI 并保存中转 API Key。' : '请联系管理员启用 AI 运维。' : compact ? 'Enter 发送 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行 · 工具详情默认折叠'}</Text></div></div>}
+      <AIOpsComposer ref={composer} draftRef={draft} miniApp={miniApp} compact={compact} loaded={loaded} busy={busy} sessionBusy={aiSessionBusy(detail)} unavailable={unavailable} sendBlocked={foreignFullAccess || (selectedID > 0 && !detail)} isAdmin={isAdmin} onSend={(content) => void send(content)} onStop={() => void stop()} />
     </section>
     <Drawer title="历史会话" aria-label="历史会话" placement={miniApp ? 'bottom' : 'left'} rootClassName={miniApp ? 'mini-ops-history-drawer' : 'ai-ops-history-drawer'} width="min(360px, 90vw)" height={miniApp ? '80%' : undefined} open={compact && historyOpen} onClose={() => setHistoryOpen(false)} destroyOnHidden>{compact && sessionHistory}</Drawer>
     <Drawer title="对话设置" aria-label="对话设置" placement={compact ? 'bottom' : 'right'} rootClassName={miniApp ? 'mini-ops-settings-drawer' : 'ai-ops-settings-drawer'} width={360} height={compact ? 'auto' : undefined} open={settingsOpen} onClose={() => setSettingsOpen(false)} destroyOnHidden>

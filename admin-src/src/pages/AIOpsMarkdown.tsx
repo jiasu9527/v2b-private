@@ -9,7 +9,7 @@ function inline(text: string): React.ReactNode[] {
 function cells(line: string): string[] { return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim()); }
 function separator(line: string): boolean { return line.includes('|') && cells(line).every((cell) => /^:?-{3,}:?$/.test(cell)); }
 
-export default function AIOpsMarkdown({ content }: { content: string }) {
+function AIOpsMarkdown({ content }: { content: string }) {
   const lines = content.replace(/\r\n/g, '\n').split('\n');
   const blocks: React.ReactNode[] = [];
   for (let index = 0; index < lines.length;) {
@@ -47,3 +47,5 @@ export default function AIOpsMarkdown({ content }: { content: string }) {
   }
   return <div className="ai-ops-markdown">{blocks}</div>;
 }
+
+export default React.memo(AIOpsMarkdown);

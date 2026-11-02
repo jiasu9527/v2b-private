@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import ts from 'typescript';
 const source = await readFile(new URL('../src/pages/aiOpsModel.ts', import.meta.url), 'utf8');
 const page = await readFile(new URL('../src/pages/AIOpsPage.tsx', import.meta.url), 'utf8');
+const composer = await readFile(new URL('../src/pages/AIOpsComposer.tsx', import.meta.url), 'utf8');
 const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 } });
 const { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, AI_REASONING_OPTIONS, aiReasoningEffort, aiSessionReasoning, aiReasoningDefaults, aiReasoningDefaultLabel, aiActionStatus, aiCanApprove, aiCanReadSession, aiSessionBusy, aiLatestTurn, aiParseModels, aiFingerprintMatches, aiRequestID, aiAccessMode, aiOwnsFullAccess, aiMergeSessionAccess } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
@@ -160,7 +161,7 @@ test('async send uses stable retry request IDs and does not replace a subsequent
 
 test('chat preserves raw SSH password whitespace for sending and retry identity while rejecting blank input', () => {
   const send = page.slice(page.indexOf('const send ='), page.indexOf('const saveConfig'));
-  assert.match(send, /const content = contentOverride \?\? draft;/);
+  assert.match(send, /const content = contentOverride \?\? draft.current;/);
   assert.match(send, /if \(!content\.trim\(\) \|\|/);
   assert.match(send, /sendRetry\.content === content/);
   assert.match(send, /model, content, request_id: retry\.requestID/);
@@ -198,8 +199,8 @@ test('Enter sends only once; Shift+Enter, IME composition and held keys never se
   assert.equal(extra.aiShouldSendKey({key:'Enter',keyCode:229}),false);
   assert.equal(extra.aiShouldSendKey({key:'Enter'},true),false);
   assert.equal(extra.aiShouldSendKey({key:'a'}),false);
-  assert.match(page,/event\.preventDefault\(\); void send\(\)/);
-  assert.match(page,/onCompositionStart/); assert.match(page,/onCompositionEnd/);
+  assert.match(composer,/event\.preventDefault\(\); send\(\)/);
+  assert.match(composer,/onCompositionStart/); assert.match(composer,/onCompositionEnd/);
 });
 
 test('each conversation turn has one collapsed activity group and approval still shows the full command', () => {

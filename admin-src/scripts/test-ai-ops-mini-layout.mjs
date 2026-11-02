@@ -14,6 +14,8 @@ const helpers = {};
 new Function('exports', compile(model))(helpers);
 const serverIdentity = {};
 new Function('exports', compile(await readFile(new URL('../src/pages/aiOpsServerIdentity.ts', import.meta.url), 'utf8')))(serverIdentity);
+const composer = {};
+new Function('require', 'exports', compile(await readFile(new URL('../src/pages/AIOpsComposer.tsx', import.meta.url), 'utf8')))((name) => name === './aiOpsModel' ? helpers : require(name), composer);
 const ast = ts.createSourceFile('AIOpsPage.tsx', page, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const component = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'AIOpsPage');
 const stateNames = component.body.statements.flatMap((node) => ts.isVariableStatement(node) ? node.declarationList.declarations.filter((decl) => ts.isArrayBindingPattern(decl.name) && ts.isCallExpression(decl.initializer) && decl.initializer.expression.getText(ast) === 'useState').map((decl) => decl.name.elements[0].name.getText(ast)) : []);
@@ -37,6 +39,7 @@ function render({ miniApp = true, admin = true, states = {}, screens = { lg: tru
     if (name === '../lib/api') return { getAdminUserInfo: () => ({ id: 7, is_admin: admin ? 1 : 0, is_staff: admin ? 0 : 1 }) };
     if (name === './aiOpsModel') return helpers;
     if (name === './aiOpsServerIdentity') return serverIdentity;
+    if (name === './AIOpsComposer') return composer;
     if (name.startsWith('./')) return { __esModule: true, default: () => null, aiActionNames: {} };
     return require(name);
   };
