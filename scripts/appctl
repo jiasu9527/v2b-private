@@ -185,37 +185,81 @@ print_update_summary() {
   esac
 }
 
-bootstrap_local_go() {
-  local version os arch url archive extract_dir
+bootstrap_local_go() (
+  local version os arch url archive extract_dir filename expected actual
   version="${GO_BOOTSTRAP_VERSION:-$(required_go_version)}"
   os="${GO_BOOTSTRAP_OS:-$(detect_go_bootstrap_os)}"
   arch="${GO_BOOTSTRAP_ARCH:-$(detect_go_bootstrap_arch)}"
-  url="${GO_BOOTSTRAP_URL:-https://go.dev/dl/go${version}.${os}-${arch}.tar.gz}"
-  archive="${LOCAL_TOOL_DIR}/go${version}.${os}-${arch}.tar.gz"
-  extract_dir="${LOCAL_TOOL_DIR}/.go-extract.$$"
+  if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+     [[ "${os}" != linux && "${os}" != darwin ]] ||
+     [[ "${arch}" != amd64 && "${arch}" != arm64 ]]; then
+    echo "Go 下载版本或平台无效" >&2
+    exit 1
+  fi
+  filename="go${version}.${os}-${arch}.tar.gz"
+  url="${GO_BOOTSTRAP_URL:-https://go.dev/dl/${filename}}"
+  expected="${GO_BOOTSTRAP_SHA256:-}"
+  if [[ -z "${expected}" && -f "${ROOT_DIR}/scripts/go-toolchain.sha256" ]]; then
+    expected="$(awk -v target="${filename}" '$2 == target { print $1 }' "${ROOT_DIR}/scripts/go-toolchain.sha256")"
+  fi
+  if [[ ! "${expected}" =~ ^[[:xdigit:]]{64}$ ]]; then
+    echo "缺少 ${filename} 的可信 SHA256；请更新工具链校验清单，或设置从官方核对的 GO_BOOTSTRAP_SHA256" >&2
+    exit 1
+  fi
+  expected="$(printf '%s' "${expected}" | tr '[:upper:]' '[:lower:]')"
 
   if ! command -v tar >/dev/null 2>&1; then
     echo "自动安装 Go 需要 tar" >&2
     exit 1
   fi
+  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+    echo "自动安装 Go 需要 sha256sum 或 shasum 校验下载文件" >&2
+    exit 1
+  fi
 
   mkdir -p "${LOCAL_TOOL_DIR}"
-  rm -rf "${extract_dir}" "${LOCAL_GO_ROOT}"
+  extract_dir="$(mktemp -d "${LOCAL_TOOL_DIR}/.go-install.XXXXXX")"
+  archive="${extract_dir}/${filename}"
+  cleanup_go_bootstrap() {
+    local status=$?
+    if [[ ( -e "${extract_dir}/previous-go" || -L "${extract_dir}/previous-go" ) && ! -e "${LOCAL_GO_ROOT}" && ! -L "${LOCAL_GO_ROOT}" ]]; then
+      if ! mv "${extract_dir}/previous-go" "${LOCAL_GO_ROOT}"; then
+        echo "旧 Go 工具链仍保留在 ${extract_dir}/previous-go，请勿删除" >&2
+        return "${status}"
+      fi
+    fi
+    rm -rf "${extract_dir}"
+    return "${status}"
+  }
+  trap cleanup_go_bootstrap EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 
   echo "正在初始化本地 Go 工具链 ${version} 到 ${LOCAL_GO_ROOT}" >&2
   download_file "${url}" "${archive}"
-  mkdir -p "${extract_dir}"
+  actual="$(write_sha256 "${archive}")"
+  actual="${actual%% *}"
+  if [[ "${actual}" != "${expected}" ]]; then
+    echo "Go 下载文件 SHA256 不匹配，拒绝解压和安装；原有工具链未修改" >&2
+    exit 1
+  fi
   tar -C "${extract_dir}" -xzf "${archive}"
 
   if [[ ! -x "${extract_dir}/go/bin/go" ]]; then
     echo "自动安装 Go 失败：解压结果中缺少 go/bin/go" >&2
-    rm -rf "${extract_dir}" "${archive}"
     exit 1
   fi
 
-  mv "${extract_dir}/go" "${LOCAL_GO_ROOT}"
-  rm -rf "${extract_dir}" "${archive}"
-}
+  # Only replace the previous toolchain after download, verification and
+  # extraction succeed. EXIT restores the previous directory if activation fails.
+  if [[ -e "${LOCAL_GO_ROOT}" || -L "${LOCAL_GO_ROOT}" ]]; then
+    mv "${LOCAL_GO_ROOT}" "${extract_dir}/previous-go"
+  fi
+  if ! mv "${extract_dir}/go" "${LOCAL_GO_ROOT}"; then
+    echo "新 Go 工具链启用失败，正在恢复原工具链" >&2
+    exit 1
+  fi
+)
 
 env_file_looks_legacy_stack() {
   local path="$1"

@@ -9,6 +9,25 @@ Go runtime prefers `.env.go`; legacy `.env` is only used when it does not look l
 - Update: `./update.sh`
 - Runtime ops: `./scripts/appctl <command>`
 
+## Go security baseline
+
+The minimum toolchain is **Go 1.27.3**, enforced by `go-api/go.mod`. An older
+Go installation with automatic toolchain selection downloads a compatible
+toolchain; `GOTOOLCHAIN=local` with an older Go fails instead of compiling with
+an unpatched standard library. Do not lower the module's Go requirement to
+work around a download failure.
+
+`appctl` bootstrap verifies the archive against `scripts/go-toolchain.sha256`
+before extraction and preserves a previously installed local toolchain on
+failure. A custom release without a pinned digest requires a separately
+verified `GO_BOOTSTRAP_SHA256`.
+
+Security updates require **rebuilding and restarting**, not just pulling source
+or installing a newer system Go. `./scripts/appctl update` rebuilds the panel
+and downloadable probes; existing remote probe processes must also be upgraded
+and restarted. See [the security review](go-security-2026-11.md) for findings,
+scope and verification commands. User frontend and App changes are not needed.
+
 ## Node smoke
 
 Read-only node smoke test:

@@ -13,6 +13,10 @@ cat > "${TMP_DIR}/.local/go/bin/go" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "${GO_LOG}"
+if [[ "${1:-}" == "build" && "${2:-}" == "-o" ]]; then
+  mkdir -p "$(dirname "${3}")"
+  printf 'fake binary\n' > "${3}"
+fi
 exit 0
 EOF
 chmod +x "${TMP_DIR}/.local/go/bin/go"
@@ -23,6 +27,8 @@ export GO_LOG
 PATH="/usr/bin:/bin" "${TMP_DIR}/scripts/appctl" build
 
 EXPECTED=$'mod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest ./cmd/server'
+EXPECTED+=$'\nbuild -o '"${TMP_DIR}"'/storage/probe/forest-probe-linux-amd64 ./cmd/probe'
+EXPECTED+=$'\nbuild -o '"${TMP_DIR}"'/storage/probe/forest-probe-linux-arm64 ./cmd/probe'
 ACTUAL="$(cat "${GO_LOG}")"
 if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
   echo "expected cached local go binary to be used"
