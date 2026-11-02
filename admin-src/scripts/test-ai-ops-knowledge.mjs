@@ -47,3 +47,10 @@ test('new forms start as unpinned drafts and category/status and content limits 
   for (const changes of [{ title: ' ' }, { title: 'a'.repeat(121) }, { summary: 'a'.repeat(501) }, { content: ' \n' }, { content: 'a'.repeat(12001) }, { category: 'bad' }, { status: 'bad' }]) assert.throws(() => aiKnowledgeSavePayload({ ...valid, ...changes }, null, true));
   assert.equal(aiKnowledgeSavePayload({ ...valid, title: '测'.repeat(120), summary: 'x'.repeat(500), content: 'x'.repeat(12000) }, null, true).content.length, 12000);
 });
+
+test('deployment knowledge keeps literal keys and placeholders in the authorized edit payload', () => {
+  const content = '# 安装\nAPI_KEY="fixture-deployment-key" bash install.sh\nTOKEN=${TOKEN} bash retry.sh\n';
+  const payload = aiKnowledgeSavePayload({ ...aiKnowledgeValues(entry), content }, entry, true);
+  assert.equal(payload.content, content);
+  assert.equal(payload.expected_version, entry.version);
+});

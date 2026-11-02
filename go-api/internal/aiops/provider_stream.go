@@ -47,7 +47,7 @@ func readCompletionStream(ctx context.Context, reader io.Reader, onContent func(
 		kind := eventType
 		eventType = ""
 		if kind == "error" {
-			return errors.New("AI 流式响应返回错误，未执行工具")
+			return transientProviderError("AI 流式响应返回错误，未执行工具")
 		}
 		if payload == "" {
 			return nil
@@ -64,8 +64,11 @@ func readCompletionStream(ctx context.Context, reader io.Reader, onContent func(
 			return errors.New("AI 流式响应编码无效，未执行工具")
 		}
 		var frame completionDelta
-		if json.Unmarshal([]byte(payload), &frame) != nil || (len(frame.Error) != 0 && string(frame.Error) != "null") {
+		if json.Unmarshal([]byte(payload), &frame) != nil {
 			return errors.New("AI 流式响应格式无效或返回错误，未执行工具")
+		}
+		if len(frame.Error) != 0 && string(frame.Error) != "null" {
+			return transientProviderError("AI 流式响应返回错误，未执行工具")
 		}
 		// OpenAI-compatible usage frames have choices=[] after the final delta.
 		if len(frame.Choices) == 0 {
@@ -98,6 +101,9 @@ func readCompletionStream(ctx context.Context, reader io.Reader, onContent func(
 		}
 		if choice.FinishReason != nil && *choice.FinishReason != "" {
 			finishReason = *choice.FinishReason
+			if finishReason == "length" {
+				return errProviderOutputLimit
+			}
 			if finishReason != "stop" && finishReason != "tool_calls" {
 				return errors.New("AI 流式响应未完整结束，未执行工具；请检查模型输出限制")
 			}
@@ -144,8 +150,11 @@ func readCompletionStream(ctx context.Context, reader io.Reader, onContent func(
 			eventType = value
 		}
 	}
-	if scanner.Err() != nil || limited.N <= 0 {
-		return empty, errors.New("AI 流式响应中断或超出限制，未执行工具")
+	if errors.Is(scanner.Err(), bufio.ErrTooLong) || limited.N <= 0 {
+		return empty, errors.New("AI 流式响应超出大小限制，未执行工具")
+	}
+	if scanner.Err() != nil {
+		return empty, transientProviderError("AI 流式响应中断，未执行工具")
 	}
 	if !done && data.Len() > 0 {
 		if err := consume(); err != nil {
@@ -153,7 +162,7 @@ func readCompletionStream(ctx context.Context, reader io.Reader, onContent func(
 		}
 	}
 	if !done || !finished || ctx.Err() != nil {
-		return empty, errors.New("AI 流式响应未完整结束，未执行工具")
+		return empty, transientProviderError("AI 流式响应未完整结束，未执行工具")
 	}
 	out.ToolCalls = calls.result()
 	if (len(out.ToolCalls) > 0 && finishReason != "tool_calls") || (len(out.ToolCalls) == 0 && finishReason != "stop") {

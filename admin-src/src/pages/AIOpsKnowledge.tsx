@@ -103,7 +103,7 @@ export default function AIOpsKnowledge({ active, isAdmin, actorID, miniBackHandl
   const edit = mode === 'edit' || mode === 'create';
   const statuses = isAdmin ? AI_KNOWLEDGE_STATUSES : AI_KNOWLEDGE_STATUSES.filter((item) => item.value !== 'disabled').map((item) => item.value === 'draft' ? { ...item, label: '我的草稿' } : item);
   return <div className="ai-knowledge">
-    <Paragraph className="ai-knowledge-note" type="secondary">{isAdmin ? '已发布资料供所有运维人员与 AI 使用；管理员可维护，员工可提交草稿。' : '可阅读已发布资料和自己的草稿；提交后由管理员发布。'} 不存放密码、密钥或订阅 Token。</Paragraph>
+    <Paragraph className="ai-knowledge-note" type="secondary">{isAdmin ? '已发布资料供所有运维人员与 AI 使用；管理员可维护，员工可提交草稿。' : '可阅读已发布资料和自己的草稿；提交后由管理员发布。'} 支持保存部署脚本及其中的密钥，正文加密保存。</Paragraph>
     <div className="ai-knowledge-toolbar">
       <Input.Search aria-label="搜索共享知识" placeholder="搜索标题、摘要或正文" value={query} allowClear maxLength={200} onChange={(event) => setQuery(event.target.value)} onSearch={(value) => setFilters((current) => ({ ...current, query: value.trim(), current: 1 }))} />
       <Select aria-label="知识类别" value={filters.category} options={[{ value: '', label: '全部类别' }, ...AI_KNOWLEDGE_CATEGORIES]} onChange={(category) => setFilters((current) => ({ ...current, category, current: 1 }))} />

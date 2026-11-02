@@ -114,7 +114,7 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 	if !errors.Is(err, sql.ErrNoRows) {
 		return out, err
 	}
-	sanitized, sshInputs, err := ParseSSHRegistrationInput(req.Content)
+	sanitized, sshInputs, err := prepareKnowledgeChatInput(req.Content)
 	if err != nil {
 		return out, err
 	}
@@ -134,7 +134,7 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 		return out, err
 	}
 	if req.SessionID == 0 {
-		title := []rune(req.Content)
+		title := []rune(redactKnowledgeText(req.Content))
 		if len(title) > 80 {
 			title = title[:80]
 		}
@@ -229,7 +229,11 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 		}
 		req.Content += intakeContext
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO v2_ai_message(session_id,turn_id,role,content,created_at) VALUES($1,$2,'user',$3,$4)`, out.Session.ID, out.Turn.ID, req.Content, now); err != nil {
+	displayContent, contentCipher, err := s.protectKnowledgeChatInput(req.Content)
+	if err != nil {
+		return out, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO v2_ai_message(session_id,turn_id,role,content,content_cipher,created_at) VALUES($1,$2,'user',$3,$4,$5)`, out.Session.ID, out.Turn.ID, displayContent, contentCipher, now); err != nil {
 		return out, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE v2_ai_session SET status='running',model=$2,updated_at=$3,reasoning_effort=$4 WHERE id=$1`, out.Session.ID, req.Model, now, selection); err != nil {
@@ -283,7 +287,7 @@ func (s *Service) history(ctx context.Context, sessionID, currentTurnID int64) (
 	// Complete turns retain paired calls/results. Failed or interrupted turns
 	// retain only their original request: a following "continue" must not lose
 	// its task, but partial tool exchanges must never enter the next request.
-	rows, err := s.db.QueryContext(ctx, `SELECT turn.id,turn.status,message.role,message.content,message.tool_calls::TEXT,message.tool_call_id FROM v2_ai_message message JOIN v2_ai_turn turn ON turn.id=message.turn_id WHERE message.session_id=$1 AND (turn.id=$2 OR turn.id IN(SELECT id FROM v2_ai_turn WHERE session_id=$1 AND status IN('completed','pending') ORDER BY id DESC LIMIT 10) OR (message.role='user' AND turn.id IN(SELECT id FROM v2_ai_turn WHERE session_id=$1 AND status IN('failed','interrupted') ORDER BY id DESC LIMIT 10))) ORDER BY message.id`, sessionID, currentTurnID)
+	rows, err := s.db.QueryContext(ctx, `SELECT turn.id,turn.status,message.role,message.content,message.tool_calls::TEXT,message.tool_call_id,message.content_cipher FROM v2_ai_message message JOIN v2_ai_turn turn ON turn.id=message.turn_id WHERE message.session_id=$1 AND (turn.id=$2 OR turn.id IN(SELECT id FROM v2_ai_turn WHERE session_id=$1 AND status IN('completed','pending') ORDER BY id DESC LIMIT 10) OR (message.role='user' AND turn.id IN(SELECT id FROM v2_ai_turn WHERE session_id=$1 AND status IN('failed','interrupted') ORDER BY id DESC LIMIT 10))) ORDER BY message.id`, sessionID, currentTurnID)
 	if err != nil {
 		return nil, err
 	}
@@ -322,10 +326,18 @@ func (s *Service) history(ctx context.Context, sessionID, currentTurnID int64) (
 	}
 	for rows.Next() {
 		var m providerMessage
-		var raw, turnStatus string
+		var raw, turnStatus, contentCipher string
 		var sourceTurnID int64
-		if err = rows.Scan(&sourceTurnID, &turnStatus, &m.Role, &m.Content, &raw, &m.ToolCallID); err != nil {
+		if err = rows.Scan(&sourceTurnID, &turnStatus, &m.Role, &m.Content, &raw, &m.ToolCallID, &contentCipher); err != nil {
 			return nil, err
+		}
+		// Only the original operator task is recoverable. Persisted tool
+		// transcripts remain redacted and must be re-read from the knowledge
+		// tool, avoiding accidental execution of an incomplete historical script.
+		if m.Role == "user" && contentCipher != "" {
+			if m.Content, err = s.decryptSecret(contentCipher); err != nil {
+				return nil, err
+			}
 		}
 		if sourceTurnID != currentTurnID && (turnStatus == "failed" || turnStatus == "interrupted") {
 			if m.Role == "user" {
@@ -358,7 +370,7 @@ func (s *Service) history(ctx context.Context, sessionID, currentTurnID int64) (
 	}
 	return compactProviderContext(out, maxHistoryContextBytes)
 }
-func (s *Service) appendMessages(ctx context.Context, actorID, sessionID, turnID int64, messages []providerMessage) error {
+func (s *Service) appendMessages(ctx context.Context, actorID, sessionID, turnID int64, messages []providerMessage, knownSecrets ...string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -383,7 +395,7 @@ func (s *Service) appendMessages(ctx context.Context, actorID, sessionID, turnID
 	if !running {
 		return ErrConflict
 	}
-	for _, m := range redactPanelMessages(messages) {
+	for _, m := range redactKnowledgeMessages(redactPanelMessages(messages), knownSecrets) {
 		raw, _ := json.Marshal(m.ToolCalls)
 		if len(m.ToolCalls) == 0 {
 			raw = []byte("[]")
@@ -469,6 +481,11 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 		}
 	}
 	var knownPanelSecrets []string
+	for _, message := range messages {
+		if message.Role == "user" && message.contextKind == "" {
+			knownPanelSecrets = append(knownPanelSecrets, knowledgeTextSecrets(message.Content)...)
+		}
+	}
 	failedSSHCommands := map[string]int64{}
 	failedPanelOperations := map[string]int64{}
 	var panelReadOnlyActionID int64
@@ -513,7 +530,7 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 			if content != "" && time.Since(lastWrite) < 600*time.Millisecond {
 				return nil
 			}
-			if err := s.updateDraft(ctx, actorID, sessionID, turnID, round+1, redactSSHOutput(content, knownPanelSecrets, false)); err != nil {
+			if err := s.updateDraft(ctx, actorID, sessionID, turnID, round+1, redactKnowledgeText(redactSSHOutput(content, knownPanelSecrets, false))); err != nil {
 				return err
 			}
 			lastWrite = time.Now()
@@ -533,9 +550,10 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 			}
 		}
 		knownPanelSecrets = append(knownPanelSecrets, panelToolSecrets(assistant.ToolCalls)...)
-		assistant.Content = redactSSHOutput(assistant.Content, knownPanelSecrets, true)
+		knownPanelSecrets = append(knownPanelSecrets, knowledgeCallSecrets(assistant.ToolCalls)...)
+		assistant.Content = redactKnowledgeText(redactSSHOutput(assistant.Content, knownPanelSecrets, true))
 		if len(assistant.ToolCalls) == 0 {
-			if err = s.appendMessages(ctx, actorID, sessionID, turnID, []providerMessage{assistant}); err != nil {
+			if err = s.appendMessages(ctx, actorID, sessionID, turnID, []providerMessage{assistant}, knownPanelSecrets...); err != nil {
 				return
 			}
 			if panelReadOnlyActionID > 0 {
@@ -619,6 +637,10 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 			if result.Pending {
 				pending = true
 			}
+			if call.Function.Name == "knowledge_get" {
+				knownPanelSecrets = append(knownPanelSecrets, result.KnowledgeSecrets...)
+				knownPanelSecrets = append(knownPanelSecrets, knowledgeResultSecrets(result.Content)...)
+			}
 			batch = append(batch, providerMessage{Role: "tool", Content: result.Content, ToolCallID: call.ID})
 			outcomes = append(outcomes, result)
 		}
@@ -640,7 +662,7 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 		if halt {
 			batch = append(batch, providerMessage{Role: "assistant", Content: errText})
 		}
-		if err = s.appendMessages(ctx, actorID, sessionID, turnID, batch); err != nil {
+		if err = s.appendMessages(ctx, actorID, sessionID, turnID, batch, knownPanelSecrets...); err != nil {
 			return
 		}
 		batch = redactPanelMessages(batch)

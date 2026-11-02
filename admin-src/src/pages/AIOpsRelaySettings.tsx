@@ -34,14 +34,13 @@ function FallbackRelayRow({ field, count, saved, models, busy, move, remove }: {
 }
 
 export default function AIOpsRelaySettings({ config, form, models, busy }: { config: AIConfig; form: FormInstance; models: string[]; busy: boolean }) {
-  const failoverEnabled = Form.useWatch('failover_enabled', { form, preserve: true });
   const relays: AIFallbackRelayForm[] = Form.useWatch('fallback_relays', { form, preserve: true }) || [];
   return <section className="ai-ops-relay-settings" aria-label="多中转灾备设置">
     <Text strong>多中转灾备</Text>
     <Paragraph type="secondary">主中转遇到网络超时、限流或服务异常时，按下方顺序切换可用的备用中转，继续使用同一个模型。切换不会重复执行已经完成的操作。</Paragraph>
     <div className="ai-ops-failover-controls">
       <Form.Item name="failover_enabled" label="自动切换备用中转" valuePropName="checked"><Switch /></Form.Item>
-      <Form.Item name="failover_timeout_seconds" label="单站请求超时（秒）" rules={[{ required: true, type: 'number', min: 10, max: 90, message: '请填写 10–90 秒' }]} extra="单个中转未在此时间内完整返回，将按顺序尝试备用中转。"><InputNumber min={10} max={90} precision={0} placeholder={String(AI_DEFAULT_FAILOVER_TIMEOUT)} disabled={busy || !failoverEnabled} /></Form.Item>
+      <Form.Item name="failover_timeout_seconds" label="响应空闲超时（秒）" rules={[{ required: true, type: 'number', min: 10, max: 90, message: '请填写 10–90 秒' }]} extra="首段响应给予至少 90 秒等待；开始接收后，连续无数据才按此时长超时，持续输出不会被截断。临时故障会有限重试，开启灾备时优先尝试备用中转。"><InputNumber min={10} max={90} precision={0} placeholder={String(AI_DEFAULT_FAILOVER_TIMEOUT)} disabled={busy} /></Form.Item>
     </div>
     <Form.List name="fallback_relays" rules={[{ validator: (_, values) => (values || []).length <= AI_MAX_FALLBACK_RELAYS ? Promise.resolve() : Promise.reject(new Error('最多配置 4 个备用中转')) }]}>
       {(fields, { add, remove, move }, { errors }) => <>

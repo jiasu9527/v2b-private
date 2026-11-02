@@ -121,10 +121,15 @@ func TestAIContinuousPostgres(t *testing.T) {
 		defer relay.Close()
 		continuousConfigure(t, f, relay.URL)
 		client := f.s.httpClient
+		var previousDeadline time.Time
 		f.s.httpClient = providerClientFunc(func(request *http.Request) (*http.Response, error) {
-			if _, hasDeadline := request.Context().Deadline(); hasDeadline {
-				t.Error("full worker still inherits a fixed lifetime deadline")
+			// Each model completion is bounded independently. That deadline
+			// must renew, rather than limit the whole full-access tool loop.
+			deadline, hasDeadline := request.Context().Deadline()
+			if !hasDeadline || time.Until(deadline) <= completionTimeout-5*time.Second || time.Until(deadline) > completionTimeout || (!previousDeadline.IsZero() && !deadline.After(previousDeadline)) {
+				t.Error("full worker completion deadline is missing, stale, or inherited across rounds")
 			}
+			previousDeadline = deadline
 			return client.Do(request)
 		})
 		started := continuousSend(t, f, SendMessageRequest{Content: task, AccessMode: "full"})

@@ -210,8 +210,8 @@ func TestProviderFailoverTransportTimeoutAndAttemptDeadline(t *testing.T) {
 	s.httpClient = providerClientFunc(func(req *http.Request) (*http.Response, error) {
 		count++
 		deadline, ok := req.Context().Deadline()
-		if !ok || time.Until(deadline) > 10*time.Second || time.Until(deadline) < 9*time.Second {
-			t.Error("configured per-attempt deadline not applied")
+		if !ok || time.Until(deadline) > completionTimeout || time.Until(deadline) < completionTimeout-time.Second {
+			t.Error("completion deadline missing or incorrectly using idle window as total deadline")
 		}
 		if count == 1 {
 			return nil, fmt.Errorf("SECRET_TRANSPORT_DATA: %w", context.DeadlineExceeded)
@@ -321,10 +321,13 @@ func TestProviderFailoverCoolingDownRecoveryAndConfigChanges(t *testing.T) {
 		t.Fatal("new URL inherited old circuit state")
 	}
 	for _, endpoint := range endpoints {
-		s.markRelayCoolingDown(relayFingerprint(endpoint, "model-c"))
+		s.relayHealthMu.Lock()
+		s.relayCooldowns[relayFingerprint(endpoint, "model-c")] = time.Now().Add(30 * time.Millisecond)
+		s.relayHealthMu.Unlock()
 	}
-	if _, err := s.completeWithRelays(context.Background(), failoverTestConfig(), endpoints, "model-c", []byte(`{}`), nil); err == nil || !strings.Contains(err.Error(), "冷却") || primaryCount != 5 || backupCount != 3 {
-		t.Fatalf("all-cooling request should stop before transport: %v", err)
+	started := time.Now()
+	if _, err := s.completeWithRelays(context.Background(), failoverTestConfig(), endpoints, "model-c", []byte(`{}`), nil); err != nil || primaryCount != 6 || backupCount != 3 || time.Since(started) < 20*time.Millisecond {
+		t.Fatalf("all-cooling request should await recovery without failing the next turn: %v", err)
 	}
 }
 
@@ -346,15 +349,19 @@ func TestProviderFailoverDisabledAndCompletedRequestsNeverUseBackup(t *testing.T
 				if req.URL.Host != "primary.example" {
 					t.Fatal("backup must not be used")
 				}
-				if _, ok := req.Context().Deadline(); !tc.enabled && ok {
-					t.Fatal("disabled failover changed legacy request timeout")
+				if _, ok := req.Context().Deadline(); !ok {
+					t.Fatal("all requests need a bounded completion deadline")
 				}
 				return &http.Response{StatusCode: tc.status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(failoverTestReply))}, nil
 			})
 			cfg := failoverTestConfig()
 			cfg.FailoverEnabled = tc.enabled
 			_, err := s.completeWithRelays(context.Background(), cfg, endpoints, "model", []byte(`{}`), nil)
-			if (err == nil) != (tc.status == 200) || count != 1 {
+			wantAttempts := 1
+			if tc.status == 503 {
+				wantAttempts = 2
+			}
+			if (err == nil) != (tc.status == 200) || count != wantAttempts {
 				t.Fatal("unexpected attempts", err, count)
 			}
 		})

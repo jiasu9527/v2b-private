@@ -24,7 +24,10 @@ var errProviderContentUpdate = errors.New("AI 回复更新已中止")
 const maxCompletionToolCalls = 64
 
 func newProviderHTTPClient() *http.Client {
-	return &http.Client{Timeout: 90 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	// The completion owns its total deadline and its first-byte/idle watchdog.
+	// http.Client.Timeout is a whole-response deadline, not an idle timeout,
+	// and would abort healthy long-running reasoning/tool-argument streams.
+	return &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
 type providerMessage struct {
@@ -93,7 +96,7 @@ func (s *Service) completeStreamWithReasoning(ctx context.Context, model, reason
 	if !allowed {
 		return empty, errors.New("所选模型不在允许列表中")
 	}
-	request := completionRequest{Model: model, Messages: []providerMessage{}, Tools: s.toolDefinitions(), ToolChoice: "auto", Stream: true, MaxTokens: 4096}
+	request := completionRequest{Model: model, Messages: []providerMessage{}, Tools: s.toolDefinitions(), ToolChoice: "auto", Stream: true, MaxTokens: initialCompletionTokens}
 	if reasoningEffort != "auto" {
 		request.ReasoningEffort = reasoningEffort
 	}
@@ -112,9 +115,10 @@ func (s *Service) completeStreamWithReasoning(ctx context.Context, model, reason
 	return s.completeWithRelays(ctx, cfg, endpoints, model, payload, onContent)
 }
 
-// Each attempt receives the same encoded request. A failed relay can never
-// dispatch a tool: only a completely validated response escapes this function.
-func (s *Service) completeAtRelay(ctx context.Context, endpoint RelayEndpoint, payload []byte, onContent func(string) error) (providerMessage, error) {
+// A failed relay can never dispatch a tool: only a completely validated
+// response escapes this function. The idle watchdog covers connection setup,
+// headers and every body read, including non-public reasoning/tool deltas.
+func (s *Service) completeAtRelay(ctx context.Context, endpoint RelayEndpoint, payload []byte, idleTimeout time.Duration, onContent func(string) error) (providerMessage, error) {
 	var empty providerMessage
 	key, err := s.decryptSecret(endpoint.APIKeyCipher)
 	if err != nil || key == "" {
@@ -124,6 +128,8 @@ func (s *Service) completeAtRelay(ctx context.Context, endpoint RelayEndpoint, p
 	if err != nil || base == "" {
 		return empty, retryableProviderError("AI 中转地址无效")
 	}
+	ctx, activity := newProviderResponseContext(ctx, max(idleTimeout, providerFirstResponseGrace), idleTimeout)
+	defer activity.close()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/chat/completions", bytes.NewReader(payload))
 	if err != nil {
 		return empty, errors.New("无法创建 AI 请求")
@@ -133,25 +139,32 @@ func (s *Service) completeAtRelay(ctx context.Context, endpoint RelayEndpoint, p
 	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return empty, retryableProviderError("AI 中转请求失败或超时，请检查中转配置")
+		return empty, transientProviderError("AI 中转请求失败或首响应超时，请检查中转配置")
 	}
 	defer resp.Body.Close()
+	body := &providerActivityReader{Reader: resp.Body, activity: activity}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return empty, providerResponseError(resp.StatusCode, resp.Body)
+		return empty, providerResponseError(resp.StatusCode, body)
 	}
 	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if mediaType == "text/event-stream" {
-		out, err := readCompletionStream(ctx, resp.Body, onContent)
-		if err != nil && !errors.Is(err, errProviderContentUpdate) {
+		out, err := readCompletionStream(ctx, body, onContent)
+		if activity.expired() && !errors.Is(err, errProviderContentUpdate) {
+			return empty, transientProviderError("AI 流式响应空闲超时，未执行工具")
+		}
+		if err != nil && !errors.Is(err, errProviderContentUpdate) && !canSwitchRelay(err) && !errors.Is(err, errProviderOutputLimit) {
 			return empty, retryableProviderError(err.Error())
 		}
 		return out, err
 	}
 	// Some compatible relays ignore stream=true. Accept their single JSON
 	// response without making a second paid request or changing the model.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, (512<<10)+1))
-	if err != nil || len(raw) > 512<<10 {
-		return empty, retryableProviderError("AI 响应过大或读取失败")
+	raw, err := io.ReadAll(io.LimitReader(body, (512<<10)+1))
+	if err != nil {
+		return empty, transientProviderError("AI 响应读取中断或空闲超时，未执行工具")
+	}
+	if len(raw) > 512<<10 {
+		return empty, retryableProviderError("AI 响应过大，未执行工具")
 	}
 	var result completionResponse
 	if json.Unmarshal(raw, &result) != nil || len(result.Choices) != 1 {
@@ -162,14 +175,23 @@ func (s *Service) completeAtRelay(ctx context.Context, endpoint RelayEndpoint, p
 	if choice.Message.Content != nil {
 		out.Content = *choice.Message.Content
 	}
+	if choice.FinishReason == "length" {
+		return empty, errProviderOutputLimit
+	}
 	if choice.FinishReason != "" && choice.FinishReason != "stop" && choice.FinishReason != "tool_calls" {
 		return empty, retryableProviderError("AI 响应未完整结束，未执行工具；请检查模型输出限制")
 	}
+	if choice.FinishReason != "" && ((len(out.ToolCalls) > 0 && choice.FinishReason != "tool_calls") || (len(out.ToolCalls) == 0 && choice.FinishReason != "stop")) {
+		return empty, retryableProviderError("AI 完成状态与工具请求不匹配，未执行工具")
+	}
 	if err = validateCompletion(out); err != nil {
+		if canSwitchRelay(err) {
+			return empty, err
+		}
 		return empty, retryableProviderError(err.Error())
 	}
 	if ctx.Err() != nil {
-		return empty, retryableProviderError("AI 中转请求失败或超时，请检查中转配置")
+		return empty, transientProviderError("AI 中转请求失败或超时，请检查中转配置")
 	}
 	if onContent != nil && out.Content != "" {
 		if err = onContent(out.Content); err != nil {
@@ -196,8 +218,8 @@ func validateCompletion(out providerMessage) error {
 		}
 		seen[call.ID] = true
 	}
-	if out.Content == "" && len(out.ToolCalls) == 0 {
-		return errors.New("AI 未返回有效内容")
+	if strings.TrimSpace(out.Content) == "" && len(out.ToolCalls) == 0 {
+		return transientProviderError("AI 未返回有效内容")
 	}
 	return nil
 }
@@ -239,13 +261,13 @@ func providerResponseError(status int, body io.Reader) error {
 	case code == "insufficient_quota" || kind == "insufficient_quota" || code == "quota_exceeded":
 		return retryableProviderError("AI 中转额度不足，请检查当前 Key 分组的余额或额度")
 	case status == http.StatusTooManyRequests:
-		return retryableProviderError("AI 中转请求受限（429），请稍后重试或检查分组额度")
+		return transientProviderError("AI 中转请求受限（429），请稍后重试或检查分组额度")
 	case status == http.StatusNotFound:
 		return retryableProviderError("AI 中转接口或模型不存在（404），请核对 Base URL 和模型 ID")
 	case status == http.StatusRequestTimeout:
-		return retryableProviderError("AI 中转请求超时（408），请稍后重试")
+		return transientProviderError("AI 中转请求超时（408），请稍后重试")
 	case status >= 500:
-		return retryableProviderError(fmt.Sprintf("AI 中转或上游模型暂时异常（HTTP %d），请稍后核对中转服务状态", status))
+		return transientProviderError(fmt.Sprintf("AI 中转或上游模型暂时异常（HTTP %d），请稍后核对中转服务状态", status))
 	case (status == http.StatusBadRequest || status == http.StatusUnprocessableEntity) && (envelope.Error.Param == "reasoning_effort" || strings.Contains(strings.ToLower(envelope.Error.Message), "reasoning_effort") || strings.Contains(code, "reasoning_effort")):
 		return errors.New("AI 中转或当前模型不支持所选推理强度，请将推理强度切换为中转默认（auto）后重试；本轮未自动降级或重发请求")
 	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity:

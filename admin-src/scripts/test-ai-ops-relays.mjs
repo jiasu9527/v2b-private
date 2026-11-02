@@ -12,6 +12,14 @@ const saved = [
   { id: 'backup-b', name: 'B', base_url: 'https://b.example.test/v1', models: [], enabled: false, has_api_key: false },
 ];
 
+test('relay settings describe inactivity instead of a whole-stream deadline and apply to single-site mode', async () => {
+  const settings = await readFile(new URL('../src/pages/AIOpsRelaySettings.tsx', import.meta.url), 'utf8');
+  assert.match(settings, /响应空闲超时/);
+  assert.match(settings, /至少 90 秒等待/);
+  assert.match(settings, /持续输出不会被截断/);
+  assert.doesNotMatch(settings, /未在此时间内完整返回|disabled=\{busy \|\| !failoverEnabled\}/);
+});
+
 test('legacy configurations default to no backup, a 30 second timeout, and a maximum of four backups', () => {
   assert.deepEqual(aiFallbackRelayForms(), []);
   assert.deepEqual(aiPrepareFallbackRelays(), []);
