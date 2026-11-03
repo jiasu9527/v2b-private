@@ -244,12 +244,24 @@ func (s *Service) executePanelOperation(ctx context.Context, a Action, snapshot 
 		// be saved; never invite the model to repeat a write to recover its output.
 		resultCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		output, err := s.savePanelResult(resultCtx, actor.ID, a.SessionID, operation.Name, data, true)
+		// Keep protected results behind the result reader's fresh role check.
+		// Ordinary compact receipts can stay inline in the existing action;
+		// large payloads still use chunked storage automatically.
+		output, err := s.savePanelResult(resultCtx, actor.ID, a.SessionID, operation.Name, data, panelMutationNeedsChunk(operation, data))
 		if err != nil {
 			return "succeeded", "后台操作已完成，但结果保存失败；请查询业务现状，不要重复执行", ""
 		}
 		return "succeeded", output, ""
 	}
+}
+
+func panelMutationNeedsChunk(operation PanelOperation, data json.RawMessage) bool {
+	// automaticActionSummary includes only 6000 characters. Keep ample room for
+	// the inline envelope; medium results must remain fully recoverable by ID.
+	return operation.AdminOnly || jsonSize(struct {
+		Operation string          `json:"operation"`
+		Data      json.RawMessage `json:"data"`
+	}{operation.Name, data}) > 5000
 }
 
 func panelPreflightOutput(code string) string {

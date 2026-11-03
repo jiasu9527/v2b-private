@@ -65,6 +65,21 @@ API Key 只写不读，留空保留；**修改中转地址必须重新输入 Key
 
 同日第二轮 iPhone/WebKit 专项回归：本地生产包、390×844 移动视口、100 轮／400 条合成消息，先空闲 11.5 秒覆盖两次轮询，再连续输入 70 个中文字符跨过刷新周期。相比上一轮版本，默认折叠页面 DOM 元素从 7148 降至 3798，不变轮询引起的历史日期格式化从 1268 次降为 0；WebKit 输入期间脚本读取 textarea 高度从 224 次降为原生尺寸模式的 0 次，强制旧 WebView 回退模式为 70 次。另用 Chrome 6 倍 CPU 降速复核。覆盖大段粘贴与缩回、键盘视口、菜单草稿、返回最新消息、上滑历史不被轮询打断、工具详情展开／释放；以上是本地模拟测试，并非用户 iPhone 实机测试。
 
+## 入口诊断与精简回执（2026-11-02）
+
+- `entry_health` 主表只返回入口状态、来源／探针计数，不再内联重复大数组；保留 `coverage_note`。它只覆盖**已配置监测**的入口，兼容字段 `unmonitored=0` 不代表没有漏监测。TCP 通畅也不代表低延迟或业务全链路正常。
+- `entry_health_detail(key, section, limit, offset, revision)`：`section=sources/probes` 分别读完整来源／探针分页，每页默认 20、最多 50 条，按实际 `next_offset` 续读。返回拓扑 revision，后续页必须携带；拓扑变化返回 `conflict`，从第一页重读。探针观测是查询当时的值，不是历史快照。查询不刷新目标、不发检测、首次调用也不执行建表。
+- `host_references(host, port?, limit, offset, revision)`：精确反查**当前入口分配候选地址**关联的规则、固定叶子、合集、节点和监测目标；每行一个 `{type,id}` 引用，避免二次嵌套截断。包括未配置监测、停用的来源；不传端口则列该 host 各端口。域名大小写、末尾点和 IPv6 规范化，不把域名解析 IP 当作原配置地址。
+- `entry_coverage(gaps_only?, limit, offset, revision)`：独立检查覆盖缺口，不改变员工首页“未监测不显示”的设置。`source_gaps` 按启用来源计数，`address_gaps` 按启用来源的地址去重；同一地址被别的规则监测，不会抹掉本来源的漏配置。区分 `unconfigured`、`monitor_disabled`、`target_missing`、`target_address_mismatch`、`no_enabled_probes`，以及探针离线、观测缺失／过期等问题。`address_covered` 仅为结构覆盖，`address_observed` 表示该地址至少有新鲜明确观测，失败的 TCP 检测也算“已观测”，不等于健康。默认列覆盖缺口、观测不完整或 TCP 异常；`summary` 始终为全部候选统计。
+
+上述反查／覆盖的端口是**已配置检测端口或候选建议端口**（见 `port_basis`），不是保证等于订阅连接端口；范围不含独立客户端入口、额外订阅节点、未关联规则节点，亦不代表历史实际下发全集。没有将当前配置反推成历史证据。分页超出单次输出体积时返回更少行，必须用 `next_offset`，不能自己加 `limit`。来源／引用分页校验拓扑与筛选集合版本；状态变化会使覆盖分页失效，延迟和时间等连续观测数值仍可能变化。
+
+`entry_rule_detail` 新增可选 `revision`：先读 summary 取得版本，展开条件、值和节点时携带；`offset>0` 必须携带，规则版本在事务内比对，不符直接 `conflict`，不返回混合版本页。版本是 64 字符 SHA-256 值，不是自增编号，也不提供历史快照恢复。
+
+`entry_monitors.save` 改走专用 `PUT /dns-failover/entry-monitors/save-receipt`，返回事务确认的 `committed`、新 `revision`、`saved_policy_count`、`saved_target_count`、`deleted_policy_count`；这些是完整保存后的数量，不是假称“仅改变字段”的 diff。提交后不再拉取整套概览，避免已保存却因后续读取失败被 AI 误报为写入失败。普通后台原保存接口和完整概览响应保持兼容。非管理员专属操作的小回执直接保存在原动作中，不再另建分块结果；大结果仍可通过 `panel_result_read` 续读，管理员专属结果仍保留权限校验。
+
+**无条件规则确认**：新建 `conditions=[]`，或把原非空条件清空时，普通后台须勾选确认，AI／API须显式传 `confirm_match_all=true`。专用更新工具在 `changes` 中传，普通 `entry_rules.save` 在参数顶层传。确认只表示明确接受“所选节点范围全部合资格用户”的匹配，不改变权限组及规则优先级；不写入业务字段。已存在的无条件规则可继续原样编辑，`email in []` 仍是无人命中，不会变成全员。
+
 ## 权限与连续运维
 
 对话窗口提供 **逐次确认 / 完全访问** 选项，新会话默认完全访问，操作人可主动切换逐次确认；已有会话保留原来的选择，不批量改写授权。

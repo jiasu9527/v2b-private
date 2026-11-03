@@ -278,6 +278,11 @@ func (s *DBService) SaveClientEntryUserPolicy(ctx context.Context, req ClientEnt
 	if err != nil {
 		return false, err
 	}
+	if prepared.ID == nil {
+		if err := requireClientEntryMatchAllConfirmation(true, nil, prepared.Conditions, req.ConfirmMatchAll); err != nil {
+			return false, err
+		}
+	}
 	now := time.Now().Unix()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -320,6 +325,21 @@ RETURNING id`, prepared.Name, nextSort, prepared.Action, conditions, prepared.En
 		if err := lockClientEntryVisibleOrder(ctx, tx); err != nil {
 			return false, err
 		}
+		if len(prepared.Conditions) == 0 && !req.ConfirmMatchAll {
+			// Read under the same transaction/topology lock as the update: a
+			// stale editor must not silently erase another writer's conditions.
+			var beforeRaw string
+			if err := tx.QueryRowContext(ctx, `SELECT conditions FROM v2_client_entry_user_policy WHERE id=$1 AND mode='standard' FOR UPDATE`, policyID).Scan(&beforeRaw); err != nil {
+				return false, errors.New("规则不存在或已变化，请刷新后重试")
+			}
+			beforeConditions, err := cliententry.DecodeConditions(beforeRaw)
+			if err != nil {
+				return false, errors.New("现有匹配条件无效，请刷新核对")
+			}
+			if err := requireClientEntryMatchAllConfirmation(false, beforeConditions, prepared.Conditions, false); err != nil {
+				return false, err
+			}
+		}
 		result, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
 SET name = $2, action = $3, conditions = $4, entry_host = $5, resolve_entry_host = $6, extra_nodes = $7, extra_nodes_position = $8, enabled = $9, remarks = $10, updated_at = $11
 WHERE id = $1 AND mode = 'standard'
@@ -349,6 +369,17 @@ VALUES ($1, $2, $3, $4, $5, $5)`, policyID, member.ServerType, member.ServerID, 
 	}
 	s.markClientEntryMonitorTargetsDirty()
 	return true, nil
+}
+
+// Empty conditions retain their historical match-all semantics, but newly
+// introducing them requires an explicit per-operation acknowledgment. This is
+// not persisted: existing default rules remain editable, and an explicit empty
+// email list is still one deny-all condition rather than match-all.
+func requireClientEntryMatchAllConfirmation(isNew bool, before, after []cliententry.Condition, confirmed bool) error {
+	if len(after) == 0 && (isNew || len(before) > 0) && !confirmed {
+		return errors.New("无匹配条件将匹配所选节点范围内的全部合资格用户；请明确确认并设置 confirm_match_all=true")
+	}
+	return nil
 }
 
 func (s *DBService) SortClientEntryUserPolicies(ctx context.Context, ids []int64) (bool, error) {

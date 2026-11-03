@@ -370,11 +370,15 @@ type probeDTO struct {
 	ReportedAt *int64 `json:"reported_at"`
 }
 type healthSourceDTO struct {
-	PolicyID  int64  `json:"policy_id"`
-	Name      string `json:"name"`
-	SourceKey string `json:"source_key"`
-	Status    string `json:"status"`
-	Enabled   bool   `json:"enabled"`
+	PolicyID       int64  `json:"policy_id"`
+	Name           string `json:"name"`
+	SourceKey      string `json:"source_key"`
+	Status         string `json:"status"`
+	Enabled        bool   `json:"enabled"`
+	MonitorEnabled bool   `json:"monitor_enabled"`
+	Monitored      bool   `json:"monitored"`
+	ProbeCount     int    `json:"probe_count"`
+	StatusReason   string `json:"status_reason"`
 }
 type healthItemDTO struct {
 	Key              string            `json:"key"`
@@ -383,18 +387,19 @@ type healthItemDTO struct {
 	Status           string            `json:"status"`
 	StatusReason     string            `json:"status_reason"`
 	LastReportedAt   *int64            `json:"last_reported_at"`
-	Sources          []healthSourceDTO `json:"sources"`
+	Sources          []healthSourceDTO `json:"sources,omitempty"`
 	SourceCount      int               `json:"source_count"`
 	SourcesTruncated bool              `json:"sources_truncated"`
-	Probes           []probeDTO        `json:"probes"`
+	Probes           []probeDTO        `json:"probes,omitempty"`
 	ProbeCount       int               `json:"probe_count"`
 	ProbesTruncated  bool              `json:"probes_truncated"`
 }
 type healthDTO struct {
-	GeneratedAt int64                     `json:"generated_at"`
-	Coverage    string                    `json:"coverage"`
-	Summary     admin.SupportEntrySummary `json:"summary"`
-	Entries     pageDTO[healthItemDTO]    `json:"entries"`
+	GeneratedAt  int64                     `json:"generated_at"`
+	Coverage     string                    `json:"coverage"`
+	CoverageNote string                    `json:"coverage_note"`
+	Summary      admin.SupportEntrySummary `json:"summary"`
+	Entries      pageDTO[healthItemDTO]    `json:"entries"`
 }
 
 func projectHealth(v admin.SupportEntryOverview, status string, limit, offset int) healthDTO {
@@ -406,31 +411,20 @@ func projectHealth(v admin.SupportEntryOverview, status string, limit, offset in
 	}
 	items := []healthItemDTO{}
 	for _, r := range window(filtered, limit, offset) {
-		o := healthItemDTO{Key: clip(r.Key, 300), Host: clip(r.Host, 255), Port: r.Port, Status: clip(r.Status, 64), StatusReason: clip(r.StatusReason, 256), LastReportedAt: r.LastReportedAt, Sources: []healthSourceDTO{}, SourceCount: len(r.Sources), SourcesTruncated: len(r.Sources) > 20, Probes: []probeDTO{}, ProbeCount: len(r.Probes), ProbesTruncated: len(r.Probes) > 20}
-		for _, x := range window(r.Sources, 20, 0) {
-			o.Sources = append(o.Sources, healthSourceDTO{PolicyID: x.PolicyID, Name: clip(x.PolicyName, 128), SourceKey: clip(x.SourceKey, 128), Status: clip(x.Status, 64), Enabled: x.PolicyEnabled})
-		}
-		for _, p := range window(r.Probes, 20, 0) {
-			o.Probes = append(o.Probes, probeDTO{ID: p.ProbeID, Name: clip(p.ProbeName, 128), Online: p.Online, Status: clip(p.Status, 64), Success: p.LastSuccess, LatencyMS: p.LastLatencyMS, ReportedAt: p.LastReportedAt})
-		}
-		for jsonSize(o) > maxToolItemBytes {
-			if len(o.Sources) > 0 && (len(o.Probes) == 0 || jsonSize(o.Sources) >= jsonSize(o.Probes)) {
-				o.Sources = o.Sources[:len(o.Sources)/2]
-				o.SourcesTruncated = true
-			} else if len(o.Probes) > 0 {
-				o.Probes = o.Probes[:len(o.Probes)/2]
-				o.ProbesTruncated = true
-			} else {
-				break
-			}
-		}
+		// List results carry counts only. Read all nested data through the
+		// separately paginated entry_health_detail tool, never an unpaged tail.
+		o := projectHealthSummary(r)
 		items = append(items, o)
 	}
-	out := healthDTO{GeneratedAt: v.GeneratedAt, Coverage: clip(v.Coverage, 128), Summary: v.Summary}
+	out := healthDTO{GeneratedAt: v.GeneratedAt, Coverage: clip(v.Coverage, 128), CoverageNote: clip(v.CoverageNote, 1000), Summary: v.Summary}
 	// Account for the health envelope and aggregate summary, not just items.
 	budget := maxToolOutputBytes - jsonSize(out) - 64
 	out.Entries = boundedPage(items, int64(len(filtered)), limit, offset, budget)
 	return out
+}
+
+func projectHealthSummary(r admin.SupportEntryItem) healthItemDTO {
+	return healthItemDTO{Key: r.Key, Host: clip(r.Host, 255), Port: r.Port, Status: clip(r.Status, 64), StatusReason: clip(r.StatusReason, 256), LastReportedAt: r.LastReportedAt, SourceCount: len(r.Sources), SourcesTruncated: len(r.Sources) > 0, ProbeCount: len(r.Probes), ProbesTruncated: len(r.Probes) > 0}
 }
 
 type usageDTO struct {

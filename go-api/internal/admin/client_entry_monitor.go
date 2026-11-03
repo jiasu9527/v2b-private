@@ -206,6 +206,12 @@ func (s *DBService) resolveClientEntryMonitorPolicies(ctx context.Context) ([]Cl
 	if err != nil {
 		return nil, err
 	}
+	return buildClientEntryMonitorPolicies(policies, nodes), nil
+}
+
+// buildClientEntryMonitorPolicies is shared by the normal monitor configuration
+// and the read-only inventory, which must not initialize schema or refresh targets.
+func buildClientEntryMonitorPolicies(policies []ClientEntryUserPolicyRecord, nodes map[string]clientEntryMonitorNode) []ClientEntryMonitorPolicy {
 	result := make([]ClientEntryMonitorPolicy, 0, len(policies))
 	for _, policy := range policies {
 		item := ClientEntryMonitorPolicy{
@@ -277,7 +283,7 @@ func (s *DBService) resolveClientEntryMonitorPolicies(ctx context.Context) ([]Cl
 		}
 		result = append(result, item)
 	}
-	return result, nil
+	return result
 }
 
 func (s *DBService) loadClientEntryMonitorNodes(ctx context.Context, policies []ClientEntryUserPolicyRecord) (map[string]clientEntryMonitorNode, error) {
@@ -668,35 +674,47 @@ func clientEntryMonitorStateFresh(lastReportedAt sql.NullInt64, now, checkInterv
 	return dnsFailoverProbeStateFresh(lastReportedAt, now, checkIntervalSec, tcpTimeoutMS, int64(^uint64(0)>>1))
 }
 
+// SaveClientEntryMonitors preserves the full overview response expected by the
+// administrator page. Automated writes use SaveClientEntryMonitorReceipt so a
+// later overview read failure cannot obscure a successfully committed write.
 func (s *DBService) SaveClientEntryMonitors(ctx context.Context, request ClientEntryMonitorSaveRequest) (ClientEntryMonitorOverview, error) {
+	if _, err := s.SaveClientEntryMonitorReceipt(ctx, request); err != nil {
+		return ClientEntryMonitorOverview{}, err
+	}
+	return s.ListClientEntryMonitors(ctx)
+}
+
+// SaveClientEntryMonitorReceipt returns only values determined by the save
+// transaction. It deliberately performs no query or refresh after Commit.
+func (s *DBService) SaveClientEntryMonitorReceipt(ctx context.Context, request ClientEntryMonitorSaveRequest) (ClientEntryMonitorSaveReceipt, error) {
 	if s == nil || s.db == nil {
-		return ClientEntryMonitorOverview{}, ErrUnavailable
+		return ClientEntryMonitorSaveReceipt{}, ErrUnavailable
 	}
 	if err := s.ensureDNSFailoverSchema(ctx); err != nil {
-		return ClientEntryMonitorOverview{}, err
+		return ClientEntryMonitorSaveReceipt{}, err
 	}
 	policies, err := s.resolveClientEntryMonitorPolicies(ctx)
 	if err != nil {
-		return ClientEntryMonitorOverview{}, err
+		return ClientEntryMonitorSaveReceipt{}, err
 	}
 	policyByID := make(map[int64]ClientEntryMonitorPolicy, len(policies))
 	for _, policy := range policies {
 		policyByID[policy.ID] = policy
 	}
 	if len(request.Items) > clientEntryMonitorRunMaxPolicies {
-		return ClientEntryMonitorOverview{}, errors.New("入口检测规则数量过多")
+		return ClientEntryMonitorSaveReceipt{}, errors.New("入口检测规则数量过多")
 	}
 	seenPolicies := make(map[int64]struct{}, len(request.Items))
 	requiresEnabledProbe := false
 	for index := range request.Items {
 		item := &request.Items[index]
 		if _, exists := seenPolicies[item.PolicyID]; exists {
-			return ClientEntryMonitorOverview{}, errors.New("入口检测规则重复")
+			return ClientEntryMonitorSaveReceipt{}, errors.New("入口检测规则重复")
 		}
 		seenPolicies[item.PolicyID] = struct{}{}
 		policy, ok := policyByID[item.PolicyID]
 		if !ok || policy.Action == cliententry.ActionHide || len(policy.Targets) == 0 {
-			return ClientEntryMonitorOverview{}, errors.New("所选用户入口规则不可检测")
+			return ClientEntryMonitorSaveReceipt{}, errors.New("所选用户入口规则不可检测")
 		}
 		if item.CheckIntervalSec == 0 {
 			item.CheckIntervalSec = defaultClientEntryMonitorIntervalSec
@@ -705,13 +723,13 @@ func (s *DBService) SaveClientEntryMonitors(ctx context.Context, request ClientE
 			item.TCPTimeoutMS = defaultClientEntryMonitorTimeoutMS
 		}
 		if err := normalizeClientEntryMonitorThresholds(item); err != nil {
-			return ClientEntryMonitorOverview{}, err
+			return ClientEntryMonitorSaveReceipt{}, err
 		}
 		if item.CheckIntervalSec < 5 || item.CheckIntervalSec > 3600 {
-			return ClientEntryMonitorOverview{}, errors.New("检测间隔必须在 5 到 3600 秒之间")
+			return ClientEntryMonitorSaveReceipt{}, errors.New("检测间隔必须在 5 到 3600 秒之间")
 		}
 		if item.TCPTimeoutMS < 100 || item.TCPTimeoutMS > 60000 {
-			return ClientEntryMonitorOverview{}, errors.New("TCP 超时必须在 100 到 60000 毫秒之间")
+			return ClientEntryMonitorSaveReceipt{}, errors.New("TCP 超时必须在 100 到 60000 毫秒之间")
 		}
 		requiresEnabledProbe = requiresEnabledProbe || item.Enabled
 		candidateByKey := make(map[string]ClientEntryMonitorCandidateTarget, len(policy.Targets))
@@ -722,15 +740,15 @@ func (s *DBService) SaveClientEntryMonitors(ctx context.Context, request ClientE
 		autoSplitByKey := make(map[string]bool, len(item.Targets))
 		for _, target := range item.Targets {
 			if _, ok := candidateByKey[target.SourceKey]; !ok {
-				return ClientEntryMonitorOverview{}, errors.New("入口检测地址已变化，请刷新后重试")
+				return ClientEntryMonitorSaveReceipt{}, errors.New("入口检测地址已变化，请刷新后重试")
 			}
 			if target.Port < 1 || target.Port > 65535 {
-				return ClientEntryMonitorOverview{}, errors.New("TCP 端口必须在 1 到 65535 之间")
+				return ClientEntryMonitorSaveReceipt{}, errors.New("TCP 端口必须在 1 到 65535 之间")
 			}
 			if target.AutoSplitEnabled {
 				policyID, _, ok := parseClientEntryMonitorSplitGroupSourceKey(target.SourceKey)
 				if !ok || policyID != item.PolicyID || policy.Mode != ClientEntryUserPolicyModeSplit {
-					return ClientEntryMonitorOverview{}, errors.New("自动二分容灾只能用于固定二分叶子规则")
+					return ClientEntryMonitorSaveReceipt{}, errors.New("自动二分容灾只能用于固定二分叶子规则")
 				}
 			}
 			portByKey[target.SourceKey] = target.Port
@@ -749,16 +767,16 @@ func (s *DBService) SaveClientEntryMonitors(ctx context.Context, request ClientE
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return ClientEntryMonitorOverview{}, fmt.Errorf("begin saving client entry monitors: %w", err)
+		return ClientEntryMonitorSaveReceipt{}, fmt.Errorf("begin saving client entry monitors: %w", err)
 	}
 	defer tx.Rollback()
 	now := time.Now().Unix()
 	if err := lockClientEntryMonitorRevision(ctx, tx, request.Revision); err != nil {
-		return ClientEntryMonitorOverview{}, err
+		return ClientEntryMonitorSaveReceipt{}, err
 	}
 	if requiresEnabledProbe {
 		if err := requireEnabledClientEntryMonitorProbe(ctx, tx); err != nil {
-			return ClientEntryMonitorOverview{}, err
+			return ClientEntryMonitorSaveReceipt{}, err
 		}
 	}
 	for _, item := range request.Items {
@@ -768,7 +786,7 @@ func (s *DBService) SaveClientEntryMonitors(ctx context.Context, request ClientE
 		if err := tx.QueryRowContext(ctx, `SELECT enabled FROM v2_client_entry_monitor
 	WHERE policy_id = $1 FOR UPDATE`, item.PolicyID).Scan(&previousMonitorEnabled); err != nil {
 			if !errors.Is(err, sql.ErrNoRows) {
-				return ClientEntryMonitorOverview{}, fmt.Errorf("lock client entry monitor before save: %w", err)
+				return ClientEntryMonitorSaveReceipt{}, fmt.Errorf("lock client entry monitor before save: %w", err)
 			}
 			previousMonitorFound = false
 		}
@@ -787,7 +805,7 @@ func (s *DBService) SaveClientEntryMonitors(ctx context.Context, request ClientE
 	updated_at = EXCLUDED.updated_at
 	RETURNING id`, item.PolicyID, boolToInt64(item.Enabled), item.CheckIntervalSec, item.TCPTimeoutMS,
 			item.FailureThreshold, item.SuccessThreshold, now).Scan(&monitorID); err != nil {
-			return ClientEntryMonitorOverview{}, fmt.Errorf("save client entry monitor: %w", err)
+			return ClientEntryMonitorSaveReceipt{}, fmt.Errorf("save client entry monitor: %w", err)
 		}
 		portByKey := make(map[string]int64, len(item.Targets))
 		autoSplitByKey := make(map[string]bool, len(item.Targets))
@@ -802,7 +820,7 @@ func (s *DBService) SaveClientEntryMonitors(ctx context.Context, request ClientE
 			autoSplitEnabled := autoSplitByKey[target.SourceKey]
 			if err := resetClientEntryMonitorTargetState(ctx, tx, monitorID, target.SourceKey, target.Host,
 				&port, &autoSplitEnabled, monitorReenabled); err != nil {
-				return ClientEntryMonitorOverview{}, err
+				return ClientEntryMonitorSaveReceipt{}, err
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO v2_client_entry_monitor_target AS current_target
 (monitor_id, source_key, name, host, port, sort, auto_split_enabled, created_at, updated_at)
@@ -824,16 +842,17 @@ WHERE current_target.name IS DISTINCT FROM EXCLUDED.name
 	OR $9 = 1`,
 				monitorID, target.SourceKey, target.Name, target.Host, portByKey[target.SourceKey], int64(index+1)*10,
 				boolToInt64(autoSplitByKey[target.SourceKey]), now, boolToInt64(monitorReenabled)); err != nil {
-				return ClientEntryMonitorOverview{}, fmt.Errorf("save client entry monitor target: %w", err)
+				return ClientEntryMonitorSaveReceipt{}, fmt.Errorf("save client entry monitor target: %w", err)
 			}
 		}
 		if err := deleteClientEntryMonitorTargetsExcept(ctx, tx, monitorID, keys); err != nil {
-			return ClientEntryMonitorOverview{}, err
+			return ClientEntryMonitorSaveReceipt{}, err
 		}
 	}
+	var deleteResult sql.Result
 	if len(seenPolicies) == 0 {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_monitor`); err != nil {
-			return ClientEntryMonitorOverview{}, fmt.Errorf("delete unselected client entry monitors: %w", err)
+		if deleteResult, err = tx.ExecContext(ctx, `DELETE FROM v2_client_entry_monitor`); err != nil {
+			return ClientEntryMonitorSaveReceipt{}, fmt.Errorf("delete unselected client entry monitors: %w", err)
 		}
 	} else {
 		ids := make([]int64, 0, len(seenPolicies))
@@ -847,18 +866,29 @@ WHERE current_target.name IS DISTINCT FROM EXCLUDED.name
 			placeholders[index] = fmt.Sprintf("$%d", index+1)
 			args[index] = id
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM v2_client_entry_monitor WHERE policy_id NOT IN (`+strings.Join(placeholders, ",")+`)`, args...); err != nil {
-			return ClientEntryMonitorOverview{}, fmt.Errorf("delete unselected client entry monitors: %w", err)
+		if deleteResult, err = tx.ExecContext(ctx, `DELETE FROM v2_client_entry_monitor WHERE policy_id NOT IN (`+strings.Join(placeholders, ",")+`)`, args...); err != nil {
+			return ClientEntryMonitorSaveReceipt{}, fmt.Errorf("delete unselected client entry monitors: %w", err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE v2_client_entry_monitor_config
-SET revision = revision + 1, updated_at = $1 WHERE id = 1`, now); err != nil {
-		return ClientEntryMonitorOverview{}, fmt.Errorf("advance client entry monitor config revision: %w", err)
+	deletedPolicies, err := deleteResult.RowsAffected()
+	if err != nil {
+		return ClientEntryMonitorSaveReceipt{}, fmt.Errorf("count deleted client entry monitors: %w", err)
+	}
+	receipt := ClientEntryMonitorSaveReceipt{
+		SavedPolicyCount: int64(len(request.Items)), DeletedPolicyCount: deletedPolicies,
+	}
+	for _, item := range request.Items {
+		receipt.SavedTargetCount += int64(len(item.Targets))
+	}
+	if err := tx.QueryRowContext(ctx, `UPDATE v2_client_entry_monitor_config
+SET revision = revision + 1, updated_at = $1 WHERE id = 1 RETURNING revision`, now).Scan(&receipt.Revision); err != nil {
+		return ClientEntryMonitorSaveReceipt{}, fmt.Errorf("advance client entry monitor config revision: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return ClientEntryMonitorOverview{}, fmt.Errorf("commit client entry monitor settings: %w", err)
+		return ClientEntryMonitorSaveReceipt{}, fmt.Errorf("commit client entry monitor settings: %w", err)
 	}
-	return s.ListClientEntryMonitors(ctx)
+	receipt.Committed = true
+	return receipt, nil
 }
 
 func normalizeClientEntryMonitorThresholds(item *ClientEntryMonitorSaveItem) error {

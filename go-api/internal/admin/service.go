@@ -1300,6 +1300,7 @@ type ClientEntryUserPolicySaveRequest struct {
 	Name               string
 	Action             string
 	Conditions         []cliententry.Condition
+	ConfirmMatchAll    bool
 	Members            []ClientEntryGroupMemberSaveRequest
 	EntryHost          string
 	ResolveEntryHost   *int64

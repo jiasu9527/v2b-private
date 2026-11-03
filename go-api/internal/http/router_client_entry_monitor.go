@@ -50,6 +50,33 @@ func handleClientEntryMonitors(w http.ResponseWriter, r *http.Request, service a
 	return true
 }
 
+// Compact writes share normal administrator authentication, schema validation
+// and optimistic locking, but do not request the post-save overview.
+func handleClientEntryMonitorSaveReceipt(w http.ResponseWriter, r *http.Request, service admin.Service) bool {
+	if r.Method != http.MethodPut {
+		return dnsFailoverMethodNotAllowed(w, r, http.MethodPut)
+	}
+	receiptService, ok := any(service).(admin.ClientEntryMonitorReceiptService)
+	if !ok || receiptService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "入口检测精简保存服务暂不可用"})
+		return true
+	}
+	var request admin.ClientEntryMonitorSaveRequest
+	if !decodeStrictDNSFailoverJSON(w, r, &request) {
+		return true
+	}
+	if request.Items == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "入口检测规则列表不能为空"})
+		return true
+	}
+	result, err := receiptService.SaveClientEntryMonitorReceipt(r.Context(), request)
+	if err != nil {
+		return writeClientEntryMonitorError(w, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": result})
+	return true
+}
+
 func handleClientEntryMonitorRun(w http.ResponseWriter, r *http.Request, service admin.Service) bool {
 	if r.Method != http.MethodPost {
 		return dnsFailoverMethodNotAllowed(w, r, http.MethodPost)

@@ -161,7 +161,7 @@ func aiRuleDecode(raw json.RawMessage, out any) error {
 // and node validation. Only supplied fields are returned, so an abbreviated AI
 // read can never silently erase the original member list or conditions.
 func PrepareAIEntryRuleChanges(ctx context.Context, tx *sql.Tx, before AIEntryRuleSnapshot, changes map[string]json.RawMessage) (map[string]json.RawMessage, error) {
-	if len(changes) == 0 || len(changes) > 11 {
+	if len(changes) == 0 || len(changes) > 12 {
 		return nil, ErrAIEntryRuleInvalid
 	}
 	req := ClientEntryUserPolicySaveRequest{Name: before.Name, Action: before.Action, Conditions: before.Conditions, EntryHost: before.EntryHost, ResolveEntryHost: before.ResolveEntryHost, Enabled: &before.Enabled, Remarks: before.Remarks}
@@ -189,6 +189,10 @@ func PrepareAIEntryRuleChanges(ctx context.Context, tx *sql.Tx, before AIEntryRu
 			}
 		case "conditions":
 			if before.Kind != "policy" || aiRuleDecode(raw, &req.Conditions) != nil || len(req.Conditions) > 100 {
+				return nil, ErrAIEntryRuleInvalid
+			}
+		case "confirm_match_all":
+			if _, supplied := changes["conditions"]; before.Kind != "policy" || !supplied || aiRuleDecode(raw, &req.ConfirmMatchAll) != nil {
 				return nil, ErrAIEntryRuleInvalid
 			}
 		case "enabled":
@@ -244,6 +248,9 @@ func PrepareAIEntryRuleChanges(ctx context.Context, tx *sql.Tx, before AIEntryRu
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrAIEntryRuleInvalid, err)
 	}
+	if err := requireClientEntryMatchAllConfirmation(false, before.Conditions, prepared.Conditions, req.ConfirmMatchAll); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrAIEntryRuleInvalid, err)
+	}
 	if err = validateClientEntryRuleUsers(ctx, tx, prepared.Conditions); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrAIEntryRuleInvalid, err)
 	}
@@ -261,6 +268,9 @@ func PrepareAIEntryRuleChanges(ctx context.Context, tx *sql.Tx, before AIEntryRu
 	values["members"] = members
 	out := map[string]json.RawMessage{}
 	for key := range changes {
+		if key == "confirm_match_all" {
+			continue
+		}
 		out[key], _ = json.Marshal(values[key])
 	}
 	if _, ok := changes["action"]; ok && prepared.Action != cliententry.ActionOverride {

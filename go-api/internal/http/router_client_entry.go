@@ -1076,6 +1076,7 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		Name               string                  `json:"name"`
 		Action             string                  `json:"action"`
 		Conditions         []cliententry.Condition `json:"conditions"`
+		ConfirmMatchAll    bool                    `json:"confirm_match_all"`
 		EntryHost          string                  `json:"entry_host"`
 		ResolveEntryHost   *json.Number            `json:"resolve_entry_host"`
 		ExtraNodes         []string                `json:"extra_nodes"`
@@ -1105,6 +1106,14 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		}
 		payload.Name = strings.TrimSpace(inputs["name"])
 		payload.Action = strings.TrimSpace(inputs["action"])
+		if raw := strings.TrimSpace(inputs["confirm_match_all"]); raw != "" {
+			confirmed, err := strconv.ParseBool(raw)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"message": "匹配全部用户确认格式无效"})
+				return true
+			}
+			payload.ConfirmMatchAll = confirmed
+		}
 		payload.EntryHost = strings.TrimSpace(inputs["entry_host"])
 		if raw := strings.TrimSpace(inputs["resolve_entry_host"]); raw != "" {
 			v := json.Number(raw)
@@ -1177,7 +1186,7 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 		members = append(members, admin.ClientEntryGroupMemberSaveRequest{ServerType: member.ServerType, ServerID: *serverID, Sort: sortValue})
 	}
 	saved, err := adminService.SaveClientEntryUserPolicy(r.Context(), admin.ClientEntryUserPolicySaveRequest{
-		ID: id, Name: payload.Name, Action: payload.Action, Conditions: payload.Conditions, EntryHost: payload.EntryHost, ResolveEntryHost: resolveEntryHost, ExtraNodes: payload.ExtraNodes, ExtraNodesPosition: payload.ExtraNodesPosition, Members: members, Enabled: enabled, Remarks: payload.Remarks,
+		ID: id, Name: payload.Name, Action: payload.Action, Conditions: payload.Conditions, ConfirmMatchAll: payload.ConfirmMatchAll, EntryHost: payload.EntryHost, ResolveEntryHost: resolveEntryHost, ExtraNodes: payload.ExtraNodes, ExtraNodesPosition: payload.ExtraNodesPosition, Members: members, Enabled: enabled, Remarks: payload.Remarks,
 	})
 	if err != nil {
 		return handleAdminError(w, err)

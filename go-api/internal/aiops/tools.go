@@ -68,7 +68,7 @@ func (s *Service) declaredToolDefinitions() []ToolDefinition {
 	p["policy_id"] = num("可选精确规则ID")
 	add("entry_rules_list", "查询入口规则/UA/固定分组，指定邮箱仅返回数量；大规则嵌套列表会摘要裁剪并返回总数与truncated，不可将省略的条件视为不存在。按next_offset翻页。", p)
 	add("entry_simulate", "按实际UA和当前规则模拟入口；不改配置。", map[string]any{"email": str("完整邮箱"), "ua": str("实际UA最多1024字节，空表示真实为空")}, "email", "ua")
-	add("entry_health", "读取已有入口检测结果，不发新探测，TCP正常不代表业务全链路正常。", page())
+	add("entry_health", "读取已配置监测入口的TCP结果和来源/探针计数，不内联明细；用entry_health_detail按key分页读取sources/probes。未配置监测入口不在此表，不能以unmonitored=0声称全覆盖，请用entry_coverage核查。TCP正常不代表业务或延迟正常，不发新探测。", page())
 	add("backup_ips_list", "读取备用IP健康及占用，不清检测状态不领取IP。", page())
 	add("servers_list", "分页读取管理员登记SSH服务器，不返回密码/私钥；按next_offset继续。", page())
 	add("ssh_status", "检查已登记服务器的系统与端口；完全访问自动执行，逐次确认模式等待操作人批准。", map[string]any{"server_id": num("已登记SSH服务器ID"), "reason": str("检查原因")}, "server_id", "reason")
@@ -80,6 +80,7 @@ func (s *Service) declaredToolDefinitions() []ToolDefinition {
 	out = append(out, ticketToolDefinitions()...)
 	out = append(out, probeToolDefinitions()...)
 	out = append(out, entryRuleToolDefinitions()...)
+	out = append(out, entryInspectionToolDefinitions()...)
 	out = append(out, entrySplitToolDefinitions()...)
 	out = append(out, nodeToolDefinitions()...)
 	out = append(out, serverToolDefinitions()...)
@@ -123,6 +124,8 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 		return s.callProbeTool(ctx, actorID, sessionID, call)
 	case "entry_rule_detail", "propose_entry_rule_update":
 		return s.callEntryRuleTool(ctx, actorID, sessionID, call)
+	case "entry_health_detail", "host_references", "entry_coverage":
+		return s.callEntryInspectionTool(ctx, call)
 	case "entry_split_options", "propose_entry_manual_split", "entry_split_operation", "propose_entry_auto_split", "propose_entry_split":
 		return s.callEntrySplitTool(ctx, actorID, sessionID, call)
 	case "node_detail", "propose_node_update":

@@ -193,7 +193,7 @@ func TestPanelOperationCatalogCoversAdminRoutes(t *testing.T) {
 			}
 		}
 	}
-	for _, route := range []string{"/support/operations", "/support/operations/clear", "/dns-failover/settings", "/dns-failover/probes", "/dns-failover/probes/{id}", "/dns-failover/probes/{id}/enabled", "/dns-failover/probes/{id}/revoke", "/dns-failover/rules", "/dns-failover/rules/{id}", "/dns-failover/rules/{id}/status", "/dns-failover/rules/{id}/enabled", "/dns-failover/rules/{id}/manual-switch", "/dns-failover/events", "/dns-failover/logs", "/dns-failover/entry-monitors", "/dns-failover/entry-monitors/run", "/dns-failover/entry-monitors/runs", "/dns-failover/entry-monitors/backup-ips", "/dns-failover/entry-monitors/backup-ips/{id}", "/dns-failover/entry-monitors/backup-ips/refresh", "/dns-failover/entry-monitors/backup-ips/delete"} {
+	for _, route := range []string{"/support/operations", "/support/operations/clear", "/dns-failover/settings", "/dns-failover/probes", "/dns-failover/probes/{id}", "/dns-failover/probes/{id}/enabled", "/dns-failover/probes/{id}/revoke", "/dns-failover/rules", "/dns-failover/rules/{id}", "/dns-failover/rules/{id}/status", "/dns-failover/rules/{id}/enabled", "/dns-failover/rules/{id}/manual-switch", "/dns-failover/events", "/dns-failover/logs", "/dns-failover/entry-monitors", "/dns-failover/entry-monitors/save-receipt", "/dns-failover/entry-monitors/run", "/dns-failover/entry-monitors/runs", "/dns-failover/entry-monitors/backup-ips", "/dns-failover/entry-monitors/backup-ips/{id}", "/dns-failover/entry-monitors/backup-ips/refresh", "/dns-failover/entry-monitors/backup-ips/delete"} {
 		if !paths[route] {
 			t.Errorf("missing dynamic operation %s", route)
 		}
@@ -286,6 +286,7 @@ func TestPanelOperationDynamicDispatcherCoverage(t *testing.T) {
 		`len(parts) == 1 && parts[0] == "events"`,
 		`len(parts) == 1 && parts[0] == "logs"`,
 		`len(parts) == 1 && parts[0] == "entry-monitors"`,
+		`len(parts) == 2 && parts[0] == "entry-monitors" && parts[1] == "save-receipt"`,
 		`len(parts) == 2 && parts[0] == "entry-monitors" && parts[1] == "run"`,
 		`len(parts) == 2 && parts[0] == "entry-monitors" && parts[1] == "runs"`,
 		`len(parts) == 2 && parts[0] == "entry-monitors" && parts[1] == "backup-ips"`,
@@ -352,4 +353,31 @@ func TestPanelOperationConfigSchemaMatchesGuard(t *testing.T) {
 			t.Errorf("schema advertises disallowed config field: %s", field)
 		}
 	}
+}
+
+func TestPanelEntryRuleMatchAllConfirmationSchema(t *testing.T) {
+	for _, op := range panelOperationCatalog() {
+		if op.Name != "entry_rules.save" {
+			continue
+		}
+		var schema struct {
+			Properties map[string]struct {
+				Type string `json:"type"`
+			} `json:"properties"`
+			Required []string `json:"required"`
+		}
+		if err := json.Unmarshal(op.Parameters, &schema); err != nil {
+			t.Fatal(err)
+		}
+		if schema.Properties["confirm_match_all"].Type != "boolean" {
+			t.Fatal("AI save catalog cannot express match-all confirmation")
+		}
+		for _, required := range schema.Required {
+			if required == "confirm_match_all" {
+				t.Fatal("confirmation cannot be required for ordinary limited rules")
+			}
+		}
+		return
+	}
+	t.Fatal("missing entry_rules.save")
 }

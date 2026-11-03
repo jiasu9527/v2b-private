@@ -2,6 +2,7 @@ package aiops
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"strings"
@@ -27,17 +28,18 @@ func entryRuleToolDefinitions() []ToolDefinition {
 	changes := map[string]any{
 		"name": str("规则名称"), "entry_host": str("单个域名或IP"), "resolve_entry_host": integer("0下发域名，1解析后下发IP", 0, 1),
 		"enabled": integer("0停用、1启用；二分叶子影响整个父规则", 0, 1), "sort": integer("优先级排序值，越小越先匹配；相同排序值按现有ID顺序", 0, 2147483647), "remarks": str("备注；二分叶子影响整个父规则"),
-		"action":     map[string]any{"type": "string", "enum": []string{"override", "original", "hide"}, "description": "仅标准规则；override替换目标节点入口，original按原节点地址下发，hide不下发；逐节点首条命中生效。original/hide会清空入口host和解析设置，在审批卡显示"},
-		"conditions": map[string]any{"type": "array", "maxItems": 100, "items": condition, "description": "仅标准规则；完整替换所有AND条件，必须先读取全部条件和值；[]表示匹配所有用户。不要把摘要当完整条件"},
-		"members":    map[string]any{"type": "array", "minItems": 1, "maxItems": 500, "items": member, "description": "完整替换生效节点列表，数组顺序即节点顺序；二分叶子影响同父规则全部叶子"},
+		"action":            map[string]any{"type": "string", "enum": []string{"override", "original", "hide"}, "description": "仅标准规则；override替换目标节点入口，original按原节点地址下发，hide不下发；逐节点首条命中生效。original/hide会清空入口host和解析设置，在审批卡显示"},
+		"conditions":        map[string]any{"type": "array", "maxItems": 100, "items": condition, "description": "仅标准规则；完整替换所有AND条件，必须先读取全部条件和值；清空为[]会匹配所选节点范围全部合资格用户，需同时confirm_match_all=true；不要把摘要当完整条件"},
+		"confirm_match_all": map[string]any{"type": "boolean", "description": "仅标准规则且必须与conditions一起提交；把非空条件清空为[]时须为true，明确确认扩大匹配范围。已有空条件原样编辑不需确认"},
+		"members":           map[string]any{"type": "array", "minItems": 1, "maxItems": 500, "items": member, "description": "完整替换生效节点列表，数组顺序即节点顺序；二分叶子影响同父规则全部叶子"},
 	}
 	out := []ToolDefinition{}
 	add := func(name, desc string, p map[string]any, required ...string) {
 		raw, _ := json.Marshal(map[string]any{"type": "object", "properties": p, "required": required, "additionalProperties": false})
 		out = append(out, ToolDefinition{Type: "function", Function: ToolFunctionDefinition{Name: name, Description: desc, Parameters: raw}})
 	}
-	add("entry_rule_detail", "读取单个标准入口规则或二分叶子可编辑配置与revision。条件值、节点分页，不返回额外订阅链接凭据。修改前读取；每页revision必须相同；条件values_truncated时用condition_values读取全部值。", map[string]any{"kind": kind, "target_id": integer("规则或叶子ID", 1, 2147483647), "section": map[string]any{"type": "string", "enum": []string{"summary", "conditions", "condition_values", "members"}, "description": "默认summary返回标量与计数；conditions按条件分页；condition_values按一个条件的values分页；members按节点分页"}, "condition_index": integer("条件序号，从0开始，仅condition_values使用", 0, 100000), "limit": integer("分页条数，默认20最多50", 1, 50), "offset": integer("第一页0，后续按next_offset", 0, 100000)}, "kind", "target_id")
-	add("propose_entry_rule_update", "编辑入口规则，按会话权限执行。未提供字段保留；conditions/members为完整替换。二分叶子可改名称/入口/解析/排序以及共享状态/备注/生效节点，不能改变固定名单来源条件；合集入口保持统一。使用entry_rule_detail最新revision；完全访问自动执行，逐次确认模式等待批准。", map[string]any{"kind": kind, "target_id": integer("规则或叶子ID", 1, 2147483647), "revision": str("entry_rule_detail返回的64位revision"), "changes": map[string]any{"type": "object", "properties": changes, "additionalProperties": false}, "reason": str("修改原因及用户影响")}, "kind", "target_id", "revision", "changes", "reason")
+	add("entry_rule_detail", "读取单个标准入口规则或二分叶子可编辑配置与revision。首读取得revision，展开条件/节点及翻页时携带它；offset>0必须携带revision。版本变化返回conflict，重新从summary读取，禁止拼接不同版本。条件values_truncated时用condition_values读取全部值，不返回订阅凭据。", map[string]any{"kind": kind, "target_id": integer("规则或叶子ID", 1, 2147483647), "revision": str("首读可省略；后续使用首次返回的64字符revision，过期拒绝返回混合分页"), "section": map[string]any{"type": "string", "enum": []string{"summary", "conditions", "condition_values", "members"}, "description": "默认summary返回标量与计数；conditions按条件分页；condition_values按一个条件的values分页；members按节点分页"}, "condition_index": integer("条件序号，从0开始，仅condition_values使用", 0, 100000), "limit": integer("分页条数，默认20最多50", 1, 50), "offset": integer("第一页0，后续按next_offset", 0, 100000)}, "kind", "target_id")
+	add("propose_entry_rule_update", "编辑入口规则，按会话权限执行。未提供字段保留；conditions/members为完整替换。二分叶子可改名称/入口/解析/排序以及共享状态/备注/生效节点，不能改变固定名单来源条件；合集入口保持统一。使用entry_rule_detail最新revision；完全访问自动执行，逐次确认模式等待批准。", map[string]any{"kind": kind, "target_id": integer("规则或叶子ID", 1, 2147483647), "revision": str("entry_rule_detail返回的64字符revision"), "changes": map[string]any{"type": "object", "properties": changes, "additionalProperties": false}, "reason": str("修改原因及用户影响")}, "kind", "target_id", "revision", "changes", "reason")
 	return out
 }
 
@@ -84,6 +86,9 @@ func (s *Service) callEntryRuleTool(ctx context.Context, actor, sessionID int64,
 	if a.Section == "" {
 		a.Section = "summary"
 	}
+	if !oneOf(a.Section, "summary", "conditions", "condition_values", "members") || !validReadRevision(a.Revision, a.Offset) {
+		return ToolOutcome{}, ErrValidation
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ToolOutcome{}, err
@@ -92,6 +97,11 @@ func (s *Service) callEntryRuleTool(ctx context.Context, actor, sessionID int64,
 	v, err := admin.LoadAIEntryRule(ctx, tx, a.Kind, a.TargetID)
 	if err != nil {
 		return ToolOutcome{}, entryRuleError(err)
+	}
+	// Compare while the rule/topology locks are still held. Never return a page
+	// from a new configuration under a caller's previous revision.
+	if a.Revision != "" && a.Revision != v.Revision {
+		return ToolOutcome{}, ErrConflict
 	}
 	if err = tx.Commit(); err != nil {
 		return ToolOutcome{}, err
@@ -130,6 +140,14 @@ func (s *Service) callEntryRuleTool(ctx context.Context, actor, sessionID int64,
 		return ToolOutcome{}, ErrUnavailable
 	}
 	return ToolOutcome{Content: string(raw)}, nil
+}
+
+func validReadRevision(revision string, offset int) bool {
+	if revision == "" {
+		return offset == 0
+	}
+	decoded, err := hex.DecodeString(revision)
+	return err == nil && len(decoded) == 32 && revision == strings.ToLower(revision)
 }
 
 func projectEntryEditCondition(c cliententry.Condition, index int) map[string]any {

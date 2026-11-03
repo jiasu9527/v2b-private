@@ -58,6 +58,9 @@ func handleAdminDNSFailover(w http.ResponseWriter, r *http.Request, sessions ses
 	if len(parts) == 1 && parts[0] == "entry-monitors" {
 		return handleClientEntryMonitors(w, r, service)
 	}
+	if len(parts) == 2 && parts[0] == "entry-monitors" && parts[1] == "save-receipt" {
+		return handleClientEntryMonitorSaveReceipt(w, r, service)
+	}
 	if len(parts) == 2 && parts[0] == "entry-monitors" && parts[1] == "run" {
 		return handleClientEntryMonitorRun(w, r, service)
 	}

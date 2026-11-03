@@ -280,9 +280,8 @@ func TestSupportEntryOverviewReadOnlyDoesNotRefreshOrScheduleMonitors(t *testing
 	}
 	defer db.Close()
 	service := &DBService{db: db}
-	// Startup owns schema initialization. All subsequent overview work must be
-	// SELECT-only; unexpected writes, task scheduling or secret reads fail.
-	service.clientEntryEnsureOnce.Do(func() {})
+	// Do not prime schema guards: even the first overview call is SELECT-only.
+	// Unexpected schema writes, task scheduling or secret reads must fail.
 	mock.ExpectQuery(`(?s)^SELECT p.id, p.name, p.sort, p.mode,.*FROM v2_client_entry_user_policy p.*ORDER BY p.sort ASC NULLS LAST, p.id ASC$`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "sort", "mode", "snapshot_from", "snapshot_to", "action", "conditions", "entry_host", "resolve_entry_host", "extra_nodes", "extra_nodes_position", "enabled", "remarks", "created_at", "updated_at"}))
 	mock.ExpectQuery(`(?s)^SELECT m.id, m.policy_id, p.name, p.action, m.enabled,.*FROM v2_client_entry_monitor m.*ORDER BY p.sort ASC NULLS LAST, p.id ASC$`).

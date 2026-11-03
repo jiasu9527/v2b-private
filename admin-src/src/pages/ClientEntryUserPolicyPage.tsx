@@ -42,6 +42,7 @@ import { filterEntryRows, entryRuleName, entryRuleHost, moveEntryRow } from './c
 import { attachEntryCollections, effectiveEntryResolveHost, entryCollectionResolveLabel, parseEntryCollections, canJoinEntryCollection, entryCollectionMember, entryCollectionMemberKey, type EntryCollection, type EntryCollectionOption } from './clientEntryCollections';
 import { buildVisibleServerOptions, memberKey, splitMemberKey, type ClientEntryServerOption } from './clientEntryHelpers';
 import { splitUserIDRange as singleUserIDRange, splitUAConditions } from './clientEntrySplitConditions';
+import { requiresMatchAllConfirmation } from './clientEntryMatchAll';
 import { useSplitBackupIPPool } from './clientEntryBackupPool';
 import EntryEvidencePanel from './EntryEvidencePanel';
 
@@ -410,6 +411,7 @@ function policyPayload(row: any, overrides: Record<string, any> = {}) {
     resolve_entry_host: action === 'override' && normalizeResolveEntryHost(source.resolve_entry_host) ? 1 : 0,
     action,
     conditions: cleanConditions(source.conditions),
+    confirm_match_all: source.confirm_match_all === true,
     members: (Array.isArray(source.members) ? source.members : [])
       .map((member: any) => typeof member === 'string' ? splitMemberKey(member) : member)
       .filter(Boolean),
@@ -548,6 +550,8 @@ function PolicyEditor({
   const emailSearchSequence = useRef(0);
   const [form] = Form.useForm();
   const action = Form.useWatch('action', form) || 'override';
+  const conditions = Form.useWatch('conditions', form) || [];
+  const needsMatchAllConfirmation = requiresMatchAllConfirmation(!row?.id, parseConditions(row?.conditions), conditions);
   const extraNodeCount = parseExtraNodes(Form.useWatch('extra_nodes', form)).length;
 
   const show = () => {
@@ -572,6 +576,7 @@ function PolicyEditor({
       resolve_entry_host: effectiveEntryResolveHost(row),
       action: normalizePolicyAction(row?.action),
       conditions,
+      confirm_match_all: false,
       members: normalizedMembers(row),
       extra_nodes: parseExtraNodes(row?.extra_nodes).join('\n'),
       extra_nodes_position: normalizeExtraNodePosition(row?.extra_nodes_position),
@@ -714,7 +719,7 @@ function PolicyEditor({
           </Form.Item>
         </>}
         <div className="entry-editor-section-title">匹配与下发</div>
-        <Form.Item label="匹配条件" extra="同一条规则中的所有条件必须同时满足（AND）。不添加条件表示匹配全部用户。">
+        <Form.Item label="匹配条件" extra="同一条规则中的所有条件必须同时满足（AND）。不添加条件表示匹配所选节点范围内的全部合资格用户，仍受节点权限和规则优先级约束。">
           <Form.List name="conditions">
             {(fields, { add, remove }) => <Space direction="vertical" size={10} style={{ width: '100%' }}>
               {fields.map((item) => <ConditionEditorRow
@@ -735,6 +740,14 @@ function PolicyEditor({
             </Space>}
           </Form.List>
         </Form.Item>
+        {needsMatchAllConfirmation && <Form.Item
+          name="confirm_match_all"
+          valuePropName="checked"
+          preserve={false}
+          rules={[{ validator: (_, value) => value === true ? Promise.resolve() : Promise.reject(new Error('请确认此规则无需用户或 UA 条件，匹配全部合资格用户')) }]}
+        >
+          <Checkbox>确认不限制用户或 UA，按本规则动作处理所选节点范围内的全部合资格用户</Checkbox>
+        </Form.Item>}
         <Form.Item name="members" label="生效节点" rules={[{ required: true, message: '请选择生效节点' }]} tooltip="规则只作用于选中的节点，可以选择多个。">
           <Select mode="multiple" showSearch allowClear placeholder="选择多个生效节点" options={serverOptions} optionFilterProp="label" />
         </Form.Item>

@@ -79,7 +79,7 @@ func (s *Service) panelRecoveryReadOnlyCall(call ToolCall) bool {
 		"panel_operations_list", "panel_operation_describe", "panel_result_read",
 		"panel_status", "user_lookup", "user_detail", "plans_list", "groups_list",
 		"orders_list", "nodes_list", "node_detail",
-		"entry_rules_list", "entry_simulate", "entry_health", "backup_ips_list",
+		"entry_rules_list", "entry_simulate", "entry_health", "entry_health_detail", "host_references", "entry_coverage", "backup_ips_list",
 		"entry_probe_result", "entry_rule_detail", "entry_split_operation",
 		"tickets_list", "tickets_list_global", "ticket_get", "ticket_message_get", "ticket_settings", "servers_list":
 		return true

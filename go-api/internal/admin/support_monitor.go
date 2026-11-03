@@ -85,10 +85,17 @@ func (s *DBService) SupportEntryOverview(ctx context.Context) (SupportEntryOverv
 	if s == nil || s.db == nil {
 		return SupportEntryOverview{}, ErrUnavailable
 	}
-	policies, err := s.resolveClientEntryMonitorPolicies(ctx)
+	// Schema initialization belongs to startup. The recovery-safe AI health
+	// tools also use this path, so even the first call must remain SELECT-only.
+	rules, err := s.listClientEntryUserPolicies(ctx, false)
 	if err != nil {
 		return SupportEntryOverview{}, err
 	}
+	nodes, err := s.loadClientEntryMonitorNodes(ctx, rules)
+	if err != nil {
+		return SupportEntryOverview{}, err
+	}
+	policies := buildClientEntryMonitorPolicies(rules, nodes)
 	monitors, err := s.loadClientEntryMonitorRecords(ctx)
 	if err != nil {
 		return SupportEntryOverview{}, err

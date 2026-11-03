@@ -68,9 +68,13 @@ func TestAIEntryRuleEditPostgres(t *testing.T) {
 	if _, err = db.Exec(`INSERT INTO v2_client_entry_user_policy_member(policy_id,server_type,server_id,sort,created_at,updated_at)VALUES($1,'vmess',$2,10,1,1)`, policy, node); err != nil {
 		t.Fatal(err)
 	}
+	readRevisions := map[string]string{}
 	detail := func(kind string, id int64, section string, offset int) string {
 		t.Helper()
-		args, _ := json.Marshal(map[string]any{"kind": kind, "target_id": id, "section": section, "offset": offset})
+		if section == "summary" {
+			delete(readRevisions, fmt.Sprintf("%s:%d", kind, id))
+		}
+		args, _ := json.Marshal(map[string]any{"kind": kind, "target_id": id, "section": section, "offset": offset, "revision": readRevisions[fmt.Sprintf("%s:%d", kind, id)]})
 		out, e := s.callEntryRuleTool(ctx, actor, session, ToolCall{Function: ToolFunction{Name: "entry_rule_detail", Arguments: string(args)}})
 		if e != nil {
 			t.Fatal(e)
@@ -78,6 +82,13 @@ func TestAIEntryRuleEditPostgres(t *testing.T) {
 		if strings.Contains(out.Content, "MUST_NOT_EXPOSE") {
 			t.Fatal("secret projection")
 		}
+		var page struct {
+			Rule struct {
+				Revision string `json:"revision"`
+			} `json:"rule"`
+		}
+		json.Unmarshal([]byte(out.Content), &page)
+		readRevisions[fmt.Sprintf("%s:%d", kind, id)] = page.Rule.Revision
 		return out.Content
 	}
 	revision := func(kind string, id int64) string {
@@ -143,6 +154,19 @@ func TestAIEntryRuleEditPostgres(t *testing.T) {
 	}
 	if _, err = propose("invalidmember", "policy", policy, `{"members":[{"server_type":"vmess","server_id":2147483647}]}`); !errors.Is(err, ErrValidation) {
 		t.Fatal("missing node", err)
+	}
+	if _, err = propose("unconfirmed-match-all", "policy", policy, `{"conditions":[]}`); !errors.Is(err, ErrValidation) {
+		t.Fatal("expanding to match-all without acknowledgement", err)
+	}
+	confirmed, err := propose("confirmed-match-all", "policy", policy, `{"conditions":[],"confirm_match_all":true}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ApproveAction(ctx, actor, session, confirmed.ID); err != nil {
+		t.Fatal("confirmation lost between proposal and execution", err)
+	}
+	if err = db.QueryRow(`SELECT conditions FROM v2_client_entry_user_policy WHERE id=$1`, policy).Scan(&actualConditions); err != nil || actualConditions != "[]" {
+		t.Fatal("confirmed condition clear not committed", actualConditions, err)
 	}
 	hide, err := propose("hide", "policy", policy, `{"action":"hide"}`)
 	if err != nil {

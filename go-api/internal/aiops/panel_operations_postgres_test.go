@@ -114,12 +114,18 @@ func TestAIPanelOperationsPostgresLifecycle(t *testing.T) {
 		if executionActor.ID != f.admin || executionActor.IsAdmin {
 			t.Fatal("admin approval widened original employee scope or lost audit identity", executionActor)
 		}
-		var chunk panelResultChunk
-		if json.Unmarshal([]byte(done.Output), &chunk) != nil || chunk.ResultID <= 0 {
+		var receipt struct {
+			Operation string `json:"operation"`
+			Data      struct {
+				Saved bool `json:"saved"`
+			} `json:"data"`
+		}
+		if json.Unmarshal([]byte(done.Output), &receipt) != nil || receipt.Operation != "notices.save" || !receipt.Data.Saved || strings.Contains(done.Output, "result_id") {
 			t.Fatal(done.Output)
 		}
-		if _, err := f.s.readPanelResult(ctx, f.staff, a.SessionID, chunk.ResultID, 0, 1000); err != nil {
-			t.Fatal("owner cannot read admin-approved ordinary result", err)
+		var savedResultCount int
+		if err := f.db.QueryRowContext(ctx, `SELECT count(*) FROM v2_ai_result WHERE session_id=$1`, a.SessionID).Scan(&savedResultCount); err != nil || savedResultCount != 0 {
+			t.Fatal("small successful receipt unexpectedly stored a second result", savedResultCount, err)
 		}
 		if _, err := f.s.ApproveAction(ctx, f.admin, a.SessionID, a.ID); !errors.Is(err, ErrConflict) {
 			t.Fatal(err)
@@ -192,7 +198,7 @@ func TestAIPanelOperationsPostgresLifecycle(t *testing.T) {
 		}
 		before := runtime.count()
 		out, err := f.s.automaticActionResult(ctx, f.staff, a.SessionID, turn, ToolOutcome{ActionID: a.ID, Pending: true})
-		if err != nil || !strings.Contains(out.Content, "result_id") || runtime.count() != before+1 {
+		if err != nil || !strings.Contains(out.Content, `\"saved\":true`) || runtime.count() != before+1 {
 			t.Fatal(out, err, runtime.count())
 		}
 		done := wait(a.ID)
