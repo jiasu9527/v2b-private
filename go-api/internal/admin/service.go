@@ -458,6 +458,8 @@ type DBService struct {
 
 	supportEnsureOnce       sync.Once
 	supportEnsureErr        error
+	commissionLogSchemaMu   sync.Mutex
+	commissionLogSchemaOK   bool
 	clientEntryEnsureOnce   sync.Once
 	clientEntryEnsureErr    error
 	clientEntryMonitorMu    sync.Mutex

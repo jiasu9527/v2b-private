@@ -70,7 +70,7 @@ func TestPanelOperationCatalogContracts(t *testing.T) {
 
 func TestPanelOperationDeploymentCredentialContracts(t *testing.T) {
 	operations := panelOperationCatalog()
-	if len(operations) != 220 {
+	if len(operations) != 225 {
 		t.Fatalf("credential access must not duplicate backend operations: got %d", len(operations))
 	}
 	byName := map[string]aiops.PanelOperation{}
@@ -131,6 +131,7 @@ func TestPanelOperationCatalogCoversAdminRoutes(t *testing.T) {
 		paths[op.Path] = true
 	}
 	excluded := map[string]string{
+		"/commission-log/": "subroutes checked below",
 		"/server/client-entry-user-policy/investigations/": "subroutes checked below",
 		"/ai-ops/telegram/": "Telegram authorization/configuration is managed by humans; never recursively invoke",
 		"/payment/fetch":    "payment configuration forbidden", "/payment/getPaymentMethods": "payment configuration forbidden", "/payment/getPaymentForm": "payment configuration forbidden", "/payment/save": "payment configuration forbidden", "/payment/drop": "payment configuration forbidden", "/payment/show": "payment configuration forbidden", "/payment/sort": "payment configuration forbidden",
@@ -147,6 +148,7 @@ func TestPanelOperationCatalogCoversAdminRoutes(t *testing.T) {
 		}
 	}
 	for _, entry := range []struct{ file, fn, base string }{
+		{"router_commission_log.go", "handleAdminCommissionLog", "/commission-log/"},
 		{"router_entry_evidence.go", "handleEntryEvidence", "/server/client-entry-user-policy/investigations/"},
 		{"router_apple_id_admin.go", "handleAdminAppleID", "/apple-id/"},
 		{"router_user_migration.go", "handleUserMigration", "/migration/xboard/"},

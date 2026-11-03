@@ -28,9 +28,9 @@ const gibibyte = int64(1073741824)
 var adminInviteCodePattern = regexp.MustCompile(`^[A-Za-z0-9]{1,32}$`)
 
 type UserFilter struct {
-	Key       string
-	Condition string
-	Value     string
+	Key       string `json:"key"`
+	Condition string `json:"condition"`
+	Value     string `json:"value"`
 }
 
 type UserFetchRequest struct {
@@ -42,8 +42,9 @@ type UserFetchRequest struct {
 }
 
 type UserListResult struct {
-	Data  []map[string]any `json:"data"`
-	Total int64            `json:"total"`
+	Data           []map[string]any `json:"data"`
+	Total          int64            `json:"total"`
+	AppliedFilters []UserFilter     `json:"applied_filters"`
 }
 
 type UserUpdateRequest struct {
@@ -118,13 +119,22 @@ func (s *DBService) ListUsers(ctx context.Context, req UserFetchRequest) (UserLi
 	sortExpr := sanitizeUserSort(req.Sort)
 	sortType := sanitizeAdminSortType(req.SortType)
 
-	whereClause, args, err := s.buildUserWhere(ctx, req.Filters)
+	filters, err := NormalizeUserFilters(req.Filters)
+	if err != nil {
+		return UserListResult{}, err
+	}
+	whereClause, args, err := s.buildUserWhere(ctx, filters)
 	if err != nil {
 		return UserListResult{}, err
 	}
 
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return UserListResult{}, err
+	}
+	defer tx.Rollback()
 	var total int64
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_user u`+whereClause, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_user u`+whereClause, args...).Scan(&total); err != nil {
 		return UserListResult{}, fmt.Errorf("count admin users: %w", err)
 	}
 
@@ -132,9 +142,18 @@ func (s *DBService) ListUsers(ctx context.Context, req UserFetchRequest) (UserLi
 	dataArgs := append(append([]any{}, args...), pageSize, offset)
 	query := adminUserListJSONQuery(whereClause, sortExpr, sortType, len(dataArgs)-1, len(dataArgs))
 
-	data, err := s.queryJSONList(ctx, query, dataArgs...)
+	var raw []byte
+	err = tx.QueryRowContext(ctx, query, dataArgs...).Scan(&raw)
 	if err != nil {
 		return UserListResult{}, fmt.Errorf("query admin users: %w", err)
+	}
+
+	var data []map[string]any
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return UserListResult{}, fmt.Errorf("decode admin users: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return UserListResult{}, err
 	}
 
 	nodeNames, err := s.loadManagedServerNameMap(ctx)
@@ -160,7 +179,7 @@ func (s *DBService) ListUsers(ctx context.Context, req UserFetchRequest) (UserLi
 		item["subscribe_url"] = subscribeURL
 	}
 
-	return UserListResult{Data: data, Total: total}, nil
+	return UserListResult{Data: data, Total: total, AppliedFilters: filters}, nil
 }
 
 func (s *DBService) GetUserInfoByID(ctx context.Context, id int64) (map[string]any, error) {
@@ -1217,6 +1236,11 @@ func deleteAuthSessionsByUserIDs(ctx context.Context, tx *sql.Tx, ids []int64, m
 }
 
 func (s *DBService) buildUserWhere(ctx context.Context, filters []UserFilter) (string, []any, error) {
+	var err error
+	filters, err = NormalizeUserFilters(filters)
+	if err != nil {
+		return "", nil, err
+	}
 	if len(filters) == 0 {
 		return "", nil, nil
 	}
@@ -1225,9 +1249,6 @@ func (s *DBService) buildUserWhere(ctx context.Context, filters []UserFilter) (s
 	args := make([]any, 0, len(filters))
 	for _, filter := range filters {
 		key := strings.TrimSpace(filter.Key)
-		if key == "" {
-			continue
-		}
 		condition, err := normalizeUserFilterCondition(filter.Condition)
 		if err != nil {
 			return "", nil, err
@@ -1261,7 +1282,11 @@ AND ic.code %s $%d
 		}
 
 		if key == "plan_id" && value == "null" {
-			parts = append(parts, "u.plan_id IS NULL")
+			if condition == "<>" {
+				parts = append(parts, "u.plan_id IS NOT NULL")
+			} else {
+				parts = append(parts, "u.plan_id IS NULL")
+			}
 			continue
 		}
 
@@ -1276,7 +1301,7 @@ AND ic.code %s $%d
 			field = userLikeFilterField(key)
 			argument = "%" + value + "%"
 		}
-		if key == "d" || key == "transfer_enable" {
+		if condition != "ILIKE" && (key == "d" || key == "transfer_enable") {
 			argument = userTrafficBytesFromInput(value)
 		}
 		if condition != "ILIKE" && key != "remarks" && key != "email" && key != "uuid" && key != "token" {
@@ -1324,6 +1349,8 @@ func userFilterField(key string) (string, bool) {
 		return "u.t", true
 	case "expired_at":
 		return "u.expired_at", true
+	case "created_at", "updated_at":
+		return "u." + key, true
 	case "uuid":
 		return "u.uuid", true
 	case "token":
@@ -1359,6 +1386,8 @@ func userLikeFilterField(key string) string {
 		return "CAST(u.t AS TEXT)"
 	case "expired_at":
 		return "CAST(u.expired_at AS TEXT)"
+	case "created_at", "updated_at":
+		return "CAST(u." + key + " AS TEXT)"
 	case "invite_user_id":
 		return "CAST(u.invite_user_id AS TEXT)"
 	case "plan_id":

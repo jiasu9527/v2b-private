@@ -8,15 +8,14 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	usersvc "forest/go-api/internal/user"
 )
 
 type OrderFilter struct {
-	Key       string
-	Condition string
-	Value     string
+	Key       string `json:"key"`
+	Condition string `json:"condition"`
+	Value     string `json:"value"`
 }
 
 type OrderFetchRequest struct {
@@ -27,8 +26,9 @@ type OrderFetchRequest struct {
 }
 
 type OrderListResult struct {
-	Data  []map[string]any `json:"data"`
-	Total int64            `json:"total"`
+	Data           []map[string]any `json:"data"`
+	Total          int64            `json:"total"`
+	AppliedFilters []OrderFilter    `json:"applied_filters"`
 }
 
 type OrderUpdateRequest struct {
@@ -64,9 +64,22 @@ func (s *DBService) FetchOrders(ctx context.Context, req OrderFetchRequest) (Ord
 		pageSize = 10
 	}
 
-	whereClause, args := buildOrderWhere(req)
+	filters, err := NormalizeOrderFilters(req.Filters)
+	if err != nil {
+		return OrderListResult{}, err
+	}
+	req.Filters = filters
+	whereClause, args, err := buildOrderWhere(req)
+	if err != nil {
+		return OrderListResult{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return OrderListResult{}, err
+	}
+	defer tx.Rollback()
 	var total int64
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_order o`+whereClause, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_order o`+whereClause, args...).Scan(&total); err != nil {
 		return OrderListResult{}, fmt.Errorf("count admin orders: %w", err)
 	}
 
@@ -78,12 +91,12 @@ FROM (
 	FROM v2_order o
 	LEFT JOIN v2_plan p ON p.id = o.plan_id
 	%s
-	ORDER BY o.created_at DESC
+	ORDER BY o.created_at DESC, o.id DESC
 	LIMIT $%d OFFSET $%d
 ) AS t`, whereClause, len(dataArgs)-1, len(dataArgs))
 
 	var raw []byte
-	if err := s.db.QueryRowContext(ctx, query, dataArgs...).Scan(&raw); err != nil {
+	if err := tx.QueryRowContext(ctx, query, dataArgs...).Scan(&raw); err != nil {
 		return OrderListResult{}, fmt.Errorf("query admin orders: %w", err)
 	}
 
@@ -92,7 +105,10 @@ FROM (
 		return OrderListResult{}, fmt.Errorf("decode admin orders: %w", err)
 	}
 
-	return OrderListResult{Data: data, Total: total}, nil
+	if err := tx.Commit(); err != nil {
+		return OrderListResult{}, err
+	}
+	return OrderListResult{Data: data, Total: total, AppliedFilters: filters}, nil
 }
 
 func (s *DBService) GetOrderDetail(ctx context.Context, id int64) (map[string]any, error) {
@@ -155,31 +171,7 @@ FROM (
 }
 
 func (s *DBService) UpdateOrder(ctx context.Context, req OrderUpdateRequest) (bool, error) {
-	if s.db == nil {
-		return false, ErrUnavailable
-	}
-	req.TradeNo = strings.TrimSpace(req.TradeNo)
-	if req.TradeNo == "" {
-		return false, errors.New("订单不存在")
-	}
-	if req.CommissionStatus == nil {
-		return false, errors.New("佣金状态格式不正确")
-	}
-
-	result, err := s.db.ExecContext(ctx, `UPDATE v2_order
-SET commission_status = $2, updated_at = $3
-WHERE trade_no = $1`, req.TradeNo, *req.CommissionStatus, time.Now().Unix())
-	if err != nil {
-		return false, errors.New("更新失败")
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return false, errors.New("更新失败")
-	}
-	if affected == 0 {
-		return false, errors.New("订单不存在")
-	}
-	return true, nil
+	return s.updateOrderCommissionStatus(ctx, req)
 }
 
 func (s *DBService) MarkOrderPaid(ctx context.Context, tradeNo string) (bool, error) {
@@ -314,53 +306,39 @@ func (s *DBService) AssignOrder(ctx context.Context, req OrderAssignRequest) (st
 	return tradeNo, nil
 }
 
-func buildOrderWhere(req OrderFetchRequest) (string, []any) {
-	clauses := make([]string, 0)
-	args := make([]any, 0)
-
+func buildOrderWhere(req OrderFetchRequest) (string, []any, error) {
+	filters, err := NormalizeOrderFilters(req.Filters)
+	if err != nil {
+		return "", nil, err
+	}
+	clauses := []string{}
+	args := []any{}
 	if req.IsCommission {
-		clauses = append(clauses, `o.invite_user_id IS NOT NULL`)
-		clauses = append(clauses, `o.status NOT IN (0, 2)`)
-		clauses = append(clauses, `o.commission_balance > 0`)
+		clauses = append(clauses, `o.invite_user_id IS NOT NULL`, `o.status NOT IN (0, 2)`, `o.commission_balance > 0`)
 	}
-
-	for _, filter := range req.Filters {
-		key := strings.TrimSpace(filter.Key)
-		condition := strings.TrimSpace(filter.Condition)
-		value := strings.TrimSpace(filter.Value)
-		if key == "" || condition == "" {
-			continue
+	for _, f := range filters {
+		column := "o." + f.Key
+		if f.Key == "email" {
+			column = "u.email"
 		}
-
-		switch key {
-		case "email":
-			if condition == "模糊" {
-				args = append(args, "%"+value+"%")
-				clauses = append(clauses, fmt.Sprintf(`EXISTS (SELECT 1 FROM v2_user u WHERE u.id = o.user_id AND u.email ILIKE $%d)`, len(args)))
-				continue
-			}
-			if operator, ok := allowedOrderOperator(condition); ok {
-				args = append(args, value)
-				clauses = append(clauses, fmt.Sprintf(`EXISTS (SELECT 1 FROM v2_user u WHERE u.id = o.user_id AND u.email %s $%d)`, operator, len(args)))
-			}
-		case "trade_no", "status", "commission_status", "user_id", "invite_user_id", "callback_no", "commission_balance":
-			column := "o." + key
-			if condition == "模糊" {
-				args = append(args, "%"+value+"%")
-				clauses = append(clauses, fmt.Sprintf(`CAST(%s AS TEXT) ILIKE $%d`, column, len(args)))
-				continue
-			}
-			if operator, ok := allowedOrderOperator(condition); ok {
-				args = append(args, value)
-				clauses = append(clauses, fmt.Sprintf(`%s %s $%d`, column, operator, len(args)))
-			}
+		operator := f.Condition
+		value := any(f.Value)
+		if f.Condition == "模糊" {
+			operator = "ILIKE"
+			column = "CAST(" + column + " AS TEXT)"
+			value = "%" + f.Value + "%"
 		}
+		args = append(args, value)
+		predicate := fmt.Sprintf(`%s %s $%d`, column, operator, len(args))
+		if f.Key == "email" {
+			predicate = `EXISTS (SELECT 1 FROM v2_user u WHERE u.id = o.user_id AND ` + predicate + `)`
+		}
+		clauses = append(clauses, predicate)
 	}
-
 	if len(clauses) == 0 {
-		return "", args
+		return "", args, nil
 	}
-	return " WHERE " + strings.Join(clauses, " AND "), args
+	return " WHERE " + strings.Join(clauses, " AND "), args, nil
 }
 
 func allowedOrderOperator(condition string) (string, bool) {

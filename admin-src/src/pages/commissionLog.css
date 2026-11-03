@@ -1,0 +1,11 @@
+.commission-log-panel { min-width: 0; }
+.commission-log-filters .ant-form-item-control { min-width: 0; }
+@media (max-width: 600px) {
+  .commission-log-filters .ant-form-item { flex: 0 0 100%; margin-inline-end: 0; }
+  .commission-log-filters .ant-form-item-row { flex-wrap: nowrap; }
+  .commission-log-filters .ant-form-item-label { flex: 0 0 80px; padding: 0; text-align: left; }
+  .commission-log-filters .ant-form-item-control { flex: 1; }
+  .commission-log-filters .ant-input-number,
+  .commission-log-filters .ant-select,
+  .commission-log-filters .ant-picker { width: 100% !important; min-width: 0; }
+}

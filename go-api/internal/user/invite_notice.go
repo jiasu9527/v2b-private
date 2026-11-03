@@ -188,14 +188,14 @@ func (s *DBService) InviteDetails(ctx context.Context, userID, current, pageSize
 
 	var total int64
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_commission_log
-WHERE invite_user_id = $1 AND get_amount > 0`, userID).Scan(&total); err != nil {
+WHERE invite_user_id = $1 AND get_amount > 0 AND deleted_at IS NULL`, userID).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count invite commission details: %w", err)
 	}
 
 	offset := (current - 1) * pageSize
 	rows, err := s.queryRowsAsMaps(ctx, `SELECT id, trade_no, order_amount, get_amount, created_at
 FROM v2_commission_log
-WHERE invite_user_id = $1 AND get_amount > 0
+WHERE invite_user_id = $1 AND get_amount > 0 AND deleted_at IS NULL
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3`, userID, pageSize, offset)
 	if err != nil {

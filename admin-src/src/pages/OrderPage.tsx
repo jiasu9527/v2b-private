@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Badge, Button, Card, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Select, Skeleton, Space, Table, Tag, Tooltip, message } from 'antd';
+import { Badge, Button, Card, Tabs, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Select, Skeleton, Space, Table, Tag, Tooltip, message } from 'antd';
 import type { MenuProps } from 'antd';
 import { CaretDownOutlined, PlusOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { apiGet, apiPost, getAdminPath } from '../lib/api';
+import CommissionLogTab from './CommissionLogTab';
 import LegacyFilterDrawer, { FilterButton } from '../components/LegacyFilterDrawer';
 
 const periodText: Record<string, string> = { month_price: '月付', quarter_price: '季付', half_year_price: '半年付', year_price: '年付', two_year_price: '两年付', three_year_price: '三年付', onetime_price: '一次性', reset_price: '流量重置包' };
@@ -119,6 +120,7 @@ function DetailSection({ title, children }: { title: string; children: React.Rea
 }
 
 export default function OrderPage() {
+  const [tab, setTab] = useState('orders');
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -207,6 +209,9 @@ export default function OrderPage() {
 
   return <div className="legacy-page order-page">
     <div className="content-heading">订单管理</div>
+    <Tabs activeKey={tab} onChange={setTab} items={[{ key: 'orders', label: '套餐订单' }, { key: 'commission', label: '返佣记录' }]} />
+    {tab === 'commission' && <Card className="block-card" styles={{ body: { padding: 0 } }}><CommissionLogTab /></Card>}
+    <div style={{ display: tab === 'orders' ? undefined : 'none' }}>
     <Card className="block-card" styles={{ body: { padding: 0 } }}>
       <div className="forest-table-action">
         <Space>
@@ -250,5 +255,6 @@ export default function OrderPage() {
       </div>}
     </Modal>
     <AddOrderModal open={addOpen} plans={plans} onClose={() => setAddOpen(false)} onDone={() => load()} />
+    </div>
   </div>;
 }

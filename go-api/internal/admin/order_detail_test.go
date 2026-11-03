@@ -39,10 +39,13 @@ func TestGetOrderDetailClearsMissingInviteUserReference(t *testing.T) {
 }
 
 func TestBuildOrderWhereSupportsUserIDFilter(t *testing.T) {
-	whereClause, args := buildOrderWhere(OrderFetchRequest{Filters: []OrderFilter{
+	whereClause, args, err := buildOrderWhere(OrderFetchRequest{Filters: []OrderFilter{
 		{Key: "user_id", Condition: "=", Value: "12"},
 	}})
 
+	if err != nil {
+		t.Fatal(err)
+	}
 	if whereClause != " WHERE o.user_id = $1" {
 		t.Fatalf("unexpected order where clause: %s", whereClause)
 	}

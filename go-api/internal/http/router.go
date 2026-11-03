@@ -651,6 +651,9 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleStaffUserUnban(w, r, state.session, state.admin) {
 				return
 			}
+		case strings.HasPrefix(r.URL.Path, adminPrefix+"/commission-log/"):
+			handleAdminCommissionLog(w, r, state.session, state.admin, strings.TrimPrefix(r.URL.Path, adminPrefix+"/commission-log/"))
+			return
 		case strings.HasPrefix(r.URL.Path, adminPrefix+"/migration/xboard/"):
 			handleUserMigration(w, r, state.session, state.userMigration, strings.TrimPrefix(r.URL.Path, adminPrefix+"/migration/xboard/"))
 			return
@@ -3585,10 +3588,18 @@ func handleStaffUserSendMail(w http.ResponseWriter, r *http.Request, sessionServ
 		return true
 	}
 
-	inputs, err := readInputs(r)
+	inputs, err := readAdminFilteredInputs(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
 		return true
+	}
+
+	filters, err := userFilters(inputs)
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	if err := validateUserFilterParameters(inputs, true); err != nil {
+		return handleAdminError(w, err)
 	}
 
 	sent, err := adminService.SendUserMail(r.Context(), admin.UserMailRequest{
@@ -3596,7 +3607,7 @@ func handleStaffUserSendMail(w http.ResponseWriter, r *http.Request, sessionServ
 		Content:  strings.TrimSpace(inputs["content"]),
 		Sort:     strings.TrimSpace(inputs["sort"]),
 		SortType: strings.TrimSpace(inputs["sort_type"]),
-		Filters:  enforceStaffUserScope(userFilters(inputs)),
+		Filters:  enforceStaffUserScope(filters),
 	})
 	if err != nil {
 		return handleAdminError(w, err)
@@ -3614,13 +3625,21 @@ func handleStaffUserBan(w http.ResponseWriter, r *http.Request, sessionService s
 		return true
 	}
 
-	inputs, err := readInputs(r)
+	inputs, err := readAdminFilteredInputs(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
 		return true
 	}
 
-	banned, err := adminService.BanUsers(r.Context(), enforceStaffUserScope(userFilters(inputs)))
+	filters, err := userFilters(inputs)
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	if err := validateUserFilterParameters(inputs, false); err != nil {
+		return handleAdminError(w, err)
+	}
+
+	banned, err := adminService.BanUsers(r.Context(), enforceStaffUserScope(filters))
 	if err != nil {
 		return handleAdminError(w, err)
 	}
@@ -3637,13 +3656,21 @@ func handleStaffUserUnban(w http.ResponseWriter, r *http.Request, sessionService
 		return true
 	}
 
-	inputs, err := readInputs(r)
+	inputs, err := readAdminFilteredInputs(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
 		return true
 	}
 
-	unbanned, err := adminService.UnbanUsers(r.Context(), enforceStaffUserScope(userFilters(inputs)))
+	filters, err := userFilters(inputs)
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	if err := validateUserFilterParameters(inputs, false); err != nil {
+		return handleAdminError(w, err)
+	}
+
+	unbanned, err := adminService.UnbanUsers(r.Context(), enforceStaffUserScope(filters))
 	if err != nil {
 		return handleAdminError(w, err)
 	}
@@ -3677,10 +3704,18 @@ func handleAdminUserFetch(w http.ResponseWriter, r *http.Request, sessionService
 		return true
 	}
 
-	inputs, err := readInputs(r)
+	inputs, err := readAdminFilteredInputs(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
 		return true
+	}
+
+	filters, err := userFilters(inputs)
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	if err := validateListFilterParameters(inputs, false); err != nil {
+		return handleAdminError(w, err)
 	}
 
 	current := int64(1)
@@ -3690,7 +3725,11 @@ func handleAdminUserFetch(w http.ResponseWriter, r *http.Request, sessionService
 		}
 	}
 	pageSize := int64(10)
-	if raw := strings.TrimSpace(inputs["pageSize"]); raw != "" {
+	pageSizeInput := inputs["pageSize"]
+	if pageSizeInput == "" {
+		pageSizeInput = inputs["page_size"]
+	}
+	if raw := strings.TrimSpace(pageSizeInput); raw != "" {
 		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed >= 10 {
 			pageSize = parsed
 		}
@@ -3701,14 +3740,15 @@ func handleAdminUserFetch(w http.ResponseWriter, r *http.Request, sessionService
 		PageSize: pageSize,
 		Sort:     strings.TrimSpace(inputs["sort"]),
 		SortType: strings.TrimSpace(inputs["sort_type"]),
-		Filters:  userFilters(inputs),
+		Filters:  filters,
 	})
 	if err != nil {
 		return handleAdminError(w, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"data":  result.Data,
-		"total": result.Total,
+		"data":            result.Data,
+		"total":           result.Total,
+		"applied_filters": result.AppliedFilters,
 	})
 	return true
 }
@@ -3846,13 +3886,21 @@ func handleAdminUserDumpCSV(w http.ResponseWriter, r *http.Request, sessionServi
 		return true
 	}
 
-	inputs, err := readInputs(r)
+	inputs, err := readAdminFilteredInputs(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
 		return true
 	}
 
-	data, err := adminService.DumpUserCSV(r.Context(), userFilters(inputs))
+	filters, err := userFilters(inputs)
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	if err := validateUserFilterParameters(inputs, false); err != nil {
+		return handleAdminError(w, err)
+	}
+
+	data, err := adminService.DumpUserCSV(r.Context(), filters)
 	if err != nil {
 		return handleAdminError(w, err)
 	}
@@ -3869,10 +3917,18 @@ func handleAdminUserSendMail(w http.ResponseWriter, r *http.Request, sessionServ
 		return true
 	}
 
-	inputs, err := readInputs(r)
+	inputs, err := readAdminFilteredInputs(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
 		return true
+	}
+
+	filters, err := userFilters(inputs)
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	if err := validateUserFilterParameters(inputs, true); err != nil {
+		return handleAdminError(w, err)
 	}
 
 	sent, err := adminService.SendUserMail(r.Context(), admin.UserMailRequest{
@@ -3880,7 +3936,7 @@ func handleAdminUserSendMail(w http.ResponseWriter, r *http.Request, sessionServ
 		Content:  strings.TrimSpace(inputs["content"]),
 		Sort:     strings.TrimSpace(inputs["sort"]),
 		SortType: strings.TrimSpace(inputs["sort_type"]),
-		Filters:  userFilters(inputs),
+		Filters:  filters,
 	})
 	if err != nil {
 		return handleAdminError(w, err)
@@ -3898,13 +3954,21 @@ func handleAdminUserBan(w http.ResponseWriter, r *http.Request, sessionService s
 		return true
 	}
 
-	inputs, err := readInputs(r)
+	inputs, err := readAdminFilteredInputs(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
 		return true
 	}
 
-	banned, err := adminService.BanUsers(r.Context(), userFilters(inputs))
+	filters, err := userFilters(inputs)
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	if err := validateUserFilterParameters(inputs, false); err != nil {
+		return handleAdminError(w, err)
+	}
+
+	banned, err := adminService.BanUsers(r.Context(), filters)
 	if err != nil {
 		return handleAdminError(w, err)
 	}
@@ -3921,13 +3985,21 @@ func handleAdminUserUnban(w http.ResponseWriter, r *http.Request, sessionService
 		return true
 	}
 
-	inputs, err := readInputs(r)
+	inputs, err := readAdminFilteredInputs(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
 		return true
 	}
 
-	unbanned, err := adminService.UnbanUsers(r.Context(), userFilters(inputs))
+	filters, err := userFilters(inputs)
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	if err := validateUserFilterParameters(inputs, false); err != nil {
+		return handleAdminError(w, err)
+	}
+
+	unbanned, err := adminService.UnbanUsers(r.Context(), filters)
 	if err != nil {
 		return handleAdminError(w, err)
 	}
@@ -4000,13 +4072,21 @@ func handleAdminUserAllDel(w http.ResponseWriter, r *http.Request, sessionServic
 		return true
 	}
 
-	inputs, err := readInputs(r)
+	inputs, err := readAdminFilteredInputs(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
 		return true
 	}
 
-	deleted, err := adminService.DeleteUsers(r.Context(), userFilters(inputs))
+	filters, err := userFilters(inputs)
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	if err := validateUserFilterParameters(inputs, false); err != nil {
+		return handleAdminError(w, err)
+	}
+
+	deleted, err := adminService.DeleteUsers(r.Context(), filters)
 	if err != nil {
 		return handleAdminError(w, err)
 	}
@@ -5815,10 +5895,18 @@ func handleAdminOrderFetch(w http.ResponseWriter, r *http.Request, sessionServic
 		return true
 	}
 
-	inputs, err := readInputs(r)
+	inputs, err := readAdminFilteredInputs(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
 		return true
+	}
+
+	filters, err := indexedOrderFilters(inputs, "filter")
+	if err != nil {
+		return handleAdminError(w, err)
+	}
+	if err := validateListFilterParameters(inputs, true); err != nil {
+		return handleAdminError(w, err)
 	}
 
 	current := int64(1)
@@ -5828,7 +5916,11 @@ func handleAdminOrderFetch(w http.ResponseWriter, r *http.Request, sessionServic
 		}
 	}
 	pageSize := int64(10)
-	if raw := strings.TrimSpace(inputs["pageSize"]); raw != "" {
+	pageSizeInput := inputs["pageSize"]
+	if pageSizeInput == "" {
+		pageSizeInput = inputs["page_size"]
+	}
+	if raw := strings.TrimSpace(pageSizeInput); raw != "" {
 		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil {
 			pageSize = parsed
 		}
@@ -5838,14 +5930,15 @@ func handleAdminOrderFetch(w http.ResponseWriter, r *http.Request, sessionServic
 		Current:      current,
 		PageSize:     pageSize,
 		IsCommission: parseBoolish(inputs["is_commission"]),
-		Filters:      indexedOrderFilters(inputs, "filter"),
+		Filters:      filters,
 	})
 	if err != nil {
 		return handleAdminError(w, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"data":  result.Data,
-		"total": result.Total,
+		"data":            result.Data,
+		"total":           result.Total,
+		"applied_filters": result.AppliedFilters,
 	})
 	return true
 }
@@ -5894,7 +5987,7 @@ func handleAdminOrderUpdate(w http.ResponseWriter, r *http.Request, sessionServi
 	}
 	commissionStatus, err := parseOptionalInt64(inputs["commission_status"])
 	if err != nil || commissionStatus == nil || !containsInt64([]int64{0, 1, 3}, *commissionStatus) {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "佣金状态格式不正确"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "佣金状态格式不正确：仅允许0待确认、1发放中、3已驳回；2已发放由结算自动设置"})
 		return true
 	}
 
@@ -5903,6 +5996,14 @@ func handleAdminOrderUpdate(w http.ResponseWriter, r *http.Request, sessionServi
 		CommissionStatus: commissionStatus,
 	})
 	if err != nil {
+		if errors.Is(err, admin.ErrOrderCommissionInvalid) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+			return true
+		}
+		if errors.Is(err, admin.ErrOrderCommissionSettled) {
+			writeJSON(w, http.StatusConflict, map[string]any{"message": err.Error()})
+			return true
+		}
 		return handleAdminError(w, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": updated})
@@ -6968,6 +7069,10 @@ func handlePaymentError(w http.ResponseWriter, err error) bool {
 }
 
 func handleAdminError(w http.ResponseWriter, err error) bool {
+	if errors.Is(err, admin.ErrInvalidFilter) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error(), "code": "invalid_filter"})
+		return true
+	}
 	var nodeValidation *admin.ManagedServerValidationError
 	switch {
 	case errors.As(err, &nodeValidation):
@@ -7585,32 +7690,6 @@ func parseBoolish(raw string) bool {
 	default:
 		return false
 	}
-}
-
-func indexedOrderFilters(inputs map[string]string, prefix string) []admin.OrderFilter {
-	entries := indexedNestedFieldMap(inputs, prefix)
-	result := make([]admin.OrderFilter, 0, len(entries))
-	for _, entry := range entries {
-		result = append(result, admin.OrderFilter{
-			Key:       strings.TrimSpace(entry["key"]),
-			Condition: strings.TrimSpace(entry["condition"]),
-			Value:     strings.TrimSpace(entry["value"]),
-		})
-	}
-	return result
-}
-
-func userFilters(inputs map[string]string) []admin.UserFilter {
-	entries := indexedNestedFieldMap(inputs, "filter")
-	result := make([]admin.UserFilter, 0, len(entries))
-	for _, entry := range entries {
-		result = append(result, admin.UserFilter{
-			Key:       strings.TrimSpace(entry["key"]),
-			Condition: strings.TrimSpace(entry["condition"]),
-			Value:     strings.TrimSpace(entry["value"]),
-		})
-	}
-	return result
 }
 
 func enforceStaffUserScope(filters []admin.UserFilter) []admin.UserFilter {

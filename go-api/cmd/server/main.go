@@ -66,6 +66,9 @@ func main() {
 		if err := postgres.EnsureSupportSchema(ctx, db); err != nil {
 			log.Fatalf("ensure support schema: %v", err)
 		}
+		if err := postgres.EnsureCommissionLogSchema(ctx, db); err != nil {
+			log.Fatalf("ensure commission log management schema: %v", err)
+		}
 		if err := postgres.EnsureOnlineLocationSchema(ctx, db); err != nil {
 			log.Fatalf("ensure online location schema: %v", err)
 		}

@@ -502,6 +502,11 @@ func panelSchemaMatches(value any, schema map[string]any) bool {
 func sensitivePanelKey(key string) bool {
 	key = strings.ToLower(strings.ReplaceAll(key, "-", "_"))
 	switch key {
+	case "checkout_result", "checkout_claim", "checkout_fingerprint", "checkout_claim_expires_at":
+		// Checkout responses carry signed gateway URLs, merchant IDs and
+		// callbacks. Hide the entire value (text/array/object) at any depth.
+		// Only the AI adapter uses this scrubber; user checkout stays intact.
+		return true
 	case "password_limit_enable", "password_limit_count", "password_limit_expire", "subscribe_token_in_path", "token_configured", "secret_configured", "has_api_key", "has_password", "has_private_key", "has_credentials":
 		return false
 	}
@@ -517,9 +522,17 @@ func sensitivePanelKey(key string) bool {
 func scrubPanelValue(value any) any {
 	switch typed := value.(type) {
 	case map[string]any:
+		// Filter echoes use a generic "value" field. Classify it using the
+		// declared filter key instead of leaking UUID/token search arguments.
+		filterKey, hasFilterKey := typed["key"].(string)
+		sensitiveFilter := hasFilterKey && sensitivePanelKey(filterKey)
+		_, hasFilterCondition := typed["condition"].(string)
+		_, hasFilterValue := typed["value"]
+		_, hasFilterValues := typed["values"]
+		filterDescriptor := hasFilterCondition && (hasFilterValue || hasFilterValues) && knownPanelFilterField(filterKey)
 		for key, item := range typed {
 			_, userRecord := typed["email"]
-			if sensitivePanelKey(key) || userRecord && (key == "subscribe_url" || key == "subscribe_urls") {
+			if sensitivePanelKey(key) && !(filterDescriptor && key == "key") || sensitiveFilter && (key == "value" || key == "values") || userRecord && (key == "subscribe_url" || key == "subscribe_urls") {
 				typed[key] = "[已隐藏凭据]"
 			} else {
 				typed[key] = scrubPanelValue(item)
@@ -531,6 +544,17 @@ func scrubPanelValue(value any) any {
 		}
 	}
 	return value
+}
+
+// Only known field identifiers may bypass the generic "key" credential rule.
+// This must not treat an arbitrary map's API key as a filter field name.
+func knownPanelFilterField(key string) bool {
+	switch key {
+	case "id", "email", "token", "uuid", "password", "api_key", "created_at", "updated_at", "paid_at", "t", "last_login_at", "expired_at", "user_id", "invite_user_id", "invite_by_email", "invite_code", "plan_id", "banned", "is_admin", "is_staff", "remarks", "d", "u", "transfer_enable", "device_limit", "trade_no", "callback_no", "status", "commission_status", "commission_balance", "total_amount":
+		return true
+	default:
+		return false
+	}
 }
 
 func sanitizePanelResponse(raw []byte, contentType string) (json.RawMessage, error) {

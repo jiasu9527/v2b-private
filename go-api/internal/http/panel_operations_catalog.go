@@ -15,6 +15,7 @@ func panelOperationCatalog() []aiops.PanelOperation {
 	out := append(panelCoreOperations(), panelNetworkOperations()...)
 	out = append(out, panelBusinessOperations()...)
 	out = append(out, panelEntryEvidenceOperations()...)
+	out = append(out, panelCommissionOperations()...)
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
@@ -161,7 +162,7 @@ func panelCoreOperations() []aiops.PanelOperation {
 	}
 	add("stats.user", "stats", "分页查询单用户流量统计", "GET", "/stat/getStatUser", false, false, poMerge(poPage(), panelSchema{"user_id": poID()}), "user_id")
 	add("stats.online_users", "stats", "查询在线地区里的账号；city范围须同时传province_code和city，未知城市可传空字符串", "GET", "/stat/online/users", false, false, poFields("scope country_code province_code city reason search page:i page_size:i"))
-	add("users.list", "users", "组合筛选所有用户，支持ID范围、邮箱和套餐；不传filter即全站，按current翻页", "GET", "/user/fetch", false, false, poPage())
+	add("users.list", "users", "组合筛选用户，filter是key/condition/value对象数组，多条件AND；支持id/email/plan_id/invite_user_id/created_at/updated_at/expired_at等，时间为Unix秒字符串。未知字段或条件返回400，applied_filters回显实际条件；不传filter即全站，按current翻页。", "GET", "/user/fetch", false, false, poPage())
 	add("users.detail", "users", "按ID读取用户完整业务资料及邀请关系", "GET", "/user/getUserInfoById", false, false, panelSchema{"id": poID()}, "id")
 	userFields := poFields("id:i email banned:i is_admin:i is_staff:i password transfer_enable:i device_limit:i expired_at:i commission_rate:i discount:i speed_limit:i u:i d:i balance:i commission_type:i commission_balance:i plan_id:i remarks invite_user_email invite_code")
 	for _, key := range []string{"device_limit", "expired_at", "commission_rate", "discount", "speed_limit", "plan_id", "remarks"} {
@@ -177,9 +178,9 @@ func panelCoreOperations() []aiops.PanelOperation {
 	}
 	add("users.reset_secret", "users", "重置用户订阅Token与UUID；旧订阅失效", "POST", "/user/resetSecret", true, false, panelSchema{"id": poID()}, "id")
 	add("users.delete", "users", "删除指定用户", "POST", "/user/delUser", true, false, panelSchema{"id": poID()}, "id")
-	add("orders.list", "orders", "分页查询订单，filter支持用户ID比较等，is_commission=1查询佣金订单", "GET", "/order/fetch", false, false, poMerge(poPage(), poFields("is_commission:i")))
+	add("orders.list", "orders", "分页查询订单，filter为key/condition/value对象数组，多条件AND，禁止把筛选字段直接放顶层。支持id/user_id/invite_user_id/email/trade_no/callback_no/status/commission_status/commission_balance/total_amount/created_at/updated_at/paid_at；数字和Unix秒时间用字符串，支持=、!=、>、<、>=、<=、模糊。未知条件返回400；applied_filters回显实际条件。is_commission=1查询佣金订单；独立流水用commission_log.list。", "GET", "/order/fetch", false, false, poMerge(poPage(), poFields("is_commission:i")))
 	add("orders.detail", "orders", "查询订单详细资料、佣金记录及折抵关联订单", "POST", "/order/detail", false, false, panelSchema{"id": poID()}, "id")
-	add("orders.commission", "orders", "更新订单佣金状态；不修改支付通道配置", "POST", "/order/update", true, false, poFields("trade_no commission_status:i"), "trade_no", "commission_status")
+	add("orders.commission", "orders", "修改尚未发放订单的佣金审核状态：0待确认（可能被自动审核发放），1发放中（队列随后发放），2已发放（只读），3已驳回。不能重置已结算订单或删除流水，状态修改不立即回退余额。清理明细用commission_log预览和隐藏。", "POST", "/order/update", true, false, panelSchema{"trade_no": poText("完整订单号"), "commission_status": panelSchema{"type": "integer", "enum": []int{0, 1, 3}, "description": "仅0待确认、1发放中、3已驳回；2已发放由结算任务维护"}}, "trade_no", "commission_status")
 	for _, x := range []struct{ name, path, desc string }{{"orders.paid", "/order/paid", "补单：将订单标记已支付并执行套餐交付"}, {"orders.cancel", "/order/cancel", "取消未完成订单"}, {"orders.refund", "/order/refund", "退款处理，沿用后台退款语义"}} {
 		add(x.name, "orders", x.desc, "POST", x.path, true, false, poFields("trade_no"), "trade_no")
 	}
