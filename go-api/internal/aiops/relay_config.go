@@ -144,6 +144,10 @@ func (s *Service) loadProviderCandidates(ctx context.Context, model string) (Con
 	if err != nil {
 		return cfg, nil, err
 	}
+	return cfg, providerCandidates(cfg, cipher, fallbacks, model), nil
+}
+
+func providerCandidates(cfg Config, cipher string, fallbacks []RelayEndpoint, model string) []RelayEndpoint {
 	primary := RelayEndpoint{ID: "primary", Name: "主站", BaseURL: cfg.BaseURL,
 		APIKeyCipher: cipher, Models: append([]string{}, cfg.Models...), Enabled: cfg.Enabled}
 	if endpoint, exists := cfg.modelEndpoints[model]; exists {
@@ -152,7 +156,7 @@ func (s *Service) loadProviderCandidates(ctx context.Context, model string) (Con
 	}
 	candidates := []RelayEndpoint{primary}
 	if !cfg.FailoverEnabled {
-		return cfg, candidates, nil
+		return candidates
 	}
 	for _, relay := range fallbacks {
 		if !relay.Enabled || relay.BaseURL == "" || relay.APIKeyCipher == "" {
@@ -169,5 +173,5 @@ func (s *Service) loadProviderCandidates(ctx context.Context, model string) (Con
 			}
 		}
 	}
-	return cfg, candidates, nil
+	return candidates
 }

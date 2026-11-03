@@ -69,6 +69,9 @@ func (r *ConfigSaveRequest) UnmarshalJSON(raw []byte) error {
 		if decoder.Decode(&value) != nil {
 			return ErrValidation
 		}
+		if key == "fallback_models" && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return ErrValidation
+		}
 		if key == "model_endpoints" {
 			entries := json.NewDecoder(bytes.NewReader(value))
 			opening, e := entries.Token()

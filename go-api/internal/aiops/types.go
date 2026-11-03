@@ -16,6 +16,8 @@ var (
 var DefaultModels = []string{"gpt-6.1-sol", "claude-fable-5-1", "deepseek-v4.1-flash", "glm-5.3"}
 
 type Config struct {
+	skipCooldownWait       bool
+	FallbackModels         []string                       `json:"fallback_models"`
 	ModelEndpoints         map[string]ModelEndpointConfig `json:"model_endpoints"`
 	ReadyModels            []string                       `json:"ready_models"`
 	modelEndpoints         map[string]modelEndpoint
@@ -29,6 +31,7 @@ type Config struct {
 	HasAPIKey              bool              `json:"has_api_key"`
 }
 type ConfigSaveRequest struct {
+	FallbackModels         *[]string                            `json:"fallback_models,omitempty"`
 	ModelEndpoints         *map[string]ModelEndpointSaveRequest `json:"model_endpoints,omitempty"`
 	FallbackRelays         *[]RelaySaveRequest                  `json:"fallback_relays,omitempty"`
 	FailoverEnabled        *bool                                `json:"failover_enabled,omitempty"`

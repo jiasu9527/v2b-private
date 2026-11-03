@@ -31,11 +31,13 @@ func newProviderHTTPClient() *http.Client {
 }
 
 type providerMessage struct {
-	Role        string     `json:"role"`
-	Content     string     `json:"content"`
-	ToolCalls   []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID  string     `json:"tool_call_id,omitempty"`
-	contextKind string
+	Role            string     `json:"role"`
+	Content         string     `json:"content"`
+	ToolCalls       []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID      string     `json:"tool_call_id,omitempty"`
+	actualModel     string
+	actualReasoning string
+	contextKind     string
 }
 type completionRequest struct {
 	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
@@ -77,7 +79,7 @@ func (s *Service) completeStreamWithReasoning(ctx context.Context, model, reason
 	if ctx.Err() != nil {
 		return empty, errProviderCanceled
 	}
-	cfg, endpoints, err := s.loadProviderCandidates(ctx, model)
+	cfg, cipher, relays, err := s.loadConfigState(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
 			return empty, errProviderCanceled
@@ -112,7 +114,7 @@ func (s *Service) completeStreamWithReasoning(ctx context.Context, model, reason
 	if err != nil || len(payload) > maxProviderRequestBytes {
 		return empty, errContextTooLarge
 	}
-	return s.completeWithRelays(ctx, cfg, endpoints, model, payload, onContent)
+	return s.completeWithModelFailover(ctx, cfg, cipher, relays, model, request, onContent)
 }
 
 // A failed relay can never dispatch a tool: only a completely validated

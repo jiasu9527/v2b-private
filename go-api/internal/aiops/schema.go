@@ -27,6 +27,7 @@ func (s *Service) ensureSchema(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS v2_ai_config(id SMALLINT PRIMARY KEY CHECK(id=1),enabled BOOLEAN NOT NULL DEFAULT FALSE,base_url TEXT NOT NULL DEFAULT '',models JSONB NOT NULL,api_key_cipher TEXT NOT NULL DEFAULT '',updated_by BIGINT NOT NULL,updated_at BIGINT NOT NULL)`,
 		`ALTER TABLE v2_ai_config ADD COLUMN IF NOT EXISTS reasoning_efforts JSONB NOT NULL DEFAULT '{}'::JSONB`,
 		`ALTER TABLE v2_ai_config ADD COLUMN IF NOT EXISTS fallback_relays JSONB NOT NULL DEFAULT '[]'::JSONB`,
+		`ALTER TABLE v2_ai_config ADD COLUMN IF NOT EXISTS fallback_models JSONB NOT NULL DEFAULT '[]'::JSONB`,
 		`ALTER TABLE v2_ai_config ADD COLUMN IF NOT EXISTS model_endpoints JSONB NOT NULL DEFAULT '{}'::JSONB`,
 		`ALTER TABLE v2_ai_config ADD COLUMN IF NOT EXISTS failover_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
 		`ALTER TABLE v2_ai_config ADD COLUMN IF NOT EXISTS failover_timeout_seconds INTEGER NOT NULL DEFAULT 30`,

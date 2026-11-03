@@ -153,7 +153,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
   const applyConfig = (next: AIConfig) => {
     if (!next || !Array.isArray(next.models)) throw new Error('AI 配置数据格式不正确');
     setConfig(next);
-    if (isAdmin) configForm.setFieldsValue({ ...next, reasoning_efforts: aiReasoningDefaults(next.models, next.reasoning_efforts), models_text: next.models.join('\n'), api_key: '', clear_api_key: false, failover_enabled: !!next.failover_enabled, failover_timeout_seconds: next.failover_timeout_seconds ?? AI_DEFAULT_FAILOVER_TIMEOUT, fallback_relays: aiFallbackRelayForms(next.fallback_relays) });
+    if (isAdmin) configForm.setFieldsValue({ ...next, reasoning_efforts: aiReasoningDefaults(next.models, next.reasoning_efforts), models_text: next.models.join('\n'), api_key: '', clear_api_key: false, fallback_models: next.fallback_models || [], failover_enabled: !!next.failover_enabled, failover_timeout_seconds: next.failover_timeout_seconds ?? AI_DEFAULT_FAILOVER_TIMEOUT, fallback_relays: aiFallbackRelayForms(next.fallback_relays) });
     if (isAdmin) configForm.setFieldValue('model_endpoint_forms', aiModelEndpointForms(next.models, next.model_endpoints));
     setModel((current) => next.models.includes(current) ? current : next.models[0] || AI_DEFAULT_MODELS[0]);
   };
@@ -355,7 +355,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
       const modelEndpoints = aiPrepareModelEndpoints(values.model_endpoint_forms, config.model_endpoints, models, !!values.enabled);
       if (values.enabled && models.some((id) => !Object.prototype.hasOwnProperty.call(modelEndpoints, id)) && (!baseURL || (!defaultKey && (!config.has_api_key || values.clear_api_key)))) throw new Error('使用默认中转的模型需要填写默认 Base URL 和 API Key；也可为每个模型分别配置独立中转');
       const fallbackRelays = aiPrepareFallbackRelays(values.fallback_relays, config.fallback_relays, models);
-      const response = await apiJsonPost('/ai-ops/config/save', { enabled: !!values.enabled, base_url: baseURL, models, model_endpoints: modelEndpoints, reasoning_efforts: aiReasoningDefaults(models, values.reasoning_efforts), api_key: defaultKey, clear_api_key: !!values.clear_api_key, failover_enabled: !!values.failover_enabled, failover_timeout_seconds: values.failover_timeout_seconds ?? AI_DEFAULT_FAILOVER_TIMEOUT, fallback_relays: fallbackRelays });
+      const response = await apiJsonPost('/ai-ops/config/save', { enabled: !!values.enabled, base_url: baseURL, models, model_endpoints: modelEndpoints, reasoning_efforts: aiReasoningDefaults(models, values.reasoning_efforts), api_key: defaultKey, clear_api_key: !!values.clear_api_key, failover_enabled: !!values.failover_enabled, failover_timeout_seconds: values.failover_timeout_seconds ?? AI_DEFAULT_FAILOVER_TIMEOUT, fallback_relays: fallbackRelays, fallback_models: values.fallback_models || [] });
       if (!alive.current) return;
       configForm.setFieldsValue({ api_key: '', clear_api_key: false, fallback_relays: fallbackRelays.map((relay) => ({ ...relay, api_key: '', clear_api_key: false })) });
       applyConfig(response?.data as AIConfig);

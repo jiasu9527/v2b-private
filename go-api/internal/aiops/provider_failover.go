@@ -90,6 +90,9 @@ func (s *Service) completeWithRelays(ctx context.Context, cfg Config, endpoints 
 			if len(candidates) > 0 {
 				break
 			}
+			if cfg.skipCooldownWait {
+				return empty, retryableProviderError("当前模型中转处于故障冷却，尝试备用模型")
+			}
 			if !waitProviderRetry(completionCtx, wait) {
 				return empty, contextError()
 			}
@@ -165,7 +168,7 @@ func (s *Service) completeWithRelays(ctx context.Context, cfg Config, endpoints 
 	}
 	if lastErr != nil {
 		if attempted > 1 {
-			return empty, fmt.Errorf("AI 中转在切换及有限重试后仍未完成请求（共 %d 次）；%s", attempted, lastErr.Error())
+			return empty, fmt.Errorf("AI 中转在切换及有限重试后仍未完成请求（共 %d 次）；%w", attempted, lastErr)
 		}
 		return empty, lastErr
 	}

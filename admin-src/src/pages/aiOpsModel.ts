@@ -10,7 +10,7 @@ export type AIFallbackRelayForm = { id?: string; name: string; base_url: string;
 export type AIModelEndpoint = { base_url: string; has_api_key: boolean };
 export type AIModelEndpointForm = { mode: 'shared' | 'dedicated'; base_url: string; api_key: string; clear_api_key: boolean };
 export type AIModelEndpointSave = { base_url: string; api_key: string; clear_api_key: boolean };
-export type AIConfig = { enabled: boolean; base_url?: string; models: string[]; has_api_key: boolean; model_endpoints?: Record<string, AIModelEndpoint>; ready_models?: string[]; reasoning_efforts?: Record<string, string>; failover_enabled?: boolean; failover_timeout_seconds?: number; fallback_relays?: AIFallbackRelay[] };
+export type AIConfig = { enabled: boolean; base_url?: string; models: string[]; has_api_key: boolean; model_endpoints?: Record<string, AIModelEndpoint>; ready_models?: string[]; reasoning_efforts?: Record<string, string>; fallback_models?: string[]; failover_enabled?: boolean; failover_timeout_seconds?: number; fallback_relays?: AIFallbackRelay[] };
 const hasOwn = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key);
 export function aiModelEndpointForms(models: string[], endpoints: Record<string, AIModelEndpoint> = {}): Record<string, AIModelEndpointForm> {
   return Object.fromEntries([...new Set([...models, ...Object.keys(endpoints)])].map((model) => {

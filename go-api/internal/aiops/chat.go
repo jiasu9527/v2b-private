@@ -400,6 +400,11 @@ func (s *Service) appendMessages(ctx context.Context, actorID, sessionID, turnID
 		if len(m.ToolCalls) == 0 {
 			raw = []byte("[]")
 		}
+		if m.actualModel != "" {
+			if _, err = tx.ExecContext(ctx, `UPDATE v2_ai_turn SET model=$2,reasoning_effort=$3 WHERE id=$1 AND status='running'`, turnID, m.actualModel, m.actualReasoning); err != nil {
+				return err
+			}
+		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO v2_ai_message(session_id,turn_id,role,content,tool_calls,tool_call_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, sessionID, turnID, m.Role, m.Content, string(raw), m.ToolCallID, time.Now().Unix()); err != nil {
 			return err
 		}
@@ -548,6 +553,11 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 				errText = "完全访问授权已撤回或任务已停止，处理已停止"
 				return
 			}
+		}
+		// Keep the recovered model for subsequent tool rounds in this turn.
+		if assistant.actualModel != "" {
+			model = assistant.actualModel
+			reasoningEffort = assistant.actualReasoning
 		}
 		knownPanelSecrets = append(knownPanelSecrets, panelToolSecrets(assistant.ToolCalls)...)
 		knownPanelSecrets = append(knownPanelSecrets, knowledgeCallSecrets(assistant.ToolCalls)...)

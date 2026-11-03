@@ -72,7 +72,7 @@ func TestProviderFailoverKeepsExactRequestAndSeparateKeys(t *testing.T) {
 	primary := failoverTestEndpoint(t, s, "primary", servers[0].URL, "relay-key-0")
 	fallback := failoverTestEndpoint(t, s, "backup", servers[1].URL, "relay-key-1")
 	backups, _ := json.Marshal([]RelayEndpoint{fallback})
-	mock.ExpectQuery(`SELECT enabled,base_url,models::TEXT,api_key_cipher`).WillReturnRows(sqlmock.NewRows([]string{"enabled", "base_url", "models", "key", "reasoning_efforts", "fallback_relays", "failover_enabled", "failover_timeout_seconds", "model_endpoints"}).AddRow(true, primary.BaseURL, `["gpt-6.1-sol"]`, primary.APIKeyCipher, `{}`, string(backups), true, 10, `{}`))
+	mock.ExpectQuery(`SELECT enabled,base_url,models::TEXT,api_key_cipher`).WillReturnRows(sqlmock.NewRows([]string{"enabled", "base_url", "models", "key", "reasoning_efforts", "fallback_relays", "failover_enabled", "failover_timeout_seconds", "model_endpoints", "fallback_models"}).AddRow(true, primary.BaseURL, `["gpt-6.1-sol"]`, primary.APIKeyCipher, `{}`, string(backups), true, 10, `{}`, `[]`))
 	out, err := s.completeStreamWithReasoning(context.Background(), "gpt-6.1-sol", "high", []providerMessage{{Role: "user", Content: "保留上下文"}}, nil)
 	if err != nil || out.Content != "备用回复" || counts[0].Load() != 1 || counts[1].Load() != 1 || bodies[0] != bodies[1] {
 		t.Fatalf("failover did not preserve request: %v counts %d/%d", err, counts[0].Load(), counts[1].Load())
