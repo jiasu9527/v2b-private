@@ -69,12 +69,12 @@ npm run build
 
 ## 入口分组：历史拉取 IP
 
-在 **节点管理 → 入口分配 → 历史拉取 IP** 选择已有下发地址或直接输入 IP，默认查询最近 7 天。列表读取最终订阅响应中的 `delivered_host`，跨规则、节点和端口按用户 ID 去重，不按当前入口规则回推，也不把客户端后来 DNS 解析出的 IP 当作服务端历史下发。
+在 **节点管理 → 入口分配 → 历史拉取 IP** 选择已有下发地址或直接输入 IP，默认查询最近 7 天，可选择精确到分钟的开始和结束时间（浏览器本地时区，包含开始、不包含结束）。列表读取最终订阅响应中的 `delivered_host`，跨规则、节点和端口按用户 ID 去重，不按当前入口规则回推，也不把客户端后来 DNS 解析出的 IP 当作服务端历史下发。
 
-可分页查看历史用户、拉取时邮箱、首次/最近下发时间和请求次数。已删除用户仍展示历史，但不能加入新固定分组。展开“固定此名单并二分”，选择生效节点和 A/B 入口，即按 ID 升序均分并保存为已有的固定二分规则；之后可以继续二分任意叶子。创建不修改原规则，不增加套餐或节点权限，需检查新规则的优先级。
+可分页查看历史用户、拉取时邮箱、首次/最近下发时间和请求次数。已删除用户仍展示历史，但不能加入新固定分组。展开“保存固定名单”，可选择“不二分，全部放一个组”或“平均二分为 A/B 两组”。单组至少 1 人，只需一个入口，默认沿用所选历史 IP；二分至少 2 人，填写 A/B 入口并按 ID 升序均分。两种方式都保存为固定名单，单组之后也可以继续二分。创建不修改原规则，不增加套餐或节点权限，需检查新规则的优先级。
 
 预览保存固定的半开时间窗口和名单哈希。执行时重新验证同一窗口，日志清理、补写或用户删除导致名单变化会拒绝旧预览，需重新查询；查询之后发生的新拉取不会自动加入。固定名单独立保存，不随原始订阅下发日志的 7 天滚动清理而删除。
 
-`GET /server/client-entry-user-policy/investigations/delivery-hosts` 支持现有下发筛选和分页，返回去重 host、历史去重人数和最近下发时间。`split-preview` 新增 `history_host`，可带 `history_from/history_to` 或最近 `minutes`；返回 `snapshot_hash/from/to/user_count`。`split-create` 使用 `history_host/history_from/history_to/snapshot_hash` 和现有节点/双入口参数，不能传空快照绕过验证。
+`GET /server/client-entry-user-policy/investigations/delivery-hosts` 支持现有下发筛选和分页，返回去重 host、历史去重人数和最近下发时间。`split-preview` 新增 `history_host`，可带 `history_from/history_to` 或最近 `minutes`；返回 `snapshot_hash/from/to/user_count`。`split-create` 使用 `history_host/history_from/history_to/snapshot_hash` 和现有节点/入口参数，不能传空快照绕过验证。`history_single_group=true` 仅用于历史名单，创建一个固定叶子且不接受 B 入口；省略或 false 保持原来的双组行为。
 
 原始日志默认保留 7 天；尚未手动设置过的旧默认 30 天配置迁移为 7 天，管理员已经保存的自定义保留期不覆盖。仍可在“入口排查 → 记录保留”设置 1～365 天。不保存完整订阅内容、Token、UUID 或节点密码。服务端完整返回只能证明下发，不能证明客户端已经使用。

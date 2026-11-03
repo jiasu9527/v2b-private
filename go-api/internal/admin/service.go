@@ -1355,18 +1355,19 @@ type ClientEntryUserPolicySplitPreviewResult struct {
 }
 
 type ClientEntryUserPolicySplitCreateRequest struct {
-	HistoryHost      string
-	HistoryFrom      int64
-	HistoryTo        int64
-	SnapshotHash     string
-	Name             string
-	Minutes          int64
-	Members          []ClientEntryGroupMemberSaveRequest
-	EntryHostA       string
-	EntryHostB       string
-	ResolveEntryHost *int64
-	Enabled          *int64
-	Remarks          string
+	HistorySingleGroup bool
+	HistoryHost        string
+	HistoryFrom        int64
+	HistoryTo          int64
+	SnapshotHash       string
+	Name               string
+	Minutes            int64
+	Members            []ClientEntryGroupMemberSaveRequest
+	EntryHostA         string
+	EntryHostB         string
+	ResolveEntryHost   *int64
+	Enabled            *int64
+	Remarks            string
 }
 
 type ClientEntryUserPolicySplitConvertRequest struct {

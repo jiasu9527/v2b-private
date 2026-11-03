@@ -67,6 +67,9 @@ func (s *DBService) CreateClientEntryUserPolicySplit(ctx context.Context, req Cl
 	if err := s.ensureClientEntrySchema(ctx); err != nil {
 		return ClientEntryUserPolicyRecord{}, err
 	}
+	if req.HistorySingleGroup && req.HistoryHost == "" {
+		return ClientEntryUserPolicyRecord{}, ErrEntryEvidenceInvalid
+	}
 	prepared, err := normalizeClientEntryUserPolicySplitCreateRequest(req)
 	if err != nil {
 		return ClientEntryUserPolicyRecord{}, err
@@ -148,9 +151,12 @@ VALUES ($1, $2, $3, $4, $5, $5)`, policyID, member.ServerType, member.ServerID, 
 	if err != nil {
 		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("创建 A 组", err)
 	}
-	groupB, err := insertClientEntryUserPolicySplitGroup(ctx, tx, policyID, nil, "B", "B", prepared.EntryHostB, 2*clientEntryRuleSortStep, globalSortB, now, nil)
-	if err != nil {
-		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("创建 B 组", err)
+	groupB := groupA
+	if !req.HistorySingleGroup {
+		groupB, err = insertClientEntryUserPolicySplitGroup(ctx, tx, policyID, nil, "B", "B", prepared.EntryHostB, 2*clientEntryRuleSortStep, globalSortB, now, nil)
+		if err != nil {
+			return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("创建 B 组", err)
+		}
 	}
 
 	var rows *sql.Rows
@@ -196,11 +202,17 @@ RETURNING group_id`, from, now, policyID, groupA, groupB)
 	if err := rows.Close(); err != nil {
 		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("关闭分组结果", err)
 	}
-	if userCount < 2 || groupCounts[groupA] == 0 || groupCounts[groupB] == 0 {
-		return ClientEntryUserPolicyRecord{}, errors.New("近期成功拉取订阅的用户不足 2 人，无法创建二分规则")
-	}
-	if difference := groupCounts[groupA] - groupCounts[groupB]; difference < -1 || difference > 1 {
-		return ClientEntryUserPolicyRecord{}, errors.New("二分用户人数异常，请重试")
+	if req.HistorySingleGroup {
+		if userCount < 1 {
+			return ClientEntryUserPolicyRecord{}, fmt.Errorf("%w：当前历史名单没有可分组用户", ErrEntryEvidenceInvalid)
+		}
+	} else {
+		if userCount < 2 || groupCounts[groupA] == 0 || groupCounts[groupB] == 0 {
+			return ClientEntryUserPolicyRecord{}, errors.New("近期成功拉取订阅的用户不足 2 人，无法创建二分规则")
+		}
+		if difference := groupCounts[groupA] - groupCounts[groupB]; difference < -1 || difference > 1 {
+			return ClientEntryUserPolicyRecord{}, errors.New("二分用户人数异常，请重试")
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("提交数据库事务", err)
@@ -212,13 +224,15 @@ RETURNING group_id`, from, now, policyID, groupA, groupB)
 		members = append(members, ClientEntryGroupMemberRecord{ServerType: member.ServerType, ServerID: member.ServerID, Sort: &sortValue})
 	}
 	snapshotFrom := from
+	groups := []ClientEntryUserPolicySplitGroupRecord{
+		{ID: groupA, PolicyID: policyID, Name: "A", Path: "A", EntryHost: prepared.EntryHostA, Sort: clientEntryRuleSortStep, GlobalSort: &globalSortA, UserCount: groupCounts[groupA], IsLeaf: true, CreatedAt: now, UpdatedAt: now},
+	}
+	if !req.HistorySingleGroup {
+		groups = append(groups, ClientEntryUserPolicySplitGroupRecord{ID: groupB, PolicyID: policyID, Name: "B", Path: "B", EntryHost: prepared.EntryHostB, Sort: 2 * clientEntryRuleSortStep, GlobalSort: &globalSortB, UserCount: groupCounts[groupB], IsLeaf: true, CreatedAt: now, UpdatedAt: now})
+	}
 	return ClientEntryUserPolicyRecord{
 		ID: policyID, Name: prepared.Name, Sort: nextSort, Mode: ClientEntryUserPolicyModeSplit,
-		SnapshotFrom: &snapshotFrom, SnapshotTo: &snapshotTo, SnapshotUserCount: userCount,
-		SplitGroups: []ClientEntryUserPolicySplitGroupRecord{
-			{ID: groupA, PolicyID: policyID, Name: "A", Path: "A", EntryHost: prepared.EntryHostA, Sort: clientEntryRuleSortStep, GlobalSort: &globalSortA, UserCount: groupCounts[groupA], IsLeaf: true, CreatedAt: now, UpdatedAt: now},
-			{ID: groupB, PolicyID: policyID, Name: "B", Path: "B", EntryHost: prepared.EntryHostB, Sort: 2 * clientEntryRuleSortStep, GlobalSort: &globalSortB, UserCount: groupCounts[groupB], IsLeaf: true, CreatedAt: now, UpdatedAt: now},
-		},
+		SnapshotFrom: &snapshotFrom, SnapshotTo: &snapshotTo, SnapshotUserCount: userCount, SplitGroups: groups,
 		Action: cliententry.ActionOverride, Conditions: []cliententry.Condition{}, Members: members,
 		EntryHost: "", ResolveEntryHost: prepared.ResolveEntryHost, ExtraNodes: []string{}, ExtraNodesPosition: "after",
 		Enabled: prepared.Enabled, Remarks: prepared.Remarks, CreatedAt: now, UpdatedAt: now,
@@ -1185,7 +1199,14 @@ func normalizeClientEntryUserPolicySplitCreateRequest(req ClientEntryUserPolicyS
 		return result, err
 	}
 	result.Minutes = minutes
-	result.EntryHostA, result.EntryHostB, err = normalizeClientEntryUserPolicySplitHosts(req.EntryHostA, req.EntryHostB)
+	if req.HistorySingleGroup {
+		if req.HistoryHost == "" || strings.TrimSpace(req.EntryHostB) != "" {
+			return result, ErrEntryEvidenceInvalid
+		}
+		result.EntryHostA, err = cliententry.NormalizeHost(req.EntryHostA)
+	} else {
+		result.EntryHostA, result.EntryHostB, err = normalizeClientEntryUserPolicySplitHosts(req.EntryHostA, req.EntryHostB)
+	}
 	if err != nil {
 		return result, err
 	}

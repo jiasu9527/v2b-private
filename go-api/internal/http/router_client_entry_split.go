@@ -116,18 +116,19 @@ func handleAdminClientEntryUserPolicySplitCreate(w http.ResponseWriter, r *http.
 		return true
 	}
 	var payload struct {
-		HistoryHost      string       `json:"history_host"`
-		HistoryFrom      int64        `json:"history_from"`
-		HistoryTo        int64        `json:"history_to"`
-		SnapshotHash     string       `json:"snapshot_hash"`
-		Name             string       `json:"name"`
-		Minutes          *json.Number `json:"minutes"`
-		EntryHostA       string       `json:"entry_host_a"`
-		EntryHostB       string       `json:"entry_host_b"`
-		ResolveEntryHost *json.Number `json:"resolve_entry_host"`
-		Enabled          *json.Number `json:"enabled"`
-		Remarks          string       `json:"remarks"`
-		Members          []struct {
+		HistorySingleGroup bool         `json:"history_single_group"`
+		HistoryHost        string       `json:"history_host"`
+		HistoryFrom        int64        `json:"history_from"`
+		HistoryTo          int64        `json:"history_to"`
+		SnapshotHash       string       `json:"snapshot_hash"`
+		Name               string       `json:"name"`
+		Minutes            *json.Number `json:"minutes"`
+		EntryHostA         string       `json:"entry_host_a"`
+		EntryHostB         string       `json:"entry_host_b"`
+		ResolveEntryHost   *json.Number `json:"resolve_entry_host"`
+		Enabled            *json.Number `json:"enabled"`
+		Remarks            string       `json:"remarks"`
+		Members            []struct {
 			ServerType string       `json:"server_type"`
 			ServerID   *json.Number `json:"server_id"`
 			Sort       *json.Number `json:"sort"`
@@ -162,7 +163,7 @@ func handleAdminClientEntryUserPolicySplitCreate(w http.ResponseWriter, r *http.
 		return true
 	}
 	result, err := adminService.CreateClientEntryUserPolicySplit(r.Context(), admin.ClientEntryUserPolicySplitCreateRequest{
-		HistoryHost: payload.HistoryHost, HistoryFrom: payload.HistoryFrom, HistoryTo: payload.HistoryTo, SnapshotHash: payload.SnapshotHash,
+		HistorySingleGroup: payload.HistorySingleGroup, HistoryHost: payload.HistoryHost, HistoryFrom: payload.HistoryFrom, HistoryTo: payload.HistoryTo, SnapshotHash: payload.SnapshotHash,
 		Name:             payload.Name,
 		Minutes:          minutesValue,
 		Members:          members,

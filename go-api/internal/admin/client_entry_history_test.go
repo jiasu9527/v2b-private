@@ -168,6 +168,69 @@ func TestHistoricalEntrySplitPostgres(t *testing.T) {
 			t.Fatalf("runtime %d: %+v %v", i, servers, err)
 		}
 	}
+
+	// A single fixed group needs only one entry and can be split later.
+	single := create
+	single.Name = "single " + marker
+	single.HistorySingleGroup = true
+	single.EntryHostA = host
+	single.EntryHostB = ""
+	singleRecord, err := s.CreateClientEntryUserPolicySplit(ctx, single)
+	if err != nil {
+		t.Fatal("single creation", err)
+	}
+	policies = append(policies, singleRecord.ID)
+	if len(singleRecord.SplitGroups) != 1 || singleRecord.SplitGroups[0].UserCount != 2 || singleRecord.SnapshotUserCount != 2 {
+		t.Fatal("single group fragmented", singleRecord)
+	}
+	exec(`UPDATE v2_client_entry_user_policy SET enabled=0 WHERE id=$1`, record.ID)
+	for _, uid := range ids[:2] {
+		servers, e := runtime.Servers(ctx, uid, "Forest")
+		if e != nil || len(servers) != 1 || fmt.Sprint(servers[0]["host"]) != host {
+			t.Fatal("single runtime", servers, e)
+		}
+	}
+	continued, e := s.SplitClientEntryUserPolicyGroup(ctx, ClientEntryUserPolicyGroupSplitRequest{PolicyID: singleRecord.ID, GroupID: singleRecord.SplitGroups[0].ID, EntryHostA: "192.0.2.152", EntryHostB: "192.0.2.153"})
+	if e != nil {
+		t.Fatal("single group cannot split later", e)
+	}
+	if continued.ID != singleRecord.ID {
+		t.Fatal("later split changed policy", continued)
+	}
+	var leaves int
+	if err = db.QueryRow(`SELECT COUNT(DISTINCT group_id) FROM v2_client_entry_user_policy_split_assignment WHERE policy_id=$1`, singleRecord.ID).Scan(&leaves); err != nil || leaves != 2 {
+		t.Fatal("expected two assignment leaves", leaves, err)
+	}
+	for i, uid := range ids[:2] {
+		servers, e := runtime.Servers(ctx, uid, "Forest")
+		expected := []string{"192.0.2.152", "192.0.2.153"}[i]
+		if e != nil || len(servers) != 1 || fmt.Sprint(servers[0]["host"]) != expected {
+			t.Fatal("later binary runtime", servers, e)
+		}
+	}
+	// Exact second boundaries beneath the minute UI still use [from,to).
+	onePreview, e := s.PreviewClientEntryUserPolicySplit(ctx, ClientEntryUserPolicySplitPreviewRequest{HistoryHost: host, HistoryFrom: now - 45, HistoryTo: now - 35})
+	if e != nil || onePreview.UserCount != 1 {
+		t.Fatal("precise interval", onePreview, e)
+	}
+	one := single
+	one.Name = "one " + marker
+	one.HistoryFrom = onePreview.From
+	one.HistoryTo = onePreview.To
+	one.SnapshotHash = onePreview.SnapshotHash
+	oneRecord, e := s.CreateClientEntryUserPolicySplit(ctx, one)
+	if e != nil {
+		t.Fatal("one user single group rejected", e)
+	}
+	policies = append(policies, oneRecord.ID)
+	if len(oneRecord.SplitGroups) != 1 || oneRecord.SnapshotUserCount != 1 {
+		t.Fatal("one user lost", oneRecord)
+	}
+	illegal := one
+	illegal.HistoryHost = ""
+	if _, e = s.CreateClientEntryUserPolicySplit(ctx, illegal); !errors.Is(e, ErrEntryEvidenceInvalid) {
+		t.Fatal("single mode allowed on recent-user binary", e)
+	}
 	// Deleting evidence does not delete the independent fixed assignment.
 	exec(`DELETE FROM v2_entry_delivery_request WHERE id LIKE $1`, marker+"%")
 	var count int
