@@ -7,7 +7,55 @@ export const AI_REASONING_LABELS: Record<AIReasoningEffort, string> = { auto: '�
 export const AI_REASONING_OPTIONS = Object.entries(AI_REASONING_LABELS).map(([value, label]) => ({ value: value as AIReasoningEffort, label }));
 export type AIFallbackRelay = { id: string; name: string; base_url: string; models: string[]; enabled: boolean; has_api_key: boolean };
 export type AIFallbackRelayForm = { id?: string; name: string; base_url: string; models: string[]; enabled: boolean; api_key: string; clear_api_key: boolean };
-export type AIConfig = { enabled: boolean; base_url?: string; models: string[]; has_api_key: boolean; reasoning_efforts?: Record<string, string>; failover_enabled?: boolean; failover_timeout_seconds?: number; fallback_relays?: AIFallbackRelay[] };
+export type AIModelEndpoint = { base_url: string; has_api_key: boolean };
+export type AIModelEndpointForm = { mode: 'shared' | 'dedicated'; base_url: string; api_key: string; clear_api_key: boolean };
+export type AIModelEndpointSave = { base_url: string; api_key: string; clear_api_key: boolean };
+export type AIConfig = { enabled: boolean; base_url?: string; models: string[]; has_api_key: boolean; model_endpoints?: Record<string, AIModelEndpoint>; ready_models?: string[]; reasoning_efforts?: Record<string, string>; failover_enabled?: boolean; failover_timeout_seconds?: number; fallback_relays?: AIFallbackRelay[] };
+const hasOwn = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key);
+export function aiModelEndpointForms(models: string[], endpoints: Record<string, AIModelEndpoint> = {}): Record<string, AIModelEndpointForm> {
+  return Object.fromEntries([...new Set([...models, ...Object.keys(endpoints)])].map((model) => {
+    const saved = hasOwn(endpoints, model) ? endpoints[model] : undefined;
+    return [model, { mode: saved ? 'dedicated' : 'shared', base_url: saved?.base_url || '', api_key: '', clear_api_key: false }];
+  }));
+}
+export function aiNormalizeEndpointURL(value: string): string {
+  const raw = value.trim().replace(/\/+$/, '');
+  if (!raw) return '';
+  let url: URL;
+  try { url = new URL(raw); } catch { throw new Error('请输入有效的中转 Base URL'); }
+  const loopback = url.hostname === 'localhost' || url.hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(url.hostname);
+  if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback))) throw new Error('Base URL 必须使用 HTTPS，且不能包含密钥、查询参数或片段');
+  // Preserve the administrator's host spelling and path: Go normalizes only
+  // these suffixes, not WHATWG URL's host casing/default ports/path segments.
+  const base = raw.endsWith('/chat/completions') ? raw.slice(0, -'/chat/completions'.length) : raw;
+  if (new URL(base).pathname === '/') return `${base.replace(/\/+$/, '')}/v1`;
+  return base;
+}
+export function aiPrepareModelEndpoints(values: Record<string, AIModelEndpointForm> = {}, previous: Record<string, AIModelEndpoint> = {}, models: string[] = [], enabled = false): Record<string, AIModelEndpointSave> {
+  const entries: [string, AIModelEndpointSave][] = [];
+  for (const [model, entry] of Object.entries(values)) {
+    if (!entry || entry.mode === 'shared') continue;
+    if (entry.mode !== 'dedicated') throw new Error(`${model}：请选择默认中转或独立中转`);
+    if (!models.includes(model)) throw new Error(`${model} 已从模型列表移除，请先将它切回默认中转以确认删除独立配置`);
+    const saved = hasOwn(previous, model) ? previous[model] : undefined;
+    const base = aiNormalizeEndpointURL(String(entry.base_url || ''));
+    if (!base) throw new Error(`${model}：请填写独立 Base URL`);
+    const key = String(entry.api_key || '').trim();
+    const clear = !!entry.clear_api_key;
+    if (key && clear) throw new Error(`${model}：清除 Key 和填写新 Key 不能同时使用`);
+    if (saved?.has_api_key && base !== aiNormalizeEndpointURL(saved.base_url) && !key && !clear) throw new Error(`${model}：修改地址后请重新输入 API Key 或明确清除旧 Key`);
+    if (enabled && !key && (!saved?.has_api_key || clear)) throw new Error(`${model}：启用前请填写独立 API Key，或切回默认中转`);
+    entries.push([model, { base_url: base, api_key: key, clear_api_key: clear }]);
+  }
+  return Object.fromEntries(entries);
+}
+export function aiModelReady(config: AIConfig, model: string): boolean {
+  if (!config.enabled || !config.models.includes(model)) return false;
+  // The safe readiness list also works for staff, whose endpoint details are hidden.
+  if (Array.isArray(config.ready_models)) return config.ready_models.includes(model);
+  if (config.model_endpoints && hasOwn(config.model_endpoints, model)) return !!config.model_endpoints[model]?.has_api_key;
+  return !!config.has_api_key;
+}
 export const AI_MAX_FALLBACK_RELAYS = 4;
 export const AI_DEFAULT_FAILOVER_TIMEOUT = 30;
 export function aiFallbackRelayForms(relays: AIFallbackRelay[] = []): AIFallbackRelayForm[] {

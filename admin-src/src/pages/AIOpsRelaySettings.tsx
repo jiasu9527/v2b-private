@@ -37,7 +37,7 @@ export default function AIOpsRelaySettings({ config, form, models, busy }: { con
   const relays: AIFallbackRelayForm[] = Form.useWatch('fallback_relays', { form, preserve: true }) || [];
   return <section className="ai-ops-relay-settings" aria-label="多中转灾备设置">
     <Text strong>多中转灾备</Text>
-    <Paragraph type="secondary">主中转遇到网络超时、限流或服务异常时，按下方顺序切换可用的备用中转，继续使用同一个模型。切换不会重复执行已经完成的操作。</Paragraph>
+    <Paragraph type="secondary">当前模型的主中转（独立中转或默认中转）遇到网络超时、限流或服务异常时，按下方顺序切换可用的备用中转，继续使用同一个模型。切换不会重复执行已经完成的操作。</Paragraph>
     <div className="ai-ops-failover-controls">
       <Form.Item name="failover_enabled" label="自动切换备用中转" valuePropName="checked"><Switch /></Form.Item>
       <Form.Item name="failover_timeout_seconds" label="响应空闲超时（秒）" rules={[{ required: true, type: 'number', min: 10, max: 90, message: '请填写 10–90 秒' }]} extra="首段响应给予至少 90 秒等待；开始接收后，连续无数据才按此时长超时，持续输出不会被截断。临时故障会有限重试，开启灾备时优先尝试备用中转。"><InputNumber min={10} max={90} precision={0} placeholder={String(AI_DEFAULT_FAILOVER_TIMEOUT)} disabled={busy} /></Form.Item>

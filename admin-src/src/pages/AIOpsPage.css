@@ -172,3 +172,12 @@
   .ai-ops-composer textarea{max-height:100px;overflow-y:auto!important}
   .ai-ops-history-drawer .ant-drawer-header{padding:10px 12px}
 }
+
+.ai-ops-model-endpoints{margin:8px 0 20px;min-width:0}
+.ai-ops-model-endpoints>.ant-typography-secondary{margin:6px 0 12px;font-size:12px}
+.ai-ops-model-endpoint-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.ai-ops-model-endpoint{border:1px solid #e5e7eb;border-radius:6px;padding:16px;min-width:0}
+.ai-ops-model-endpoint-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px;overflow-wrap:anywhere}
+.ai-ops-model-endpoint .ant-form-item:last-child{margin-bottom:0}
+.ai-ops-model-endpoint .ant-select{width:100%;min-width:0}
+@media(max-width:767.98px){.ai-ops-model-endpoint-grid{grid-template-columns:minmax(0,1fr)}.ai-ops-model-endpoint{padding:12px}}

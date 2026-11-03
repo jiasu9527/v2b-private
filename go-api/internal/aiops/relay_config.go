@@ -144,8 +144,13 @@ func (s *Service) loadProviderCandidates(ctx context.Context, model string) (Con
 	if err != nil {
 		return cfg, nil, err
 	}
-	candidates := []RelayEndpoint{{ID: "primary", Name: "主站", BaseURL: cfg.BaseURL,
-		APIKeyCipher: cipher, Models: append([]string{}, cfg.Models...), Enabled: cfg.Enabled}}
+	primary := RelayEndpoint{ID: "primary", Name: "主站", BaseURL: cfg.BaseURL,
+		APIKeyCipher: cipher, Models: append([]string{}, cfg.Models...), Enabled: cfg.Enabled}
+	if endpoint, exists := cfg.modelEndpoints[model]; exists {
+		primary = RelayEndpoint{ID: "model_primary", Name: "模型独立中转", BaseURL: endpoint.BaseURL,
+			APIKeyCipher: endpoint.APIKeyCipher, Models: []string{model}, Enabled: cfg.Enabled}
+	}
+	candidates := []RelayEndpoint{primary}
 	if !cfg.FailoverEnabled {
 		return cfg, candidates, nil
 	}

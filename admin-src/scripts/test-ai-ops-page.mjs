@@ -130,7 +130,7 @@ test('explicit server form credentials clear on save/close and chat sends only i
   assert.match(page, /configForm\.setFieldsValue\(\{ api_key: '', clear_api_key: false, fallback_relays: fallbackRelays\.map\(\(relay\) => \(\{ \.\.\.relay, api_key: '', clear_api_key: false \}\)\)/);
   assert.match(page, /setServerOpen\(false\); setFingerprint\(null\); serverForm\.resetFields\(\)/);
   assert.match(page, /setServerOpen\(false\); serverForm\.resetFields\(\)/);
-  assert.match(page, /api_key: values\.api_key \|\| ''/);
+  assert.match(page, /api_key: defaultKey/);
 });
 
 test('standard mode retains manual one-action approval with complete command and output disclosure', () => {
@@ -187,11 +187,12 @@ test('action cards expose optional approver/rejector IDs without showing zero or
   }
 });
 
-test('an unconfigured disabled provider can be saved and enabling it requires its Base URL', () => {
-  const baseURLField = page.split('<Form.Item name="base_url"')[1].split('</Form.Item>')[0];
-  assert.ok(baseURLField.includes("dependencies={['enabled']}"));
-  assert.ok(baseURLField.includes("required: !!getFieldValue('enabled')"));
-  assert.ok(baseURLField.includes("whitespace: !!getFieldValue('enabled')"));
+test('default provider is optional when every model has a dedicated endpoint', () => {
+  const baseURLField = page.slice(page.indexOf('<Form.Item name="base_url"'), page.indexOf('<Form.Item name="api_key"'));
+  assert.ok(!baseURLField.includes("required:"));
+  assert.match(baseURLField, /所有模型均独立配置时可留空/);
+  assert.match(page, /values.enabled && models.some\(\(id\) => !Object.prototype.hasOwnProperty.call\(modelEndpoints, id\)\)/);
+  assert.match(page, /使用默认中转的模型需要填写默认 Base URL 和 API Key/);
 });
 
 const extra = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);

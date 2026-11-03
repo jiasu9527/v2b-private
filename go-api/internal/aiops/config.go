@@ -26,11 +26,11 @@ func normalizeBaseURL(raw string) (string, error) {
 			return "", ErrValidation
 		}
 	}
-	if u.Path == "" {
-		u.Path = "/v1"
-	}
 	if strings.HasSuffix(u.Path, "/chat/completions") {
 		u.Path = strings.TrimSuffix(u.Path, "/chat/completions")
+	}
+	if u.Path == "" {
+		u.Path = "/v1"
 	}
 	return strings.TrimRight(u.String(), "/"), nil
 }
@@ -54,10 +54,10 @@ func (s *Service) loadConfig(ctx context.Context) (Config, string, error) {
 	return result, cipher, err
 }
 func (s *Service) loadConfigState(ctx context.Context) (Config, string, []RelayEndpoint, error) {
-	result := Config{Models: append([]string{}, DefaultModels...), FallbackRelays: []RelayConfig{}, FailoverTimeoutSeconds: defaultFailoverTimeoutSeconds}
+	result := Config{ModelEndpoints: map[string]ModelEndpointConfig{}, ReadyModels: []string{}, Models: append([]string{}, DefaultModels...), FallbackRelays: []RelayConfig{}, FailoverTimeoutSeconds: defaultFailoverTimeoutSeconds}
 	result.ReasoningEfforts, _ = normalizeReasoningEfforts(result.Models, nil)
-	var raw, cipher, reasoningRaw, relaysRaw string
-	err := s.db.QueryRowContext(ctx, `SELECT enabled,base_url,models::TEXT,api_key_cipher,reasoning_efforts::TEXT,fallback_relays::TEXT,failover_enabled,failover_timeout_seconds FROM v2_ai_config WHERE id=1`).Scan(&result.Enabled, &result.BaseURL, &raw, &cipher, &reasoningRaw, &relaysRaw, &result.FailoverEnabled, &result.FailoverTimeoutSeconds)
+	var raw, cipher, reasoningRaw, relaysRaw, endpointsRaw string
+	err := s.db.QueryRowContext(ctx, `SELECT enabled,base_url,models::TEXT,api_key_cipher,reasoning_efforts::TEXT,fallback_relays::TEXT,failover_enabled,failover_timeout_seconds,model_endpoints::TEXT FROM v2_ai_config WHERE id=1`).Scan(&result.Enabled, &result.BaseURL, &raw, &cipher, &reasoningRaw, &relaysRaw, &result.FailoverEnabled, &result.FailoverTimeoutSeconds, &endpointsRaw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return result, "", nil, nil
 	}
@@ -81,6 +81,12 @@ func (s *Service) loadConfigState(ctx context.Context) (Config, string, []RelayE
 	}
 	result.FallbackRelays = publicRelays(relays)
 	result.HasAPIKey = cipher != ""
+	result.modelEndpoints, err = decodeModelEndpoints(endpointsRaw, result.Models)
+	if err != nil {
+		return result, "", nil, err
+	}
+	result.ModelEndpoints = publicModelEndpoints(result.modelEndpoints)
+	result.ReadyModels = readyModelIDs(result.Models, result.BaseURL, cipher, result.modelEndpoints)
 	return result, cipher, relays, nil
 }
 func (s *Service) GetConfig(ctx context.Context, actorID int64) (Config, error) {
@@ -97,6 +103,8 @@ func (s *Service) GetConfig(ctx context.Context, actorID int64) (Config, error) 
 		if !isAdmin {
 			cfg.BaseURL = ""
 			cfg.FallbackRelays = []RelayConfig{}
+			cfg.ModelEndpoints = map[string]ModelEndpointConfig{}
+			cfg.modelEndpoints = nil
 		}
 	}
 	return cfg, err
@@ -144,10 +152,10 @@ func (s *Service) SaveConfig(ctx context.Context, actorID int64, req ConfigSaveR
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(2026102903)`); err != nil {
 		return empty, err
 	}
-	var cipher, oldBase, oldEfforts, oldRelaysRaw string
+	var cipher, oldBase, oldEfforts, oldRelaysRaw, oldEndpointsRaw, oldModelsRaw string
 	failoverEnabled := false
 	failoverTimeout := defaultFailoverTimeoutSeconds
-	err = tx.QueryRowContext(ctx, `SELECT api_key_cipher,base_url,reasoning_efforts::TEXT,fallback_relays::TEXT,failover_enabled,failover_timeout_seconds FROM v2_ai_config WHERE id=1 FOR UPDATE`).Scan(&cipher, &oldBase, &oldEfforts, &oldRelaysRaw, &failoverEnabled, &failoverTimeout)
+	err = tx.QueryRowContext(ctx, `SELECT api_key_cipher,base_url,reasoning_efforts::TEXT,fallback_relays::TEXT,failover_enabled,failover_timeout_seconds,model_endpoints::TEXT,models::TEXT FROM v2_ai_config WHERE id=1 FOR UPDATE`).Scan(&cipher, &oldBase, &oldEfforts, &oldRelaysRaw, &failoverEnabled, &failoverTimeout, &oldEndpointsRaw, &oldModelsRaw)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return empty, err
 	}
@@ -179,7 +187,20 @@ func (s *Service) SaveConfig(ctx context.Context, actorID int64, req ConfigSaveR
 			return empty, err
 		}
 	}
-	if req.Enabled && (base == "" || cipher == "") {
+	oldModels := []string{}
+	if oldModelsRaw != "" && json.Unmarshal([]byte(oldModelsRaw), &oldModels) != nil {
+		return empty, ErrUnavailable
+	}
+	oldEndpoints, err := decodeModelEndpoints(oldEndpointsRaw, oldModels)
+	if err != nil {
+		return empty, err
+	}
+	endpoints, err := s.normalizeModelEndpoints(req.ModelEndpoints, oldEndpoints, models)
+	if err != nil {
+		return empty, err
+	}
+	readyModels := readyModelIDs(models, base, cipher, endpoints)
+	if req.Enabled && len(readyModels) != len(models) {
 		return empty, ErrValidation
 	}
 	oldRelays, err := decodeRelayEndpoints(oldRelaysRaw)
@@ -202,7 +223,8 @@ func (s *Service) SaveConfig(ctx context.Context, actorID int64, req ConfigSaveR
 	raw, _ := json.Marshal(models)
 	reasoningRaw, _ := json.Marshal(efforts)
 	relaysRaw, _ := json.Marshal(relays)
-	_, err = tx.ExecContext(ctx, `INSERT INTO v2_ai_config(id,enabled,base_url,models,api_key_cipher,updated_by,updated_at,reasoning_efforts,fallback_relays,failover_enabled,failover_timeout_seconds) VALUES(1,$1,$2,$3,$4,$5,$6,$7::JSONB,$8::JSONB,$9,$10) ON CONFLICT(id) DO UPDATE SET enabled=EXCLUDED.enabled,base_url=EXCLUDED.base_url,models=EXCLUDED.models,api_key_cipher=EXCLUDED.api_key_cipher,updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at,reasoning_efforts=EXCLUDED.reasoning_efforts,fallback_relays=EXCLUDED.fallback_relays,failover_enabled=EXCLUDED.failover_enabled,failover_timeout_seconds=EXCLUDED.failover_timeout_seconds`, req.Enabled, base, string(raw), cipher, actorID, time.Now().Unix(), string(reasoningRaw), string(relaysRaw), failoverEnabled, failoverTimeout)
+	endpointsRaw, _ := json.Marshal(endpoints)
+	_, err = tx.ExecContext(ctx, `INSERT INTO v2_ai_config(id,enabled,base_url,models,api_key_cipher,updated_by,updated_at,reasoning_efforts,fallback_relays,failover_enabled,failover_timeout_seconds,model_endpoints) VALUES(1,$1,$2,$3,$4,$5,$6,$7::JSONB,$8::JSONB,$9,$10,$11::JSONB) ON CONFLICT(id) DO UPDATE SET enabled=EXCLUDED.enabled,base_url=EXCLUDED.base_url,models=EXCLUDED.models,api_key_cipher=EXCLUDED.api_key_cipher,updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at,reasoning_efforts=EXCLUDED.reasoning_efforts,fallback_relays=EXCLUDED.fallback_relays,failover_enabled=EXCLUDED.failover_enabled,failover_timeout_seconds=EXCLUDED.failover_timeout_seconds,model_endpoints=EXCLUDED.model_endpoints`, req.Enabled, base, string(raw), cipher, actorID, time.Now().Unix(), string(reasoningRaw), string(relaysRaw), failoverEnabled, failoverTimeout, string(endpointsRaw))
 	if err != nil {
 		return empty, err
 	}
@@ -212,6 +234,6 @@ func (s *Service) SaveConfig(ctx context.Context, actorID int64, req ConfigSaveR
 	if !req.Enabled {
 		s.cancelWorker(0)
 	}
-	return Config{Enabled: req.Enabled, BaseURL: base, Models: models, HasAPIKey: cipher != "", ReasoningEfforts: efforts,
+	return Config{ModelEndpoints: publicModelEndpoints(endpoints), ReadyModels: readyModels, Enabled: req.Enabled, BaseURL: base, Models: models, HasAPIKey: cipher != "", ReasoningEfforts: efforts,
 		FallbackRelays: publicRelays(relays), FailoverEnabled: failoverEnabled, FailoverTimeoutSeconds: failoverTimeout}, nil
 }

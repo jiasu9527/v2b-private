@@ -62,7 +62,7 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 	if err != nil {
 		return out, err
 	}
-	if !cfg.Enabled || !cfg.HasAPIKey {
+	if !cfg.Enabled || !cfg.modelReady(req.Model) {
 		return out, ErrUnavailable
 	}
 	s.mu.Lock()

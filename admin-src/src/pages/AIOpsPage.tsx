@@ -2,12 +2,13 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Drawer, Form, Grid, Input, InputNumber, Modal, Select, Space, Switch, Tabs, Tag, Typography, message } from 'antd';
 import { BookOutlined, CloudServerOutlined, DeleteOutlined, HistoryOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, SlidersOutlined, StopOutlined } from '@ant-design/icons';
 import { apiGet, apiJsonPost, getAdminUserInfo } from '../lib/api';
-import { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, AI_DEFAULT_FAILOVER_TIMEOUT, AI_REASONING_OPTIONS, aiFallbackRelayForms, aiPrepareFallbackRelays, aiReasoningDefaults, aiReasoningDefaultLabel, aiSessionReasoning, aiAccessMode, aiCanReadSession, aiOwnsFullAccess, aiMergeSessionAccess, aiActionStatus, aiApplyDraft, aiCanApprove, aiFingerprintMatches, aiMergeSnapshot, aiParseModels, aiRequestID, aiSessionBusy, aiVisibleDraft, type AIAccessMode, type AIReasoningChoice, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
+import { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, AI_DEFAULT_FAILOVER_TIMEOUT, AI_REASONING_OPTIONS, aiFallbackRelayForms, aiPrepareFallbackRelays, aiModelEndpointForms, aiPrepareModelEndpoints, aiNormalizeEndpointURL, aiModelReady, aiReasoningDefaults, aiReasoningDefaultLabel, aiSessionReasoning, aiAccessMode, aiCanReadSession, aiOwnsFullAccess, aiMergeSessionAccess, aiActionStatus, aiApplyDraft, aiCanApprove, aiFingerprintMatches, aiMergeSnapshot, aiParseModels, aiRequestID, aiSessionBusy, aiVisibleDraft, type AIAccessMode, type AIReasoningChoice, type AIAction, type AIConfig, type AIDraft, type AIFingerprint, type AIServer, type AISession, type AISessionDetail } from './aiOpsModel';
 import { aiReadSessionStream } from './aiOpsStream';
 import { aiReadMiniSession, aiWriteMiniSession, aiClearMiniSession, aiPickMiniSession } from './aiOpsMiniSession';
 import AIOpsTranscript, { ActionDetails, aiDisplayTime as time } from './AIOpsTranscript';
 import AIOpsComposer, { type AIOpsComposerHandle } from './AIOpsComposer';
 import AIOpsRelaySettings from './AIOpsRelaySettings';
+import AIOpsModelEndpointSettings from './AIOpsModelEndpointSettings';
 import AIOpsKnowledge from './AIOpsKnowledge';
 import AIOpsTelegram from './AIOpsTelegram';
 import AIOpsServersPanel from './AIOpsServersPanel';
@@ -153,6 +154,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
     if (!next || !Array.isArray(next.models)) throw new Error('AI 配置数据格式不正确');
     setConfig(next);
     if (isAdmin) configForm.setFieldsValue({ ...next, reasoning_efforts: aiReasoningDefaults(next.models, next.reasoning_efforts), models_text: next.models.join('\n'), api_key: '', clear_api_key: false, failover_enabled: !!next.failover_enabled, failover_timeout_seconds: next.failover_timeout_seconds ?? AI_DEFAULT_FAILOVER_TIMEOUT, fallback_relays: aiFallbackRelayForms(next.fallback_relays) });
+    if (isAdmin) configForm.setFieldValue('model_endpoint_forms', aiModelEndpointForms(next.models, next.model_endpoints));
     setModel((current) => next.models.includes(current) ? current : next.models[0] || AI_DEFAULT_MODELS[0]);
   };
   const load = async (refreshConfig = true) => {
@@ -323,7 +325,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
   };
   const send = async (contentOverride?: string) => {
     const content = contentOverride ?? draft.current;
-    if (!content.trim() || !config.enabled || !config.has_api_key || (selectedRef.current > 0 && !detail) || aiSessionBusy(detail) || foreignFullAccess || !begin('send')) return;
+    if (!content.trim() || !aiModelReady(config, model) || (selectedRef.current > 0 && !detail) || aiSessionBusy(detail) || foreignFullAccess || !begin('send')) return;
     followOutput.current = true;
     const originalID = selectedRef.current;
     const selection = selectionSequence.current;
@@ -345,10 +347,15 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
     if (!isAdmin || !begin('config')) return;
     try {
       const values = await configForm.validateFields();
-      if (config.has_api_key && String(values.base_url || '').trim() !== config.base_url && !values.api_key && !values.clear_api_key) throw new Error('修改中转地址后必须重新输入 API Key 或明确清除旧 Key，不能自动沿用');
+      const baseURL = aiNormalizeEndpointURL(String(values.base_url || ''));
+      const defaultKey = String(values.api_key || '').trim();
+      if (defaultKey && values.clear_api_key) throw new Error('默认中转：清除 Key 和填写新 Key 不能同时使用');
+      if (config.has_api_key && baseURL !== aiNormalizeEndpointURL(config.base_url || '') && !defaultKey && !values.clear_api_key) throw new Error('修改默认中转地址后必须重新输入 API Key 或明确清除旧 Key，不能自动沿用');
       const models = aiParseModels(values.models_text || '');
+      const modelEndpoints = aiPrepareModelEndpoints(values.model_endpoint_forms, config.model_endpoints, models, !!values.enabled);
+      if (values.enabled && models.some((id) => !Object.prototype.hasOwnProperty.call(modelEndpoints, id)) && (!baseURL || (!defaultKey && (!config.has_api_key || values.clear_api_key)))) throw new Error('使用默认中转的模型需要填写默认 Base URL 和 API Key；也可为每个模型分别配置独立中转');
       const fallbackRelays = aiPrepareFallbackRelays(values.fallback_relays, config.fallback_relays, models);
-      const response = await apiJsonPost('/ai-ops/config/save', { enabled: !!values.enabled, base_url: String(values.base_url || '').trim(), models, reasoning_efforts: aiReasoningDefaults(models, values.reasoning_efforts), api_key: values.api_key || '', clear_api_key: !!values.clear_api_key, failover_enabled: !!values.failover_enabled, failover_timeout_seconds: values.failover_timeout_seconds ?? AI_DEFAULT_FAILOVER_TIMEOUT, fallback_relays: fallbackRelays });
+      const response = await apiJsonPost('/ai-ops/config/save', { enabled: !!values.enabled, base_url: baseURL, models, model_endpoints: modelEndpoints, reasoning_efforts: aiReasoningDefaults(models, values.reasoning_efforts), api_key: defaultKey, clear_api_key: !!values.clear_api_key, failover_enabled: !!values.failover_enabled, failover_timeout_seconds: values.failover_timeout_seconds ?? AI_DEFAULT_FAILOVER_TIMEOUT, fallback_relays: fallbackRelays });
       if (!alive.current) return;
       configForm.setFieldsValue({ api_key: '', clear_api_key: false, fallback_relays: fallbackRelays.map((relay) => ({ ...relay, api_key: '', clear_api_key: false })) });
       applyConfig(response?.data as AIConfig);
@@ -415,7 +422,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
   };
   const checkServer = (server: AIServer) => { newSession(); setDraft(`请检查已登记服务器 #${server.id}（${server.name}）的状态，仅使用固定只读诊断，不执行其他命令。`); };
   const deployServer = (server: AIServer) => { newSession(); setDraft(`我要在已登记服务器 #${server.id}（${server.name}，${server.host}）上部署或调整节点／中转服务。先检查系统、现有服务和端口，再按我补充的安装脚本与目标配置生成完整非交互命令，按本会话选择的权限模式执行。安装任务请设置足够的执行时间，完成后检查服务与连通性。\n\n部署需求：`); };
-  const unavailable = !config.enabled || !config.has_api_key;
+  const unavailable = !aiModelReady(config, model);
   const sessionHistory = (!compact || historyOpen) && <div className="ai-ops-session-history">
     <Space wrap><Button ref={historyNewButton} icon={<PlusOutlined />} onClick={() => { newSession(); setHistoryOpen(false); }}>新对话</Button>{isAdmin && <Button danger type="text" disabled={!sessions.length || !!busy} onClick={() => setConfirmation({ kind: 'clear' })}>清空全部会话</Button>}</Space>
     <Paragraph type="secondary">{isAdmin ? '全部操作人的会话' : '我的会话'} · 最近 200 个</Paragraph>
@@ -454,16 +461,17 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
   const serverPanel = <div className="ai-ops-server-panel"><Alert type="info" showIcon message="服务器凭据仅保存到后端，不发给模型" description="可通过聊天粘贴连接资料，也可在此表单登记。表单需填写已核对的 SSH 主机指纹；聊天未提供指纹时，会记录首次连接指纹，后续连接必须匹配。逐次确认模式下，每条服务器命令和部署操作均须批准；在对话窗口选择完全访问后，AI 可按当前任务连续执行。" /><AIOpsServersPanel servers={servers} compact={compact} busy={!!busy} unavailable={unavailable} onEdit={openServer} onCheck={checkServer} onDeploy={deployServer} onDelete={(server) => setConfirmation({ kind: 'server-delete', server })} onRefresh={() => { void loadServers().catch((e) => fail(e, '读取服务器列表失败')); }} /></div>;
   const settings = isAdmin ? <Space direction="vertical" size="middle" style={{ width: '100%' }}><Card title="模型中转设置" size="small"><Form form={configForm} layout="vertical" disabled={!!busy} onFinish={saveConfig}>
     <Form.Item name="enabled" label="启用 AI 运维" valuePropName="checked"><Switch /></Form.Item>
-    <Form.Item name="base_url" label="中转 Base URL" dependencies={['enabled']} rules={[({ getFieldValue }) => ({ required: !!getFieldValue('enabled'), whitespace: !!getFieldValue('enabled'), message: '请输入中转 Base URL' })]} extra="使用兼容 OpenAI Chat Completions 的 API 基址。修改中转地址后必须重新输入 API Key 或明确清除旧 Key，不会自动沿用旧凭据。"><Input placeholder="https://relay.example.com/v1" autoComplete="off" /></Form.Item>
-    <Form.Item name="api_key" label={`API Key · ${config.has_api_key ? '已保存（留空保持不变）' : '未配置'}`} extra="保存后不会回显。不要放在 URL 中或写进聊天。"><Input.Password autoComplete="new-password" placeholder={config.has_api_key ? '留空保留已有 API Key' : '输入 API Key'} /></Form.Item>
-    <Form.Item name="clear_api_key" valuePropName="checked"><Checkbox>清除已有 API Key</Checkbox></Form.Item>
+    <Form.Item name="base_url" label="默认中转 Base URL" extra="未配置独立中转的模型使用此地址；所有模型均独立配置时可留空。使用兼容 OpenAI Chat Completions 的基址，修改地址需重新输入 Key 或明确清除旧 Key。"><Input placeholder="https://relay.example.com/v1" autoComplete="off" /></Form.Item>
+    <Form.Item name="api_key" label={`默认 API Key · ${config.has_api_key ? '已保存（留空保持不变）' : '未配置'}`} extra="保存后不会回显。不要放在 URL 中或写进聊天。"><Input.Password autoComplete="new-password" placeholder={config.has_api_key ? '留空保留已有 API Key' : '输入 API Key'} /></Form.Item>
+    <Form.Item name="clear_api_key" valuePropName="checked"><Checkbox>清除默认中转已有 API Key</Checkbox></Form.Item>
     <Form.Item name="models_text" label="模型 ID（每行一个）" rules={[{ validator: (_, value) => aiParseModels(value || '').length ? Promise.resolve() : Promise.reject(new Error('至少填写一个模型 ID')) }]} extra="默认提供四个模型 ID；可以按中转支持的实际 ID 修改，不会自动替换模型。"><Input.TextArea rows={4} /></Form.Item>
+    <AIOpsModelEndpointSettings config={config} form={configForm} models={aiParseModels(configuredModelsText ?? config.models.join('\n'))} />
     <div className="ai-ops-reasoning-settings"><Text strong>各模型默认推理强度</Text><Paragraph type="secondary">具体等级取决于中转站和模型支持情况；不支持时请选择“中转默认”，请求中不传推理参数。</Paragraph><div className="ai-ops-reasoning-grid">{aiParseModels(configuredModelsText ?? config.models.join('\n')).map((id) => <Form.Item key={id} name={['reasoning_efforts', id]} label={id} initialValue="auto"><Select aria-label={`${id} 默认推理强度`} options={AI_REASONING_OPTIONS} /></Form.Item>)}</div></div>
     <AIOpsRelaySettings config={config} form={configForm} models={aiParseModels(configuredModelsText ?? config.models.join('\n'))} busy={!!busy} />
     <Button type="primary" htmlType="submit" loading={busy === 'config'}>保存设置</Button>
   </Form></Card><Card title="数据清理" size="small"><Paragraph>清空会话只删除聊天、消息及相关操作记录，保留中转配置、服务器凭据和共享知识。重置全部 AI 数据会同时清除上述全部数据并停止进行中的 AI 任务；已经在远程服务器启动的命令不能保证撤回或回滚。有远程操作正在执行时，删除、清空和重置会被拒绝，需等操作完成或进入“结果待核对”状态后再处理。</Paragraph><Space wrap><Button danger disabled={!!busy} onClick={() => setConfirmation({ kind: 'clear' })}>清空全部会话</Button><Button danger type="primary" disabled={!!busy} onClick={() => { setResetText(''); setConfirmation({ kind: 'reset' }); }}>重置全部 AI 数据</Button></Space></Card></Space> : null;
   const titles = { delete: '删除当前会话', clear: '清空全部会话', reset: '重置全部 AI 数据', 'server-delete': '删除服务器配置' };
-  const pageStatus = <Space wrap><Tag color={config.enabled && config.has_api_key ? 'success' : 'default'}>{!loaded ? '加载中' : config.enabled ? config.has_api_key ? '已启用' : '缺少 API Key' : '未启用'}</Tag><Button icon={<ReloadOutlined />} loading={loading} disabled={!!busy} onClick={() => void load()}>刷新</Button></Space>;
+  const pageStatus = <Space wrap><Tag color={!unavailable ? 'success' : 'default'}>{!loaded ? '加载中' : config.enabled ? !unavailable ? '已启用' : '当前模型中转未就绪' : '未启用'}</Tag><Button icon={<ReloadOutlined />} loading={loading} disabled={!!busy} onClick={() => void load()}>刷新</Button></Space>;
   const miniNavigation = [
     { key: 'chat', label: '聊天', icon: <MessageOutlined /> },
     { key: 'servers', label: '服务器', icon: <CloudServerOutlined /> },
