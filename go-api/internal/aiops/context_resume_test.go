@@ -33,16 +33,19 @@ func TestAIHistoryContinueRetainsFailedTaskWithoutPartialTools(t *testing.T) {
 		AddRow(4, "failed", "user", "继续", `[]`, "", "").
 		AddRow(5, "running", "user", "继续", `[]`, "", "")
 	mock.ExpectQuery(`SELECT turn.id,turn.status,.*message.role='user'.*status IN\('failed','interrupted'\).*ORDER BY message.id`).WithArgs(int64(9), int64(5)).WillReturnRows(rows)
-	mock.ExpectQuery(`SELECT id,kind,status,output,error FROM v2_ai_action`).WithArgs(int64(9)).WillReturnRows(sqlmock.NewRows([]string{"id", "kind", "status", "output", "error"}).
-		AddRow(88, "ssh_command", "unknown", "端口读取到一部分", "断线，结果未知").
-		AddRow(87, "node_update", "succeeded", "连接端口已更新为 54101", ""))
+	mock.ExpectQuery(`SELECT id,kind,status,output,error,COALESCE\(authorization_turn_id,0\) FROM v2_ai_action`).WithArgs(int64(9)).WillReturnRows(sqlmock.NewRows([]string{"id", "kind", "status", "output", "error", "authorization_turn_id"}).
+		AddRow(88, "ssh_command", "unknown", "端口读取到一部分", "断线，结果未知", 2).
+		AddRow(87, "node_update", "succeeded", "连接端口已更新为 54101", "", 1))
 	messages, err := s.history(context.Background(), 9, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertContextToolPairs(t, messages)
+	if !strings.Contains(messages[0].Content, "当前轮次 turn_id=5") || !strings.Contains(messages[0].Content, historicalActionRecoveryPrompt) {
+		t.Fatal("missing authoritative current-turn recovery boundary")
+	}
 	encoded, _ := json.Marshal(messages)
-	for _, want := range []string{"54101 端口对应的落地服务器", "保留现有中转配置", "先前已完成", "该轮未完成", "部分操作可能已经执行", "实际状态以最新操作摘要为准", "不得自动重试", "unknown", "succeeded"} {
+	for _, want := range []string{"54101 端口对应的落地服务器", "保留现有中转配置", "先前已完成", "该轮未完成", "部分操作可能已经执行", "实际状态以最新操作摘要为准", "不得自动重试", "unknown", "succeeded", `\"authorization_turn_id\":2`} {
 		if !strings.Contains(string(encoded), want) {
 			t.Fatalf("missing task or execution truth %q", want)
 		}

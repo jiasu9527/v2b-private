@@ -170,8 +170,16 @@ func TestAIPanelRecoveryUnknownReadOnlyPostgres(t *testing.T) {
 			sshRecoveryReply(w)
 		case 5:
 			// A new user turn may re-plan; readonly mode is deliberately per-turn.
-			sshRecoveryReply(w, panelRecoveryCall("new-turn-write", "propose_panel_operation", "dns.record_save", `{"value":"explicitly replanned"}`))
+			if len(request.Messages) == 0 || request.Messages[0].Role != "system" || !strings.Contains(request.Messages[0].Content, historicalActionRecoveryPrompt) {
+				t.Error("new turn lacks authoritative historical-action boundary")
+			}
+			sshRecoveryReply(w, panelRecoveryCall("new-turn-inspect", "panel_query", "dns.records", `{}`))
 		case 6:
+			if got := sshRecoveryToolResult(t, request, "new-turn-inspect"); got["status"] == "error" || got["status"] == "skipped" {
+				t.Error("new turn could not verify current state", got)
+			}
+			sshRecoveryReply(w, panelRecoveryCall("new-turn-write", "propose_panel_operation", "dns.record_save", `{"value":"explicitly replanned"}`))
+		case 7:
 			if got := sshRecoveryToolResult(t, request, "new-turn-write"); got["status"] != "succeeded" {
 				t.Error("new turn remained read-only", got)
 			}
@@ -196,8 +204,17 @@ func TestAIPanelRecoveryUnknownReadOnlyPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	detail = sshRecoveryWait(t, f, started.Session.ID)
-	if detail.Turns[0].Status != "completed" || rounds.Load() != 6 || runtime.count() != 4 {
+	if detail.Turns[0].Status != "completed" || rounds.Load() != 7 || runtime.count() != 5 {
 		t.Fatalf("new turn=%+v rounds=%d executes=%d", detail.Turns[0], rounds.Load(), runtime.count())
+	}
+	actions, err = f.s.ListActions(context.Background(), f.staff, started.Session.ID)
+	if err != nil || len(actions) != 2 {
+		t.Fatal("unexpected replanned actions", actions, err)
+	}
+	statuses := []string{actions[0].Status, actions[1].Status}
+	sort.Strings(statuses)
+	if strings.Join(statuses, ",") != "succeeded,unknown" {
+		t.Fatal("historical unknown was rewritten", statuses)
 	}
 }
 

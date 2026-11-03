@@ -292,7 +292,7 @@ func (s *Service) history(ctx context.Context, sessionID, currentTurnID int64) (
 		return nil, err
 	}
 	defer rows.Close()
-	out := []providerMessage{{Role: "system", Content: systemPrompt}}
+	out := []providerMessage{{Role: "system", Content: systemPrompt + fmt.Sprintf("\n当前轮次 turn_id=%d。", currentTurnID) + historicalActionRecoveryPrompt}}
 	contextBytes := jsonSize(out)
 	pending := map[string]bool{}
 	appendHistory := func(message providerMessage) error {

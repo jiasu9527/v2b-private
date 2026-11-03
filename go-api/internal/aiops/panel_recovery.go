@@ -17,6 +17,8 @@ const (
 const panelPreflightRecoveryInstruction = "该操作在写入前检查阶段失败，未执行写入。本批后续调用已跳过；先查询说明与现状，修正参数或消除明确原因后再提交。禁止原样重复失败请求。"
 const panelReadOnlyRecoveryInstruction = "该后台写操作结果未知，可能已部分执行。本轮后续仅允许已审查的只读查询核对现状并总结，禁止再次执行任何写入、SSH、探针、登记或知识保存。可用panel_query查询dns.records、dns.domains、dns.record_lines、entry_rules.list、nodes.list、orders.detail等已审查操作，也可用entry_health、entry_rules_list、entry_probe_result等只读专用工具。仅标注mutating=false不足以证明恢复阶段可用：未审查的新操作、监测目标/订阅解析/证据刷新查询不开放。原操作保持待核对，不能声称全部完成。需要写入时由操作人发送新消息重新规划，不自动重试原操作。"
 
+const historicalActionRecoveryPrompt = "轮次边界：只读恢复限制只对产生结果未知动作的那一轮生效，不是会话永久锁。历史动作摘要中的authorization_turn_id是动作获准执行的轮次（0表示手动审批或旧记录未关联轮次），不是当前轮次。上一轮的unknown状态及其输出中的停止提示，不会自动限制本轮所有写入。操作人发送新消息继续原任务时，应先查询当前状态，区分已经完成、尚未完成和仍无法确认的部分，再仅针对核实后尚未完成的差异重新规划并按本轮权限执行；不能仅因历史动作仍为unknown拒绝查询或整个任务。不得直接重放旧请求、假定旧操作未执行、将旧unknown改成成功，或用SSH绕过本轮新发生的只读限制。若查询不足以确认安全的后续差异，只暂停相关操作并说明缺少哪项事实，不得虚构已经核实。"
+
 // Only server-owned persisted action metadata may select a recovery mode. A
 // provider response, HTTP status or error text cannot establish non-execution.
 func panelActionRecovery(a Action) panelRecoveryKind {
