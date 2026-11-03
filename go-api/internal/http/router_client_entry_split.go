@@ -28,8 +28,24 @@ func handleAdminClientEntryUserPolicySplitPreview(w http.ResponseWriter, r *http
 		}
 		minutes = value
 	}
-	result, err := adminService.PreviewClientEntryUserPolicySplit(r.Context(), admin.ClientEntryUserPolicySplitPreviewRequest{Minutes: minutes})
+	historyFrom, historyTo := int64(0), int64(0)
+	for key, target := range map[string]*int64{"history_from": &historyFrom, "history_to": &historyTo} {
+		if raw := r.URL.Query().Get(key); raw != "" {
+			var err error
+			*target, err = strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"message": "历史时间范围无效"})
+				return true
+			}
+		}
+	}
+	disableResponseCache(w)
+	result, err := adminService.PreviewClientEntryUserPolicySplit(r.Context(), admin.ClientEntryUserPolicySplitPreviewRequest{Minutes: minutes, HistoryHost: r.URL.Query().Get("history_host"), HistoryFrom: historyFrom, HistoryTo: historyTo})
 	if err != nil {
+		if errors.Is(err, admin.ErrEntryEvidenceInvalid) {
+			handleEntryEvidenceError(w, err)
+			return true
+		}
 		return handleAdminError(w, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": result})
@@ -100,6 +116,10 @@ func handleAdminClientEntryUserPolicySplitCreate(w http.ResponseWriter, r *http.
 		return true
 	}
 	var payload struct {
+		HistoryHost      string       `json:"history_host"`
+		HistoryFrom      int64        `json:"history_from"`
+		HistoryTo        int64        `json:"history_to"`
+		SnapshotHash     string       `json:"snapshot_hash"`
 		Name             string       `json:"name"`
 		Minutes          *json.Number `json:"minutes"`
 		EntryHostA       string       `json:"entry_host_a"`
@@ -142,6 +162,7 @@ func handleAdminClientEntryUserPolicySplitCreate(w http.ResponseWriter, r *http.
 		return true
 	}
 	result, err := adminService.CreateClientEntryUserPolicySplit(r.Context(), admin.ClientEntryUserPolicySplitCreateRequest{
+		HistoryHost: payload.HistoryHost, HistoryFrom: payload.HistoryFrom, HistoryTo: payload.HistoryTo, SnapshotHash: payload.SnapshotHash,
 		Name:             payload.Name,
 		Minutes:          minutesValue,
 		Members:          members,
@@ -152,6 +173,10 @@ func handleAdminClientEntryUserPolicySplitCreate(w http.ResponseWriter, r *http.
 		Remarks:          payload.Remarks,
 	})
 	if err != nil {
+		if errors.Is(err, admin.ErrEntryEvidenceInvalid) || errors.Is(err, admin.ErrEntryEvidenceConflict) {
+			handleEntryEvidenceError(w, err)
+			return true
+		}
 		return handleAdminError(w, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": result})

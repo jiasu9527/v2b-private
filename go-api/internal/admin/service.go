@@ -1339,17 +1339,26 @@ type ClientEntryUserPolicySplitGroupRecord struct {
 }
 
 type ClientEntryUserPolicySplitPreviewRequest struct {
-	Minutes int64
+	HistoryHost string
+	HistoryFrom int64
+	HistoryTo   int64
+	Minutes     int64
 }
 
 type ClientEntryUserPolicySplitPreviewResult struct {
-	Minutes   int64 `json:"minutes"`
-	From      int64 `json:"from"`
-	To        int64 `json:"to"`
-	UserCount int64 `json:"user_count"`
+	HistoryHost  string `json:"history_host,omitempty"`
+	SnapshotHash string `json:"snapshot_hash,omitempty"`
+	Minutes      int64  `json:"minutes"`
+	From         int64  `json:"from"`
+	To           int64  `json:"to"`
+	UserCount    int64  `json:"user_count"`
 }
 
 type ClientEntryUserPolicySplitCreateRequest struct {
+	HistoryHost      string
+	HistoryFrom      int64
+	HistoryTo        int64
+	SnapshotHash     string
 	Name             string
 	Minutes          int64
 	Members          []ClientEntryGroupMemberSaveRequest

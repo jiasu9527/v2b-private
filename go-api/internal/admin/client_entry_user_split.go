@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"forest/go-api/internal/cliententry"
+	"forest/go-api/internal/entryevidence"
 	"forest/go-api/internal/subscribelink"
 )
 
@@ -36,6 +37,12 @@ func (s *DBService) PreviewClientEntryUserPolicySplit(ctx context.Context, req C
 	}
 	if err := s.ensureClientEntrySchema(ctx); err != nil {
 		return ClientEntryUserPolicySplitPreviewResult{}, err
+	}
+	if req.HistoryHost != "" {
+		return s.previewHistoricalEntrySplit(ctx, req)
+	}
+	if req.HistoryFrom != 0 || req.HistoryTo != 0 {
+		return ClientEntryUserPolicySplitPreviewResult{}, ErrEntryEvidenceInvalid
 	}
 	minutes, err := normalizeClientEntryUserPolicySplitMinutes(req.Minutes)
 	if err != nil {
@@ -67,11 +74,51 @@ func (s *DBService) CreateClientEntryUserPolicySplit(ctx context.Context, req Cl
 
 	now := time.Now().Unix()
 	from := now - prepared.Minutes*60
+	snapshotTo := now
+	history := req.HistoryHost != ""
+	if history {
+		host, err := normalizeHistoricalEntryWindow(req.HistoryHost, req.HistoryFrom, req.HistoryTo)
+		if err != nil || req.SnapshotHash == "" {
+			return ClientEntryUserPolicyRecord{}, ErrEntryEvidenceInvalid
+		}
+		req.HistoryHost = host
+		from, snapshotTo = req.HistoryFrom, req.HistoryTo
+	} else if req.HistoryFrom != 0 || req.HistoryTo != 0 || req.SnapshotHash != "" {
+		return ClientEntryUserPolicyRecord{}, ErrEntryEvidenceInvalid
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("开启数据库事务", err)
 	}
 	defer tx.Rollback()
+	var historyIDs []int64
+	if history {
+		historyIDs, err = entryevidence.HistoricalUserIDs(ctx, tx, req.HistoryHost, from, snapshotTo)
+		if err != nil {
+			return ClientEntryUserPolicyRecord{}, err
+		}
+		if historicalEntryHash(req.HistoryHost, from, snapshotTo, historyIDs) != req.SnapshotHash {
+			return ClientEntryUserPolicyRecord{}, ErrEntryEvidenceConflict
+		}
+		locked, e := tx.QueryContext(ctx, `SELECT id FROM v2_user WHERE id=ANY($1) ORDER BY id FOR SHARE`, historyIDs)
+		if e != nil {
+			return ClientEntryUserPolicyRecord{}, e
+		}
+		var lockedCount int
+		for locked.Next() {
+			lockedCount++
+		}
+		e = locked.Err()
+		locked.Close()
+		if e != nil {
+			return ClientEntryUserPolicyRecord{}, e
+		}
+		if lockedCount != len(historyIDs) {
+			return ClientEntryUserPolicyRecord{}, ErrEntryEvidenceConflict
+		}
+
+	}
 	if err := validateClientEntryRuleMembers(ctx, tx, prepared.Members); err != nil {
 		return ClientEntryUserPolicyRecord{}, err
 	}
@@ -84,7 +131,7 @@ func (s *DBService) CreateClientEntryUserPolicySplit(ctx context.Context, req Cl
 	if err := tx.QueryRowContext(ctx, `INSERT INTO v2_client_entry_user_policy
 (name, sort, mode, action, conditions, entry_host, resolve_entry_host, extra_nodes, extra_nodes_position, snapshot_from, snapshot_to, enabled, remarks, created_at, updated_at)
 VALUES ($1, $2, 'split', 'override', '[]', '', $3, '[]', 'after', $4, $5, $6, $7, $8, $8)
-RETURNING id`, prepared.Name, nextSort, prepared.ResolveEntryHost, from, now, prepared.Enabled, prepared.Remarks, now).Scan(&policyID); err != nil {
+RETURNING id`, prepared.Name, nextSort, prepared.ResolveEntryHost, from, snapshotTo, prepared.Enabled, prepared.Remarks, now).Scan(&policyID); err != nil {
 		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("写入规则", err)
 	}
 	for index, member := range prepared.Members {
@@ -106,7 +153,14 @@ VALUES ($1, $2, $3, $4, $5, $5)`, policyID, member.ServerType, member.ServerID, 
 		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("创建 B 组", err)
 	}
 
-	rows, err := tx.QueryContext(ctx, `WITH eligible AS (
+	var rows *sql.Rows
+	if history {
+		rows, err = tx.QueryContext(ctx, `WITH eligible AS (
+ SELECT user_id,ROW_NUMBER() OVER(ORDER BY user_id) AS position,COUNT(*) OVER() AS total FROM unnest($1::BIGINT[]) user_id
+ ) INSERT INTO v2_client_entry_user_policy_split_assignment(policy_id,user_id,group_id,created_at,updated_at)
+ SELECT $2,user_id,CASE WHEN position <= (total+1)/2 THEN $3::BIGINT ELSE $4::BIGINT END,$5,$5 FROM eligible ORDER BY user_id RETURNING group_id`, historyIDs, policyID, groupA, groupB, now)
+	} else {
+		rows, err = tx.QueryContext(ctx, `WITH eligible AS (
 	SELECT activity.user_id,
 	       ROW_NUMBER() OVER (ORDER BY activity.user_id ASC) AS position,
 	       COUNT(*) OVER () AS total
@@ -120,6 +174,7 @@ SELECT $3, user_id, CASE WHEN position <= (total + 1) / 2 THEN $4::BIGINT ELSE $
 FROM eligible
 ORDER BY user_id ASC
 RETURNING group_id`, from, now, policyID, groupA, groupB)
+	}
 	if err != nil {
 		return ClientEntryUserPolicyRecord{}, clientEntryUserPolicySplitCreateFailure("固定用户名单", err)
 	}
@@ -156,7 +211,7 @@ RETURNING group_id`, from, now, policyID, groupA, groupB)
 		sortValue := int64(index+1) * clientEntryRuleSortStep
 		members = append(members, ClientEntryGroupMemberRecord{ServerType: member.ServerType, ServerID: member.ServerID, Sort: &sortValue})
 	}
-	snapshotFrom, snapshotTo := from, now
+	snapshotFrom := from
 	return ClientEntryUserPolicyRecord{
 		ID: policyID, Name: prepared.Name, Sort: nextSort, Mode: ClientEntryUserPolicyModeSplit,
 		SnapshotFrom: &snapshotFrom, SnapshotTo: &snapshotTo, SnapshotUserCount: userCount,

@@ -112,7 +112,7 @@ func (s *Service) panelRecoveryReadOnlyCall(call ToolCall) bool {
 func panelRecoveryReadOnlyOperation(name string) bool {
 	switch name {
 	case "dns.config", "dns.domains", "dns.records", "dns.record_types", "dns.record_lines",
-		"entry_evidence.delivery_stats", "entry_evidence.delivery_users", "entry_evidence.delivery_versions",
+		"entry_evidence.delivery_hosts", "entry_evidence.delivery_stats", "entry_evidence.delivery_users", "entry_evidence.delivery_versions",
 		"nodes.list", "node_groups.list", "node_routes.list",
 		"entry_rules.list", "entry_rules.simulate", "entry_split.users", "entry_collections.list", "entry_monitors.runs", "ip_pool.list",
 		"users.detail", "orders.list", "orders.detail", "plans.list", "notices.list", "tickets.list", "config.read":

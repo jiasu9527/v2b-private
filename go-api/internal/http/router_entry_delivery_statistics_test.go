@@ -37,8 +37,14 @@ func (s *deliveryStatisticsHTTPStore) Versions(_ context.Context, f entryevidenc
 	return entryevidence.DeliveryVersionsPage{Total: 2, Limit: f.Limit, Offset: f.Offset}, s.err
 }
 
+func (s *deliveryStatisticsHTTPStore) Hosts(_ context.Context, f entryevidence.Filter) (entryevidence.DeliveryHostsPage, error) {
+	s.calls++
+	s.filter = f
+	return entryevidence.DeliveryHostsPage{Items: []entryevidence.DeliveryHost{}, Total: 2, Limit: f.Limit, Offset: f.Offset}, s.err
+}
+
 func TestEntryDeliveryStatisticsHTTPReadOnlyAndMetadata(t *testing.T) {
-	for _, action := range []string{"delivery-stats", "delivery-users", "delivery-versions"} {
+	for _, action := range []string{"delivery-stats", "delivery-users", "delivery-versions", "delivery-hosts"} {
 		for _, tc := range []struct {
 			name, method string
 			actor        *session.Identity
@@ -90,7 +96,7 @@ func TestEntryDeliveryStatisticsHTTPReadOnlyAndMetadata(t *testing.T) {
 }
 
 func TestEntryDeliveryStatisticsHTTPFailureAndFilterValidation(t *testing.T) {
-	for _, action := range []string{"delivery-stats", "delivery-users", "delivery-versions"} {
+	for _, action := range []string{"delivery-stats", "delivery-users", "delivery-versions", "delivery-hosts"} {
 		for _, unavailable := range []bool{false, true} {
 			var store entryEvidenceReader = &deliveryStatisticsHTTPStore{err: errors.New("PRIVATE-SENTINEL query")}
 			want := 500

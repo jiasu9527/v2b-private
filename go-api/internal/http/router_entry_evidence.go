@@ -50,7 +50,7 @@ func handleEntryEvidence(w http.ResponseWriter, r *http.Request, sessions sessio
 	w.Header().Set("Vary", "Authorization")
 	method := http.MethodGet
 	switch action {
-	case "status", "deliveries", "delivery-stats", "delivery-users", "delivery-versions", "candidates", "cases", "case", "context":
+	case "status", "deliveries", "delivery-stats", "delivery-users", "delivery-versions", "delivery-hosts", "candidates", "cases", "case", "context":
 	case "freeze", "split-preview", "split-execute", "case-update", "case-delete", "settings":
 		method = http.MethodPost
 	default:
@@ -111,7 +111,34 @@ func handleEntryEvidence(w http.ResponseWriter, r *http.Request, sessions sessio
 		var page entryevidence.Page
 		page, err = store.List(ctx, filter)
 		result = map[string]any{"items": page.Items, "total": page.Total, "current": filter.Offset/filter.Limit + 1, "page_size": filter.Limit, "warnings": []string{"此处展示真实采集的节点元数据。coverage 不完整、304 或响应失败的记录不能视为本次已完整下发。"}}
-	case "delivery-stats", "delivery-users", "delivery-versions":
+	case "delivery-stats", "delivery-users", "delivery-versions", "delivery-hosts":
+		if action == "delivery-hosts" {
+			reader, ok := store.(interface {
+				Hosts(context.Context, entryevidence.Filter) (entryevidence.DeliveryHostsPage, error)
+			})
+			if store == nil || !ok {
+				handleEntryEvidenceError(w, admin.ErrUnavailable)
+				return
+			}
+			filter, e := parseEntryDeliveryFilter(r.URL.Query())
+			if e != nil {
+				err = e
+				break
+			}
+			filter.CompleteOnly = true
+			page, e := reader.Hosts(ctx, filter)
+			if e != nil {
+				err = e
+				break
+			}
+			status, e := store.Status(ctx)
+			if e != nil {
+				err = e
+				break
+			}
+			result = map[string]any{"items": page.Items, "total": page.Total, "current": filter.Offset/filter.Limit + 1, "page_size": filter.Limit, "keep_days": status.KeepDays, "available_from": status.FirstAt, "available_to": status.LastAt, "warnings": entryDeliveryStatisticsWarnings(status), "query": filter}
+			break
+		}
 		reader, ok := store.(entryDeliveryStatisticsReader)
 		if store == nil || !ok {
 			handleEntryEvidenceError(w, admin.ErrUnavailable)

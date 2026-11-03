@@ -288,8 +288,10 @@ CREATE INDEX IF NOT EXISTS idx_v2_user_online_location_last_seen ON v2_user_onli
 
 -- Entry delivery evidence and frozen investigation cases. Keep in sync with Go schema contracts.
 CREATE TABLE IF NOT EXISTS v2_entry_delivery_settings (
- id INTEGER PRIMARY KEY CHECK(id=1), keep_days INTEGER NOT NULL DEFAULT 30 CHECK(keep_days BETWEEN 1 AND 365), updated_at BIGINT NOT NULL DEFAULT 0
+ id INTEGER PRIMARY KEY CHECK(id=1), keep_days INTEGER NOT NULL DEFAULT 7 CHECK(keep_days BETWEEN 1 AND 365), updated_at BIGINT NOT NULL DEFAULT 0
 );
+ALTER TABLE v2_entry_delivery_settings ALTER COLUMN keep_days SET DEFAULT 7;
+UPDATE v2_entry_delivery_settings SET keep_days=7 WHERE id=1 AND updated_at=0 AND keep_days=30;
 INSERT INTO v2_entry_delivery_settings(id) VALUES(1) ON CONFLICT(id) DO NOTHING;
 CREATE TABLE IF NOT EXISTS v2_entry_delivery_request (
  id TEXT PRIMARY KEY, user_id BIGINT NOT NULL, email_at_event TEXT NOT NULL DEFAULT '', ua TEXT NOT NULL DEFAULT '',

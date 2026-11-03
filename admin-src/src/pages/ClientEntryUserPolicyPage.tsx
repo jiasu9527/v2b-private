@@ -45,6 +45,7 @@ import { splitUserIDRange as singleUserIDRange, splitUAConditions } from './clie
 import { requiresMatchAllConfirmation } from './clientEntryMatchAll';
 import { useSplitBackupIPPool } from './clientEntryBackupPool';
 import EntryEvidencePanel from './EntryEvidencePanel';
+import EntryHistoryIP from './EntryHistoryIP';
 
 type ConditionField = 'user_id' | 'email' | 'registration_days' | 'ua' | 'plan_id';
 
@@ -2005,6 +2006,7 @@ export default function ClientEntryUserPolicyPage({ embedded = false }: { embedd
               <Space wrap>
                 <PolicyEditor onDone={load} serverOptions={serverOptions}><Button type="primary" icon={<PlusOutlined />} disabled={sortSaving}>新增规则</Button></PolicyEditor>
                 <Button icon={<PlusOutlined />} disabled={sortSaving} onClick={() => editCollection()}>新建合集</Button>
+                <EntryHistoryIP onDone={load} serverOptions={serverOptions} disabled={sortSaving} />
                 <SplitPolicyCreator onDone={load} serverOptions={serverOptions}><Button icon={<BranchesOutlined />} disabled={sortSaving}>近期用户固定二分</Button></SplitPolicyCreator>
               </Space>
               <Space wrap>

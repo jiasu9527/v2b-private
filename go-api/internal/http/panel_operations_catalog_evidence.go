@@ -42,6 +42,7 @@ func panelEntryEvidenceOperations() []aiops.PanelOperation {
 	for field, length := range map[string]int{"host": 255, "port": 64, "ua": 1024, "account": 254} {
 		delivery[field] = poMerge(delivery[field].(panelSchema), panelSchema{"maxLength": length})
 	}
+	add("delivery_hosts", "分页读取保留期内实际下发过的入口地址及去重用户人数，可用于历史拉取IP选择；跨规则节点端口取并集，排除不完整和失败响应；不是当前入口规则列表", "GET", "delivery-hosts", false, false, delivery)
 	add("delivery_stats", "统计保留期内实际下发过目标入口的去重用户数、去重请求数及首次/最近下发时间；同一订阅多个节点与合集成员取并集，不累计相加。只计完整覆盖、服务端写入完整的2xx请求；全部筛选匹配同一请求和同一节点。不使用当前规则反推历史，服务端返回不证明客户端导入或连接。首次记录不是入口启用时间，需精确时间时由已知变更记录给from/to", "GET", "delivery-stats", false, false, delivery)
 	add("delivery_users", "分页读取真实订阅下发的去重用户ID、历史邮箱、次数及首次/最近记录；不会关联当前用户或当前规则，已删除用户保留历史身份。支持version精确快照、UA和半开时间范围。仅保留期内完整2xx记录，不能把缺日志视为未获得入口；每页最多100，按返回current/page_size/total翻页", "GET", "delivery-users", false, false, delivery)
 	add("delivery_versions", "分页列出实际订阅下发的规则/固定叶子/合集/provider与host/port快照及各自去重人数。返回version供精确钻取；rule_revision为空表示旧版本未知，collection_id=0可能缺历史归属。快照不是配置生效轮次，相同快照复用不能保证区分轮次，首次记录不等于启用时间。各版本人数有重叠不能相加", "GET", "delivery-versions", false, false, delivery)
