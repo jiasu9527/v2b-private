@@ -549,27 +549,37 @@ func (s *DBService) DeleteClientEntryBackupIP(ctx context.Context, id int64) (bo
 	return true, nil
 }
 
-func (s *DBService) BulkDeleteClientEntryBackupIPs(ctx context.Context, request ClientEntryBackupIPBulkDeleteRequest) (ClientEntryBackupIPBulkDeleteResult, error) {
-	if s == nil || s.db == nil {
-		return ClientEntryBackupIPBulkDeleteResult{}, ErrUnavailable
-	}
+// NormalizeClientEntryBackupIPBulkDeleteRequest performs no database access or writes.
+func NormalizeClientEntryBackupIPBulkDeleteRequest(request ClientEntryBackupIPBulkDeleteRequest) (ClientEntryBackupIPBulkDeleteRequest, error) {
 	if request.Scope != "selected" && request.Scope != "faulty" && request.Scope != "all" {
-		return ClientEntryBackupIPBulkDeleteResult{}, errors.New("批量删除范围必须是 selected、faulty 或 all")
+		return request, errors.New("批量删除范围必须是 selected、faulty 或 all")
 	}
 	var err error
 	if request.Scope == "selected" {
 		if len(request.IDs) == 0 {
-			return ClientEntryBackupIPBulkDeleteResult{}, errors.New("选择删除时备用 IP ID 列表不能为空")
+			return request, errors.New("选择删除时备用 IP ID 列表不能为空")
 		}
 		if len(request.IDs) > clientEntryBackupIPMaxBatch {
-			return ClientEntryBackupIPBulkDeleteResult{}, fmt.Errorf("一次最多删除 %d 个备用 IP", clientEntryBackupIPMaxBatch)
+			return request, fmt.Errorf("一次最多删除 %d 个备用 IP", clientEntryBackupIPMaxBatch)
 		}
 		request.IDs, err = normalizeClientEntryBackupIPIDs(request.IDs)
 		if err != nil {
-			return ClientEntryBackupIPBulkDeleteResult{}, err
+			return request, err
 		}
 	} else if len(request.IDs) != 0 {
-		return ClientEntryBackupIPBulkDeleteResult{}, errors.New("faulty 或 all 范围不能指定备用 IP ID")
+		return request, errors.New("faulty 或 all 范围不能指定备用 IP ID")
+	}
+	return request, nil
+}
+
+func (s *DBService) BulkDeleteClientEntryBackupIPs(ctx context.Context, request ClientEntryBackupIPBulkDeleteRequest) (ClientEntryBackupIPBulkDeleteResult, error) {
+	if s == nil || s.db == nil {
+		return ClientEntryBackupIPBulkDeleteResult{}, ErrUnavailable
+	}
+	var err error
+	request, err = NormalizeClientEntryBackupIPBulkDeleteRequest(request)
+	if err != nil {
+		return ClientEntryBackupIPBulkDeleteResult{}, err
 	}
 	if err := s.ensureDNSFailoverSchema(ctx); err != nil {
 		return ClientEntryBackupIPBulkDeleteResult{}, err

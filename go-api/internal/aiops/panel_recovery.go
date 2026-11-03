@@ -38,7 +38,7 @@ func panelActionRecovery(a Action) panelRecoveryKind {
 		return panelRecoveryNone
 	}
 	switch marker.Code {
-	case "dns_invalid_arguments", "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed", "node_invalid_arguments":
+	case "dns_invalid_arguments", "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed", "node_invalid_arguments", "ip_pool_invalid_arguments":
 		return panelRecoveryPreflight
 	default:
 		return panelRecoveryNone

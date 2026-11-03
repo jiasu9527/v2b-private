@@ -422,7 +422,7 @@ func safeAIError(e error) error {
 	var panelError *PanelOperationError
 	if errors.As(e, &panelError) {
 		code, message := panelOperationErrorText(panelError)
-		notExecuted := panelError.NotExecuted && strings.HasPrefix(code, "dns_")
+		notExecuted := panelError.NotExecuted && (strings.HasPrefix(code, "dns_") || code == "ip_pool_invalid_arguments")
 		retryable := notExecuted && panelError.Retryable && oneOf(code, "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed")
 		return &PanelOperationError{Status: panelError.Status, Code: code, Message: message, NotExecuted: notExecuted, Retryable: retryable}
 	}

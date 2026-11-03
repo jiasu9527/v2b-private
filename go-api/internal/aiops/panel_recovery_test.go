@@ -14,6 +14,7 @@ func TestAIPanelRecoveryOnlyTrustedActionMetadata(t *testing.T) {
 		want panelRecoveryKind
 	}{
 		{"preflight", Action{Kind: "panel_operation", Status: "failed", Output: marker}, panelRecoveryPreflight},
+		{"ip pool validation", Action{Kind: "panel_operation", Status: "failed", Output: strings.ReplaceAll(marker, "dns_domain_metadata", "ip_pool_invalid_arguments")}, panelRecoveryPreflight},
 		{"node validation", Action{Kind: "panel_operation", Status: "failed", Output: strings.ReplaceAll(marker, "dns_domain_metadata", "node_invalid_arguments")}, panelRecoveryPreflight},
 		{"uncertain panel", Action{Kind: "panel_operation", Status: "unknown"}, panelRecoveryReadOnly},
 		{"error text not trusted", Action{Kind: "panel_operation", Status: "failed", Error: marker}, panelRecoveryNone},

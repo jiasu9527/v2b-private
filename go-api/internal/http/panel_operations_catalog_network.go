@@ -134,7 +134,10 @@ func panelNetworkOperations() []aiops.PanelOperation {
 	add("ip_pool.update", "entries", "修改IP池条目", "PUT", em+"/backup-ips/{id}", true, false, poMerge(poReflect(admin.ClientEntryBackupIPSaveRequest{})["properties"].(panelSchema), panelSchema{"id": poID()}), "id")
 	add("ip_pool.delete", "entries", "删除IP池条目，后台校验占用", "DELETE", em+"/backup-ips/{id}", true, false, panelSchema{"id": poID()}, "id")
 	add("ip_pool.refresh", "entries", "主动刷新指定IP池检测，ids为空按后台全部刷新", "POST", em+"/backup-ips/refresh", true, false, poFields("ids:ids"))
-	addSchema("ip_pool.delete_many", "entries", "按scope和ids批量删除IP池资源，已占用条目由后台跳过", "POST", em+"/backup-ips/delete", true, false, poReflect(admin.ClientEntryBackupIPBulkDeleteRequest{}))
+	add("ip_pool.delete_many", "entries", "批量删除IP池条目，不修改服务器网卡或独立监控。scope必填：selected删除指定ID，必须传非空ids（最多500）；faulty删除全部已确认unhealthy的条目，all删除全部，两者均不得传非空ids。只替换指定一批时必须用selected，不得扩大为faulty/all；后台跳过仍被入口规则占用的条目，核对deleted/skipped_in_use/skipped_not_found。参数校验未通过时未执行删除，可查询后修正参数，不得原样重试。", "POST", em+"/backup-ips/delete", true, false, panelSchema{
+		"scope": poEnum("删除范围，必须明确选择；指定替换名单用selected", "selected", "faulty", "all"),
+		"ids":   panelSchema{"type": "array", "items": poID(), "maxItems": 500, "description": "scope=selected时必须传1至500个真实IP池ID；不是IP字符串、节点ID或监控ID。faulty/all省略。"},
+	}, "scope")
 	return out
 }
 

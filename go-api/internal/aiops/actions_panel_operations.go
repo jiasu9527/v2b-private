@@ -222,6 +222,9 @@ func (s *Service) executePanelOperation(ctx context.Context, a Action, snapshot 
 				// This marker originates in the private HTTP adapter, never from an
 				// upstream response body or a model-supplied status. Failures after
 				// dispatch remain unknown regardless of their HTTP status.
+				if panelError.NotExecuted && code == "ip_pool_invalid_arguments" {
+					return "failed", panelPreflightOutput(code), message
+				}
 				if panelError.NotExecuted && strings.HasPrefix(code, "dns_") {
 					if panelError.Retryable && oneOf(code, "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed") && attempt < operationMaxAttempts {
 						if err := readToolRetryDelay(ctx, attempt); err != nil {

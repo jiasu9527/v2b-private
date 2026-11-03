@@ -245,3 +245,68 @@ func TestAIPanelRecoveryStopOrRevokePostgres(t *testing.T) {
 		})
 	}
 }
+
+func TestAIPoolBulkDeletePreflightCorrectionPostgres(t *testing.T) {
+	f := setupStaffAIFixture(t)
+	runtime := panelRecoveryRuntime(&PanelOperationError{Status: 400, Code: "ip_pool_invalid_arguments", NotExecuted: true})
+	runtime.ops = []PanelOperation{fixtureOperation("ip_pool.delete_many", "/ip-pool/delete", true, false), fixtureOperation("ip_pool.list", "/ip-pool/list", false, false)}
+	f.s.SetPanelOperations(runtime)
+	var rounds atomic.Int32
+	first := panelRecoveryCall("preflight", "propose_panel_operation", "ip_pool.delete_many", `{"scope":"selected","ids":[]}`)
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request completionRequest
+		if json.NewDecoder(r.Body).Decode(&request) != nil {
+			t.Error("invalid relay request")
+			w.WriteHeader(400)
+			return
+		}
+		switch rounds.Add(1) {
+		case 1:
+			sshRecoveryReply(w, first, panelRecoveryCall("stale-batch", "propose_panel_operation", "ip_pool.delete_many", `{"scope":"all"}`))
+		case 2:
+			if got := sshRecoveryToolResult(t, request, "preflight"); got["status"] != "failed" || got["recovery_instruction"] != panelPreflightRecoveryInstruction {
+				t.Error("missing preflight result", got)
+			}
+			if got := sshRecoveryToolResult(t, request, "stale-batch"); got["status"] != "skipped" {
+				t.Error("stale batch executed", got)
+			}
+			replay := first
+			replay.ID = "same-parameters"
+			replay.Function.Arguments = `{ "reason":"a different reason", "parameters": {"scope":"selected","ids":[]}, "operation":"ip_pool.delete_many" }`
+			sshRecoveryReply(w, replay, panelRecoveryCall("replay-batch", "panel_query", "ip_pool.list", `{}`))
+		case 3:
+			if got := sshRecoveryToolResult(t, request, "same-parameters"); got["code"] != "panel_operation_already_failed" {
+				t.Error("same request retried", got)
+			}
+			if got := sshRecoveryToolResult(t, request, "replay-batch"); got["status"] != "skipped" {
+				t.Error("repeat batch not skipped", got)
+			}
+			sshRecoveryReply(w, panelRecoveryCall("inspect", "panel_query", "ip_pool.list", `{}`))
+		case 4:
+			sshRecoveryReply(w, panelRecoveryCall("corrected", "propose_panel_operation", "ip_pool.delete_many", `{"scope":"selected","ids":[180,181]}`))
+		case 5:
+			if got := sshRecoveryToolResult(t, request, "corrected"); got["status"] != "succeeded" {
+				t.Error("corrected request failed", got)
+			}
+			sshRecoveryReply(w)
+		default:
+			t.Error("unexpected relay call")
+			sshRecoveryReply(w)
+		}
+	}))
+	defer relay.Close()
+	started := sshRecoverySend(t, f, relay.URL)
+	detail := sshRecoveryWait(t, f, started.Session.ID)
+	if detail.Turns[0].Status != "completed" || rounds.Load() != 5 || runtime.count() != 3 {
+		t.Fatalf("turn=%+v rounds=%d executes=%d", detail.Turns[0], rounds.Load(), runtime.count())
+	}
+	actions, err := f.s.ListActions(context.Background(), f.staff, started.Session.ID)
+	if err != nil || len(actions) != 2 {
+		t.Fatal("unexpected actions", actions, err)
+	}
+	statuses := []string{actions[0].Status, actions[1].Status}
+	sort.Strings(statuses)
+	if strings.Join(statuses, ",") != "failed,succeeded" {
+		t.Fatal("action status rewritten", statuses)
+	}
+}

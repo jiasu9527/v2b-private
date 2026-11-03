@@ -116,9 +116,15 @@ func handleClientEntryBackupIPBulkDelete(w http.ResponseWriter, r *http.Request,
 	}
 	var request admin.ClientEntryBackupIPBulkDeleteRequest
 	if !decodeStrictDNSFailoverJSON(w, r, &request) {
+		capturePanelOperationPreflight(r.Context(), "ip_pool_invalid_arguments", false)
 		return true
 	}
-	result, err := backupService.BulkDeleteClientEntryBackupIPs(r.Context(), request)
+	normalized, err := admin.NormalizeClientEntryBackupIPBulkDeleteRequest(request)
+	if err != nil {
+		capturePanelOperationPreflight(r.Context(), "ip_pool_invalid_arguments", false)
+		return writeClientEntryBackupIPError(w, err)
+	}
+	result, err := backupService.BulkDeleteClientEntryBackupIPs(r.Context(), normalized)
 	if err != nil {
 		return writeClientEntryBackupIPError(w, err)
 	}

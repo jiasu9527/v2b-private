@@ -149,3 +149,20 @@ func TestAIPanelPreflightErrorRequiresTrustedMarkerAndSafeCode(t *testing.T) {
 		}
 	}
 }
+
+func TestAIPoolPreflightSafeErrorDoesNotTrustStatusOrBody(t *testing.T) {
+	for _, trusted := range []bool{false, true} {
+		err := &PanelOperationError{Status: 400, Code: "ip_pool_invalid_arguments", Message: "PRIVATE_SENTINEL", NotExecuted: trusted, Retryable: true}
+		out := toolErrorContent(safeAIError(err))
+		if strings.Contains(out, "PRIVATE_SENTINEL") {
+			t.Fatal("raw cause leaked", out)
+		}
+		if trusted {
+			if !strings.Contains(out, "ip_pool_invalid_arguments") || !strings.Contains(out, "未执行删除") {
+				t.Fatal("classification lost", out)
+			}
+		} else if strings.Contains(out, "未执行删除") {
+			t.Fatal("untrusted failure claimed not executed", out)
+		}
+	}
+}

@@ -50,6 +50,8 @@ func (e *PanelOperationError) Error() string {
 func panelOperationErrorText(e *PanelOperationError) (string, string) {
 	if e.NotExecuted {
 		switch e.Code {
+		case "ip_pool_invalid_arguments":
+			return e.Code, "IP池批量删除参数校验失败，未执行删除；scope必填，指定名单须用selected并传非空ids，faulty/all不得传非空ids。请查询目录并修正参数，不要原样重试"
 		case "dns_invalid_arguments":
 			return e.Code, "DNS 参数未通过校验，未发送写请求；请查询域名与线路信息后修正参数"
 		case "dns_domain_metadata":
