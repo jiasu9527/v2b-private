@@ -1,5 +1,6 @@
 export type SubscribeGuardFilters = {
   account: string;
+  ip: string;
   account_match: 'contains' | 'exact';
   entry: string;
   ua: string;
@@ -13,11 +14,11 @@ export type SubscribeGuardFilters = {
 export type EntrySearchOption = { value: string; label: string; disabled: boolean };
 
 export function emptyGuardFilters(): SubscribeGuardFilters {
-  return { account: '', account_match: 'contains', entry: '', ua: '', ua_match: 'contains', result: 'all', sort: 'last_at' };
+  return { ip: '', account: '', account_match: 'contains', entry: '', ua: '', ua_match: 'contains', result: 'all', sort: 'last_at' };
 }
 
 export function normalizedGuardFilters(filters: SubscribeGuardFilters): SubscribeGuardFilters {
-  return { ...filters, account: filters.account.trim(), ua: filters.ua.trim(), entry: filters.entry || '' };
+  return { ...filters, ip: (filters.ip || '').trim(), account: filters.account.trim(), ua: filters.ua.trim(), entry: filters.entry || '' };
 }
 
 export function entrySearchSelection(value: string): { policy_id?: number; group_id?: number } {
@@ -33,7 +34,7 @@ export function guardFilterError(input: SubscribeGuardFilters): string {
   const { start_at: start, end_at: end } = filters;
   if ((start === undefined) !== (end === undefined)) return '请选择完整的开始时间和结束时间';
   if (start !== undefined && (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end! <= start)) return '结束时间必须晚于开始时间';
-  if (!filters.account && !filters.entry && !filters.ua && start === undefined && filters.result === 'all') return '请至少填写一项筛选条件，也可以选择最近 24 小时';
+  if (!filters.ip && !filters.account && !filters.entry && !filters.ua && start === undefined && filters.result === 'all') return '请至少填写一项筛选条件，也可以选择最近 24 小时';
   return '';
 }
 
@@ -45,6 +46,7 @@ export function guardSearchParams(filters: SubscribeGuardFilters, current = 1, p
     ...entrySearchSelection(normalized.entry), result: normalized.result, sort: normalized.sort,
     current: Math.max(1, Math.floor(current) || 1), page_size: Math.max(1, Math.min(100, Math.floor(pageSize) || 20)),
   };
+  if (normalized.ip) params.ip = normalized.ip;
   if (normalized.account) { params.account = normalized.account; params.account_match = normalized.account_match; }
   if (normalized.ua) { params.ua = normalized.ua; params.ua_match = normalized.ua_match; }
   if (normalized.start_at !== undefined) { params.start_at = normalized.start_at; params.end_at = normalized.end_at!; }
@@ -53,7 +55,7 @@ export function guardSearchParams(filters: SubscribeGuardFilters, current = 1, p
 
 export function guardFilterFingerprint(filters: SubscribeGuardFilters): string {
   const next = normalizedGuardFilters(filters);
-  return JSON.stringify([next.account, next.account ? next.account_match : '', next.entry, next.ua, next.ua ? next.ua_match : '', next.start_at ?? null, next.end_at ?? null, next.result, next.sort]);
+  return JSON.stringify([next.ip, next.account, next.account ? next.account_match : '', next.entry, next.ua, next.ua ? next.ua_match : '', next.start_at ?? null, next.end_at ?? null, next.result, next.sort]);
 }
 
 export function entrySearchOptions(policies: any): EntrySearchOption[] {

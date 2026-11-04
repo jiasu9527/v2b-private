@@ -94,3 +94,11 @@ test('page integration keeps a static component, applied pagination, cancellatio
   assert.ok(component.includes('入口规则无法确定'));
   for (const text of ['不是历史分组', '同一条请求', '不影响总统计和排行榜', '已放行不代表订阅下载成功', '防护关闭期间', '0 次', '下表及翻页仍使用上次查询条件']) assert.ok(component.includes(text), text);
 });
+
+test('source IP is an independent event filter and persists across pagination', () => {
+  const filters = { ...emptyGuardFilters(), ip: ' 2001:db8::1 ' };
+  assert.equal(guardFilterError(filters), '');
+  assert.equal(guardSearchParams(filters, 2).ip, '2001:db8::1');
+  assert.notEqual(guardFilterFingerprint(filters), guardFilterFingerprint({ ...filters, ip: '192.0.2.7' }));
+  assert.equal(guardFilterFingerprint(filters), guardFilterFingerprint({ ...filters, ip: '2001:db8::1' }));
+});

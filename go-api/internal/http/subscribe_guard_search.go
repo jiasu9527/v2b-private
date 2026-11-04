@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"sort"
@@ -38,12 +39,19 @@ type subscribeGuardSearchLoader interface {
 }
 
 type subscribeGuardSearchQuery struct {
-	Account, AccountMatch, UA, UAMatch, Result, Sort     string
+	Account, AccountMatch, UA, UAMatch, Result, Sort, IP string
 	PolicyID, GroupID, StartAt, EndAt, Current, PageSize int64
 }
 
 func parseSubscribeGuardSearchQuery(values url.Values) (subscribeGuardSearchQuery, error) {
 	q := subscribeGuardSearchQuery{Account: strings.TrimSpace(values.Get("account")), UA: strings.TrimSpace(values.Get("ua")), AccountMatch: values.Get("account_match"), UAMatch: values.Get("ua_match"), Result: values.Get("result"), Sort: values.Get("sort")}
+	if raw := strings.TrimSpace(values.Get("ip")); raw != "" {
+		address, err := netip.ParseAddr(raw)
+		if err != nil || address.Zone() != "" {
+			return q, errors.New("来源 IP 格式无效，请输入单个 IPv4 或 IPv6 地址，不含端口或网段")
+		}
+		q.IP = address.Unmap().String()
+	}
 	if len(q.Account) > 255 || len(q.UA) > 1024 {
 		return q, errors.New("搜索内容过长")
 	}
@@ -104,10 +112,16 @@ func parseSubscribeGuardSearchQuery(values url.Values) (subscribeGuardSearchQuer
 }
 
 func (q subscribeGuardSearchQuery) includeWithoutEvents() bool {
-	return (q.Account != "" || q.PolicyID > 0) && q.UA == "" && q.StartAt == 0 && q.EndAt == 0 && q.Result == "all"
+	return (q.Account != "" || q.PolicyID > 0) && q.IP == "" && q.UA == "" && q.StartAt == 0 && q.EndAt == 0 && q.Result == "all"
 }
 
 func (q subscribeGuardSearchQuery) matchesEvent(event subscribeGuardEvent) bool {
+	if q.IP != "" {
+		address, err := netip.ParseAddr(strings.TrimSpace(event.IP))
+		if err != nil || address.Zone() != "" || address.Unmap().String() != q.IP {
+			return false
+		}
+	}
 	if q.StartAt > 0 && event.Time < q.StartAt {
 		return false
 	}

@@ -374,3 +374,38 @@ func TestSubscribeGuardSearchOversizeDiskAndEvaluationCancellation(t *testing.T)
 		t.Fatalf("cancel lost %v", err)
 	}
 }
+
+func TestSubscribeGuardSearchSourceIP(t *testing.T) {
+	for _, raw := range []string{"192.0.2.7:443", "192.0.2.0/24", "example.com", "fe80::1%eth0", "not-an-ip"} {
+		if _, err := parseSubscribeGuardSearchQuery(url.Values{"ip": {raw}}); err == nil {
+			t.Fatal("accepted invalid IP", raw)
+		}
+	}
+	q, err := parseSubscribeGuardSearchQuery(url.Values{"ip": {" ::ffff:192.0.2.7 "}, "account": {"1"}, "ua": {"Forest"}})
+	if err != nil || q.IP != "192.0.2.7" || q.includeWithoutEvents() {
+		t.Fatal(q, err)
+	}
+	events := []subscribeGuardEvent{
+		{UserID: 1, IP: "192.0.2.7", UA: "Forest", Time: 100},
+		{UserID: 1, IP: "::ffff:192.0.2.7", UA: "Forest", Time: 101},
+		{UserID: 2, IP: "192.0.2.70", UA: "Forest", Time: 102},
+		{UserID: 2, IP: "192.0.2.7", UA: "Clash", Time: 103},
+	}
+	result, err := aggregateSubscribeGuardSearch(context.Background(), q, events, guardSearchHTTPTestSnapshot(1, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := guardSearchRows(t, result)
+	if len(rows) != 1 || rows[0]["user_id"] != int64(1) || rows[0]["count"] != int64(2) {
+		t.Fatal(result)
+	}
+	q.Account, q.UA = "", ""
+	result, err = aggregateSubscribeGuardSearch(context.Background(), q, events, guardSearchHTTPTestSnapshot(1, 2, 3))
+	if err != nil || result["total"] != int64(2) || result["matched_events"] != int64(3) {
+		t.Fatal("shared source IP must return both users, excluding nonmatching IP and users without events", result, err)
+	}
+	q, err = parseSubscribeGuardSearchQuery(url.Values{"ip": {"2001:0db8:0:0:0:0:0:1"}})
+	if err != nil || !q.matchesEvent(subscribeGuardEvent{IP: "2001:db8::1"}) || q.matchesEvent(subscribeGuardEvent{IP: "2001:db8::2"}) {
+		t.Fatal(q, err)
+	}
+}

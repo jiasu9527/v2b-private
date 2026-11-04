@@ -153,6 +153,7 @@ export default function SubscribeGuardSearch({ onUserDetail, onMatchDetail, stat
 
   const appliedSummary = applied ? [
     applied.account ? `${/^\d+$/.test(applied.account) ? 'ID 等于' : `邮箱${applied.account_match === 'exact' ? '等于' : '包含'}`} ${applied.account}` : '',
+    applied.ip ? `拉取来源 IP 等于 ${applied.ip}` : '',
     applied.entry ? (options.find((option) => option.value === applied.entry)?.label || applied.entry) : '',
     applied.ua ? `UA ${applied.ua_match === 'equals' ? '等于' : applied.ua_match === 'not_contains' ? '不包含' : '包含'} ${applied.ua}` : '',
     applied.start_at !== undefined ? `${dateText(applied.start_at)} ≤ 拉取时间 < ${dateText(applied.end_at)}` : '全部保留期',
@@ -163,7 +164,7 @@ export default function SubscribeGuardSearch({ onUserDetail, onMatchDetail, stat
   return <Card className="mt-4" size="small" title="用户组合筛选">
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Alert type="info" showIcon style={{ background: '#f5f7fa', borderColor: '#d9dfe7' }} message="条件同时满足（AND），仅影响下方用户结果，不影响总统计和排行榜。" description={<>
-        按当前入口规则和用户状态、结合匹配请求的 UA 重算，不是历史分组，也不等于节点最终下发结果。UA、时间、放行 / 拦截条件必须命中同一条请求。
+        按当前入口规则和用户状态、结合匹配请求的 UA 重算，不是历史分组，也不等于节点最终下发结果。来源 IP、UA、时间、放行 / 拦截条件必须命中同一条请求。来源 IP 是访问订阅时的地址，不是下发的节点入口 IP。
         仅按账号 / 入口规则查询可包含无请求记录用户（0 次）；有请求条件时必须有匹配日志。防护关闭期间及日志保留期外无法追溯；已放行不代表订阅下载成功。
       </>} />
       <Form layout="vertical" onFinish={() => void search(draft)}>
@@ -179,6 +180,9 @@ export default function SubscribeGuardSearch({ onUserDetail, onMatchDetail, stat
               <Select aria-label="当前命中入口规则" allowClear showSearch optionFilterProp="label" style={{ width: '100%' }} loading={policyLoading} value={draft.entry || undefined} onChange={(entry) => patchDraft({ entry: entry || '' })} placeholder="不限；可选普通规则或具体固定子组" options={options} />
               <Button title="刷新入口规则选项" aria-label="刷新入口规则选项" loading={policyLoading} icon={<ReloadOutlined />} onClick={() => setPolicyRefresh((previous) => previous + 1)} />
             </Space.Compact>
+          </Form.Item></Col>
+          <Col xs={24} lg={12}><Form.Item label="拉取来源 IP（精确匹配）">
+            <Input aria-label="拉取来源 IP" allowClear value={draft.ip} onChange={(event) => patchDraft({ ip: event.target.value })} placeholder="单个 IPv4 / IPv6，不含端口；留空不限" maxLength={64} />
           </Form.Item></Col>
           <Col xs={24} lg={12}><Form.Item label="请求 UA（忽略大小写）">
             <Space.Compact style={{ width: '100%' }}>
