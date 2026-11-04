@@ -50,6 +50,10 @@ func (e *PanelOperationError) Error() string {
 func panelOperationErrorText(e *PanelOperationError) (string, string) {
 	if e.NotExecuted {
 		switch e.Code {
+		case "entry_order_invalid_arguments":
+			return e.Code, "入口排序参数校验失败，未执行排序；请读取entry_rules.order取得真实kind/id和revision，用entry_rules.move将选中行移到after锚点后；完整sort必须包含所有普通规则和当前叶子，不能传父容器或仅A/B，不要原样重试"
+		case "entry_order_conflict":
+			return e.Code, "入口排序版本或可见行已变化，未执行排序；请重新读取entry_rules.order核对锚点和目标叶子，用最新revision重新规划，不能原样重试"
 		case "ip_pool_invalid_arguments":
 			return e.Code, "IP池批量删除参数校验失败，未执行删除；scope必填，指定名单须用selected并传非空ids，faulty/all不得传非空ids。请查询目录并修正参数，不要原样重试"
 		case "dns_invalid_arguments":

@@ -166,3 +166,17 @@ func TestAIPoolPreflightSafeErrorDoesNotTrustStatusOrBody(t *testing.T) {
 		}
 	}
 }
+
+func TestAIEntryOrderSafeErrorRequiresTrustedMarker(t *testing.T) {
+	for _, code := range []string{"entry_order_invalid_arguments", "entry_order_conflict"} {
+		for _, trusted := range []bool{true, false} {
+			raw := toolErrorContent(safeAIError(&PanelOperationError{Status: 409, Code: code, Message: "PRIVATE_SENTINEL", NotExecuted: trusted, Retryable: true}))
+			if strings.Contains(raw, "PRIVATE_SENTINEL") || strings.Contains(raw, "未执行排序") != trusted {
+				t.Fatal(raw)
+			}
+			if trusted && !strings.Contains(raw, code) {
+				t.Fatal("trusted recovery code lost", raw)
+			}
+		}
+	}
+}

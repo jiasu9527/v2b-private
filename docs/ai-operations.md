@@ -451,3 +451,16 @@ Key 应由临时环境或秘密管理设施注入，不写进源码、测试快�
 `entry_split.preview` / `entry_split.create` 现在暴露后台页面已支持的历史参数。先通过 `panel_query` 查询 `entry_split.preview`，传 `history_host/history_from/history_to`；将返回的 `history_host/from/to/snapshot_hash` 原样对应到创建请求的 `history_host/history_from/history_to/snapshot_hash`。历史模式不用 `minutes`，不能替换成近期任意订阅用户；名单由后端重查并用 hash 校验，不用模型回传全部用户 ID。`entry_evidence.delivery_users` 可分页核对历史身份。创建传明确的共同 `members`、名称、A/B入口；`history_single_group=true` 时只建一个组并省略B。创建独立规则不需要删除旧规则或解除合集关系。
 
 这只是补齐现有页面接口的 AI 契约，不新增永久快照ID，不自动继承不同来源的UA，也不自动完成特殊规则保护排序。新规则默认追加，需读取当前顺序、保留指定置顶规则，必要时排序并按真实用户/UA/节点模拟验证；未验证不得声称已生效。若无法用共同节点/条件表达用户要求的差异，应说明边界而非扩大范围。
+
+### 入口规则与固定叶子的相对排序
+
+旧 `entry_rules.sort` 对应后台拖拽保存，是完整全表替换：`items` 必须包含全部普通 `policy` 和当前叶子 `split_group`（含停用项），不能仅传新建 A/B；二分父容器和历史非叶子不参与全局排序，`policy_id` 不是叶子 ID。工具 schema 现已明确 `kind` 枚举与这个全量约束。
+
+AI 调整少量分组优先使用：
+
+1. `panel_query` → `entry_rules.order`，分页读取真实 `kind/id/name/policy_name/sort` 和全表 `revision`。后续页传 `expected_revision`，不一致返回 409，不能拼接不同版本；该只读操作也允许在本轮只读恢复时核对。
+2. `propose_panel_operation` → `entry_rules.move`，传 `items`（要移动的 A/B 叶子，最多 100 项）、`after`（目标锚点，如用户指定的特殊置顶规则）和 `expected_revision`。例如 `{"items":[{"kind":"split_group","id":201},{"kind":"split_group","id":202}],"after":{"kind":"policy","id":7},"expected_revision":"从order取得的64位版本"}`，ID 只是格式示例，不可据此执行。
+3. 后端在同一排序锁与事务中核实版本和可见项，按 `items` 次序插到 `after` 后，保留未选行相对顺序。不会删除原规则、更改条件、节点、固定分配或合集。相同位置用最新版本提交返回 `changed=false`，不重复写。
+4. 成功后回读顺序，按真实用户、节点、UA 模拟验证分流。仅修改顺序不代表已经证明最终下发，特殊规则必须选对真实锚点，不能用名称推测 ID。
+
+纯参数校验拒绝或前置版本/可见项冲突通过内部可信标记返回 `entry_order_invalid_arguments` / `entry_order_conflict`、`not_executed/panel_preflight`，可查询、修正后继续，禁止原样重放；业务写入或事务提交结果不明仍为 `unknown`，不能把普通 HTTP 400/409 或返回文本伪装成未执行。旧 unknown 动作不会被此更新自动改状态或重跑。无需前端构建或新增数据表。

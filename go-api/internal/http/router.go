@@ -864,6 +864,14 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminClientEntryUserPolicyEnabled(w, r, state.session, state.admin) {
 				return
 			}
+		case r.URL.Path == adminPrefix+"/server/client-entry-user-policy/order":
+			if handleAdminClientEntryOrder(w, r, state.session, state.admin, false) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/server/client-entry-user-policy/move":
+			if handleAdminClientEntryOrder(w, r, state.session, state.admin, true) {
+				return
+			}
 		case r.URL.Path == adminPrefix+"/server/client-entry-user-policy/sort":
 			if handleAdminClientEntryUserPolicySort(w, r, state.session, state.admin) {
 				return

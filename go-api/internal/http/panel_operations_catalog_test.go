@@ -61,7 +61,7 @@ func TestPanelOperationCatalogContracts(t *testing.T) {
 			t.Errorf("log deletion exposed to staff: %s", op.Name)
 		}
 	}
-	for _, name := range []string{"orders.cancel", "orders.refund", "plans.save", "nodes.v2node.save", "dns.record_save", "entry_monitors.save", "ip_pool.create", "apple.order_refund", "migration.apply", "subscribe_guard.search", "config.save"} {
+	for _, name := range []string{"orders.cancel", "orders.refund", "plans.save", "nodes.v2node.save", "dns.record_save", "entry_monitors.save", "ip_pool.create", "apple.order_refund", "migration.apply", "subscribe_guard.search", "config.save", "entry_rules.order", "entry_rules.move"} {
 		if !names[name] {
 			t.Errorf("missing backend capability %s", name)
 		}
@@ -70,7 +70,8 @@ func TestPanelOperationCatalogContracts(t *testing.T) {
 
 func TestPanelOperationDeploymentCredentialContracts(t *testing.T) {
 	operations := panelOperationCatalog()
-	if len(operations) != 226 {
+	// Includes the two independent order-query/relative-move operations.
+	if len(operations) != 228 {
 		t.Fatalf("credential access must not duplicate backend operations: got %d", len(operations))
 	}
 	byName := map[string]aiops.PanelOperation{}

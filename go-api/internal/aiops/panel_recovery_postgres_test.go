@@ -327,3 +327,62 @@ func TestAIPoolBulkDeletePreflightCorrectionPostgres(t *testing.T) {
 		t.Fatal("action status rewritten", statuses)
 	}
 }
+
+func TestAIEntryOrderPreflightCorrectionPostgres(t *testing.T) {
+	for _, code := range []string{"entry_order_invalid_arguments", "entry_order_conflict"} {
+		t.Run(code, func(t *testing.T) {
+			f := setupStaffAIFixture(t)
+			runtime := panelRecoveryRuntime(&PanelOperationError{Status: 409, Code: code, NotExecuted: true})
+			runtime.ops = []PanelOperation{fixtureOperation("entry_rules.move", "/server/client-entry-user-policy/move", true, false), fixtureOperation("entry_rules.order", "/server/client-entry-user-policy/order", false, false)}
+			f.s.SetPanelOperations(runtime)
+			var rounds atomic.Int32
+			relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request completionRequest
+				if json.NewDecoder(r.Body).Decode(&request) != nil {
+					t.Error("invalid relay request")
+					w.WriteHeader(400)
+					return
+				}
+				switch rounds.Add(1) {
+				case 1:
+					sshRecoveryReply(w, panelRecoveryCall("stale", "propose_panel_operation", "entry_rules.move", `{"items":[{"kind":"split_group","id":2}],"after":{"kind":"policy","id":2},"expected_revision":"old"}`))
+				case 2:
+					got := sshRecoveryToolResult(t, request, "stale")
+					if got["status"] != "failed" || got["recovery_instruction"] != panelPreflightRecoveryInstruction {
+						t.Error("preflight failure stopped task", got)
+					}
+					sshRecoveryReply(w, panelRecoveryCall("inspect", "panel_query", "entry_rules.order", `{}`))
+				case 3:
+					got := sshRecoveryToolResult(t, request, "inspect")
+					if got["status"] == "error" || got["status"] == "skipped" {
+						t.Error("inspection blocked", got)
+					}
+					sshRecoveryReply(w, panelRecoveryCall("corrected", "propose_panel_operation", "entry_rules.move", `{"items":[{"kind":"split_group","id":2}],"after":{"kind":"policy","id":2},"expected_revision":"refreshed"}`))
+				case 4:
+					if got := sshRecoveryToolResult(t, request, "corrected"); got["status"] != "succeeded" {
+						t.Error("corrected move blocked", got)
+					}
+					sshRecoveryReply(w)
+				default:
+					t.Error("unexpected relay call")
+					sshRecoveryReply(w)
+				}
+			}))
+			defer relay.Close()
+			started := sshRecoverySend(t, f, relay.URL)
+			detail := sshRecoveryWait(t, f, started.Session.ID)
+			if detail.Turns[0].Status != "completed" || rounds.Load() != 4 || runtime.count() != 3 {
+				t.Fatal(detail.Turns[0], rounds.Load(), runtime.count())
+			}
+			actions, err := f.s.ListActions(context.Background(), f.staff, started.Session.ID)
+			if err != nil || len(actions) != 2 {
+				t.Fatal(actions, err)
+			}
+			statuses := []string{actions[0].Status, actions[1].Status}
+			sort.Strings(statuses)
+			if strings.Join(statuses, ",") != "failed,succeeded" {
+				t.Fatal(statuses)
+			}
+		})
+	}
+}

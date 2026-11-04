@@ -533,39 +533,15 @@ FOR UPDATE OF split_group`)
 		return false, errors.New("保存排序失败")
 	}
 	if len(actual) != len(seen) {
-		return false, errors.New("规则列表已变化，请刷新后重试")
+		return false, ErrClientEntryOrderConflict
 	}
 	for key := range seen {
 		if _, exists := actual[key]; !exists {
-			return false, errors.New("规则列表已变化，请刷新后重试")
+			return false, ErrClientEntryOrderConflict
 		}
 	}
 
-	now := time.Now().Unix()
-	for index, item := range items {
-		nextSort := int64(index+1) * clientEntryRuleSortStep
-		var result sql.Result
-		if item.Kind == "policy" {
-			result, err = tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
-SET sort = $2, updated_at = $3
-WHERE id = $1 AND mode <> 'split'`, item.ID, nextSort, now)
-		} else {
-			result, err = tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy_split_group split_group
-SET global_sort = $2, updated_at = $3
-WHERE split_group.id = $1
-  AND EXISTS (
-	SELECT 1 FROM v2_client_entry_user_policy policy
-	WHERE policy.id = split_group.policy_id AND policy.mode = 'split'
-  )
-  AND NOT EXISTS (
-	SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = split_group.id
-  )`, item.ID, nextSort, now)
-		}
-		if err != nil || requireClientEntryRuleAffected(result, "规则") != nil {
-			return false, errors.New("保存排序失败")
-		}
-	}
-	if err := syncClientEntrySplitPolicySorts(ctx, tx); err != nil {
+	if err := persistClientEntryVisibleOrder(ctx, tx, items, time.Now().Unix()); err != nil {
 		return false, errors.New("保存排序失败")
 	}
 	if err := tx.Commit(); err != nil {
@@ -843,4 +819,36 @@ func requireClientEntryRuleAffected(result sql.Result, label string) error {
 
 func clientEntryRuleRawInt64(raw []byte) (int64, error) {
 	return strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
+}
+
+// Persist only ordering columns; callers hold the visible-order and row locks.
+func persistClientEntryVisibleOrder(ctx context.Context, tx *sql.Tx, items []ClientEntryUserPolicySortItem, now int64) error {
+	var err error
+	for index, item := range items {
+		nextSort := int64(index+1) * clientEntryRuleSortStep
+		var result sql.Result
+		if item.Kind == "policy" {
+			result, err = tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy
+SET sort = $2, updated_at = $3
+WHERE id = $1 AND mode <> 'split'`, item.ID, nextSort, now)
+		} else {
+			result, err = tx.ExecContext(ctx, `UPDATE v2_client_entry_user_policy_split_group split_group
+SET global_sort = $2, updated_at = $3
+WHERE split_group.id = $1
+  AND EXISTS (
+	SELECT 1 FROM v2_client_entry_user_policy policy
+	WHERE policy.id = split_group.policy_id AND policy.mode = 'split'
+  )
+  AND NOT EXISTS (
+	SELECT 1 FROM v2_client_entry_user_policy_split_group child WHERE child.parent_id = split_group.id
+  )`, item.ID, nextSort, now)
+		}
+		if err != nil || requireClientEntryRuleAffected(result, "规则") != nil {
+			return errors.New("保存排序失败")
+		}
+	}
+	if err := syncClientEntrySplitPolicySorts(ctx, tx); err != nil {
+		return errors.New("保存排序失败")
+	}
+	return nil
 }

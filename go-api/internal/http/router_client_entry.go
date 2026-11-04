@@ -1196,6 +1196,9 @@ func handleAdminClientEntryUserPolicySave(w http.ResponseWriter, r *http.Request
 }
 
 func handleAdminClientEntryUserPolicySort(w http.ResponseWriter, r *http.Request, sessionService session.Service, adminService admin.Service) bool {
+	if !requireHTTPMethod(w, r, http.MethodPost) {
+		return true
+	}
 	if _, ok := authenticateRequest(w, r, sessionService, true); !ok {
 		return true
 	}
@@ -1210,7 +1213,8 @@ func handleAdminClientEntryUserPolicySort(w http.ResponseWriter, r *http.Request
 		} `json:"items"`
 	}
 	if err := readJSONBody(r, &payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+		capturePanelOperationPreflight(r.Context(), "entry_order_invalid_arguments", false)
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "排序请求格式无效"})
 		return true
 	}
 	items := make([]admin.ClientEntryUserPolicySortItem, 0, len(payload.Items))
@@ -1218,14 +1222,16 @@ func handleAdminClientEntryUserPolicySort(w http.ResponseWriter, r *http.Request
 		id, err := jsonNumberToInt64Pointer(raw.ID)
 		kind := strings.ToLower(strings.TrimSpace(raw.Kind))
 		if err != nil || id == nil || *id <= 0 || (kind != "policy" && kind != "split_group") {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"message": "规则顺序无效"})
-			return true
+			return writeClientEntryOrderError(w, r, admin.ErrClientEntryOrderInvalid)
 		}
 		items = append(items, admin.ClientEntryUserPolicySortItem{Kind: kind, ID: *id})
 	}
+	if err := admin.ValidateClientEntryOrderItems(items); err != nil {
+		return writeClientEntryOrderError(w, r, err)
+	}
 	sorted, err := adminService.SortClientEntryUserPolicyRows(r.Context(), items)
 	if err != nil {
-		return handleAdminError(w, err)
+		return writeClientEntryOrderError(w, r, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": sorted})
 	return true

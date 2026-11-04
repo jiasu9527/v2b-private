@@ -288,10 +288,10 @@ type panelOperationPreflightCapture struct {
 
 func capturePanelOperationPreflight(ctx context.Context, code string, retryable bool) {
 	switch code {
-	case "dns_invalid_arguments", "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed", "ip_pool_invalid_arguments":
+	case "dns_invalid_arguments", "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed", "ip_pool_invalid_arguments", "entry_order_invalid_arguments", "entry_order_conflict":
 		if capture, ok := ctx.Value(panelOperationPreflightKey{}).(*panelOperationPreflightCapture); ok {
 			capture.code = code
-			capture.retryable = retryable && code != "dns_invalid_arguments" && code != "ip_pool_invalid_arguments"
+			capture.retryable = retryable && code != "dns_invalid_arguments" && code != "ip_pool_invalid_arguments" && code != "entry_order_invalid_arguments" && code != "entry_order_conflict"
 		}
 	}
 }
