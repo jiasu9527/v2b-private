@@ -113,6 +113,9 @@ func TestAIContextPostgresRecoversOversizedHistory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	originalTask := insertTurn(-1, "completed")
+	insertMessage(originalTask, providerMessage{Role: "user", Content: "ORIGINAL-TASK-MARKER：只替换20个地址，保留40个，不修改默认网关"})
+	insertMessage(originalTask, providerMessage{Role: "assistant", Content: "OLD-ANSWER-NOT-LOADED"})
 	for index := 0; index < 10; index++ {
 		turn := insertTurn(index, "completed")
 		callID := fmt.Sprintf("context-tool-%d", index)
@@ -142,6 +145,9 @@ func TestAIContextPostgresRecoversOversizedHistory(t *testing.T) {
 		t.Fatalf("oversized history should be recoverable: %v", err)
 	}
 	raw, err := json.Marshal(messages)
+	if !strings.Contains(string(raw), "ORIGINAL-TASK-MARKER") || strings.Contains(string(raw), "OLD-ANSWER-NOT-LOADED") {
+		t.Fatal("older operator task not loaded independently of full transcript window")
+	}
 	if err != nil || len(raw) > 240000 || !utf8.Valid(raw) || len(messages) >= 43 {
 		t.Fatalf("history not bounded or invalid: bytes=%d messages=%d err=%v", len(raw), len(messages), err)
 	}
@@ -167,7 +173,7 @@ func TestAIContextPostgresRecoversOversizedHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	var oldCount int
-	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_ai_message WHERE session_id=$1`, session).Scan(&oldCount); err != nil || oldCount != 40 {
+	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_ai_message WHERE session_id=$1`, session).Scan(&oldCount); err != nil || oldCount != 42 {
 		t.Fatal("fixture history count", oldCount, err)
 	}
 	result, err := s.SendMessage(ctx, actor, SendMessageRequest{SessionID: session, Model: DefaultModels[0], Content: question, RequestID: "context-resume-" + marker})

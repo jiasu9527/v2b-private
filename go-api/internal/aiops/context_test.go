@@ -82,3 +82,39 @@ func TestAIContextTextTruncationPreservesUTF8(t *testing.T) {
 		}
 	}
 }
+
+func TestAIContextCompactionKeepsTaskConstraintsBeforeOldToolOutput(t *testing.T) {
+	messages := []providerMessage{{Role: "system", Content: "trusted policy"},
+		{Role: "user", Content: "新增20个地址，保留其余40个，不改默认网关；先查询现状再执行"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "large", Type: "function", Function: ToolFunction{Name: "panel_query", Arguments: `{}`}}}},
+		{Role: "tool", ToolCallID: "large", Content: strings.Repeat("old trace ", 1000)},
+		{Role: "assistant", Content: "old answer"},
+		{Role: "user", Content: "继续"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "latest", Type: "function", Function: ToolFunction{Name: "panel_query", Arguments: `{}`}}}},
+		{Role: "tool", ToolCallID: "latest", Content: `{"status":"unknown","action_id":322}`},
+	}
+	out, err := compactProviderContext(messages, 2500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContextToolPairs(t, out)
+	raw, _ := json.Marshal(out)
+	for _, want := range []string{"保留其余40个", "不改默认网关", "继续", "unknown", "latest"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatal("lost task or newest execution truth", want, string(raw))
+		}
+	}
+	if strings.Contains(string(raw), "old trace") {
+		t.Fatal("retained bulky obsolete tools")
+	}
+	for _, m := range out {
+		if m.Role == "system" && strings.Contains(m.Content, "新增20个") {
+			t.Fatal("untrusted task promoted to system")
+		}
+	}
+	again, err := compactProviderContext(out, 2500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContextToolPairs(t, again)
+}

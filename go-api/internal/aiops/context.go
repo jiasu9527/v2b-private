@@ -174,6 +174,34 @@ func compactProviderContext(messages []providerMessage, budget int) ([]providerM
 	if fits(out) {
 		return out, nil
 	}
+	// Prefer retaining the operator's actual task/constraints over historical
+	// tool transcripts. Keep whole user messages, never truncated shell scripts
+	// or promoted system summaries. A bounded soft reserve still yields when
+	// the current request and latest tool batch need the space.
+	taskReserve := map[int]bool{}
+	remaining := min(16000, budget/4)
+	for i := current - 1; i >= 0; i-- {
+		m := source[i]
+		if m.Role != "user" || m.contextKind != "" || len(m.ToolCalls) != 0 {
+			continue
+		}
+		size := jsonSize(m) + 1
+		if size <= remaining {
+			taskReserve[i] = true
+			remaining -= size
+		}
+	}
+	for _, unit := range old {
+		for _, i := range unit.indexes {
+			if !taskReserve[i] {
+				keep[i] = false
+			}
+		}
+		out = build(true)
+		if fits(out) {
+			return out, nil
+		}
+	}
 	for _, unit := range append(old, recent...) {
 		for _, i := range unit.indexes {
 			keep[i] = false

@@ -287,7 +287,7 @@ func (s *Service) history(ctx context.Context, sessionID, currentTurnID int64) (
 	// Complete turns retain paired calls/results. Failed or interrupted turns
 	// retain only their original request: a following "continue" must not lose
 	// its task, but partial tool exchanges must never enter the next request.
-	rows, err := s.db.QueryContext(ctx, `SELECT turn.id,turn.status,message.role,message.content,message.tool_calls::TEXT,message.tool_call_id,message.content_cipher FROM v2_ai_message message JOIN v2_ai_turn turn ON turn.id=message.turn_id WHERE message.session_id=$1 AND (turn.id=$2 OR turn.id IN(SELECT id FROM v2_ai_turn WHERE session_id=$1 AND status IN('completed','pending') ORDER BY id DESC LIMIT 10) OR (message.role='user' AND turn.id IN(SELECT id FROM v2_ai_turn WHERE session_id=$1 AND status IN('failed','interrupted') ORDER BY id DESC LIMIT 10))) ORDER BY message.id`, sessionID, currentTurnID)
+	rows, err := s.db.QueryContext(ctx, `SELECT turn.id,turn.status,message.role,message.content,message.tool_calls::TEXT,message.tool_call_id,message.content_cipher FROM v2_ai_message message JOIN v2_ai_turn turn ON turn.id=message.turn_id WHERE message.session_id=$1 AND (turn.id=$2 OR turn.id IN(SELECT id FROM v2_ai_turn WHERE session_id=$1 AND status IN('completed','pending') ORDER BY id DESC LIMIT 10) OR (message.role='user' AND turn.id IN(SELECT id FROM v2_ai_turn WHERE session_id=$1 AND status IN('completed','pending','failed','interrupted') ORDER BY id DESC LIMIT 50))) ORDER BY message.id`, sessionID, currentTurnID)
 	if err != nil {
 		return nil, err
 	}
