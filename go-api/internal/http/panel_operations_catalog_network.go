@@ -61,8 +61,15 @@ func panelNetworkOperations() []aiops.PanelOperation {
 	add("entry_rules.enabled", "entries", "启用或停用指定入口规则，enabled=0或1", "POST", base+"/enabled", true, false, poFields("id:i enabled:i"), "id", "enabled")
 	add("entry_rules.sort", "entries", "排序入口规则或二分组，items逐项kind/id", "POST", base+"/sort", true, false, panelSchema{"items": poArray(poObj(poFields("kind id:i"), "kind", "id"))}, "items")
 	add("entry_rules.delete", "entries", "删除入口分配规则", "POST", base+"/drop", true, false, panelSchema{"id": poID()}, "id")
-	add("entry_split.preview", "entries", "按最近minutes分钟订阅拉取用户预览二分", "GET", base+"/split-preview", false, false, poFields("minutes:i"))
-	add("entry_split.create", "entries", "按最近订阅用户新建二分规则，填写两边入口地址", "POST", base+"/split-create", true, false, poMerge(poFields("name minutes:i entry_host_a entry_host_b resolve_entry_host:i enabled:i remarks"), panelSchema{"members": members}), "name", "minutes", "entry_host_a", "entry_host_b")
+	historyFields := panelSchema{
+		"history_host": poText("历史实际下发的入口IP/host；指定时跨原规则、分组、合集、UA、节点和端口取用户并集，不是请求来源IP"),
+		"history_from": poInt("历史查询开始Unix秒，包含开始；与history_to一起原样传递"),
+		"history_to":   poInt("历史查询结束Unix秒，不含结束；创建时必须使用预览返回值"),
+		"minutes":      poInt("仅未指定history_host时表示近期拉取窗口；不能用任意订阅拉取代替目标IP实际下发"),
+	}
+	add("entry_split.preview", "entries", "预览新建固定名单：指定history_host及history_from/history_to可按历史实际下发IP跨来源去重，返回现存user_count及snapshot_hash/from/to；只计完整成功响应。必须读取预览，不能沿用旧人数或猜hash；历史已删除账号不加入新组。未指定history_host才是最近minutes分钟任意订阅拉取模式", "GET", base+"/split-preview", false, false, historyFields)
+	add("entry_split.create", "entries", "与后台历史拉取IP页面相同：按历史实际下发IP名单新建独立固定组或平均二分，不要求原来源是单规则，来源属于合集也可选人。历史模式必须传预览返回的history_host/history_from=from/history_to=to/snapshot_hash，省略minutes；名单变化返回冲突需重查，不复制上千个ID。history_single_group=false或省略创建A/B，true只建一个组并省略entry_host_b。members必须明确选择且仅作用于这些共同节点，继承原端口；新规则不自动继承各来源UA或用户/节点差异，不能宣称已保留，无法表达时先说明。新规则默认追加，需核对排序并保留特殊置顶规则，不先删除/重建/移出旧规则或合集；创建成功后再按需排序并模拟验证。历史模式不是永久快照ID接口，只支持时间窗口加hash校验。非历史模式才传minutes", "POST", base+"/split-create", true, false, poMerge(historyFields, poFields("name entry_host_a entry_host_b resolve_entry_host:i enabled:i remarks snapshot_hash history_single_group:b"), panelSchema{"members": members}), "name", "members", "entry_host_a")
+
 	split := poFields("policy_id:i group_id:i entry_host_a entry_host_b use_backup_ip_pool:b")
 	convert := poMerge(split)
 	delete(convert, "group_id")

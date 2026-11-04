@@ -1,7 +1,10 @@
 package httpapi
 
 import (
+	"context"
+	"encoding/json"
 	"forest/go-api/internal/admin"
+	"forest/go-api/internal/aiops"
 	"forest/go-api/internal/config"
 	"forest/go-api/internal/session"
 	"net/http"
@@ -33,5 +36,30 @@ func TestHistoricalEntrySplitHTTPParameters(t *testing.T) {
 		if w.Code != 400 {
 			t.Fatal("bad history time accepted", w.Code)
 		}
+	}
+}
+
+func TestAIEntryHistorySplitCatalogSupportsPageParameters(t *testing.T) {
+	service := &fakeAdminService{clientEntrySplitPreview: admin.ClientEntryUserPolicySplitPreviewResult{HistoryHost: "45.192.207.49", SnapshotHash: "hash-from-preview", From: 1793177880, To: 1793782680, UserCount: 1271}}
+	p := newPanelOperations(config.Config{}, &routerState{admin: service})
+	actor := aiops.PanelOperationActor{ID: 1, IsAdmin: true}
+	for operation, raw := range map[string]string{
+		"entry_split.preview": `{"history_host":"45.192.207.49","history_from":1793177880,"history_to":1793782680}`,
+		"entry_split.create":  `{"name":"historical","history_host":"45.192.207.49","history_from":1793177880,"history_to":1793782680,"snapshot_hash":"hash-from-preview","history_single_group":false,"members":[{"server_type":"vmess","server_id":14}],"entry_host_a":"45.192.207.202","entry_host_b":"45.192.196.62"}`,
+	} {
+		if err := p.Validate(context.Background(), actor, operation, json.RawMessage(raw)); err != nil {
+			t.Fatal(operation, err)
+		}
+		result, err := p.Execute(context.Background(), actor, operation, json.RawMessage(raw))
+		if err != nil {
+			t.Fatal(operation, err)
+		}
+		if operation == "entry_split.preview" && !strings.Contains(string(result), "hash-from-preview") {
+			t.Fatal("preview hash lost before reaching model", string(result))
+		}
+	}
+	got := service.lastClientEntrySplitCreate
+	if got.HistoryHost != "45.192.207.49" || got.SnapshotHash != "hash-from-preview" || got.HistoryFrom != 1793177880 || got.HistoryTo != 1793782680 || got.Minutes != 0 || len(got.Members) != 1 || got.Members[0].ServerID != 14 || got.HistorySingleGroup {
+		t.Fatal("AI adapter lost historical page parameters", got)
 	}
 }
