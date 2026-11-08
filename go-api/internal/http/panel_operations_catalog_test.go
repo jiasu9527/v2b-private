@@ -32,7 +32,7 @@ func TestPanelOperationCatalogContracts(t *testing.T) {
 		if op.Name == "" || op.Category == "" || op.Description == "" || !strings.HasPrefix(op.Path, "/") {
 			t.Errorf("incomplete descriptor %+v", op)
 		}
-		if strings.Contains(op.Path, "/payment/") || strings.Contains(op.Path, "/ai-ops/") {
+		if strings.Contains(op.Path, "/payment/") || strings.Contains(op.Path, "/ai-ops/") || strings.Contains(op.Path, "/new-api/") {
 			t.Errorf("forbidden recursive/payment route %s", op.Path)
 		}
 		if op.Method == "GET" && op.Mutating {
@@ -132,6 +132,7 @@ func TestPanelOperationCatalogCoversAdminRoutes(t *testing.T) {
 		paths[op.Path] = true
 	}
 	excluded := map[string]string{
+		"/new-api/":        "wallet payment integration, credentials and settlement are administrator-only and excluded from AI operations",
 		"/commission-log/": "subroutes checked below",
 		"/server/client-entry-user-policy/investigations/": "subroutes checked below",
 		"/ai-ops/telegram/": "Telegram authorization/configuration is managed by humans; never recursively invoke",

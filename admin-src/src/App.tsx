@@ -32,6 +32,7 @@ import SubscribeGuardPage from './pages/SubscribeGuardPage';
 import DNSPodPage from './pages/DNSPodPage';
 import DNSFailoverPage from './pages/DNSFailoverPage';
 import XboardMigrationPage from './pages/XboardMigrationPage';
+import NewAPIIntegrationPage from './pages/NewAPIIntegrationPage';
 import { checkLogin, clearAuth, getAuth, getCurrentUserInfo, getSettings, pathAdminSegment, setAdminUserInfo } from './lib/api';
 
 const { Header, Sider, Content } = Layout;
@@ -49,6 +50,7 @@ const menu = [
   { type: 'item', key: '/config/payment', icon: <CreditCardOutlined />, label: '支付配置' },
   { type: 'item', key: '/config/subscribe-guard', icon: <SafetyCertificateOutlined />, label: '订阅防护' },
   { type: 'item', key: '/config/user-migration', icon: <DatabaseOutlined />, label: '用户迁移' },
+  { type: 'item', key: '/config/new-api', icon: <GlobalOutlined />, label: 'New API 接入' },
   { type: 'item', key: '/config/ai-ops', icon: <MessageOutlined />, label: 'AI 运维' },
   { type: 'heading', key: 'server-heading', label: '服务器' },
   { type: 'item', key: '/server/manage', icon: <DeploymentUnitOutlined />, label: '节点管理' },
@@ -106,6 +108,7 @@ function Page({ path }: { path: string }) {
   if (route === '/config/payment') return <PaymentPage />;
   if (route === '/config/subscribe-guard') return <SubscribeGuardPage />;
   if (route === '/config/user-migration') return <XboardMigrationPage />;
+  if (route === '/config/new-api') return <NewAPIIntegrationPage />;
   const ticketMatch = route.match(/^\/ticket\/(\d+)/);
   if (ticketMatch) return <TicketDetailPage ticketId={ticketMatch[1]} />;
   if (route === '/ticket') return <TicketPage />;

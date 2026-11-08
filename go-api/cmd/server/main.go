@@ -19,6 +19,7 @@ import (
 	"forest/go-api/internal/entryevidence"
 	"forest/go-api/internal/guest"
 	httpapi "forest/go-api/internal/http"
+	"forest/go-api/internal/newapibridge"
 	"forest/go-api/internal/nodeapi"
 	"forest/go-api/internal/passport"
 	"forest/go-api/internal/payment"
@@ -116,6 +117,7 @@ func main() {
 	var userService usersvc.Service
 	var paymentService payment.Service
 	var appleIDService *appleid.DBService
+	var newAPIService *newapibridge.Service
 	var migrationService *usermigration.DBService
 	var adminService admin.Service
 	var aiOpsService *aiops.Service
@@ -135,6 +137,14 @@ func main() {
 		sessionService = session.NewDBService(cfg, db).WithAuthCache(authCache)
 		userService = userDBService
 		appleIDService = appleid.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig)
+		newAPIService = newapibridge.NewService(cfg, db)
+		if err := newAPIService.EnsureSchema(ctx); err != nil {
+			log.Fatalf("initialize New API bridge schema: %v", err)
+		}
+		newAPICtx, stopNewAPI := context.WithCancel(ctx)
+		newAPIDone := make(chan struct{})
+		go func() { defer close(newAPIDone); newAPIService.Run(newAPICtx) }()
+		defer func() { stopNewAPI(); <-newAPIDone }()
 		migrationService = usermigration.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig)
 		paymentService = payment.NewDBService(cfg, db, userDBService).WithExternalOrderManager(appleIDService).WithRuntimeConfig(runtimeConfig)
 		adminDBService := admin.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache).WithOnlineGeoResolver(onlineGeo)
@@ -185,6 +195,7 @@ func main() {
 			httpapi.WithUserService(userService),
 			httpapi.WithPaymentService(paymentService),
 			httpapi.WithAppleIDService(appleIDService),
+			httpapi.WithNewAPIBridge(newAPIService),
 			httpapi.WithUserMigrationService(migrationService),
 			httpapi.WithAdminService(adminService),
 			httpapi.WithAIOps(aiOpsService),

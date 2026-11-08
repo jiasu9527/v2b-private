@@ -116,7 +116,7 @@ func panelOperationPermitted(op PanelOperation) bool {
 		return false
 	}
 	for _, segment := range append(strings.Split(strings.ToLower(op.Path), "/"), strings.ToLower(op.Category)) {
-		if oneOf(segment, "payment", "payments", "payment_configuration", "ai-ops", "ai_ops") {
+		if oneOf(segment, "payment", "payments", "payment_configuration", "new-api", "new_api", "ai-ops", "ai_ops") {
 			return false
 		}
 	}

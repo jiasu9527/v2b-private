@@ -73,7 +73,7 @@ func fixtureOperation(name, path string, mutating, adminOnly bool) PanelOperatio
 
 func TestAIPanelOperationCatalogBoundaryAndRedaction(t *testing.T) {
 	valid := fixtureOperation("notices.list", "/notice/fetch", false, false)
-	for _, path := range []string{"/payment/fetch", "/payments/save", "/ai-ops/config", "/notice/../payment/save", "https://fixture.test/payment", "//payment/fetch", "/pa%79ment/fetch", "/notice/fetch?url=/payment"} {
+	for _, path := range []string{"/new-api/config", "/new-api/retry", "/new_api/config", "/payment/fetch", "/payments/save", "/ai-ops/config", "/notice/../payment/save", "https://fixture.test/payment", "//payment/fetch", "/pa%79ment/fetch", "/notice/fetch?url=/payment"} {
 		op := valid
 		op.Path = path
 		if panelOperationPermitted(op) {

@@ -61,6 +61,7 @@ type routerState struct {
 	aiOps             aiOpsService
 	aiTelegram        aiTelegramService
 	entryEvidence     *entryevidence.Store
+	newAPI            newAPIBridgeService
 }
 
 func WithEntryEvidenceStore(store *entryevidence.Store) Option {
@@ -246,6 +247,24 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 		adminPrefix := "/api/v1/" + strings.Trim(strings.TrimSpace(cfg.AdminPath), "/")
 
 		switch {
+		case r.URL.Path == "/new-api" || r.URL.Path == "/new-api/" || r.URL.Path == "/new-api/authorize":
+			renderNewAPIPortal(w, r, state.newAPI)
+			return
+		case r.URL.Path == "/new-api/submit.php":
+			handleNewAPISubmit(w, r, state.newAPI)
+			return
+		case r.URL.Path == "/new-api/.well-known/openid-configuration":
+			handleNewAPIPublic(w, r, state.session, state.passport, state.newAPI, "oauth/discovery")
+			return
+		case strings.HasPrefix(r.URL.Path, "/api/v1/new-api/"):
+			handleNewAPIPublic(w, r, state.session, state.passport, state.newAPI, strings.TrimPrefix(r.URL.Path, "/api/v1/new-api/"))
+			return
+		case strings.HasPrefix(r.URL.Path, "/api/v1/user/new-api/"):
+			handleNewAPIUser(w, r, state.session, state.newAPI, strings.TrimPrefix(r.URL.Path, "/api/v1/user/new-api/"))
+			return
+		case strings.HasPrefix(r.URL.Path, adminPrefix+"/new-api/"):
+			handleNewAPIAdmin(w, r, state.session, state.newAPI, strings.TrimPrefix(r.URL.Path, adminPrefix+"/new-api/"))
+			return
 		case r.URL.Path == "/ai-ops-mini" || r.URL.Path == "/ai-ops-mini/":
 			renderTelegramMiniShell(w, r, cfg)
 			return

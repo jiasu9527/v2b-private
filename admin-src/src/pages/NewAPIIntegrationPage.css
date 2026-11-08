@@ -1,0 +1,25 @@
+.new-api-integration-page .ant-alert-info {
+  background: #f5f7fa;
+  border-color: #d9e2ed;
+}
+
+.new-api-integration-page .ant-alert-info .ant-alert-message,
+.new-api-integration-page .ant-alert-info .ant-alert-description {
+  color: #333;
+}
+
+.new-api-integration-page .ant-card-head-wrapper {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.new-api-integration-page .ant-card-head-title {
+  white-space: normal;
+}
+
+@media (max-width: 768px) {
+  .new-api-integration-page .ant-card-extra {
+    width: auto;
+    padding-top: 0;
+  }
+}
