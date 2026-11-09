@@ -20,8 +20,8 @@ import (
 
 // These errors deliberately contain no part of the input. HTTP handlers may
 // expose these fixed messages without exposing a malformed password or key.
-var ErrSSHIntakeInvalid = fmt.Errorf("%w：检测到 SSH 凭据，但无法完整识别。请每次发送一台，提供地址、端口、用户名及密码或完整私钥；凭据未发送给模型", ErrValidation)
-var ErrSSHIntakeMultiple = fmt.Errorf("%w：每条消息仅支持一台 SSH 服务器，请分开发送；凭据未发送给模型", ErrValidation)
+var ErrSSHIntakeInvalid = fmt.Errorf("%w：检测到 SSH 凭据，但无法完整识别。请补齐每台的地址、用户名及密码或完整私钥，端口可省略；凭据未发送给模型", ErrValidation)
+var ErrSSHIntakeMultiple = fmt.Errorf("%w：SSH 资料存在重复或冲突字段，请核对每台对应的资料；凭据未发送给模型", ErrValidation)
 
 type SSHRegistrationInput struct {
 	Name, Host, Username, HostKeySHA256 string
@@ -145,11 +145,11 @@ func sshIntakeSSHCommand(line string) (SSHRegistrationInput, bool) {
 	return out, out.Host != "" && out.Username != ""
 }
 
-// ParseSSHRegistrationInput accepts a single, structurally explicit SSH record.
+// parseSSHRegistrationSingle validates one structurally explicit SSH record.
 // It never sends partial recognition onward: ambiguous credential-like input
 // returns a fixed error with an empty sanitized result. Bare password lines
 // retain all bytes; named values only remove one delimiter formatting space.
-func ParseSSHRegistrationInput(content string) (string, []SSHRegistrationInput, error) {
+func parseSSHRegistrationSingle(content string) (string, []SSHRegistrationInput, error) {
 	fail := func(err error) (string, []SSHRegistrationInput, error) { return "", nil, err }
 	if strings.ContainsRune(content, 0) || !utf8.ValidString(content) || strings.Contains(content, sshIntakeKeyMarker) {
 		return fail(ErrSSHIntakeInvalid)
@@ -241,7 +241,7 @@ func ParseSSHRegistrationInput(content string) (string, []SSHRegistrationInput, 
 		if field, value, ok := sshIntakeLabel(line); ok {
 			used[i] = true
 			if (field == "password" || field == "passphrase") && strings.HasPrefix(value, "\"") {
-				if err := json.Unmarshal([]byte(value), &value); err != nil {
+				if err := json.Unmarshal([]byte(value), &value); err != nil || value == "" {
 					return fail(ErrSSHIntakeInvalid)
 				}
 			}
@@ -418,30 +418,33 @@ func (s *Service) storeSSHIntakesTx(ctx context.Context, tx *sql.Tx, actorID, se
 	if len(inputs) == 0 {
 		return "", nil
 	}
-	if len(inputs) != 1 || actorID <= 0 || sessionID <= 0 || turnID <= 0 {
+	if len(inputs) > maxSSHIntakeBatchSize || actorID <= 0 || sessionID <= 0 || turnID <= 0 {
 		return "", ErrSSHIntakeInvalid
 	}
-	input := inputs[0]
-	secrets := []string{input.Password, input.PrivateKey, input.KeyPassphrase}
-	ciphers := make([]string, len(secrets))
-	for i, secret := range secrets {
-		if secret != "" {
-			cipher, err := s.encryptSecret(secret)
-			if err != nil {
-				return "", err
-			}
-			ciphers[i] = cipher
-		}
-	}
 	now := time.Now().Unix()
-	var id int64
-	err := tx.QueryRowContext(ctx, `INSERT INTO v2_ai_server_intake(session_id,turn_id,actor_id,name,host,port,username,host_key_sha256,password_cipher,private_key_cipher,key_passphrase_cipher,created_at,expires_at)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`, sessionID, turnID, actorID, input.Name, input.Host, input.Port, input.Username, input.HostKeySHA256, ciphers[0], ciphers[1], ciphers[2], now, now+86400).Scan(&id)
-	if err != nil {
-		return "", err
+	items := make([]sshIntakePublic, 0, len(inputs))
+	for index, input := range inputs {
+		secrets := []string{input.Password, input.PrivateKey, input.KeyPassphrase}
+		ciphers := make([]string, len(secrets))
+		for i, secret := range secrets {
+			if secret != "" {
+				cipher, err := s.encryptSecret(secret)
+				if err != nil {
+					return "", err
+				}
+				ciphers[i] = cipher
+			}
+		}
+		var id int64
+		err := tx.QueryRowContext(ctx, `INSERT INTO v2_ai_server_intake(session_id,turn_id,actor_id,item_index,name,host,port,username,host_key_sha256,password_cipher,private_key_cipher,key_passphrase_cipher,created_at,expires_at)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`, sessionID, turnID, actorID, index+1, input.Name, input.Host, input.Port, input.Username, input.HostKeySHA256, ciphers[0], ciphers[1], ciphers[2], now, now+86400).Scan(&id)
+		if err != nil {
+			return "", err
+		}
+		items = append(items, sshIntakePublic{IntakeID: id, ItemIndex: index + 1, Name: input.Name, Host: input.Host, Port: input.Port, Username: input.Username, HostKeySHA256: input.HostKeySHA256, HasPassword: input.Password != "", HasPrivateKey: input.PrivateKey != "", HasKeyPassphrase: input.KeyPassphrase != "", ExpiresAt: now + 86400})
 	}
-	raw, err := json.Marshal(map[string]any{"intake_id": id, "name": input.Name, "host": input.Host, "port": input.Port, "username": input.Username, "host_key_sha256": input.HostKeySHA256, "has_password": input.Password != "", "has_private_key": input.PrivateKey != "", "has_key_passphrase": input.KeyPassphrase != "", "expires_at": now + 86400})
+	raw, err := json.Marshal(map[string]any{"turn_id": turnID, "total": len(items), "items": items})
 	if err != nil {
 		return "", errors.New("无法生成 SSH 暂存资料摘要")
 	}
-	return "\n[后端提供的 SSH 暂存资料；凭据已加密，仅使用 intake_id 登记服务器，不要索取凭据。]\n" + string(raw), nil
+	return "\n[后端提供的 SSH 批量暂存资料；凭据已加密，仅使用各 intake_id 登记服务器，不要索取凭据。可用 ssh_intakes_list 按 turn_id 分页核对完整批次与登记进度。]\n" + string(raw), nil
 }

@@ -74,6 +74,58 @@ test('Enter sends exact current input once; failed or pending send does not clea
   assert.equal(instance.draftRef.current, '');
 });
 
+test('a 50-server paste is preserved beyond the old character cap on desktop and mini', () => {
+  const password = ' !"$&|:=#中🙂'.repeat(30);
+  const content = Array.from({ length: 50 }, (_, index) => `地址: 192.0.2.${index + 1}:2222\n用户名: ops\npassword: ${JSON.stringify(password)}\n`).join('\n');
+  assert.ok(content.length > 12000);
+  assert.equal(model.aiMessageTooLarge(content), false);
+  for (const miniApp of [true, false]) {
+    const instance = composer('', { miniApp });
+    instance.find('textarea').props.onChange({ target: { value: content } }); instance.render();
+    assert.equal(instance.find('textarea').props.maxLength, undefined);
+    assert.equal(instance.find('textarea').props.value, content);
+    assert.equal(instance.find('button').props.disabled, false);
+    instance.key();
+    assert.deepEqual(instance.sent, [content]);
+    assert.equal(instance.draftRef.current, content);
+  }
+});
+
+test('UTF-8 message size matches backend bytes, accepts exact limit and never truncates an oversized draft', () => {
+  assert.equal(model.AI_CHAT_MAX_BYTES, 131072);
+  const accepted = ['a'.repeat(131072), '中'.repeat(43690) + 'ab', '🙂'.repeat(32768)];
+  const rejected = ['a'.repeat(131073), '中'.repeat(43691), '🙂'.repeat(32768) + 'a'];
+  for (const content of [...accepted, ...rejected]) assert.equal(model.aiMessageTooLarge(content), Buffer.byteLength(content, 'utf8') > 131072);
+  for (const miniApp of [true, false]) {
+    const instance = composer(accepted[2], { miniApp });
+    instance.key(); assert.deepEqual(instance.sent, [accepted[2]]);
+    instance.ref.current.setValue(rejected[1]); instance.render();
+    assert.equal(instance.find('textarea').props['aria-invalid'], true);
+    assert.equal(instance.find('textarea').props.value, rejected[1]);
+    assert.equal(instance.find('button').props.disabled, true);
+    instance.key(); instance.find('button').props.onClick();
+    assert.equal(instance.sent.length, 1);
+    assert.equal(instance.draftRef.current, rejected[1]);
+    instance.ref.current.setValue('已拆分的消息'); instance.render(); instance.key();
+    assert.equal(instance.sent[1], '已拆分的消息');
+  }
+  const send = page.slice(page.indexOf('const send ='), page.indexOf('const saveConfig'));
+  assert.match(send, /if \(aiMessageTooLarge\(content\)\) \{ message.error\(AI_CHAT_SIZE_ERROR\); return; \}/);
+  assert.ok(send.indexOf('aiMessageTooLarge(content)') < send.indexOf("begin('send')"));
+});
+
+test('batch server help is collapsed by default and removes obsolete single-server chat restrictions', () => {
+  for (const miniApp of [true, false]) {
+    const help = composer('', { miniApp }).find('details');
+    assert.equal(help.props.className, 'ai-ops-server-help');
+    assert.notEqual(help.props.open, true);
+    assert.match(JSON.stringify(help), /50 台/);
+    assert.match(JSON.stringify(help), /192\.0\.2\.10:2222/);
+    assert.match(JSON.stringify(help), /192\.0\.2\.20/);
+  }
+  assert.doesNotMatch(page, /不要填入聊天|每条消息一台/);
+});
+
 test('prefills and explicit resets survive child remounts without a per-key parent callback', () => {
   const instance = composer('未发送的草稿');
   instance.ref.current.setValue('预填服务器 #3\n'); instance.render();

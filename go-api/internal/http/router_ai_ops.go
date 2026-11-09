@@ -130,7 +130,7 @@ func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Servic
 		result, err = service.CreateSession(ctx, actor.ID, req)
 	case "chat/send":
 		var req aiops.SendMessageRequest
-		if !decodeSupportJSON(w, r, &req) {
+		if !decodeAIOpsChatJSON(w, r, &req) {
 			return
 		}
 		if actor.IsAdmin == 0 && req.ReasoningEffort != "" && req.ReasoningEffort != "default" {
@@ -194,6 +194,10 @@ func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Servic
 	writeJSON(w, status, map[string]any{"data": result})
 }
 func handleAIOpsError(w http.ResponseWriter, err error) {
+	if message, ok := aiops.SSHIntakeErrorMessage(err); ok {
+		writeJSON(w, 400, map[string]string{"message": message})
+		return
+	}
 	status, msg := 500, "AI 运维操作失败，请核对配置或服务状态后重试"
 	switch {
 	case errors.Is(err, aiops.ErrKnowledgeCredential):

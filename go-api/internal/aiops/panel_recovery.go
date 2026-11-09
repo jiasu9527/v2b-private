@@ -83,7 +83,7 @@ func (s *Service) panelRecoveryReadOnlyCall(call ToolCall) bool {
 		"orders_list", "nodes_list", "node_detail",
 		"entry_rules_list", "entry_simulate", "entry_health", "entry_health_detail", "host_references", "entry_coverage", "backup_ips_list",
 		"entry_probe_result", "entry_rule_detail", "entry_split_operation",
-		"tickets_list", "tickets_list_global", "ticket_get", "ticket_message_get", "ticket_settings", "servers_list":
+		"tickets_list", "tickets_list_global", "ticket_get", "ticket_message_get", "ticket_settings", "servers_list", "ssh_intakes_list":
 		return true
 	case "panel_query":
 		var args struct {

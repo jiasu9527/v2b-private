@@ -17,7 +17,19 @@ func serverToolDefinitions() []ToolDefinition {
 		"name":      map[string]any{"type": "string", "maxLength": 128, "description": "可选服务器名称，未填沿用提交名称或主机地址"},
 		"reason":    map[string]any{"type": "string", "minLength": 1, "maxLength": 500, "description": "登记原因及后续用途"},
 	}, "required": []string{"intake_id", "reason"}, "additionalProperties": false})
-	return []ToolDefinition{{Type: "function", Function: ToolFunctionDefinition{Name: "ssh_server_register", Description: "将本会话已安全收取的SSH资料提议登记到服务器列表，标准模式待审批、完全访问按当前授权执行。只接受intake_id，不接受密码私钥。先无认证读取主机指纹；未提供指纹时固定首次观测值（first_use），提供指纹必须匹配。仅新建、不覆盖已有服务器或凭据。登记成功不等于已登录，返回server_id后可用ssh_status检查。", Parameters: raw}}}
+	return []ToolDefinition{sshIntakesToolDefinition(), {Type: "function", Function: ToolFunctionDefinition{Name: "ssh_server_register", Description: "将本会话已安全收取的SSH资料提议登记到服务器列表，标准模式待审批、完全访问按当前授权执行。批量资料逐个intake_id调用，可用ssh_intakes_list核对进度。只接受intake_id，不接受密码私钥。先无认证读取主机指纹；未提供指纹时固定首次观测值（first_use），提供指纹必须匹配。仅新建、不覆盖已有服务器或凭据。登记成功不等于已登录，返回server_id后可用ssh_status检查。", Parameters: raw}}}
+}
+
+func registrationOnlyBatch(calls []ToolCall) bool {
+	if len(calls) == 0 || len(calls) > maxSSHIntakeBatchSize {
+		return false
+	}
+	for _, call := range calls {
+		if call.Function.Name != "ssh_server_register" {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) callServerTool(ctx context.Context, actorID, sessionID int64, call ToolCall) (ToolOutcome, error) {
@@ -59,6 +71,13 @@ func (s *Service) callServerTool(ctx context.Context, actorID, sessionID int64, 
 		return ToolOutcome{}, err
 	} else if exists {
 		return serverRegistrationConflict(), nil
+	}
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_ai_server`).Scan(&count); err != nil {
+		return ToolOutcome{}, err
+	}
+	if count >= 200 {
+		return ToolOutcome{Content: `{"status":"error","code":"server_capacity","message":"服务器列表已达到200台容量，本条未登记；请先整理现有服务器，不要重复提交同一登记"}`}, nil
 	}
 	observed, err := s.ProbeHostKey(ctx, actorID, HostKeyRequest{Host: intake.Host, Port: intake.Port})
 	if err != nil {

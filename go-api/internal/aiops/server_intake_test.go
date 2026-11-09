@@ -82,6 +82,7 @@ func TestSSHIntakeOrdinaryTasksRemainUnchanged(t *testing.T) {
 	for _, content := range []string{
 		"帮我检查服务器状态，不要输出密码", "localhost 服务状态如何？", "host: 192.0.2.10\nusername: root\n帮我检查端口",
 		"ssh root@192.0.2.10\n帮我检查端口", "ssh root@192.0.2.10\nplease inspect ports",
+		"192.0.2.10 please inspect ports", "192.0.2.10 check service status",
 	} {
 		safe, records, err := ParseSSHRegistrationInput(content)
 		if err != nil || len(records) != 0 || safe != content {
@@ -97,7 +98,6 @@ func TestSSHIntakeRejectsAmbiguousCredentialMessagesLocally(t *testing.T) {
 		"bad port":                "host: 192.0.2.10\nport: 99999\nusername: root\npassword: secret-test",
 		"conflicting port":        "host: 192.0.2.10:2222\nport: 22\nusername: root\npassword: secret-test",
 		"bad username":            "host: 192.0.2.10\nusername: root /bin/sh\npassword: secret-test",
-		"multiple records":        "192.0.2.10\nroot\nsecret-test\n192.0.2.11\nroot\nsecond-secret",
 		"duplicate password":      "host: 192.0.2.10\nusername: root\npassword: secret-test\npassword: second-secret",
 		"secret in name":          "host: 192.0.2.10\nusername: root\npassword: secret-test\nname: server-secret-test",
 		"secret in user":          "host: 192.0.2.10\nusername: root\npassword: root",
@@ -105,10 +105,6 @@ func TestSSHIntakeRejectsAmbiguousCredentialMessagesLocally(t *testing.T) {
 		"incomplete key":          "host: 192.0.2.10\nusername: root\n-----BEGIN OPENSSH PRIVATE KEY-----\nsecret-test",
 		"invalid key":             "host: 192.0.2.10\nusername: root\n-----BEGIN OPENSSH PRIVATE KEY-----\nsecret-test\n-----END OPENSSH PRIVATE KEY-----",
 		"malformed quoted secret": "host: 192.0.2.10\nusername: root\npassword: \"secret-test",
-		"markdown table":          "| 主机 | 192.0.2.10 |\n| 用户 | root |\n| 密码 | secret-test |",
-		"space label":             "host: 192.0.2.10\nusername: root\npassword secret-test",
-		"space Chinese label":     "host: 192.0.2.10\nusername: root\n密码 secret-test",
-		"JSON credentials":        `{"host":"192.0.2.10","username":"root","password":"secret-test"}`,
 		"ssh URL":                 "ssh://root:secret-test@192.0.2.10:22",
 		"sshpass":                 "sshpass -p secret-test ssh root@192.0.2.10",
 		"bare ssh password":       "ssh root@192.0.2.10 -p 2222\nsecret-test\n帮我检查服务",

@@ -36,6 +36,11 @@ func (s *Service) ensureSchema(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS v2_ai_message(id BIGSERIAL PRIMARY KEY,session_id BIGINT NOT NULL REFERENCES v2_ai_session(id) ON DELETE CASCADE,turn_id BIGINT NOT NULL REFERENCES v2_ai_turn(id) ON DELETE CASCADE,role VARCHAR(16) NOT NULL,content TEXT NOT NULL DEFAULT '',tool_calls JSONB NOT NULL DEFAULT '[]',tool_call_id VARCHAR(200) NOT NULL DEFAULT '',created_at BIGINT NOT NULL)`,
 		`ALTER TABLE v2_ai_message ADD COLUMN IF NOT EXISTS content_cipher TEXT NOT NULL DEFAULT ''`,
 		`CREATE TABLE IF NOT EXISTS v2_ai_server_intake(id BIGSERIAL PRIMARY KEY,session_id BIGINT NOT NULL REFERENCES v2_ai_session(id) ON DELETE CASCADE,turn_id BIGINT NOT NULL REFERENCES v2_ai_turn(id) ON DELETE CASCADE,actor_id BIGINT NOT NULL,name TEXT NOT NULL,host TEXT NOT NULL,port INTEGER NOT NULL CHECK(port BETWEEN 1 AND 65535),username TEXT NOT NULL,host_key_sha256 TEXT NOT NULL DEFAULT '',password_cipher TEXT NOT NULL DEFAULT '',private_key_cipher TEXT NOT NULL DEFAULT '',key_passphrase_cipher TEXT NOT NULL DEFAULT '',created_at BIGINT NOT NULL,expires_at BIGINT NOT NULL,registered_server_id BIGINT NOT NULL DEFAULT 0,UNIQUE(turn_id))`,
+		// Upgrade the original one-intake-per-turn schema without losing old
+		// encrypted credentials. Existing rows become item 1 of their batch.
+		`ALTER TABLE v2_ai_server_intake ADD COLUMN IF NOT EXISTS item_index INTEGER NOT NULL DEFAULT 1 CHECK(item_index BETWEEN 1 AND 50)`,
+		`ALTER TABLE v2_ai_server_intake DROP CONSTRAINT IF EXISTS v2_ai_server_intake_turn_id_key`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS v2_ai_server_intake_turn_item_idx ON v2_ai_server_intake(turn_id,item_index)`,
 		`CREATE INDEX IF NOT EXISTS v2_ai_server_intake_session_idx ON v2_ai_server_intake(session_id,id)`,
 		`CREATE TABLE IF NOT EXISTS v2_ai_result(id BIGSERIAL PRIMARY KEY,session_id BIGINT NOT NULL REFERENCES v2_ai_session(id) ON DELETE CASCADE,actor_id BIGINT NOT NULL,operation TEXT NOT NULL,data TEXT NOT NULL,expires_at BIGINT NOT NULL,admin_only BOOLEAN NOT NULL DEFAULT FALSE)`,
 		`ALTER TABLE v2_ai_result ADD COLUMN IF NOT EXISTS admin_only BOOLEAN NOT NULL DEFAULT FALSE`,

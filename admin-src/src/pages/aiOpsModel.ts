@@ -1,6 +1,15 @@
 export const AI_DEFAULT_MODELS = ['gpt-6.1-sol', 'claude-fable-5-1', 'deepseek-v4.1-flash', 'glm-5.3'];
 export type AIAccessMode = 'standard' | 'full';
 export const AI_DEFAULT_ACCESS_MODE: AIAccessMode = 'full';
+export const AI_CHAT_MAX_BYTES = 128 * 1024;
+export const AI_CHAT_SIZE_ERROR = '单条消息最多 128 KiB，请分批发送；原内容已保留，未截断。';
+export function aiMessageTooLarge(content: string): boolean {
+  // Most keystrokes need no encoding/allocation; UTF-8 uses at most three
+  // bytes per UTF-16 code unit (a surrogate pair uses four bytes, not six).
+  if (content.length * 3 <= AI_CHAT_MAX_BYTES) return false;
+  if (content.length > AI_CHAT_MAX_BYTES) return true;
+  return new TextEncoder().encode(content).byteLength > AI_CHAT_MAX_BYTES;
+}
 export type AIReasoningEffort = 'auto' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 export type AIReasoningChoice = 'default' | AIReasoningEffort;
 export const AI_REASONING_LABELS: Record<AIReasoningEffort, string> = { auto: '中转默认', none: '不启用推理', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '极高' };

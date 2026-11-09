@@ -74,6 +74,7 @@ var toolCapabilities = map[string]toolCapability{
 	"ssh_status":                 {domainServers, "ssh_command"},
 	"propose_ssh_command":        {domainServers, "ssh_command"},
 	"ssh_server_register":        {domainServers, "server_register"},
+	"ssh_intakes_list":           {domainServers, ""},
 }
 
 var actionCapabilities = map[string]capabilityDomain{

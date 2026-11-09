@@ -132,6 +132,8 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 		return s.callNodeTool(ctx, actorID, sessionID, call)
 	case "ssh_server_register":
 		return s.callServerTool(ctx, actorID, sessionID, call)
+	case "ssh_intakes_list":
+		return s.callSSHIntakesList(ctx, actorID, sessionID, call)
 	}
 	var a aiToolArgs
 	d := json.NewDecoder(strings.NewReader(call.Function.Arguments))

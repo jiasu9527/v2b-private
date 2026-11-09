@@ -239,7 +239,7 @@ body.telegram-mini-body .ai-ops-markdown td { padding: 8px 10px; border-color: v
 .telegram-mini-app .ai-ops-empty p { font-size: 13px; line-height: 1.8; }
 
 /* One rounded input row; stop occupies the same reachable send-button slot. */
-.telegram-mini-app .ai-ops-composer.mini-ops-composer { flex: 0 0 auto; gap: 5px; margin: 0; padding: 8px 10px; border: 0; background: var(--mini-chat-bg); }
+.telegram-mini-app .ai-ops-composer.mini-ops-composer { position: relative; flex: 0 0 auto; gap: 5px; margin: 0; padding: 8px 10px; border: 0; background: var(--mini-chat-bg); }
 .telegram-mini-app .mini-ops-composer-row { display: flex; align-items: flex-end; gap: 7px; min-width: 0; }
 .telegram-mini-app .mini-ops-composer textarea.ant-input {
   flex: 1;
@@ -278,6 +278,11 @@ body.telegram-mini-body .ai-ops-markdown td { padding: 8px 10px; border-color: v
 .telegram-mini-app .mini-ops-composer-hint,
 .telegram-mini-app .mini-ops-composer-notice,
 .telegram-mini-app .ai-ops-composer-hint { padding-inline: 5px; color: var(--mini-hint); font-size: 10px; line-height: 1.5; }
+.telegram-mini-app .ai-ops-server-help { align-self: flex-end; margin-right: 5px; color: var(--mini-hint); font-size: 11px; }
+.telegram-mini-app .ai-ops-server-help > summary { padding-block: 1px; }
+.telegram-mini-app .ai-ops-server-help-content { background: var(--mini-surface); border-color: var(--mini-line); color: var(--mini-text); font-size: 12px; }
+.telegram-mini-app .ai-ops-server-help-content > pre { background: var(--mini-soft); }
+.telegram-mini-app .ai-ops-composer-error { padding-inline: 5px; color: var(--mini-danger); font-size: 11px; }
 
 /* Portal components inherit the same Telegram palette, including dark themes. */
 body.telegram-mini-body .ant-typography { color: var(--mini-text); }

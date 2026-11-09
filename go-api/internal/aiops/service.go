@@ -187,5 +187,7 @@ func (s *Service) decryptSecret(value string) (string, error) {
 
 const maxSessionMessages = 4000
 const maxSessions = 200
-const maxContentBytes = 16000
+
+// Includes batch SSH pastes; credentials are removed before model ingestion.
+const maxContentBytes = 128 << 10
 const turnLifetime = 150 * time.Second

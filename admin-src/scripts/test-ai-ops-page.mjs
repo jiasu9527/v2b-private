@@ -135,7 +135,7 @@ test('explicit server form credentials clear on save/close and chat sends only i
 
 test('standard mode retains manual one-action approval with complete command and output disclosure', () => {
   assert.match(transcript, /<pre className="ai-ops-pre ai-ops-command">\{command\}<\/pre>/);
-  assert.match(page, /逐次确认模式下，每条服务器命令和部署操作均须批准/);
+  assert.match(page, /操作仍按会话的逐次确认或完全访问模式执行/);
   assert.match(page, /输出会进入对话并发往中转模型/);
   assert.match(transcript, /onReview\(action, 'approve'\)/);
   assert.match(page, /setReview\(\{ action, decision \}\)/);

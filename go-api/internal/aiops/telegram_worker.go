@@ -250,6 +250,9 @@ func (b *TelegramBridge) dispatchTelegram(ctx context.Context) error {
 }
 
 func telegramSafeError(err error) string {
+	if message, ok := SSHIntakeErrorMessage(err); ok {
+		return message
+	}
 	switch {
 	case errors.Is(err, ErrBusy):
 		return "当前会话或运维服务正在处理任务；本条没有排队执行，请等待或停止后重新发送。"

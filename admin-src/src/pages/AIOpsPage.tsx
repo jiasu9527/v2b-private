@@ -14,6 +14,7 @@ import AIOpsTelegram from './AIOpsTelegram';
 import AIOpsServersPanel from './AIOpsServersPanel';
 import { watchAIChatScroll } from './aiOpsChatScroll';
 import { aiMergeSessionList } from './aiOpsModel';
+import { AI_CHAT_SIZE_ERROR, aiMessageTooLarge } from './aiOpsModel';
 import './AIOpsPage.css';
 
 const { Text, Paragraph } = Typography;
@@ -325,6 +326,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
   };
   const send = async (contentOverride?: string) => {
     const content = contentOverride ?? draft.current;
+    if (aiMessageTooLarge(content)) { message.error(AI_CHAT_SIZE_ERROR); return; }
     if (!content.trim() || !aiModelReady(config, model) || (selectedRef.current > 0 && !detail) || aiSessionBusy(detail) || foreignFullAccess || !begin('send')) return;
     followOutput.current = true;
     const originalID = selectedRef.current;
@@ -458,7 +460,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
       </Space>
     </Drawer>
   </div>;
-  const serverPanel = <div className="ai-ops-server-panel"><Alert type="info" showIcon message="服务器凭据仅保存到后端，不发给模型" description="可通过聊天粘贴连接资料，也可在此表单登记。表单需填写已核对的 SSH 主机指纹；聊天未提供指纹时，会记录首次连接指纹，后续连接必须匹配。逐次确认模式下，每条服务器命令和部署操作均须批准；在对话窗口选择完全访问后，AI 可按当前任务连续执行。" /><AIOpsServersPanel servers={servers} compact={compact} busy={!!busy} unavailable={unavailable} onEdit={openServer} onCheck={checkServer} onDeploy={deployServer} onDelete={(server) => setConfirmation({ kind: 'server-delete', server })} onRefresh={() => { void loadServers().catch((e) => fail(e, '读取服务器列表失败')); }} /></div>;
+  const serverPanel = <div className="ai-ops-server-panel"><Alert type="info" showIcon message="支持在聊天中批量粘贴 SSH 资料，凭据由后端加密保存" description="每次最多 50 台，可粘贴多段文字、表格或 JSON，无需逐台填表；AI 只接收服务器信息和登记编号，不接收密码或私钥。表单需填写已核对的 SSH 主机指纹；聊天未提供指纹时，记录首次连接指纹并在后续连接中核对。操作仍按会话的逐次确认或完全访问模式执行。" /><AIOpsServersPanel servers={servers} compact={compact} busy={!!busy} unavailable={unavailable} onEdit={openServer} onCheck={checkServer} onDeploy={deployServer} onDelete={(server) => setConfirmation({ kind: 'server-delete', server })} onRefresh={() => { void loadServers().catch((e) => fail(e, '读取服务器列表失败')); }} /></div>;
   const settings = isAdmin ? <Space direction="vertical" size="middle" style={{ width: '100%' }}><Card title="模型中转设置" size="small"><Form form={configForm} layout="vertical" disabled={!!busy} onFinish={saveConfig}>
     <Form.Item name="enabled" label="启用 AI 运维" valuePropName="checked"><Switch /></Form.Item>
     <Form.Item name="base_url" label="默认中转 Base URL" extra="未配置独立中转的模型使用此地址；所有模型均独立配置时可留空。使用兼容 OpenAI Chat Completions 的基址，修改地址需重新输入 Key 或明确清除旧 Key。"><Input placeholder="https://relay.example.com/v1" autoComplete="off" /></Form.Item>
@@ -489,7 +491,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
         <Button loading={fingerprintLoading} disabled={!!busy} onClick={() => void probeFingerprint()}>获取主机指纹（仅观察）</Button>
         {fingerprint && <Alert style={{ marginTop: 12, marginBottom: 12 }} type="warning" showIcon message="观察到的指纹，不代表已可信" description={<><div>{fingerprint.host}:{fingerprint.port} · {fingerprint.key_type}</div><Text code copyable={{ text: fingerprint.fingerprint }}>{fingerprint.fingerprint}</Text><div>请独立核对后，手动复制到上方指纹字段；与旧值不同不要直接覆盖。</div></>} />}
         <Form.Item name="password" label={`SSH 密码${editing?.has_password ? '（已保存，留空保留）' : ''}`}><Input.Password autoComplete="new-password" /></Form.Item><Form.Item name="clear_password" valuePropName="checked"><Checkbox>清除已存密码</Checkbox></Form.Item>
-        <Form.Item name="private_key" label={`SSH 私钥${editing?.has_private_key ? '（已保存，留空保留）' : ''}`}><Input.TextArea rows={4} autoComplete="off" placeholder="可用私钥代替密码；不要填入聊天" /></Form.Item><Form.Item name="clear_private_key" valuePropName="checked"><Checkbox>清除已存私钥</Checkbox></Form.Item>
+        <Form.Item name="private_key" label={`SSH 私钥${editing?.has_private_key ? '（已保存，留空保留）' : ''}`}><Input.TextArea rows={4} autoComplete="off" placeholder="粘贴完整私钥（含 BEGIN / END 行），也支持在聊天中批量登记" /></Form.Item><Form.Item name="clear_private_key" valuePropName="checked"><Checkbox>清除已存私钥</Checkbox></Form.Item>
         <Form.Item name="key_passphrase" label={`私钥口令${editing?.has_key_passphrase ? '（已保存，留空保留）' : ''}`}><Input.Password autoComplete="new-password" /></Form.Item><Form.Item name="clear_key_passphrase" valuePropName="checked"><Checkbox>清除已存私钥口令</Checkbox></Form.Item><Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
       </Form>
     </Modal>

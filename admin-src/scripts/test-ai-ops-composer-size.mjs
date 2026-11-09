@@ -76,8 +76,8 @@ test('fallback grows to four lines, handles a large paste and shrinks when clear
   const selection = [ui.input.selectionStart, ui.input.selectionEnd, ui.input.scrollTop];
   ui.input.value = 'a\nb'; ui.handle.refresh(); ui.flush();
   assert.equal(ui.input.style.height, '68px'); assert.equal(ui.input.value, 'a\nb');
-  ui.input.value = 'x'.repeat(12000); ui.handle.refresh(); ui.flush();
-  assert.equal(ui.input.style.height, '112px'); assert.equal(ui.input.value.length, 12000);
+  ui.input.value = 'x'.repeat(131072); ui.handle.refresh(); ui.flush();
+  assert.equal(ui.input.style.height, '112px'); assert.equal(ui.input.value.length, 131072);
   assert.deepEqual([ui.input.selectionStart, ui.input.selectionEnd, ui.input.scrollTop], selection);
   ui.input.value = ''; ui.handle.refresh(); ui.flush();
   assert.equal(ui.input.style.height, '46px'); assert.equal(ui.input.value, '');

@@ -139,7 +139,12 @@ func (s *Service) proposeAction(ctx context.Context, actorID, sessionID int64, c
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_ai_action WHERE session_id=$1 AND status='pending' AND expires_at>$2`, sessionID, time.Now().Unix()).Scan(&pending); err != nil {
 		return empty, err
 	}
-	if pending >= 20 {
+	pendingLimit := 20
+	if spec.Kind == "server_register" {
+		// At most one bounded paste worth of independent registration cards.
+		pendingLimit = maxSSHIntakeBatchSize
+	}
+	if pending >= pendingLimit {
 		return empty, ErrBusy
 	}
 	payload, snapshot, label, err := s.captureActionTarget(ctx, tx, spec)

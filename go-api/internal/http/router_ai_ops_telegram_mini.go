@@ -152,7 +152,7 @@ func handleAITelegramMini(w http.ResponseWriter, r *http.Request, bridgeBase aiT
 	status := http.StatusAccepted
 	if action == "chat/send" {
 		var req aiops.SendMessageRequest
-		if !decodeSupportJSON(w, r, &req) {
+		if !decodeAIOpsChatJSON(w, r, &req) {
 			return
 		}
 		if identity.IsAdmin != 1 && req.ReasoningEffort != "" && req.ReasoningEffort != "default" {
