@@ -112,6 +112,12 @@ func handleClientSubscribe(w http.ResponseWriter, r *http.Request, cfg config.Co
 
 	writeSubscribeMetadataHeaders(w, cfg, subscribe)
 
+	if isQuantumultXSubscribeFlag(flag) {
+		writeSubscribeDownloadHeadersWithExtension(w, cfg, ".txt")
+		writePlainText(w, http.StatusOK, buildQuantumultXPayload(subscribe.UUID, servers, entryevidence.FromContext(r.Context())))
+		return true
+	}
+
 	if isSingboxSubscribeFlag(flag) {
 		writeSubscribeDownloadHeadersWithExtension(w, cfg, ".json")
 		customFile, defaultFile := singBoxTemplateFiles(flag)
@@ -368,6 +374,17 @@ func isClashLikeSubscribeFlag(flag string) bool {
 		strings.Contains(flag, "nyanpasu")
 }
 
+func isQuantumultXSubscribeFlag(flag string) bool {
+	flag = strings.ToLower(strings.TrimSpace(flag))
+	if flag == "qx" || flag == "quanx" {
+		return true
+	}
+	// iOS commonly percent-encodes the space in the app's User-Agent. Do not
+	// change the original UA passed to entry rules or override an explicit flag.
+	compact := strings.NewReplacer("%20", "", " ", "", "_", "", "-", "").Replace(flag)
+	return strings.Contains(compact, "quantumultx")
+}
+
 func isShadowrocketModuleSubscribeFlag(flag string) bool {
 	return strings.Contains(flag, "shadowrocket-module") || strings.Contains(flag, "shadowrocket_module") || strings.Contains(flag, "sr-module")
 }
@@ -539,7 +556,7 @@ func firstConfiguredSubscribeBaseURL(raw string) string {
 }
 
 func prependLegacySubscribeInfoServers(cfg config.Config, flag string, subscribe usersvc.Subscribe, servers []map[string]any) []map[string]any {
-	if !cfg.ShowInfoToServerEnable || strings.TrimSpace(flag) == "" || isSingboxSubscribeFlag(flag) || isSurgeSubscribeFlag(flag) || isSurfboardSubscribeFlag(flag) || len(servers) == 0 {
+	if !cfg.ShowInfoToServerEnable || strings.TrimSpace(flag) == "" || isSingboxSubscribeFlag(flag) || isSurgeSubscribeFlag(flag) || isSurfboardSubscribeFlag(flag) || isQuantumultXSubscribeFlag(flag) || len(servers) == 0 {
 		return servers
 	}
 

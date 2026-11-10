@@ -59,6 +59,10 @@ func TestEntryDeliveryBuildersOnlyEmittedNodes(t *testing.T) {
 			buildGeneralSubscribePayload("secret-uuid", servers, c)
 			return nil
 		}},
+		{"quantumultx", func(c *entryevidence.Collector) error {
+			buildQuantumultXPayload("secret-uuid", servers, c)
+			return nil
+		}},
 		{"shadowrocket", func(c *entryevidence.Collector) error {
 			buildShadowrocketPayload(usersvc.Subscribe{UUID: "secret-uuid"}, servers, c)
 			return nil
@@ -287,6 +291,11 @@ func TestEntryDeliveryRouterSubscriptionAndNotModified(t *testing.T) {
 	rec := request("/api/v1/client/subscribe?token=NEVER-LOG-TOKEN", "")
 	if rec.Code != 200 {
 		t.Fatalf("subscribe %d %s", rec.Code, rec.Body.String())
+	}
+	expectEvidenceRequest(mock, "subscription", 200, true, "complete", "server_write_completed", 1)
+	rec = request("/api/v1/client/subscribe?token=NEVER-LOG-TOKEN&flag=qx", "")
+	if rec.Code != 200 || !strings.HasPrefix(rec.Body.String(), "vmess=192.0.2.7:54101,") {
+		t.Fatalf("native QX subscribe %d %s", rec.Code, rec.Body.String())
 	}
 	expectEvidenceRequest(mock, "server_json", 200, true, "complete", "server_write_completed", 1)
 	rec = request("/api/v1/user/server/fetch?auth_data=test", "")
