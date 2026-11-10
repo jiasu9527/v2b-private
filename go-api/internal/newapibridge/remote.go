@@ -40,6 +40,12 @@ type remoteTopUp struct {
 	PaymentMethod   string      `json:"payment_method"`
 	PaymentProvider string      `json:"payment_provider"`
 	Status          string      `json:"status"`
+	AmountFen       int64       `json:"amount_fen"`
+	CreditedQuota   int64       `json:"credited_quota"`
+	QuotaPerUnit    int64       `json:"quota_per_unit"`
+	Currency        string      `json:"currency"`
+	DisplayRate     string      `json:"display_rate"`
+	QuoteHash       string      `json:"quote_hash"`
 }
 
 type remoteUser struct {

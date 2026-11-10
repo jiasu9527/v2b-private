@@ -2,6 +2,8 @@
 
 本模块连接独立部署的 New API，不把其模型网关、计费表合并进 V2B。方向固定为 **本站普通余额 → 本人 AI 服务额度**，不支持反向提现，不直接划转佣金余额。
 
+Forest 分离前端现在另有 `/ai` 工作区：真实 AI 余额、站内划转、独立密码、流式聊天、V2 角色卡、API Key 和使用记录。需要同时更新 Forest 前端与本仓库 Go 后端；下面的 `/new-api/` 桥接门户仍保留用于 OIDC／Epay 回调与独立确认页。新工作区的上游版本依据、角色兼容范围和验收边界见 [AI 工作区后端说明](ai-workspace-backend-review.md)。
+
 ## 设计与资金口径
 
 1. 用户通过本站 OIDC 登录 New API，稳定账号标识为 `forest:<本站用户 ID>`。
@@ -74,9 +76,55 @@ New API 会向网关的 `/submit.php` 发出签名表单。支付方式展示为
 
 在 New API 中配置充值最低金额、人民币/额度换算和可选充值金额，确保它生成的人民币金额在本站限额内。本站不会用管理员写接口直接增加远端 quota。
 
+### 人民币 1:1 划转（Forest CNY 补丁）
+
+官方 `v1.0.0-rc.49` 的旧 Epay `amount` 是整数额度单位，不是人民币元；当 `Price=7.3` 时，`amount=1` 会生成 ¥7.30 的订单。不能只把 `Price` 改为 1，否则会改变现有额度购买力。
+
+`v1.0.0-rc.49-forest-cny.1` 增加人民币分协议，保留模型价格和原配额单位：
+
+- 两站用户均输入人民币，最低 **¥1.00**，可填 **¥1.23、¥10.00** 等两位小数；本站扣除多少人民币，AI 站显示增加多少人民币。管理员配置更高最低额时仍遵守限额。
+- `GET /api/user/topup/info` 返回 `supports_cny_amount_fen=true`、`min_amount_fen`；仅 CNY 显示、充值率与显示率相等、无额外充值倍率/折扣时启用。未支持此协议的远端继续走旧报价，不伪造 ¥1 支持。
+- `POST /api/user/amount` 传 `{amount_fen}`，返回金额、到账配额、配额单位、币种、换算参数和 `quote_hash`。建单 `/api/user/pay` 传 `{amount_fen,expected_quote_hash,payment_method}`，不得同时传旧 `amount`。
+- 新单保存上述快照，回调和补单按原快照到账；新单报价参数变化拒绝支付并要求重新报价，历史旧单保持旧语义。订单残缺快照不能回退旧公式。
+- 配额按最近整数取整，当前配额精度下最大误差不超过半个内部 quota；强制校验到账显示四舍五入到分后等于付款人民币金额。不会把 ¥1 显示成 $1，也不会修改模型原价。
+- Forest 工作区也须部署支持新协议的后端；New API 独立充值页可直接使用。支付启用和用户确认流程保持不变，测试不代替管理员完成线上支付启用配置。
+
 **两端公网 HTTPS 和回源 HTTPS 都要验证。** 浏览器显示 HTTPS 不代表 CDN 到源站也使用 HTTPS。若公网 301 重复跳回相同 URL，而源站 443 正常，应检查 CDN 回源模式、源站规则、端口及缓存；不要关闭源站 TLS 校验来修复钱包通信。
 
 ## 三、用户使用入口
+
+### Forest 站内工作区
+
+更新分离前端后从「AI 服务」进入 `/ai`。接入关闭时不展示正常可用余额；接入开启、尚未连接时显示「连接 AI 账号」。连接使用本站当前登录身份完成 OIDC，只能绑定 `forest:<本人ID>`，不存在让浏览器指定远端账号 ID 的入口。
+
+概览卡主余额来自 New API 的 `quota` 和实际显示单位，旁边的 V2B 余额为人民币分。转入先获得服务端报价，用户确认后才创建本人充值原单并进入既有钱包事务。`pending` 表示已扣本站余额但 AI 端到账待核对，不等于失败，不应再创建相同付款。
+
+账号连接会将本人 New API 的全局计费偏好设为 `wallet_only`；网页聊天通过本人会话调用 New API Playground，外部应用使用本人 API Key，都不使用管理 PAT 推理。模型渠道需在 New API 单独配置，没有可用模型时页面明确提示，不生成演示回复。
+
+独立密码不会复制本站密码，也无法读取外站已经存在的原密码。本站可以生成并加密保存新的 AI 独立密码；显示／修改前需验证当前本站密码，并遵守 New API 的密码、2FA 或 OIDC proof 要求。已有密码可能需要原 AI 密码；Passkey-only 验证首版不能在本站完成。密码查看响应 `no-store`，页面默认隐藏并定时清除。
+
+以下资源统一在 `/api/v1/user/new-api/`，仅接受 Authorization 中的有效本站用户登录。桥接门户的 `nap_` 窄权限会话不能访问工作区：
+
+| 方法／路径 | 用途与参数 |
+| --- | --- |
+| `GET account` | 本人远端余额、用户名、显示单位、托管密码是否可用；不回传会话凭据。 |
+| `POST account/connect` | `{}`；连接本人账号，可返回登录验证挑战。 |
+| `POST account/verify` | `{challenge_id,code}`；完成上游 2FA 挑战。 |
+| `GET models` | 本人当前可用模型。 |
+| `GET keys`、`GET usage` | `current/page_size` 分页；密钥列表不回完整 Key。 |
+| `POST keys` | `name/quota/unlimited_quota/expired_time/models/request_id`；同请求不重复创建。 |
+| `POST keys/reveal`、`POST keys/delete` | `{id}`；上游按本人身份再校验归属。 |
+| `POST transfer/quote` | `{amount_fen,request_id}`；真实费率报价，不扣款。 |
+| `POST transfer/confirm` | `{quote_id}`；确认服务器保存的原报价，不能另传金额或用户。 |
+| `GET transfer/review` | `quote_id`；只读核对报价状态、已关联划转及未知原单候选。 |
+| `POST transfer/resolve` | `{quote_id,remote_trade_no}`；用户确认选定原单后校验并支付，不创建第二单。 |
+| `POST password/prepare` | `{panel_password,reset}`；取得本人安全验证方式。 |
+| `POST password/confirm` | `{panel_password,challenge_id,method,code?,original_password?}`；生成并保存独立密码。 |
+| `POST password/reveal` | `{panel_password}`；只展示本站生成且仍可确认有效的托管密码。 |
+
+聊天、角色、历史及 SSE 字段见单独的工作区说明。写入请求为 JSON 对象，未知字段、跨用户筛选、重复查询参数均拒绝。工作区按用户限流；密码验证另有数据库原子限流。
+
+### 独立桥接门户
 
 可将 `https://panel.example.com/new-api/` 放进用户中心自定义导航或公告。这是内置独立付款/划转记录页面，支持手机及深色显示；并未自动改写所有第三方用户主题的菜单。
 
@@ -103,6 +151,20 @@ Content-Type: application/json
 桥接门户只保存 `nap_` 窄权限会话（30 分钟）；每次访问重新检查原本站会话是否有效及用户状态，不能拿它访问管理员 API。本站密码仅向本站登录接口提交，不发送 New API。退出本门户不等于退出其他 V2B 页面或 New API 页面。
 
 ## 四、反向代理与权限
+
+### 模型公开价格（Forest 工作区）
+
+`GET /api/v1/user/new-api/pricing` 使用当前 Forest 登录身份，要求接入已启用；无需先关联 New API 账号。
+拒绝请求参数、GET 正文和非 GET 方法，不允许客户端指定上游 URL。后端仅对已配置站点的
+`/api/pricing`、`/api/status` 发起只读 GET，不转发管理员 Token、用户会话或 Cookie，不跟随重定向。
+
+返回 `data.source_url`、`fetched_at`、`scope=public_catalog`、`currency=CNY`、
+`usd_exchange_rate`、`quota_per_unit` 与 `catalog`。目录保留公开模型价格、公式、分组倍率、
+厂商、端点及插件计费元数据；模型数以上游当前返回为准。缺失换算参数为 `null` 并返回警告，
+不能补成 1 或免费。金额仅供展示，不写入计费配置；这是公开分组价，不是用户专享费率或调用权限证明。
+
+Forest 前端在概览显示人民币价格及明细。实际扣费仍由 New API 结算；不将按次误称按张，
+不能解析的表达式保留原文而不猜价格。新增功能当前只在本地预览验证，需前后端一起更新后才用于用户站点。
 
 若 V2B 使用“只有 `/api/` 代理后端、其余为静态主题”的部署方式，需要额外将 `/new-api` 和 `/new-api/` 代理到同一个 Go 后端；尤其 `/new-api/submit.php` **不是 PHP 文件**，不得交给 PHP-FPM 或被静态 404 规则截获。例如在对应站点使用：
 
@@ -147,6 +209,10 @@ location ^~ /new-api/ {
 ## 六、存储、维护与验收
 
 首次启动自动创建 `v2_newapi_settings`、`v2_newapi_token`、`v2_newapi_checkout`、`v2_newapi_transfer`；短期票据自动清理，资金流水不自动删除。原套餐、佣金表不改动。数据库、配置与 `APP_KEY` 应成套备份；独立 AI 站的数据库也要单独备份。
+
+工作区还创建 `v2_newapi_account`、`v2_newapi_workspace_action`、`v2_newapi_workspace_audit`、`v2_newapi_character`、`v2_newapi_chat`、`v2_newapi_chat_message`、`v2_newapi_chat_request`。远端登录／refresh／托管密码加密保存，角色和聊天文本按本人隔离持久化。用户删除会话会删除正文，保留最小请求幂等墓碑；普通对话不会自动过期。过期的已结束登录／密码挑战清理，资金未知结果及 Key 创建幂等记录不会随其删除。
+
+分离部署时，Forest 的服务端 `API_URL` 仍指向 V2B 后端，不能填模型中转地址。工作区 Fetch SSE 经过前端代理，反代需允许长连接、关闭该流式路径响应缓冲；Go 端发送 15 秒心跳。账户 JSON 接口可用并不能证明流式代理配置正确。升级时优先后端、再前端；新增表采用兼容创建方式，回退程序不应手动删除账户／资金／幂等数据。
 
 自动化测试使用临时 PostgreSQL 与模拟远端：
 

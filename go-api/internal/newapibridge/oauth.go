@@ -375,5 +375,8 @@ func (s *Service) Cleanup(ctx context.Context) error {
 		return e
 	}
 	_, e := s.db.ExecContext(ctx, `DELETE FROM v2_newapi_token WHERE expires_at<$1`, time.Now().Unix())
-	return e
+	if e != nil {
+		return e
+	}
+	return s.CleanupWorkspaceActions(ctx)
 }

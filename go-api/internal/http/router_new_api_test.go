@@ -52,6 +52,14 @@ func (f *newAPIHTTPFixture) ListTransfers(_ context.Context, q newapibridge.Tran
 	f.calls++
 	return newapibridge.TransferPage{Items: []newapibridge.Transfer{}, Current: q.Current, PageSize: q.PageSize}, nil
 }
+func (f *newAPIHTTPFixture) ListBindings(_ context.Context, current, pageSize int) (newapibridge.BindingPage, error) {
+	f.calls++
+	return newapibridge.BindingPage{Items: []newapibridge.Binding{}, Current: current, PageSize: pageSize}, nil
+}
+func (f *newAPIHTTPFixture) CheckConnection(context.Context) (newapibridge.CheckResult, error) {
+	f.calls++
+	return newapibridge.CheckResult{}, nil
+}
 func (f *newAPIHTTPFixture) RetryTransfer(_ context.Context, id, actor int64) error {
 	f.actor = actor
 	f.calls++
@@ -188,6 +196,39 @@ func TestNewAPIHTTPAdminOnlyFreshAndNoQueryCredentials(t *testing.T) {
 	w = newAPIHTTPCall(t, router, "POST", "/api/v1/localadmin/new-api/retry", `{"id":9}`, "panel-auth")
 	if w.Code < 400 || svc.calls != before {
 		t.Fatal("revoked session accepted", w.Code)
+	}
+}
+
+func TestNewAPIAdminPageHeaderAuthContract(t *testing.T) {
+	for _, tc := range []struct{ method, path, body string }{
+		{"GET", "/config", ""},
+		{"GET", "/transfers?current=2&page_size=50&user_id=7&status=pending", ""},
+		{"GET", "/bindings?current=3&page_size=20", ""},
+		{"POST", "/config", `{"expected_revision":1,"enabled":false}`},
+		{"POST", "/check", `{}`},
+		{"POST", "/retry", `{"id":9}`},
+	} {
+		t.Run(tc.method+tc.path, func(t *testing.T) {
+			for _, token := range []string{"", "expired", "panel-auth", "Bearer panel-auth"} {
+				svc := &newAPIHTTPFixture{}
+				sessions := &newAPIFreshSession{identity: &session.Identity{ID: 7, IsAdmin: 1}}
+				router := NewRouter(config.Config{AdminPath: "safeadmin"}, WithSessionService(sessions), WithNewAPIBridge(svc))
+				r := httptest.NewRequest(tc.method, "/api/v1/safeadmin/new-api"+tc.path, strings.NewReader(tc.body))
+				r.Header.Set("Authorization", token)
+				if tc.body != "" {
+					r.Header.Set("Content-Type", "application/json")
+				}
+				w := httptest.NewRecorder()
+				router.ServeHTTP(w, r)
+				if token == "" || token == "expired" {
+					if w.Code != http.StatusForbidden || svc.calls != 0 {
+						t.Fatalf("invalid session accepted: %d %s", w.Code, w.Body.String())
+					}
+				} else if w.Code != http.StatusOK || svc.calls != 1 || sessions.freshCalls != 1 {
+					t.Fatalf("valid page request failed: %d %s (calls=%d, fresh=%d)", w.Code, w.Body.String(), svc.calls, sessions.freshCalls)
+				}
+			}
+		})
 	}
 }
 

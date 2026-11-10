@@ -114,7 +114,8 @@ func (s *Service) EnsureSchema(ctx context.Context) error {
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(763918201)`); err != nil {
 		return err
 	}
-	for _, statement := range schemaStatements {
+	statements := append(append(append([]string{}, schemaStatements...), workspaceAccountSchema...), workspaceChatSchema...)
+	for _, statement := range statements {
 		if _, err = tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("newapi schema: %w", err)
 		}

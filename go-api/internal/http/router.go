@@ -260,6 +260,9 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			handleNewAPIPublic(w, r, state.session, state.passport, state.newAPI, strings.TrimPrefix(r.URL.Path, "/api/v1/new-api/"))
 			return
 		case strings.HasPrefix(r.URL.Path, "/api/v1/user/new-api/"):
+			if handleNewAPIWorkspace(w, r, state.session, state.passport, state.newAPI, strings.TrimPrefix(r.URL.Path, "/api/v1/user/new-api/")) {
+				return
+			}
 			handleNewAPIUser(w, r, state.session, state.newAPI, strings.TrimPrefix(r.URL.Path, "/api/v1/user/new-api/"))
 			return
 		case strings.HasPrefix(r.URL.Path, adminPrefix+"/new-api/"):
