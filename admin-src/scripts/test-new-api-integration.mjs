@@ -18,6 +18,7 @@ const { outputText } = ts.transpileModule(isolated, { compilerOptions: { module:
 const {
   newAPIAmountToFen, newAPIFenToYuan, newAPIConfigPayload, newAPIConfigFormValues,
   newAPITransferStatus, newAPIRetryAllowed, newAPITransferQuery,
+  newAPIConfigResult,
 } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
 
 function config(overrides = {}) {
@@ -45,6 +46,22 @@ test('config hydration never populates stored secrets and leaves missing site UR
   for (const key of ['client_secret', 'merchant_key', 'admin_token']) assert.equal(form[key], '');
   assert.equal(form.min_amount_yuan, '1.00');
   assert.equal(form.max_amount_yuan, '1000.00');
+});
+
+test('new installations default to the migrated AI site without overwriting saved origins', () => {
+  assert.equal(newAPIConfigFormValues(config({ api_url: '' })).api_url, 'https://apizhuan.com');
+  assert.equal(newAPIConfigFormValues(config({ api_url: 'https://custom.example.test' })).api_url, 'https://custom.example.test');
+});
+
+test('config responses require complete committed state before accepting save success', () => {
+  assert.deepEqual(newAPIConfigResult(config()), config());
+  assert.equal(newAPIConfigResult(config({ revision: 4 }), 3).revision, 4);
+  for (const value of [undefined, null, true, {}, { revision: 4 },
+    config({ enabled: 'false' }), config({ has_admin_token: undefined }),
+    config({ admin_user_id: -1 }), config({ min_amount_fen: 0 }),
+    config({ daily_limit_fen: 1 }), config({ api_url: undefined }),
+  ]) assert.throws(() => newAPIConfigResult(value));
+  for (const revision of [2, 3, 5]) assert.throws(() => newAPIConfigResult(config({ revision }), 3));
 });
 
 test('save whitelists config fields, uses revision and never sends blank credentials', () => {
@@ -88,7 +105,9 @@ test('setup explains native OIDC registration and fixed New API callback origin'
   assert.match(source, /不要使用“通用自定义 OAuth”/);
   assert.match(source, /ServerAddress/);
   assert.match(source, /固定为上方已保存的 New API 站点地址/);
-  assert.match(source, /https:\/\/ai\.forest555\.com/);
+  assert.match(source, /https:\/\/apizhuan\.com/);
+  assert.doesNotMatch(source, /https:\/\/ai\.forest555\.com/);
+  assert.match(source, /config\?\.api_url \|\| 'https:\/\/apizhuan\.com'/);
   assert.match(source, /不要填 V2B 本站域名或使用其他别名/);
   assert.match(source, /RegisterEnabled=true/);
   assert.match(source, /PasswordRegisterEnabled=false/);

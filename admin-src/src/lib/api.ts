@@ -161,12 +161,23 @@ function appendValue(q: URLSearchParams, key: string, value: any, options: { kee
   q.set(key, String(value));
 }
 
-function toQuery(params: AnyRecord = {}, options: { keepEmpty?: boolean } = {}) {
+function toQuery(params: AnyRecord = {}, options: { keepEmpty?: boolean; includeAuth?: boolean } = {}) {
   const q = new URLSearchParams();
   Object.entries(params).forEach(([k, v]) => appendValue(q, k, v, options));
   const auth = getAuth();
-  if (auth && !q.has('auth_data')) q.set('auth_data', auth);
+  if (options.includeAuth !== false && auth && !q.has('auth_data')) q.set('auth_data', auth);
   return q.toString();
+}
+
+function adminHeaderAuth(path: string, params: AnyRecord): Record<string, string> | undefined {
+  // New API routes accept credentials only in Authorization, including reads.
+  // Keeping auth_data in the query would also fail their strict filter decoder.
+  if (!path.startsWith('/new-api/')) return undefined;
+  if (Object.keys(params).some((key) => key === 'auth_data' || key.startsWith('auth_data['))) {
+    throw new Error('New API 登录凭据只能通过请求头发送');
+  }
+  const auth = getAuth();
+  return auth ? { Authorization: auth } : {};
 }
 
 function normalizeError(json: any, fallback: string) {
@@ -210,8 +221,9 @@ export async function apiGet(path: string, params: AnyRecord = {}, options: { si
     const qs = miniQuery(params, options);
     return parseResponse(await fetch(`${url}${qs ? `?${qs}` : ''}`, { credentials: 'omit', signal: options.signal, cache: 'no-store', headers: aiOpsRequestHeaders() }));
   }
-  const qs = toQuery(params, { keepEmpty: options.keepEmpty });
-  const res = await fetch(`/api/v1/${getAdminPath()}${path}${qs ? `?${qs}` : ''}`, { credentials: 'same-origin', signal: options.signal, cache: options.cache });
+  const headers = adminHeaderAuth(path, params);
+  const qs = toQuery(params, { keepEmpty: options.keepEmpty, includeAuth: headers === undefined });
+  const res = await fetch(`/api/v1/${getAdminPath()}${path}${qs ? `?${qs}` : ''}`, { credentials: 'same-origin', signal: options.signal, cache: headers ? 'no-store' : options.cache, headers });
   if (path.startsWith('/apple-id/')) await revalidateSupportIdentity(res);
   return parseResponse(res);
 }
@@ -221,10 +233,12 @@ export async function apiWrite(method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', path
     const url = aiOpsRequestURL(path);
     return parseResponse(await fetch(url, { method, credentials: 'omit', cache: 'no-store', headers: { ...aiOpsRequestHeaders(), 'Content-Type': 'application/json' }, body: method === 'DELETE' ? undefined : JSON.stringify(body) }));
   }
-  // Strict JSON admin endpoints authenticate from the query string, so auth_data is not added to their decoded payload.
+  // Legacy JSON endpoints use query auth; New API endpoints require header-only auth.
+  // Neither kind accepts auth_data in its strictly decoded business payload.
+  const authHeaders = adminHeaderAuth(path, body);
   const auth = getAuth();
-  const suffix = auth ? `${path.includes('?') ? '&' : '?'}auth_data=${encodeURIComponent(auth)}` : '';
-  const res = await fetch(`/api/v1/${getAdminPath()}${path}${suffix}`, { method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: method === 'DELETE' ? undefined : JSON.stringify(body) });
+  const suffix = authHeaders === undefined && auth ? `${path.includes('?') ? '&' : '?'}auth_data=${encodeURIComponent(auth)}` : '';
+  const res = await fetch(`/api/v1/${getAdminPath()}${path}${suffix}`, { method, credentials: 'same-origin', cache: authHeaders ? 'no-store' : undefined, headers: { 'Content-Type': 'application/json', ...authHeaders }, body: method === 'DELETE' ? undefined : JSON.stringify(body) });
   return parseResponse(res);
 }
 export const apiJsonPost = (path: string, body: AnyRecord = {}) => apiWrite('POST', path, body);

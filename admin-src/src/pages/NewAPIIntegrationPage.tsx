@@ -99,7 +99,7 @@ function httpsOrigin(value: string, label: string): string {
 export function newAPIConfigFormValues(config: IntegrationConfig): ConfigForm {
   return {
     enabled: !!config.enabled,
-    api_url: config.api_url || 'https://ai.forest555.com',
+    api_url: config.api_url || 'https://apizhuan.com',
     site_url: config.site_url || '',
     client_id: config.client_id || 'forest',
     merchant_id: config.merchant_id || 'forest-wallet',
@@ -110,6 +110,20 @@ export function newAPIConfigFormValues(config: IntegrationConfig): ConfigForm {
     // Secrets never hydrate from a GET response, even if a future API regresses.
     client_secret: '', merchant_key: '', admin_token: '',
   };
+}
+
+export function newAPIConfigResult(value: unknown, previousRevision?: number): IntegrationConfig {
+  const config = value as IntegrationConfig;
+  if (!config || !Number.isSafeInteger(config.revision) || config.revision < 0 ||
+      (previousRevision !== undefined && config.revision !== previousRevision + 1) ||
+      !Number.isSafeInteger(config.admin_user_id) || config.admin_user_id < 0 ||
+      ['enabled', 'has_client_secret', 'has_merchant_key', 'has_admin_token'].some((key) => typeof config[key] !== 'boolean') ||
+      ['api_url', 'site_url', 'client_id', 'merchant_id'].some((key) => typeof config[key] !== 'string') ||
+      ['min_amount_fen', 'max_amount_fen', 'daily_limit_fen'].some((key) => !Number.isSafeInteger(config[key]) || config[key] < 1) ||
+      config.min_amount_fen > config.max_amount_fen || config.max_amount_fen > config.daily_limit_fen) {
+    throw new Error('服务端未返回有效配置及版本，请重新读取配置后核对');
+  }
+  return config;
 }
 
 export function newAPIConfigPayload(values: ConfigForm, config: IntegrationConfig): Record<string, unknown> {
@@ -190,8 +204,7 @@ export default function NewAPIIntegrationPage() {
     setLoadingConfig(true); setConfigError('');
     try {
       const response = await apiGet('/new-api/config', {}, { cache: 'no-store' });
-      const next = response?.data as IntegrationConfig;
-      if (!next || !Number.isSafeInteger(next.revision) || next.revision < 0) throw new Error('配置版本无效，请检查后端版本');
+      const next = newAPIConfigResult(response?.data);
       const values = newAPIConfigFormValues(next);
       if (mounted.current && sequence === sequences.current.config) {
         setConfig(next); form.setFieldsValue(values); setDirty(false); setCheckResult(undefined);
@@ -237,11 +250,15 @@ export default function NewAPIIntegrationPage() {
     try {
       const values = await form.validateFields();
       const payload = newAPIConfigPayload(values, config);
-      await apiJsonPost('/new-api/config', payload);
+      const response = await apiJsonPost('/new-api/config', payload);
+      const next = newAPIConfigResult(response?.data, config.revision);
+      const nextValues = newAPIConfigFormValues(next);
       if (!mounted.current) return;
-      form.setFieldsValue({ client_secret: '', merchant_key: '', admin_token: '' });
+      // The successful write already returns the committed revision. A second
+      // GET can fail after saving and leave the next write using a stale CAS.
+      ++sequences.current.config;
+      setConfig(next); form.setFieldsValue(nextValues); setDirty(false);
       message.success('接入配置已保存');
-      await loadConfig();
     } catch (error: any) { if (mounted.current && !error?.errorFields) setConfigError(error?.message || '保存失败，请重新读取配置后核对'); }
     finally { busyWrite.current = false; if (mounted.current) setSaving(false); }
   };
@@ -305,7 +322,7 @@ export default function NewAPIIntegrationPage() {
       <Form form={form} layout="vertical" disabled={!config || saving || loadingConfig || checking} autoComplete="off" onValuesChange={() => { setDirty(true); setCheckResult(undefined); }}>
         <Form.Item name="enabled" label="启用接入" valuePropName="checked" extra="默认关闭。先完成两端配置并检查连接，再开启用户登录与余额支付。关闭后不再受理新扣款；此前已扣款的待到账订单仍会按原单自动核对并补通知，不自动退款。"><Switch checkedChildren="开启" unCheckedChildren="关闭" /></Form.Item>
         <Row gutter={20}>
-          <Col xs={24} lg={12}><Form.Item name="api_url" label="New API 站点地址" rules={[{ required: true, whitespace: true, message: '请输入 New API 地址' }]}><Input placeholder="https://ai.forest555.com" /></Form.Item></Col>
+          <Col xs={24} lg={12}><Form.Item name="api_url" label="New API 站点地址" rules={[{ required: true, whitespace: true, message: '请输入 New API 地址' }]}><Input placeholder="https://apizhuan.com" /></Form.Item></Col>
           <Col xs={24} lg={12}><Form.Item name="site_url" label="V2B 本站地址" extra="固定用于登录授权和余额付款回跳，不能填写 New API 地址。"><Input placeholder="https://你的V2B域名" /></Form.Item></Col>
           <Col xs={24} lg={12}><Form.Item name="client_id" label="登录 Client ID" rules={[{ required: true, whitespace: true }]}><Input placeholder="forest" /></Form.Item></Col>
           <Col xs={24} lg={12}>{secretInput('client_secret', '登录 Client Secret')}</Col>
@@ -333,7 +350,7 @@ export default function NewAPIIntegrationPage() {
       <ol style={{ margin: '0 0 16px', paddingLeft: 22, lineHeight: 1.9 }}>
         <li>填写 New API 地址与 V2B 本站 HTTPS 地址，生成登录密钥及余额支付密钥，先保存为关闭状态。</li>
         <li>在 New API 启用<strong>内置 OIDC</strong>登录，不要使用“通用自定义 OAuth”：使用下方授权、Token、UserInfo 地址及上方 Client ID / Secret。账号按本站用户 ID 关联，不同步密码。</li>
-        <li>将 New API 的 <Text code>ServerAddress</Text> 固定为上方已保存的 New API 站点地址（本次为 <Text code>https://ai.forest555.com</Text>），用户也需从同一域名打开 AI 站。不要填 V2B 本站域名或使用其他别名，否则登录回调地址会不一致。</li>
+        <li>将 New API 的 <Text code>ServerAddress</Text> 固定为上方已保存的 New API 站点地址（当前为 <Text code>{config?.api_url || 'https://apizhuan.com'}</Text>），用户也需从同一域名打开 AI 站。不要填 V2B 本站域名或使用其他别名，否则登录回调地址会不一致。</li>
         <li>正式启用时设置 <Text code>RegisterEnabled=true</Text>、<Text code>PasswordRegisterEnabled=false</Text>，并关闭不需要的其他 OAuth 登录。总注册开关必须开启才能让本站账号首次通过 OIDC 自动建号；关闭密码注册不会影响该流程。</li>
         <li>在 New API 配置易支付兼容通道：使用本站余额网关和商户 ID / 密钥。这是 V2B 余额支付，不是重新向第三方付款。</li>
         <li>配置专用管理员访问令牌并检查连接；完成联调后再启用。用户从 New API 创建充值原单，回本站确认从自己的 V2B 余额划转。</li>
@@ -375,7 +392,7 @@ export default function NewAPIIntegrationPage() {
     <Alert type="info" showIcon message="付款账号按两端用户 ID 核验" description="仅列出发起 AI 充值后已验证的付款账号关联，不是全部 SSO 登录账号。不会复制全站用户或同步密码；此处不提供解绑或向其他账号划转的操作。" />
     <Button style={{ alignSelf: 'flex-start' }} icon={<ReloadOutlined />} loading={loadingBindings} onClick={() => void loadBindings()}>刷新关联</Button>
     {bindingError && <Alert type="error" showIcon message={bindingError} />}
-    <Table<Binding> size="small" rowKey="user_id" loading={loadingBindings} dataSource={bindings.items} scroll={{ x: 700 }} columns={[
+    <Table<Binding> size="small" rowKey={(item) => `${item.user_id}:${item.remote_user_id}`} loading={loadingBindings} dataSource={bindings.items} scroll={{ x: 700 }} columns={[
       { title: 'V2B 用户 ID', dataIndex: 'user_id', width: 140 },
       { title: '邮箱', dataIndex: 'email', render: (value: string) => <span style={{ overflowWrap: 'anywhere' }}>{value || '—'}</span> },
       { title: 'New API 用户 ID', dataIndex: 'remote_user_id', width: 170 },
