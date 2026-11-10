@@ -173,3 +173,41 @@ func TestQuantumultXPayloadTracksOnlyEmittedNodes(t *testing.T) {
 		t.Fatalf("empty resource contained data: %q", got)
 	}
 }
+
+func TestQuantumultXAnyTLSModeMatchesOtherSubscriptionFormats(t *testing.T) {
+	// Switching the panel back to TLS retains the nested Reality settings.
+	// Those inactive fields must not change the actual handshake protocol.
+	for _, key := range []string{quantumultXTestRealityKey, "inactive-invalid-key"} {
+		for _, mode := range []any{1, "1"} {
+			t.Run(stringValue(mode)+"/"+key, func(t *testing.T) {
+				node := quantumultXNode(map[string]any{"type": "v2node", "protocol": "anytls", "tls": mode, "tls_settings": map[string]any{
+					"server_name": "tls.example.test", "allow_insecure": "1", "public_key": key, "short_id": "0123456789abcdef", "alpn": []string{"h2", "http/1.1"},
+				}})
+				line, ok := buildQuantumultXProxyLine(quantumultXTestUUID, node)
+				if !ok || strings.Contains(line, "reality-") {
+					t.Fatalf("ordinary TLS was rejected or changed into Reality: %s", line)
+				}
+				for _, want := range []string{"over-tls=true", "tls-host=tls.example.test", "tls-verification=false", "tls-alpn=02683208687474702f312e31", "password=" + quantumultXTestUUID} {
+					if !strings.Contains(line, want) {
+						t.Errorf("lost active TLS option %s: %s", want, line)
+					}
+				}
+				_, normalized := normalizeSubscribeServer(node)
+				uri := buildAnyTLSURI(quantumultXTestUUID, normalized)
+				if strings.Contains(uri, "reality") || !strings.Contains(uri, "insecure=1") || !strings.Contains(uri, "sni=tls.example.test") {
+					t.Fatalf("unexpected generic URI TLS mode: %s", uri)
+				}
+				outbound := buildSingBoxAnyTLSOutbound(quantumultXTestUUID, normalized)
+				if _, enabled := serverMap(outbound, "tls")["reality"]; enabled {
+					t.Fatal("ordinary TLS unexpectedly enables Reality in sing-box")
+				}
+			})
+		}
+	}
+	for _, mode := range []any{2, "2"} {
+		node := quantumultXNode(map[string]any{"type": "v2node", "protocol": "anytls", "tls": mode, "tls_settings": map[string]any{"public_key": quantumultXTestRealityKey, "short_id": "0123456789abcdef", "server_name": "tls.example.test"}})
+		if line, ok := buildQuantumultXProxyLine(quantumultXTestUUID, node); !ok || !strings.Contains(line, "reality-base64-pubkey="+quantumultXTestRealityKey) || !strings.Contains(line, "reality-hex-shortid=0123456789abcdef") {
+			t.Fatalf("active Reality lost: %s", line)
+		}
+	}
+}

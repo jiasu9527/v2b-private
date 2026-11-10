@@ -124,8 +124,10 @@ func buildQuantumultXProxyLine(userUUID string, server map[string]any) (string, 
 		}
 		insecure := serverMapBool(tlsSettings, "allow_insecure", "allowInsecure") || serverMapBool(node, "allow_insecure", "allowInsecure", "insecure")
 		add("tls-verification", strconv.FormatBool(!insecure))
-		publicKey := firstNonEmptyString(stringValue(tlsSettings["public_key"]), stringValue(tlsSettings["publicKey"]))
-		if serverInt64(node, "tls") == 2 || publicKey != "" {
+		// Nested settings survive switching a node from Reality back to TLS.
+		// The active mode, not a leftover key, determines the handshake.
+		if serverInt64(node, "tls") == 2 {
+			publicKey := firstNonEmptyString(stringValue(tlsSettings["public_key"]), stringValue(tlsSettings["publicKey"]))
 			decoded, decodeErr := base64.RawURLEncoding.DecodeString(strings.TrimRight(publicKey, "="))
 			if decodeErr != nil || len(decoded) != 32 {
 				return "", false
