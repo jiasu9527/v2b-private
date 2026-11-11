@@ -195,14 +195,20 @@ func (s *DBService) Checkout(ctx context.Context, userID int64, req CheckoutRequ
 		return CheckoutResult{}, ErrInvalidParameter
 	}
 	if s.external != nil && s.external.OwnsExternalTradeNo(req.TradeNo) {
-		externalOrder, err := s.external.LookupExternalOrder(ctx, userID, req.TradeNo)
-		if err != nil {
-			return CheckoutResult{}, err
+		create := func(ctx context.Context) (CheckoutResult, error) {
+			externalOrder, err := s.external.LookupExternalOrder(ctx, userID, req.TradeNo)
+			if err != nil {
+				return CheckoutResult{}, err
+			}
+			if externalOrder.Status != 0 {
+				return CheckoutResult{}, ErrOrderPaidOrMissing
+			}
+			return s.checkoutExternal(ctx, userID, req, externalOrder)
 		}
-		if externalOrder.Status != 0 {
-			return CheckoutResult{}, ErrOrderPaidOrMissing
+		if guard, ok := s.external.(ExternalCheckoutManager); ok {
+			return guard.CheckoutExternalOnce(ctx, userID, req, create)
 		}
-		return s.checkoutExternal(ctx, userID, req, externalOrder)
+		return create(ctx)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

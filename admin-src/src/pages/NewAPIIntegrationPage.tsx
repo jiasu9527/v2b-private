@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Col, Descriptions, Form, Input, InputNumber, Popconfirm, Row, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
 import { CopyOutlined, KeyOutlined, ReloadOutlined } from '@ant-design/icons';
 import { apiGet, apiJsonPost } from '../lib/api';
+import NewAPIConversations from './NewAPIConversations';
 import './NewAPIIntegrationPage.css';
 
 type IntegrationConfig = {
@@ -408,6 +409,7 @@ export default function NewAPIIntegrationPage() {
         { key: 'config', label: '接入配置', children: configuration },
         { key: 'transfers', label: '划转流水', children: transferTab },
         { key: 'bindings', label: '付款账号关联', children: bindingTab },
+        { key: 'conversations', label: '用户聊天', children: tab === 'conversations' ? <NewAPIConversations /> : null },
       ]} style={{ width: '100%', minWidth: 0 }} />
     </Space>
   </div>;

@@ -1,0 +1,1786 @@
+--- a/web/src/features/wallet/index.tsx
++++ b/web/src/features/wallet/index.tsx
+@@ -46,6 +46,8 @@
+   getDefaultPaymentType,
+   getMinTopupAmount,
+   dispatchSelectedPayment,
++  isCNYEpayMethod,
++  usesCNYTopupForm,
+ } from './lib'
+ import type {
+   UserWalletData,
+@@ -96,7 +98,7 @@
+     processing,
+     calculatePaymentAmount,
+     processPayment,
+-  } = usePayment()
++  } = usePayment(usesCNYTopupForm(topupInfo))
+   const {
+     affiliateLink,
+     loading: affiliateLoading,
+@@ -183,8 +185,11 @@
+       }
+ 
+       // Calculate payment amount and show confirmation dialog
+-      await calculatePaymentAmount(topupAmount, method.type)
+-      setConfirmDialogOpen(true)
++      const quotedAmount = await calculatePaymentAmount(
++        topupAmount,
++        method.type
++      )
++      if (quotedAmount > 0) setConfirmDialogOpen(true)
+     } finally {
+       setPaymentLoading(null)
+     }
+@@ -362,7 +367,14 @@
+         calculating={calculating}
+         processing={processing || waffoProcessing || pancakeProcessing}
+         discountRate={getDiscountRate()}
+-        usdExchangeRate={effectiveUsdExchangeRate}
++        usdExchangeRate={
++          isCNYEpayMethod(
++            usesCNYTopupForm(topupInfo),
++            selectedPaymentMethod?.type || getDefaultPaymentType(topupInfo)
++          )
++            ? 1
++            : effectiveUsdExchangeRate
++        }
+       />
+ 
+       <TransferDialog
+--- a/web/src/features/wallet/api.ts
++++ b/web/src/features/wallet/api.ts
+@@ -20,6 +20,8 @@
+ 
+ import type {
+   RedemptionRequest,
++  CNYTopupQuote,
++  CNYPaymentRequest,
+   PaymentRequest,
+   AmountRequest,
+   AffiliateTransferRequest,
+@@ -110,7 +112,7 @@
+  * Request regular payment
+  */
+ export async function requestPayment(
+-  request: PaymentRequest
++  request: PaymentRequest | CNYPaymentRequest
+ ): Promise<PaymentResponse> {
+   const res = await api.post('/api/user/pay', request, {
+     skipBusinessError: true,
+@@ -246,3 +248,12 @@
+   const res = await api.post('/api/user/topup/complete', request)
+   return res.data
+ }
++
++export async function calculateCNYAmount(
++  amountFen: number
++): Promise<ApiResponse<CNYTopupQuote>> {
++  const res = await api.post('/api/user/amount', { amount_fen: amountFen }, {
++    skipBusinessError: true,
++  } as Record<string, unknown>)
++  return res.data
++}
+--- a/web/src/features/wallet/types.ts
++++ b/web/src/features/wallet/types.ts
+@@ -120,6 +120,8 @@
+  * Topup configuration information
+  */
+ export interface TopupInfo {
++  supports_cny_amount_fen?: boolean
++  min_amount_fen?: number
+   /** Whether online topup is enabled */
+   enable_online_topup: boolean
+   /** Whether Stripe topup is enabled */
+@@ -253,6 +255,12 @@
+  * Topup billing record
+  */
+ export interface TopupRecord {
++  amount_fen?: number
++  credited_quota?: number
++  quota_per_unit?: number
++  currency?: string
++  display_rate?: string
++  quote_hash?: string
+   /** Record ID */
+   id: number
+   /** User ID */
+@@ -287,3 +295,18 @@
+ export interface CompleteOrderRequest {
+   trade_no: string
+ }
++
++export interface CNYTopupQuote {
++  amount_fen: number
++  credited_quota: number
++  quota_per_unit: number
++  currency: 'CNY'
++  display_rate: string
++  quote_hash: string
++}
++
++export interface CNYPaymentRequest {
++  amount_fen: number
++  expected_quote_hash: string
++  payment_method: string
++}
+--- a/web/src/features/wallet/components/recharge-form-card.tsx
++++ b/web/src/features/wallet/components/recharge-form-card.tsx
+@@ -43,6 +43,9 @@
+   getPaymentIcon,
+   getMinTopupAmount,
+   calculatePresetPricing,
++  cnyAmountFen,
++  usesCNYTopupForm,
++  isCNYEpayMethod,
+ } from '../lib'
+ import type {
+   PaymentMethod,
+@@ -118,13 +121,18 @@
+   useEffect(() => {
+     // Empty string must survive, otherwise the field can never be cleared
+     setLocalAmount((prev) =>
+-      prev === '' && topupAmount === 0 ? prev : topupAmount.toString()
++      (prev === '' && topupAmount === 0) || Number(prev) === topupAmount
++        ? prev
++        : topupAmount.toString()
+     )
+   }, [topupAmount])
+ 
++  const cnyMode = usesCNYTopupForm(topupInfo)
++  const invalidAmount = cnyMode && cnyAmountFen(Number(localAmount)) === null
++
+   const handleAmountChange = (value: string) => {
+     setLocalAmount(value)
+-    const numValue = Number.parseInt(value) || 0
++    const numValue = (cnyMode ? Number(value) : Number.parseInt(value)) || 0
+     if (numValue >= 0) {
+       onTopupAmountChange(numValue)
+     }
+@@ -239,9 +247,9 @@
+                         hasDiscount,
+                       } = calculatePresetPricing(
+                         preset.value,
+-                        priceRatio,
+-                        discount,
+-                        usdExchangeRate
++                        cnyMode ? 1 : priceRatio,
++                        cnyMode ? 1 : discount,
++                        cnyMode ? 1 : usdExchangeRate
+                       )
+                       return (
+                         <Button
+@@ -305,6 +313,10 @@
+                     value={localAmount}
+                     onChange={(e) => handleAmountChange(e.target.value)}
+                     min={minTopup}
++                    step={cnyMode ? '0.01' : '1'}
++                    max={cnyMode ? 1000000 : undefined}
++                    inputMode='decimal'
++                    aria-invalid={invalidAmount}
+                     placeholder={t('Minimum {{amount}}', { amount: minTopup })}
+                     className='h-9 text-base sm:h-10 sm:text-lg'
+                   />
+@@ -334,7 +346,10 @@
+                         method.min_topup || 0,
+                         getMinTopupAmount(topupInfo)
+                       )
+-                      const disabled = minTopup > topupAmount
++                      const disabled =
++                        minTopup > topupAmount ||
++                        (!isCNYEpayMethod(cnyMode, method.type) &&
++                          !Number.isInteger(topupAmount))
+                       const disabledReason = disabled
+                         ? t('Minimum topup amount: {{amount}}', {
+                             amount: minTopup,
+@@ -349,7 +364,9 @@
+                           key={method.type}
+                           variant='outline'
+                           onClick={() => onPaymentMethodSelect(method)}
+-                          disabled={disabled || !!paymentLoading}
++                          disabled={
++                            disabled || invalidAmount || !!paymentLoading
++                          }
+                           title={disabledReason}
+                           aria-label={
+                             disabledReason
+@@ -417,7 +434,9 @@
+                         const loadingKey = `waffo-${index}`
+                         const methodKey = `${method.payMethodType ?? 'unknown'}-${method.payMethodName ?? method.name}`
+                         const waffoMin = waffoMinTopup || 0
+-                        const belowMin = waffoMin > topupAmount
++                        const belowMin =
++                          waffoMin > topupAmount ||
++                          !Number.isInteger(topupAmount)
+                         const disabledReason = belowMin
+                           ? t('Minimum topup amount: {{amount}}', {
+                               amount: waffoMin,
+--- a/web/src/features/wallet/components/dialogs/payment-confirm-dialog.tsx
++++ b/web/src/features/wallet/components/dialogs/payment-confirm-dialog.tsx
+@@ -145,7 +145,10 @@
+           <AlertDialogCancel disabled={processing}>
+             {t('Cancel')}
+           </AlertDialogCancel>
+-          <AlertDialogAction onClick={onConfirm} disabled={processing}>
++          <AlertDialogAction
++            onClick={onConfirm}
++            disabled={processing || calculating || paymentAmount <= 0}
++          >
+             {processing && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
+             {t('Confirm Payment')}
+           </AlertDialogAction>
+--- a/web/src/features/wallet/components/dialogs/billing-history-dialog.tsx
++++ b/web/src/features/wallet/components/dialogs/billing-history-dialog.tsx
+@@ -248,11 +248,13 @@
+                             {t('Amount')}
+                           </Label>
+                           <div className='text-sm font-semibold'>
+-                            {formatCurrencyFromUSD(record.amount, {
+-                              digitsLarge: 2,
+-                              digitsSmall: 2,
+-                              abbreviate: false,
+-                            })}
++                            {record.currency === 'CNY' && record.amount_fen
++                              ? `¥${(record.amount_fen / 100).toFixed(2)}`
++                              : formatCurrencyFromUSD(record.amount, {
++                                  digitsLarge: 2,
++                                  digitsSmall: 2,
++                                  abbreviate: false,
++                                })}
+                           </div>
+                         </div>
+                         <div className='space-y-1'>
+--- a/web/src/features/wallet/__tests__/copy.test.tsx
++++ b/web/src/features/wallet/__tests__/copy.test.tsx
+@@ -16,7 +16,7 @@
+ 
+ For commercial licensing, please contact support@quantumnous.com
+ */
+-import { act, render, screen } from '@testing-library/react'
++import { act, fireEvent, render, screen } from '@testing-library/react'
+ import { createInstance } from 'i18next'
+ import { I18nextProvider, initReactI18next } from 'react-i18next'
+ import { beforeEach, expect, it, vi } from 'vitest'
+@@ -125,3 +125,124 @@
+     expect(screen.getByPlaceholderText('Minimum 1')).toBeVisible()
+   }
+ )
++
++it('accepts RMB cents and does not multiply CNY recharge presets by the legacy rate', async () => {
++  const onAmount = vi.fn()
++  render(
++    <I18nextProvider i18n={i18n}>
++      <RechargeFormCard
++        topupInfo={{
++          enable_online_topup: true,
++          enable_stripe_topup: false,
++          pay_methods: [],
++          min_topup: 1,
++          stripe_min_topup: 1,
++          amount_options: [1],
++          discount: {},
++          supports_cny_amount_fen: true,
++          min_amount_fen: 100,
++        }}
++        presetAmounts={[{ value: 1 }]}
++        selectedPreset={null}
++        topupAmount={1}
++        paymentAmount={1}
++        priceRatio={7.3}
++        usdExchangeRate={7.3}
++        calculating={false}
++        paymentLoading={null}
++        redemptionCode=''
++        redeeming={false}
++        onSelectPreset={vi.fn()}
++        onTopupAmountChange={onAmount}
++        onPaymentMethodSelect={vi.fn()}
++        onRedemptionCodeChange={vi.fn()}
++        onRedeem={vi.fn()}
++      />
++    </I18nextProvider>
++  )
++  expect(screen.getByRole('button', { name: /^1 / })).toHaveTextContent(
++    '支付 1'
++  )
++  const input = screen.getByRole('spinbutton')
++  expect(input).toHaveAttribute('step', '0.01')
++  fireEvent.change(input, { target: { value: '1.23' } })
++  expect(onAmount).toHaveBeenLastCalledWith(1.23)
++  fireEvent.change(input, { target: { value: '1.234' } })
++  expect(input).toHaveAttribute('aria-invalid', 'true')
++})
++
++it('shows stored RMB cents for CNY orders instead of the legacy zero amount', async () => {
++  vi.spyOn(api, 'get').mockResolvedValue({
++    data: {
++      success: true,
++      data: {
++        total: 1,
++        items: [
++          {
++            id: 99,
++            status: 'success',
++            amount: 0,
++            amount_fen: 123,
++            credited_quota: 84247,
++            quota_per_unit: 500000,
++            currency: 'CNY',
++            display_rate: '7.3',
++            money: 1.23,
++            trade_no: 'cny-order',
++            payment_method: 'forest',
++            create_time: 1,
++          },
++        ],
++      },
++    },
++  })
++  render(
++    <I18nextProvider i18n={i18n}>
++      <BillingHistoryDialog open onOpenChange={vi.fn()} />
++    </I18nextProvider>
++  )
++  await screen.findByText('cny-order')
++  expect(screen.getByText('¥1.23')).toBeVisible()
++})
++
++it('keeps legacy shared-form units when Stripe is also enabled', () => {
++  render(
++    <I18nextProvider i18n={i18n}>
++      <RechargeFormCard
++        topupInfo={{
++          enable_online_topup: true,
++          enable_stripe_topup: true,
++          pay_methods: [
++            { type: 'alipay', name: 'Forest wallet' },
++            { type: 'stripe', name: 'Stripe' },
++          ],
++          min_topup: 1,
++          stripe_min_topup: 1,
++          amount_options: [1],
++          discount: {},
++          supports_cny_amount_fen: true,
++          min_amount_fen: 100,
++        }}
++        presetAmounts={[{ value: 1 }]}
++        selectedPreset={null}
++        topupAmount={1}
++        paymentAmount={7.3}
++        priceRatio={7.3}
++        usdExchangeRate={7.3}
++        calculating={false}
++        paymentLoading={null}
++        redemptionCode=''
++        redeeming={false}
++        onSelectPreset={vi.fn()}
++        onTopupAmountChange={vi.fn()}
++        onPaymentMethodSelect={vi.fn()}
++        onRedemptionCodeChange={vi.fn()}
++        onRedeem={vi.fn()}
++      />
++    </I18nextProvider>
++  )
++  expect(screen.getByRole('spinbutton')).toHaveAttribute('step', '1')
++  expect(screen.getByRole('button', { name: /^7.3 / })).toHaveTextContent(
++    '支付 7.3'
++  )
++})
+--- a/web/src/features/wallet/hooks/use-payment.test.ts
++++ b/web/src/features/wallet/hooks/use-payment.test.ts
+@@ -1,3 +1,4 @@
++import { act, renderHook } from '@testing-library/react'
+ /*
+ Copyright (C) 2023-2026 QuantumNous
+ 
+@@ -16,10 +17,13 @@
+ 
+ For commercial licensing, please contact support@quantumnous.com
+ */
+-import { describe, expect, test } from 'vitest'
++import { describe, expect, test, vi } from 'vitest'
++
++import { api } from '@/lib/api'
+ 
+ import { PAYMENT_TYPES } from '../constants'
+-import { requestPaymentAmount } from './use-payment'
++import { cnyAmountFen } from '../lib'
++import { requestPaymentAmount, usePayment } from './use-payment'
+ 
+ describe('payment amount routing', () => {
+   test('uses the dedicated Waffo amount calculator', async () => {
+@@ -47,3 +51,86 @@
+     expect(calls).toEqual(['waffo:120'])
+   })
+ })
++
++describe('CNY payment quotes', () => {
++  test('uses integer RMB cents and the confirmed quote without flooring the amount', async () => {
++    const post = vi
++      .spyOn(api, 'post')
++      .mockImplementation(async (path, body) => {
++        if (path === '/api/user/amount') {
++          return {
++            data: {
++              message: 'success',
++              data: {
++                amount_fen: (body as { amount_fen: number }).amount_fen,
++                currency: 'CNY',
++                credited_quota: 84247,
++                quota_per_unit: 500000,
++                display_rate: '7.3',
++                quote_hash: 'quote-for-123',
++              },
++            },
++          }
++        }
++        return {
++          data: {
++            message: 'success',
++            data: { money: '1.23' },
++            url: 'https://wallet.invalid/submit',
++          },
++        }
++      })
++    vi.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(() => {})
++    const { result } = renderHook(() => usePayment(true))
++    await act(async () => {
++      await result.current.calculatePaymentAmount(1.23, 'forest')
++    })
++    expect(result.current.amount).toBe(1.23)
++    await act(async () => {
++      await result.current.processPayment(1.23, 'forest')
++    })
++    expect(post).toHaveBeenCalledWith(
++      '/api/user/pay',
++      {
++        amount_fen: 123,
++        expected_quote_hash: 'quote-for-123',
++        payment_method: 'forest',
++      },
++      expect.anything()
++    )
++  })
++
++  test('refuses payment with a quote for a different entered amount', async () => {
++    const post = vi.spyOn(api, 'post').mockResolvedValue({
++      data: {
++        message: 'success',
++        data: {
++          amount_fen: 100,
++          currency: 'CNY',
++          credited_quota: 68493,
++          quota_per_unit: 500000,
++          display_rate: '7.3',
++          quote_hash: 'quote-for-100',
++        },
++      },
++    })
++    const { result } = renderHook(() => usePayment(true))
++    await act(async () => {
++      await result.current.calculatePaymentAmount(1, 'forest')
++    })
++    let success = true
++    await act(async () => {
++      success = await result.current.processPayment(1.23, 'forest')
++    })
++    expect(success).toBe(false)
++    expect(post.mock.calls.map(([path]) => path)).toEqual(['/api/user/amount'])
++  })
++
++  test('does not round third decimals or accept non-finite amounts', () => {
++    expect(cnyAmountFen(1)).toBe(100)
++    expect(cnyAmountFen(1.23)).toBe(123)
++    expect(cnyAmountFen(1.234)).toBeNull()
++    expect(cnyAmountFen(Number.NaN)).toBeNull()
++    expect(cnyAmountFen(1000000.01)).toBeNull()
++  })
++})
+--- a/web/src/features/wallet/hooks/use-payment.ts
++++ b/web/src/features/wallet/hooks/use-payment.ts
+@@ -17,13 +17,14 @@
+ For commercial licensing, please contact support@quantumnous.com
+ */
+ import i18next from 'i18next'
+-import { useState, useCallback } from 'react'
++import { useState, useCallback, useRef } from 'react'
+ import { toast } from 'sonner'
+ 
+ import { handleServerError } from '@/lib/handle-server-error'
+ 
+ import {
+   calculateAmount,
++  calculateCNYAmount,
+   calculateStripeAmount,
+   calculateWaffoAmount,
+   calculateWaffoPancakeAmount,
+@@ -36,8 +37,10 @@
+   isWaffoPayment,
+   isWaffoPancakePayment,
+   submitPaymentForm,
++  cnyAmountFen,
++  isCNYEpayMethod,
+ } from '../lib'
+-import type { AmountRequest, AmountResponse } from '../types'
++import type { AmountRequest, AmountResponse, CNYTopupQuote } from '../types'
+ 
+ // ============================================================================
+ // Payment Hook
+@@ -81,30 +84,55 @@
+   return Number.parseFloat(response.data)
+ }
+ 
+-export function usePayment() {
++export function usePayment(supportsCNY = false) {
++  const quoteRef = useRef<{ quote: CNYTopupQuote; paymentType: string } | null>(
++    null
++  )
++  const calculationId = useRef(0)
+   const [amount, setAmount] = useState<number>(0)
+   const [calculating, setCalculating] = useState(false)
+   const [processing, setProcessing] = useState(false)
+ 
+-  // Calculate payment amount
++  // Ignore stale quotes when users edit amounts while an earlier request is in flight.
+   const calculatePaymentAmount = useCallback(
+     async (topupAmount: number, paymentType: string) => {
++      const id = ++calculationId.current
++      quoteRef.current = null
++      setAmount(0)
++      setCalculating(true)
+       try {
+-        setCalculating(true)
+-        const calculatedAmount = await requestPaymentAmount(
+-          topupAmount,
+-          paymentType
+-        )
++        let calculatedAmount: number
++        if (isCNYEpayMethod(supportsCNY, paymentType)) {
++          const fen = cnyAmountFen(topupAmount)
++          if (fen === null) return 0
++          const response = await calculateCNYAmount(fen)
++          if (
++            !isApiSuccess(response) ||
++            response.data?.amount_fen !== fen ||
++            !response.data.quote_hash ||
++            response.data.currency !== 'CNY'
++          ) {
++            return 0
++          }
++          if (id !== calculationId.current) return 0
++          quoteRef.current = { quote: response.data, paymentType }
++          calculatedAmount = fen / 100
++        } else {
++          calculatedAmount = await requestPaymentAmount(
++            topupAmount,
++            paymentType
++          )
++        }
++        if (id !== calculationId.current) return 0
+         setAmount(calculatedAmount)
+         return calculatedAmount
+       } catch {
+-        setAmount(0)
+         return 0
+       } finally {
+-        setCalculating(false)
++        if (id === calculationId.current) setCalculating(false)
+       }
+     },
+-    []
++    [supportsCNY]
+   )
+ 
+   // Process payment
+@@ -114,17 +142,46 @@
+         setProcessing(true)
+ 
+         const isStripe = isStripePayment(paymentType)
+-        const amount = Math.floor(topupAmount)
+-
+-        const response = isStripe
+-          ? await requestStripePayment({
+-              amount,
+-              payment_method: 'stripe',
+-            })
+-          : await requestPayment({
+-              amount,
+-              payment_method: paymentType,
+-            })
++        const amount = topupAmount
++
++        const cnyMode = isCNYEpayMethod(supportsCNY, paymentType)
++        if (!cnyMode && !Number.isInteger(topupAmount)) {
++          toast.error(i18next.t('Invalid parameters'))
++          return false
++        }
++        const snapshot = quoteRef.current
++        const fen = cnyAmountFen(topupAmount)
++        if (
++          cnyMode &&
++          (!snapshot ||
++            snapshot.paymentType !== paymentType ||
++            snapshot.quote.amount_fen !== fen)
++        ) {
++          toast.error(
++            i18next.t(
++              'Top-up quote changed. Please refresh and confirm the amount again.'
++            )
++          )
++          return false
++        }
++        let response
++        if (isStripe) {
++          response = await requestStripePayment({
++            amount,
++            payment_method: 'stripe',
++          })
++        } else if (cnyMode && snapshot && fen !== null) {
++          response = await requestPayment({
++            amount_fen: fen,
++            expected_quote_hash: snapshot.quote.quote_hash,
++            payment_method: paymentType,
++          })
++        } else {
++          response = await requestPayment({
++            amount,
++            payment_method: paymentType,
++          })
++        }
+ 
+         if (!isApiSuccess(response)) {
+           handleServerError(response, i18next.t('Payment request failed'))
+@@ -156,7 +213,7 @@
+         setProcessing(false)
+       }
+     },
+-    []
++    [supportsCNY]
+   )
+ 
+   return {
+--- a/web/src/features/wallet/lib/payment.ts
++++ b/web/src/features/wallet/lib/payment.ts
+@@ -174,6 +174,9 @@
+   }
+ 
+   if (topupInfo.enable_online_topup) {
++    if (usesCNYTopupForm(topupInfo)) {
++      return (topupInfo.min_amount_fen ?? 100) / 100
++    }
+     return topupInfo.min_topup
+   }
+ 
+@@ -217,3 +220,38 @@
+     discount: discounts[amount] || 1.0,
+   }))
+ }
++
++/** Convert a user-entered RMB amount without silently rounding a third decimal. */
++export function cnyAmountFen(amount: number): number | null {
++  if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000) return null
++  const text = String(amount)
++  if (!/^\d+(?:\.\d{1,2})?$/.test(text)) return null
++  const [whole, fraction = ''] = text.split('.')
++  const fen = Number(whole) * 100 + Number(fraction.padEnd(2, '0'))
++  return Number.isSafeInteger(fen) ? fen : null
++}
++
++export function isCNYEpayMethod(
++  enabled: boolean,
++  paymentType: string
++): boolean {
++  return (
++    enabled &&
++    !isStripePayment(paymentType) &&
++    !isWaffoPayment(paymentType) &&
++    !isWaffoPancakePayment(paymentType)
++  )
++}
++
++// This page uses a single amount field before a gateway is selected. Keep
++// legacy units for mixed gateways until each provider supports RMB cents,
++// rather than silently interpreting one visible amount in two currencies.
++export function usesCNYTopupForm(info: TopupInfo | null): boolean {
++  return (
++    info?.supports_cny_amount_fen === true &&
++    !info.enable_stripe_topup &&
++    !info.enable_waffo_topup &&
++    !info.enable_waffo_pancake_topup &&
++    info.pay_methods.every((method) => isCNYEpayMethod(true, method.type))
++  )
++}
+--- a/web/src/i18n/locales/zh.json
++++ b/web/src/i18n/locales/zh.json
+@@ -1,5 +1,7 @@
+ {
+   "translation": {
++    "Top-up quote changed. Please refresh and confirm the amount again.": "充值报价已变化，请刷新后重新确认金额。",
++    "CNY top-up configuration is unavailable. Please contact the administrator.": "人民币充值配置不可用，请联系管理员。",
+     "360": "360",
+     "1000": "1000",
+     "10000": "10000",
+--- a/web/src/i18n/locales/ja.json
++++ b/web/src/i18n/locales/ja.json
+@@ -1,5 +1,7 @@
+ {
+   "translation": {
++    "Top-up quote changed. Please refresh and confirm the amount again.": "チャージの見積もりが変更されました。更新して金額を再確認してください。",
++    "CNY top-up configuration is unavailable. Please contact the administrator.": "人民元チャージ設定は利用できません。管理者に連絡してください。",
+     "360": "360",
+     "1000": "1000",
+     "10000": "10000",
+--- a/web/src/i18n/locales/ru.json
++++ b/web/src/i18n/locales/ru.json
+@@ -1,5 +1,7 @@
+ {
+   "translation": {
++    "Top-up quote changed. Please refresh and confirm the amount again.": "Расчёт пополнения изменился. Обновите страницу и подтвердите сумму снова.",
++    "CNY top-up configuration is unavailable. Please contact the administrator.": "Пополнение в CNY недоступно. Обратитесь к администратору.",
+     "360": "360",
+     "1000": "1000",
+     "10000": "10000",
+--- a/web/src/i18n/locales/en.json
++++ b/web/src/i18n/locales/en.json
+@@ -1,5 +1,7 @@
+ {
+   "translation": {
++    "Top-up quote changed. Please refresh and confirm the amount again.": "Top-up quote changed. Please refresh and confirm the amount again.",
++    "CNY top-up configuration is unavailable. Please contact the administrator.": "CNY top-up configuration is unavailable. Please contact the administrator.",
+     "360": "360",
+     "1000": "1000",
+     "10000": "10000",
+--- a/web/src/i18n/locales/fr.json
++++ b/web/src/i18n/locales/fr.json
+@@ -1,5 +1,7 @@
+ {
+   "translation": {
++    "Top-up quote changed. Please refresh and confirm the amount again.": "Le devis de recharge a changé. Actualisez et confirmez à nouveau le montant.",
++    "CNY top-up configuration is unavailable. Please contact the administrator.": "La configuration de recharge en CNY est indisponible. Contactez l’administrateur.",
+     "360": "360",
+     "1000": "1000",
+     "10000": "10000",
+--- a/web/src/i18n/locales/zh-TW.json
++++ b/web/src/i18n/locales/zh-TW.json
+@@ -1,5 +1,7 @@
+ {
+   "translation": {
++    "Top-up quote changed. Please refresh and confirm the amount again.": "儲值報價已變更，請重新整理並再次確認金額。",
++    "CNY top-up configuration is unavailable. Please contact the administrator.": "人民幣儲值設定無法使用，請聯絡管理員。",
+     "360": "360",
+     "1000": "1000",
+     "10000": "10000",
+--- a/web/src/i18n/locales/vi.json
++++ b/web/src/i18n/locales/vi.json
+@@ -1,5 +1,7 @@
+ {
+   "translation": {
++    "Top-up quote changed. Please refresh and confirm the amount again.": "Báo giá nạp tiền đã thay đổi. Vui lòng tải lại và xác nhận số tiền.",
++    "CNY top-up configuration is unavailable. Please contact the administrator.": "Cấu hình nạp CNY không khả dụng. Vui lòng liên hệ quản trị viên。",
+     "360": "360",
+     "1000": "1000",
+     "10000": "10000",
+--- a/controller/topup.go
++++ b/controller/topup.go
+@@ -122,12 +122,23 @@
+ 		"discount":                operation_setting.GetPaymentSetting().AmountDiscount,
+ 		"topup_link":              common.TopUpLink,
+ 	}
++	supportsCNY := false
++	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeCNY {
++		group, groupErr := model.GetUserGroup(c.GetInt("id"), true)
++		supportsCNY = groupErr == nil && cnyTopupConfigValid(group)
++	}
++	data["supports_cny_amount_fen"] = supportsCNY
++	if supportsCNY {
++		data["min_amount_fen"] = cnyMinAmountFen()
++	}
+ 	common.ApiSuccess(c, data)
+ }
+ 
+ type EpayRequest struct {
+-	Amount        int64  `json:"amount"`
+-	PaymentMethod string `json:"payment_method"`
++	Amount            *int64 `json:"amount"`
++	AmountFen         *int64 `json:"amount_fen"`
++	ExpectedQuoteHash string `json:"expected_quote_hash"`
++	PaymentMethod     string `json:"payment_method"`
+ }
+ 
+ type AmountRequest struct {
+@@ -281,30 +292,57 @@
+ }
+ 
+ func RequestEpay(c *gin.Context) {
++	if !requirePaymentCompliance(c) {
++		return
++	}
+ 	var req EpayRequest
+ 	err := c.ShouldBindJSON(&req)
+ 	if err != nil {
+ 		paymentError(c, common.NewMessage("Invalid parameters"))
+ 		return
+ 	}
+-	if req.Amount < getMinTopup() {
+-		paymentError(c, common.NewMessage("Top-up amount cannot be less than {{min}}", map[string]any{"min": getMinTopup()}))
++	if (req.Amount == nil) == (req.AmountFen == nil) {
++		paymentError(c, common.NewMessage("Invalid parameters"))
+ 		return
+ 	}
+ 	id := c.GetInt("id")
+-	if rejectInvalidTopUpQuota(c, id, req.Amount) {
+-		return
+-	}
+-
+ 	group, err := model.GetUserGroup(id, true)
+ 	if err != nil {
+ 		paymentError(c, common.NewMessage("Failed to get the user group"))
+ 		return
+ 	}
+-	payMoney := getPayMoney(req.Amount, group)
+-	if payMoney < 0.01 {
+-		paymentError(c, common.NewMessage("Payment amount is too low"))
+-		return
++	var quote *cnyTopupQuote
++	var requestedAmount int64
++	var payMoney float64
++	if req.AmountFen != nil {
++		quote, err = newCNYTopupQuote(id, group, *req.AmountFen)
++		if err != nil {
++			paymentError(c, err)
++			return
++		}
++		if req.ExpectedQuoteHash == "" || req.ExpectedQuoteHash != quote.QuoteHash {
++			paymentError(c, common.NewMessage("Top-up quote changed. Please refresh and confirm the amount again."))
++			return
++		}
++		if err = model.ValidateTopUpQuotaCapacity(id, int(quote.CreditedQuota)); err != nil {
++			paymentError(c, err)
++			return
++		}
++		payMoney = decimal.NewFromInt(quote.AmountFen).Div(decimal.NewFromInt(100)).InexactFloat64()
++	} else {
++		requestedAmount = *req.Amount
++		if requestedAmount < getMinTopup() {
++			paymentError(c, common.NewMessage("Top-up amount cannot be less than {{min}}", map[string]any{"min": getMinTopup()}))
++			return
++		}
++		if rejectInvalidTopUpQuota(c, id, requestedAmount) {
++			return
++		}
++		payMoney = getPayMoney(requestedAmount, group)
++		if payMoney < 0.01 {
++			paymentError(c, common.NewMessage("Payment amount is too low"))
++			return
++		}
+ 	}
+ 
+ 	if !operation_setting.ContainsPayMethod(req.PaymentMethod) {
+@@ -322,21 +360,25 @@
+ 		paymentError(c, common.NewMessage("Payment information has not been configured by administrator"))
+ 		return
+ 	}
++	orderName := fmt.Sprintf("TUC%d", requestedAmount)
++	if quote != nil {
++		orderName = fmt.Sprintf("CNY %.2f", payMoney)
++	}
+ 	uri, params, err := client.Purchase(&epay.PurchaseArgs{
+ 		Type:           req.PaymentMethod,
+ 		ServiceTradeNo: tradeNo,
+-		Name:           fmt.Sprintf("TUC%d", req.Amount),
++		Name:           orderName,
+ 		Money:          strconv.FormatFloat(payMoney, 'f', 2, 64),
+ 		Device:         epay.PC,
+ 		NotifyUrl:      notifyUrl,
+ 		ReturnUrl:      returnUrl,
+ 	})
+ 	if err != nil {
+-		logger.LogError(c.Request.Context(), common.LogText("Epay failed to start payment user_id=%d trade_no=%s payment_method=%s amount=%d error=%q", id, tradeNo, req.PaymentMethod, req.Amount, err.Error()))
++		logger.LogError(c.Request.Context(), common.LogText("Epay failed to start payment user_id=%d trade_no=%s payment_method=%s amount=%d error=%q", id, tradeNo, req.PaymentMethod, requestedAmount, err.Error()))
+ 		paymentError(c, common.NewMessage("Failed to start payment"))
+ 		return
+ 	}
+-	amount := req.Amount
++	amount := requestedAmount
+ 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
+ 		dAmount := decimal.NewFromInt(int64(amount))
+ 		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+@@ -352,13 +394,21 @@
+ 		CreateTime:      time.Now().Unix(),
+ 		Status:          common.TopUpStatusPending,
+ 	}
++	if quote != nil {
++		topUp.AmountFen = quote.AmountFen
++		topUp.CreditedQuota = quote.CreditedQuota
++		topUp.QuotaPerUnit = quote.QuotaPerUnit
++		topUp.Currency = quote.Currency
++		topUp.DisplayRate = quote.DisplayRate
++		topUp.QuoteHash = quote.QuoteHash
++	}
+ 	err = topUp.Insert()
+ 	if err != nil {
+-		logger.LogError(c.Request.Context(), common.LogText("Epay failed to create top-up order user_id=%d trade_no=%s payment_method=%s amount=%d error=%q", id, tradeNo, req.PaymentMethod, req.Amount, err.Error()))
++		logger.LogError(c.Request.Context(), common.LogText("Epay failed to create top-up order user_id=%d trade_no=%s payment_method=%s amount=%d error=%q", id, tradeNo, req.PaymentMethod, requestedAmount, err.Error()))
+ 		paymentError(c, common.NewMessage("Failed to create order"))
+ 		return
+ 	}
+-	logger.LogInfo(c.Request.Context(), common.LogText("Epay top-up order created user_id=%d trade_no=%s payment_method=%s amount=%d money=%.2f uri=%q params=%q", id, tradeNo, req.PaymentMethod, req.Amount, payMoney, uri, common.GetJsonString(params)))
++	logger.LogInfo(c.Request.Context(), common.LogText("Epay top-up order created user_id=%d trade_no=%s payment_method=%s amount=%d money=%.2f uri=%q params=%q", id, tradeNo, req.PaymentMethod, requestedAmount, payMoney, uri, common.GetJsonString(params)))
+ 	c.JSON(http.StatusOK, gin.H{"message": "success", "data": params, "url": uri})
+ }
+ 
+@@ -466,7 +516,7 @@
+ 		// 数据库行锁 + 事务内状态校验保证（多实例部署下同样安全）。
+ 		LockOrder(verifyInfo.ServiceTradeNo)
+ 		defer UnlockOrder(verifyInfo.ServiceTradeNo)
+-		alreadyDone, err := model.RechargeEpay(verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP())
++		alreadyDone, err := model.RechargeEpay(verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP(), verifyInfo.Money)
+ 		if err != nil {
+ 			switch {
+ 			case errors.Is(err, model.ErrTopUpNotFound):
+@@ -497,19 +547,46 @@
+ }
+ 
+ func RequestAmount(c *gin.Context) {
+-	var req AmountRequest
++	if !requirePaymentCompliance(c) {
++		return
++	}
++	var req EpayRequest
+ 	err := c.ShouldBindJSON(&req)
+ 	if err != nil {
+ 		paymentError(c, common.NewMessage("Invalid parameters"))
+ 		return
+ 	}
+ 
+-	if req.Amount < getMinTopup() {
++	if (req.Amount == nil) == (req.AmountFen == nil) {
++		paymentError(c, common.NewMessage("Invalid parameters"))
++		return
++	}
++	if req.AmountFen != nil {
++		id := c.GetInt("id")
++		group, err := model.GetUserGroup(id, true)
++		if err != nil {
++			paymentError(c, common.NewMessage("Failed to get the user group"))
++			return
++		}
++		quote, err := newCNYTopupQuote(id, group, *req.AmountFen)
++		if err == nil {
++			err = model.ValidateTopUpQuotaCapacity(id, int(quote.CreditedQuota))
++		}
++		if err != nil {
++			paymentError(c, err)
++			return
++		}
++		c.JSON(http.StatusOK, gin.H{"message": "success", "data": quote})
++		return
++	}
++	requestedAmount := *req.Amount
++
++	if requestedAmount < getMinTopup() {
+ 		paymentError(c, common.NewMessage("Top-up amount cannot be less than {{min}}", map[string]any{"min": getMinTopup()}))
+ 		return
+ 	}
+ 	id := c.GetInt("id")
+-	if rejectInvalidTopUpQuota(c, id, req.Amount) {
++	if rejectInvalidTopUpQuota(c, id, requestedAmount) {
+ 		return
+ 	}
+ 	group, err := model.GetUserGroup(id, true)
+@@ -517,7 +594,7 @@
+ 		paymentError(c, common.NewMessage("Failed to get the user group"))
+ 		return
+ 	}
+-	payMoney := getPayMoney(req.Amount, group)
++	payMoney := getPayMoney(requestedAmount, group)
+ 	if payMoney <= 0.01 {
+ 		paymentError(c, common.NewMessage("Payment amount is too low"))
+ 		return
+--- a/controller/topup_quota_limit_test.go
++++ b/controller/topup_quota_limit_test.go
+@@ -4,6 +4,7 @@
+ 	"fmt"
+ 	"net/http"
+ 	"net/http/httptest"
++	"path/filepath"
+ 	"strings"
+ 	"testing"
+ 
+@@ -95,6 +96,7 @@
+ }
+ 
+ func TestRequestAmountRejectsTopUpThatCannotBeSettled(t *testing.T) {
++	confirmPaymentComplianceForTest(t)
+ 	oldQuotaPerUnit := common.QuotaPerUnit
+ 	oldDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+ 	common.QuotaPerUnit = 500000
+@@ -124,6 +126,7 @@
+ }
+ 
+ func TestRequestAmountRejectsTopUpThatWouldOverflowWallet(t *testing.T) {
++	confirmPaymentComplianceForTest(t)
+ 	oldQuotaPerUnit := common.QuotaPerUnit
+ 	oldDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+ 	oldDB := model.DB
+@@ -201,3 +204,149 @@
+ 	require.NoError(t, common.UpdateTopupGroupRatioByJSONString(`{"free":0}`))
+ 	assert.True(t, decimal.NewFromInt(500000).Equal(getStripeCreditedQuota(1, "free")))
+ }
++
++func TestCNYTopupQuotesAndPaymentSnapshots(t *testing.T) {
++	confirmPaymentComplianceForTest(t)
++	oldUnit, oldPrice, oldRate := common.QuotaPerUnit, operation_setting.Price, operation_setting.USDExchangeRate
++	oldDisplay, oldMin := operation_setting.GetGeneralSetting().QuotaDisplayType, operation_setting.MinTopUp
++	oldDiscount := operation_setting.GetPaymentSetting().AmountDiscount
++	oldRatios := common.TopupGroupRatio2JSONString()
++	oldDB := model.DB
++	oldDBType, oldLogType := common.MainDatabaseType(), common.LogDatabaseType()
++	oldMaster, oldRedis, oldSQLite := common.IsMasterNode, common.RedisEnabled, common.SQLitePath
++	common.IsMasterNode, common.RedisEnabled = false, false
++	common.SQLitePath = filepath.Join(t.TempDir(), "cny-topup.db")
++	t.Setenv("SQL_DSN", "")
++	t.Setenv("LOG_SQL_DSN", "")
++	oldAddress, oldID, oldKey, oldMethods := operation_setting.PayAddress, operation_setting.EpayId, operation_setting.EpayKey, operation_setting.PayMethods
++	common.QuotaPerUnit, operation_setting.Price, operation_setting.USDExchangeRate = 500000, 7.3, 7.3
++	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeCNY
++	operation_setting.MinTopUp = 1
++	operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
++	require.NoError(t, common.UpdateTopupGroupRatioByJSONString(`{"default":1}`))
++	operation_setting.PayAddress, operation_setting.EpayId, operation_setting.EpayKey = "https://wallet.invalid", "fixture", "fixture-key"
++	operation_setting.PayMethods = []map[string]string{{"type": "forest"}}
++	require.NoError(t, model.InitDB())
++	db := model.DB
++	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}))
++	model.DB = db
++	require.NoError(t, db.Create(&model.User{Id: 42, Username: "cny_fixture", Group: "default", Status: common.UserStatusEnabled}).Error)
++	t.Cleanup(func() {
++		common.QuotaPerUnit, operation_setting.Price, operation_setting.USDExchangeRate = oldUnit, oldPrice, oldRate
++		operation_setting.GetGeneralSetting().QuotaDisplayType, operation_setting.MinTopUp = oldDisplay, oldMin
++		operation_setting.GetPaymentSetting().AmountDiscount = oldDiscount
++		require.NoError(t, common.UpdateTopupGroupRatioByJSONString(oldRatios))
++		model.DB = oldDB
++		common.SetDatabaseTypes(oldDBType, oldLogType)
++		common.IsMasterNode, common.RedisEnabled, common.SQLitePath = oldMaster, oldRedis, oldSQLite
++		operation_setting.PayAddress, operation_setting.EpayId, operation_setting.EpayKey, operation_setting.PayMethods = oldAddress, oldID, oldKey, oldMethods
++		sqlDB, err := db.DB()
++		require.NoError(t, err)
++		require.NoError(t, sqlDB.Close())
++	})
++	gin.SetMode(gin.TestMode)
++	call := func(body string, handler gin.HandlerFunc) *httptest.ResponseRecorder {
++		recorder := httptest.NewRecorder()
++		ctx, _ := gin.CreateTestContext(recorder)
++		ctx.Set("id", 42)
++		ctx.Request = httptest.NewRequest(http.MethodPost, "/api/user/amount", strings.NewReader(body))
++		ctx.Request.Header.Set("Content-Type", "application/json")
++		handler(ctx)
++		return recorder
++	}
++	t.Run("info advertises cent capability and RMB minimum", func(t *testing.T) {
++		result := call("{}", GetTopUpInfo)
++		var response struct {
++			Data struct {
++				Supports bool  `json:"supports_cny_amount_fen"`
++				Minimum  int64 `json:"min_amount_fen"`
++			} `json:"data"`
++		}
++		require.NoError(t, common.Unmarshal(result.Body.Bytes(), &response))
++		require.True(t, response.Data.Supports)
++		require.Equal(t, int64(100), response.Data.Minimum)
++	})
++	t.Run("cent amounts preserve RMB value", func(t *testing.T) {
++		for _, tc := range []struct{ fen, quota int64 }{{100, 68493}, {123, 84247}, {730, 500000}, {1000, 684932}} {
++			result := call(fmt.Sprintf(`{"amount_fen":%d}`, tc.fen), RequestAmount)
++			var response struct {
++				Message string        `json:"message"`
++				Data    cnyTopupQuote `json:"data"`
++			}
++			require.NoError(t, common.Unmarshal(result.Body.Bytes(), &response))
++			require.Equal(t, "success", response.Message)
++			require.Equal(t, tc.fen, response.Data.AmountFen)
++			require.Equal(t, tc.quota, response.Data.CreditedQuota)
++			require.Equal(t, "CNY", response.Data.Currency)
++			require.Len(t, response.Data.QuoteHash, 64)
++		}
++	})
++	t.Run("invalid contracts do not create orders", func(t *testing.T) {
++		for _, body := range []string{`{}`, `{"amount":1,"amount_fen":100}`, `{"amount_fen":99}`, `{"amount_fen":100.5}`, `{"amount_fen":100000001}`, `{"amount_fen":100,"payment_method":"forest"}`} {
++			result := call(body, RequestEpay)
++			require.Contains(t, result.Body.String(), `"message":"error"`)
++		}
++		var count int64
++		require.NoError(t, db.Model(&model.TopUp{}).Count(&count).Error)
++		require.Zero(t, count)
++	})
++	t.Run("wallet capacity is checked before issuing quotes", func(t *testing.T) {
++		require.NoError(t, db.Model(&model.User{}).Where("id = ?", 42).Update("quota", common.MaxWalletQuota-1).Error)
++		result := call(`{"amount_fen":100}`, RequestAmount)
++		require.Contains(t, result.Body.String(), "Top-up quota limit exceeded")
++		require.NoError(t, db.Model(&model.User{}).Where("id = ?", 42).Update("quota", 0).Error)
++	})
++	t.Run("legacy integer request remains unchanged", func(t *testing.T) {
++		result := call(`{"amount":1}`, RequestAmount)
++		assert.JSONEq(t, `{"message":"success","data":"7.30"}`, result.Body.String())
++	})
++	t.Run("config changes invalidate quotes", func(t *testing.T) {
++		quote, err := newCNYTopupQuote(42, "default", 100)
++		require.NoError(t, err)
++		operation_setting.Price, operation_setting.USDExchangeRate = 6.6, 6.6
++		result := call(fmt.Sprintf(`{"amount_fen":100,"expected_quote_hash":%q,"payment_method":"forest"}`, quote.QuoteHash), RequestEpay)
++		require.Contains(t, result.Body.String(), "Top-up quote changed")
++		operation_setting.Price, operation_setting.USDExchangeRate = 7.3, 7.3
++	})
++	t.Run("new order stores immutable quota and cent amount", func(t *testing.T) {
++		quote, err := newCNYTopupQuote(42, "default", 123)
++		require.NoError(t, err)
++		result := call(fmt.Sprintf(`{"amount_fen":123,"expected_quote_hash":%q,"payment_method":"forest"}`, quote.QuoteHash), RequestEpay)
++		require.Contains(t, result.Body.String(), `"message":"success"`)
++		require.Contains(t, result.Body.String(), `"money":"1.23"`)
++		var order model.TopUp
++		require.NoError(t, db.First(&order).Error)
++		require.Zero(t, order.Amount)
++		require.Equal(t, int64(123), order.AmountFen)
++		require.Equal(t, int64(84247), order.CreditedQuota)
++		require.Equal(t, quote.QuoteHash, order.QuoteHash)
++	})
++	t.Run("non-one discounts and mismatched pricing are rejected", func(t *testing.T) {
++		operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{10: 0.8}
++		_, err := newCNYTopupQuote(42, "default", 100)
++		require.Error(t, err)
++		operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
++		operation_setting.Price = 6.6
++		_, err = newCNYTopupQuote(42, "default", 100)
++		require.Error(t, err)
++		operation_setting.Price = 7.3
++	})
++}
++
++func TestCNYTopupRejectsRequestsWithoutComplianceBeforeCreatingOrders(t *testing.T) {
++	payment := operation_setting.GetPaymentSetting()
++	oldConfirmed := payment.ComplianceConfirmed
++	payment.ComplianceConfirmed = false
++	t.Cleanup(func() { payment.ComplianceConfirmed = oldConfirmed })
++	// Deliberately no DB fixture: both handlers must stop before even reading users.
++	for _, handler := range []gin.HandlerFunc{RequestAmount, RequestEpay} {
++		recorder := httptest.NewRecorder()
++		ctx, _ := gin.CreateTestContext(recorder)
++		ctx.Set("id", 42)
++		ctx.Request = httptest.NewRequest(http.MethodPost, "/api/user/pay", strings.NewReader("{\"amount_fen\":100}"))
++		ctx.Request.Header.Set("Content-Type", "application/json")
++		handler(ctx)
++		assert.Contains(t, recorder.Body.String(), "\"success\":false")
++		assert.Contains(t, recorder.Body.String(), "compliance")
++	}
++}
+--- /dev/null
++++ b/controller/topup_cny.go
+@@ -0,0 +1,94 @@
++package controller
++
++import (
++	"crypto/sha256"
++	"fmt"
++	"math"
++
++	"github.com/QuantumNous/new-api/common"
++	"github.com/QuantumNous/new-api/setting/operation_setting"
++	"github.com/shopspring/decimal"
++)
++
++const maxCNYAmountFen int64 = 100000000
++
++type cnyTopupQuote struct {
++	AmountFen     int64  `json:"amount_fen"`
++	CreditedQuota int64  `json:"credited_quota"`
++	QuotaPerUnit  int64  `json:"quota_per_unit"`
++	Currency      string `json:"currency"`
++	DisplayRate   string `json:"display_rate"`
++	QuoteHash     string `json:"quote_hash"`
++}
++
++func cnyMinAmountFen() int64 { return max(100, int64(operation_setting.MinTopUp)*100) }
++
++func cnyTopupConfigValid(group string) bool {
++	if operation_setting.GetQuotaDisplayType() != operation_setting.QuotaDisplayTypeCNY {
++		return false
++	}
++	for _, v := range []float64{common.QuotaPerUnit, operation_setting.Price, operation_setting.USDExchangeRate} {
++		if v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
++			return false
++		}
++	}
++	if common.QuotaPerUnit != math.Trunc(common.QuotaPerUnit) || common.QuotaPerUnit > common.MaxWalletQuota {
++		return false
++	}
++	if operation_setting.MinTopUp < 0 || operation_setting.MinTopUp > int(maxCNYAmountFen/100) {
++		return false
++	}
++	if !decimal.NewFromFloat(operation_setting.Price).Equal(decimal.NewFromFloat(operation_setting.USDExchangeRate)) {
++		return false
++	}
++	ratio := common.GetTopupGroupRatio(group)
++	if ratio != 0 && ratio != 1 {
++		return false
++	}
++	for _, discount := range operation_setting.GetPaymentSetting().AmountDiscount {
++		if math.IsNaN(discount) || math.IsInf(discount, 0) || (discount > 0 && discount != 1) {
++			return false
++		}
++	}
++	return true
++}
++
++// RMB cents are the external contract. Internal wallet quotas and model pricing
++// retain their original unit, including for pending orders created before this patch.
++func newCNYTopupQuote(userID int, group string, fen int64) (*cnyTopupQuote, error) {
++	if !cnyTopupConfigValid(group) {
++		return nil, common.NewMessage("CNY top-up configuration is unavailable. Please contact the administrator.")
++	}
++	if fen < cnyMinAmountFen() {
++		return nil, common.NewMessage("Top-up amount cannot be less than {{min}}", map[string]any{"min": decimal.NewFromInt(cnyMinAmountFen()).Div(decimal.NewFromInt(100)).StringFixed(2)})
++	}
++	if fen > maxCNYAmountFen {
++		return nil, common.NewMessage("Top-up amount cannot exceed {{max}}", map[string]any{"max": maxCNYAmountFen / 100})
++	}
++	rate := decimal.NewFromFloat(operation_setting.USDExchangeRate)
++	unit := decimal.NewFromFloat(common.QuotaPerUnit)
++	quota, err := validateCreditedQuota(decimal.NewFromInt(fen).Mul(unit).DivRound(rate.Mul(decimal.NewFromInt(100)), 0))
++	if err != nil {
++		return nil, err
++	}
++	// Credit rounding must not change the user's visible RMB cents.
++	if !decimal.NewFromInt(int64(quota)).Mul(rate).Mul(decimal.NewFromInt(100)).DivRound(unit, 0).Equal(decimal.NewFromInt(fen)) {
++		return nil, common.NewMessage("CNY top-up configuration is unavailable. Please contact the administrator.")
++	}
++	quote := &cnyTopupQuote{AmountFen: fen, CreditedQuota: int64(quota), QuotaPerUnit: int64(common.QuotaPerUnit), Currency: "CNY", DisplayRate: rate.String()}
++	// All configuration which changes eligibility or the amount is bound into the quote.
++	payload, err := common.Marshal(struct {
++		Version     int             `json:"version"`
++		UserID      int             `json:"user_id"`
++		Group       string          `json:"group"`
++		MinFen      int64           `json:"min_amount_fen"`
++		GroupRatios string          `json:"group_ratios"`
++		Discounts   map[int]float64 `json:"discounts"`
++		Quote       *cnyTopupQuote  `json:"quote"`
++	}{1, userID, group, cnyMinAmountFen(), common.TopupGroupRatio2JSONString(), operation_setting.GetPaymentSetting().AmountDiscount, quote})
++	if err != nil {
++		return nil, err
++	}
++	quote.QuoteHash = fmt.Sprintf("%x", sha256.Sum256(payload))
++	return quote, nil
++}
+--- a/model/topup.go
++++ b/model/topup.go
+@@ -1,9 +1,12 @@
+ package model
+ 
+ import (
++	"encoding/hex"
+ 	"errors"
+ 	"fmt"
+ 	"maps"
++	"math"
++	"strings"
+ 
+ 	"github.com/QuantumNous/new-api/common"
+ 	"github.com/QuantumNous/new-api/logger"
+@@ -23,6 +26,14 @@
+ 	CreateTime      int64   `json:"create_time"`
+ 	CompleteTime    int64   `json:"complete_time"`
+ 	Status          string  `json:"status"`
++	// A CNY checkout freezes its credited quota; legacy rows leave all of these
++	// fields empty and retain their original settlement semantics.
++	AmountFen     int64  `json:"amount_fen" gorm:"default:0"`
++	CreditedQuota int64  `json:"credited_quota" gorm:"default:0"`
++	QuotaPerUnit  int64  `json:"quota_per_unit" gorm:"default:0"`
++	Currency      string `json:"currency" gorm:"type:varchar(8);default:''"`
++	DisplayRate   string `json:"display_rate" gorm:"type:varchar(64);default:''"`
++	QuoteHash     string `json:"quote_hash" gorm:"type:varchar(64);default:''"`
+ }
+ 
+ const (
+@@ -47,15 +58,74 @@
+ 	ErrTopUpNotFound         = errors.New("topup not found")
+ 	ErrTopUpStatusInvalid    = errors.New("topup status invalid")
+ 	// The quota errors reach the web console, so they carry message keys.
+-	ErrInvalidTopUpQuota        error = common.NewMessage("Invalid top-up quota")
+-	ErrTopUpQuotaLimitExceeded  error = common.NewMessage("Top-up quota limit exceeded")
+-	ErrWalletQuotaLimitExceeded error = common.NewMessage("Wallet quota limit exceeded")
++	ErrInvalidTopUpQuota          error = common.NewMessage("Invalid top-up quota")
++	ErrTopUpQuotaLimitExceeded    error = common.NewMessage("Top-up quota limit exceeded")
++	ErrWalletQuotaLimitExceeded   error = common.NewMessage("Wallet quota limit exceeded")
++	ErrTopUpPaymentAmountMismatch       = errors.New("payment amount does not match order")
+ )
+ 
+ func (topUp *TopUp) Insert() error {
++	if topUp.HasCNYQuotaSnapshot() {
++		if _, err := topUp.CNYQuotaSnapshot(); err != nil {
++			return err
++		}
++	}
+ 	var err error
+ 	err = DB.Create(topUp).Error
+ 	return err
++}
++
++// HasCNYQuotaSnapshot also detects partially written snapshots. Those must fail
++// closed instead of falling back to the legacy Amount * current unit formula.
++func (topUp *TopUp) HasCNYQuotaSnapshot() bool {
++	return topUp != nil && (topUp.AmountFen != 0 || topUp.CreditedQuota != 0 || topUp.QuotaPerUnit != 0 || topUp.Currency != "" || topUp.DisplayRate != "" || topUp.QuoteHash != "")
++}
++
++// CNYQuotaSnapshot validates a persisted checkout without consulting mutable
++// global pricing options. Rounding is once, to the nearest internal quota unit;
++// the resulting two-decimal CNY amount must still equal the charged amount.
++func (topUp *TopUp) CNYQuotaSnapshot() (int, error) {
++	if topUp == nil || topUp.PaymentProvider != PaymentProviderEpay || topUp.Currency != "CNY" || topUp.Amount != 0 ||
++		topUp.AmountFen < 100 || topUp.AmountFen > common.MaxWalletQuota || topUp.QuotaPerUnit <= 0 || topUp.QuotaPerUnit > common.MaxWalletQuota ||
++		topUp.CreditedQuota <= 0 || topUp.CreditedQuota > common.MaxWalletQuota || len(topUp.QuoteHash) != 64 ||
++		len(topUp.DisplayRate) == 0 || len(topUp.DisplayRate) > 64 || math.IsNaN(topUp.Money) || math.IsInf(topUp.Money, 0) {
++		return 0, ErrInvalidTopUpQuota
++	}
++	if _, err := hex.DecodeString(topUp.QuoteHash); err != nil {
++		return 0, ErrInvalidTopUpQuota
++	}
++	if strings.Count(topUp.DisplayRate, ".") > 1 {
++		return 0, ErrInvalidTopUpQuota
++	}
++	for _, c := range topUp.DisplayRate {
++		if (c < '0' || c > '9') && c != '.' {
++			return 0, ErrInvalidTopUpQuota
++		}
++	}
++	rate, err := decimal.NewFromString(topUp.DisplayRate)
++	if err != nil || !rate.IsPositive() {
++		return 0, ErrInvalidTopUpQuota
++	}
++	fen := decimal.NewFromInt(topUp.AmountFen)
++	unit := decimal.NewFromInt(topUp.QuotaPerUnit)
++	quota := decimal.NewFromInt(topUp.CreditedQuota)
++	if !fen.Mul(unit).DivRound(rate.Mul(decimal.NewFromInt(100)), 0).Equal(quota) ||
++		!quota.Mul(rate).Mul(decimal.NewFromInt(100)).DivRound(unit, 0).Equal(fen) ||
++		!decimal.NewFromFloat(topUp.Money).Equal(fen.Div(decimal.NewFromInt(100))) {
++		return 0, ErrInvalidTopUpQuota
++	}
++	return int(topUp.CreditedQuota), nil
++}
++
++func (topUp *TopUp) settlementQuota() (int, error) {
++	if topUp.HasCNYQuotaSnapshot() {
++		return topUp.CNYQuotaSnapshot()
++	}
++	amount := decimal.NewFromInt(topUp.Amount)
++	if topUp.PaymentProvider == PaymentProviderStripe {
++		amount = decimal.NewFromFloat(topUp.Money)
++	}
++	return common.WalletQuotaFromDecimalStrict(amount.Mul(decimal.NewFromFloat(common.QuotaPerUnit)))
+ }
+ 
+ func topUpQuotaMaxCurrent(creditedQuota int) (int, error) {
+@@ -174,9 +244,37 @@
+ // 在同一个事务内完成，因此同一订单的并发/重复回调（包括多实例部署下）最多充值一次。
+ // alreadyDone=true 表示订单此前已完成，本次为幂等重复回调。
+ // 进程内的 LockOrder 只是优化，正确性由本函数的数据库行锁保证。
+-func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (alreadyDone bool, err error) {
++func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string, paidAmount ...string) (alreadyDone bool, err error) {
+ 	if tradeNo == "" {
+ 		return false, errors.New("payment order number not provided")
++	}
++	// Webhooks must pass their signed paid amount. The optional form preserves
++	// trusted in-process callers; all HTTP callbacks use the checked form.
++	var paid *decimal.Decimal
++	if len(paidAmount) > 1 {
++		return false, ErrTopUpPaymentAmountMismatch
++	}
++	if len(paidAmount) == 1 {
++		s := paidAmount[0]
++		parts := strings.Split(s, ".")
++		if len(s) == 0 || len(s) > 32 || len(parts) > 2 || (len(parts) == 2 && len(parts[1]) > 2) {
++			return false, ErrTopUpPaymentAmountMismatch
++		}
++		for _, part := range parts {
++			if part == "" {
++				return false, ErrTopUpPaymentAmountMismatch
++			}
++			for _, c := range part {
++				if c < '0' || c > '9' {
++					return false, ErrTopUpPaymentAmountMismatch
++				}
++			}
++		}
++		value, parseErr := decimal.NewFromString(s)
++		if parseErr != nil || !value.IsPositive() {
++			return false, ErrTopUpPaymentAmountMismatch
++		}
++		paid = &value
+ 	}
+ 
+ 	refCol := "`trade_no`"
+@@ -193,6 +291,9 @@
+ 		if topUp.PaymentProvider != PaymentProviderEpay {
+ 			return ErrPaymentMethodMismatch
+ 		}
++		if paid != nil && (math.IsNaN(topUp.Money) || math.IsInf(topUp.Money, 0) || !paid.Equal(decimal.NewFromFloat(topUp.Money).Round(2))) {
++			return ErrTopUpPaymentAmountMismatch
++		}
+ 		if topUp.Status == common.TopUpStatusSuccess {
+ 			alreadyDone = true
+ 			return nil
+@@ -204,9 +305,7 @@
+ 			topUp.PaymentMethod = actualPaymentMethod
+ 		}
+ 		var quotaErr error
+-		quotaToAdd, quotaErr = common.WalletQuotaFromDecimalStrict(
+-			decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
+-		)
++		quotaToAdd, quotaErr = topUp.settlementQuota()
+ 		if quotaErr != nil || quotaToAdd <= 0 {
+ 			return ErrInvalidTopUpQuota
+ 		}
+@@ -461,6 +560,7 @@
+ 	var quotaToAdd int
+ 	var payMoney float64
+ 	var paymentMethod string
++	var alreadyDone bool
+ 
+ 	err := DB.Transaction(func(tx *gorm.DB) error {
+ 		topUp := &TopUp{}
+@@ -471,6 +571,7 @@
+ 
+ 		// 幂等处理：已成功直接返回
+ 		if topUp.Status == common.TopUpStatusSuccess {
++			alreadyDone = true
+ 			return nil
+ 		}
+ 
+@@ -478,19 +579,10 @@
+ 			return common.NewMessage("Order is not pending payment and cannot be completed")
+ 		}
+ 
+-		// 计算应充值额度：
+-		// - Stripe 订单：Money 代表经分组倍率换算后的美元数量，直接 * QuotaPerUnit
+-		// - 其他订单（如易支付）：Amount 为美元数量，* QuotaPerUnit
++		// CNY orders use their immutable checkout snapshot, exactly like Epay's
++		// normal callback. Legacy orders retain the previous conversion formula.
+ 		var quotaErr error
+-		if topUp.PaymentProvider == PaymentProviderStripe {
+-			quotaToAdd, quotaErr = common.WalletQuotaFromDecimalStrict(
+-				decimal.NewFromFloat(topUp.Money).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
+-			)
+-		} else {
+-			quotaToAdd, quotaErr = common.WalletQuotaFromDecimalStrict(
+-				decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
+-			)
+-		}
++		quotaToAdd, quotaErr = topUp.settlementQuota()
+ 		if quotaErr != nil || quotaToAdd <= 0 {
+ 			return ErrInvalidTopUpQuota
+ 		}
+@@ -515,6 +607,9 @@
+ 
+ 	if err != nil {
+ 		return err
++	}
++	if alreadyDone {
++		return nil
+ 	}
+ 
+ 	// 事务外记录日志，避免阻塞
+--- /dev/null
++++ b/model/topup_cny_test.go
+@@ -0,0 +1,294 @@
++package model
++
++import (
++	"fmt"
++	"math"
++	"os"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/QuantumNous/new-api/common"
++	"github.com/QuantumNous/new-api/setting/operation_setting"
++	"github.com/jackc/pgx/v5"
++	"github.com/jackc/pgx/v5/stdlib"
++	"github.com/shopspring/decimal"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++	"gorm.io/driver/postgres"
++	"gorm.io/gorm"
++)
++
++func cnySnapshotTestOrder(fen int64) TopUp {
++	rate := decimal.RequireFromString("7.3")
++	quota := decimal.NewFromInt(fen).Mul(decimal.NewFromInt(500000)).DivRound(rate.Mul(decimal.NewFromInt(100)), 0).IntPart()
++	money, _ := decimal.NewFromInt(fen).Div(decimal.NewFromInt(100)).Float64()
++	return TopUp{
++		UserId: 700, AmountFen: fen, Money: money, CreditedQuota: quota,
++		QuotaPerUnit: 500000, Currency: "CNY", DisplayRate: "7.3", QuoteHash: strings.Repeat("a", 64),
++		TradeNo: fmt.Sprintf("CNY-%d", fen), PaymentProvider: PaymentProviderEpay,
++		PaymentMethod: "alipay", Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp(),
++	}
++}
++
++func TestCNYQuotaSnapshotSupportsYuanAndFen(t *testing.T) {
++	for _, fen := range []int64{100, 101, 123, 730, 1000, 1025, 100000, 100000000} {
++		t.Run(fmt.Sprint(fen), func(t *testing.T) {
++			order := cnySnapshotTestOrder(fen)
++			quota, err := order.CNYQuotaSnapshot()
++			require.NoError(t, err)
++			assert.Equal(t, int(order.CreditedQuota), quota)
++			displayedFen := decimal.NewFromInt(int64(quota)).Mul(decimal.RequireFromString(order.DisplayRate)).Mul(decimal.NewFromInt(100)).DivRound(decimal.NewFromInt(order.QuotaPerUnit), 0)
++			assert.Equal(t, fen, displayedFen.IntPart())
++		})
++	}
++}
++
++func TestCNYQuotaSnapshotRejectsMalformedAndPartialFields(t *testing.T) {
++	tests := map[string]func(*TopUp){
++		"under minimum":           func(o *TopUp) { o.AmountFen = 99 },
++		"missing fen":             func(o *TopUp) { o.AmountFen = 0 },
++		"negative fen":            func(o *TopUp) { o.AmountFen = -100 },
++		"overflow fen":            func(o *TopUp) { o.AmountFen = common.MaxWalletQuota + 1 },
++		"legacy amount populated": func(o *TopUp) { o.Amount = 1 },
++		"foreign provider":        func(o *TopUp) { o.PaymentProvider = PaymentProviderStripe },
++		"missing currency":        func(o *TopUp) { o.Currency = "" },
++		"foreign currency":        func(o *TopUp) { o.Currency = "USD" },
++		"missing quota":           func(o *TopUp) { o.CreditedQuota = 0 },
++		"negative quota":          func(o *TopUp) { o.CreditedQuota = -1 },
++		"tampered quota":          func(o *TopUp) { o.CreditedQuota++ },
++		"overflow quota":          func(o *TopUp) { o.CreditedQuota = common.MaxWalletQuota + 1 },
++		"missing unit":            func(o *TopUp) { o.QuotaPerUnit = 0 },
++		"negative unit":           func(o *TopUp) { o.QuotaPerUnit = -1 },
++		"overflow unit":           func(o *TopUp) { o.QuotaPerUnit = common.MaxWalletQuota + 1 },
++		"missing rate":            func(o *TopUp) { o.DisplayRate = "" },
++		"zero rate":               func(o *TopUp) { o.DisplayRate = "0" },
++		"negative rate":           func(o *TopUp) { o.DisplayRate = "-7.3" },
++		"malformed rate":          func(o *TopUp) { o.DisplayRate = "7..3" },
++		"rate exponent":           func(o *TopUp) { o.DisplayRate = "1e-999999999" },
++		"rate too long":           func(o *TopUp) { o.DisplayRate = strings.Repeat("1", 65) },
++		"missing hash":            func(o *TopUp) { o.QuoteHash = "" },
++		"invalid hash":            func(o *TopUp) { o.QuoteHash = strings.Repeat("z", 64) },
++		"short hash":              func(o *TopUp) { o.QuoteHash = strings.Repeat("a", 63) },
++		"wrong money":             func(o *TopUp) { o.Money += 0.01 },
++		"fractional fen money":    func(o *TopUp) { o.Money += 0.001 },
++		"nan money":               func(o *TopUp) { o.Money = math.NaN() },
++		"infinite money":          func(o *TopUp) { o.Money = math.Inf(1) },
++	}
++	for name, mutate := range tests {
++		t.Run(name, func(t *testing.T) {
++			order := cnySnapshotTestOrder(100)
++			mutate(&order)
++			assert.True(t, order.HasCNYQuotaSnapshot())
++			_, err := order.settlementQuota()
++			require.ErrorIs(t, err, ErrInvalidTopUpQuota)
++			require.ErrorIs(t, order.Insert(), ErrInvalidTopUpQuota)
++		})
++	}
++	var nilOrder *TopUp
++	_, err := nilOrder.CNYQuotaSnapshot()
++	require.ErrorIs(t, err, ErrInvalidTopUpQuota)
++	for _, order := range []TopUp{
++		{Amount: 2, AmountFen: 100}, {Amount: 2, CreditedQuota: 100}, {Amount: 2, QuotaPerUnit: 500000},
++		{Amount: 2, Currency: "CNY"}, {Amount: 2, DisplayRate: "7.3"}, {Amount: 2, QuoteHash: strings.Repeat("a", 64)},
++	} {
++		assert.True(t, order.HasCNYQuotaSnapshot())
++		_, err := order.settlementQuota()
++		require.ErrorIs(t, err, ErrInvalidTopUpQuota)
++	}
++}
++
++func TestCNYQuotaSnapshotPreservesLegacySettlement(t *testing.T) {
++	oldUnit := common.QuotaPerUnit
++	common.QuotaPerUnit = 500000
++	t.Cleanup(func() { common.QuotaPerUnit = oldUnit })
++	for _, tc := range []struct {
++		order TopUp
++		want  int
++	}{
++		{TopUp{Amount: 2, Money: 14.6, PaymentProvider: PaymentProviderEpay}, 1000000},
++		{TopUp{Amount: 2, Money: 1.25, PaymentProvider: PaymentProviderStripe}, 625000},
++	} {
++		assert.False(t, tc.order.HasCNYQuotaSnapshot())
++		quota, err := tc.order.settlementQuota()
++		require.NoError(t, err)
++		assert.Equal(t, tc.want, quota)
++	}
++}
++
++func TestCNYSettlementKeepsCheckoutQuotaWhenGlobalRatesChange(t *testing.T) {
++	truncateTables(t)
++	user := insertUserForPaymentGuardTest(t, 700, 0)
++	order := cnySnapshotTestOrder(1025)
++	require.NoError(t, order.Insert())
++	oldUnit, oldPrice, oldRate := common.QuotaPerUnit, operation_setting.Price, operation_setting.USDExchangeRate
++	common.QuotaPerUnit, operation_setting.Price, operation_setting.USDExchangeRate = 1, 100, 99
++	t.Cleanup(func() {
++		common.QuotaPerUnit, operation_setting.Price, operation_setting.USDExchangeRate = oldUnit, oldPrice, oldRate
++	})
++	done, err := RechargeEpay(order.TradeNo, "alipay", "127.0.0.1")
++	require.NoError(t, err)
++	assert.False(t, done)
++	assert.Equal(t, int(order.CreditedQuota), getUserQuotaForPaymentGuardTest(t, user.Id))
++	require.NoError(t, ManualCompleteTopUp(order.TradeNo, "127.0.0.1"))
++	assert.Equal(t, int(order.CreditedQuota), getUserQuotaForPaymentGuardTest(t, user.Id))
++	var logs int64
++	require.NoError(t, LOG_DB.Model(&Log{}).Where("type = ?", LogTypeTopup).Count(&logs).Error)
++	assert.Equal(t, int64(1), logs)
++}
++
++func TestCNYManualSettlementUsesSnapshotAndIsIdempotent(t *testing.T) {
++	truncateTables(t)
++	user := insertUserForPaymentGuardTest(t, 700, 0)
++	order := cnySnapshotTestOrder(100)
++	require.NoError(t, order.Insert())
++	oldUnit := common.QuotaPerUnit
++	common.QuotaPerUnit = 3
++	t.Cleanup(func() { common.QuotaPerUnit = oldUnit })
++	for i := 0; i < 3; i++ {
++		require.NoError(t, ManualCompleteTopUp(order.TradeNo, "127.0.0.1"))
++	}
++	done, err := RechargeEpay(order.TradeNo, "alipay", "127.0.0.1")
++	require.NoError(t, err)
++	assert.True(t, done)
++	assert.Equal(t, int(order.CreditedQuota), getUserQuotaForPaymentGuardTest(t, user.Id))
++	var logs int64
++	require.NoError(t, LOG_DB.Model(&Log{}).Where("type = ?", LogTypeTopup).Count(&logs).Error)
++	assert.Equal(t, int64(1), logs)
++}
++
++func TestCNYConcurrentCallbackAndManualCompletionCreditOnce(t *testing.T) {
++	truncateTables(t)
++	assertCNYConcurrentSettlementCreditOnce(t)
++}
++
++func assertCNYConcurrentSettlementCreditOnce(t *testing.T) {
++	t.Helper()
++	user := insertUserForPaymentGuardTest(t, 700, 0)
++	order := cnySnapshotTestOrder(123)
++	require.NoError(t, order.Insert())
++	errors := make(chan error, 24)
++	var wg sync.WaitGroup
++	for i := 0; i < 24; i++ {
++		wg.Add(1)
++		go func(i int) {
++			defer wg.Done()
++			if i%2 == 0 {
++				_, err := RechargeEpay(order.TradeNo, "alipay", "127.0.0.1")
++				errors <- err
++			} else {
++				errors <- ManualCompleteTopUp(order.TradeNo, "127.0.0.1")
++			}
++		}(i)
++	}
++	wg.Wait()
++	close(errors)
++	for err := range errors {
++		require.NoError(t, err)
++	}
++	assert.Equal(t, int(order.CreditedQuota), getUserQuotaForPaymentGuardTest(t, user.Id))
++	assert.Equal(t, common.TopUpStatusSuccess, getTopUpStatusForPaymentGuardTest(t, order.TradeNo))
++	var logs int64
++	require.NoError(t, LOG_DB.Model(&Log{}).Where("type = ?", LogTypeTopup).Count(&logs).Error)
++	assert.Equal(t, int64(1), logs)
++}
++
++// SQLite's shared in-memory database serializes its single connection. This
++// optional integration test verifies real PostgreSQL row locks with 24 callers
++// and a separate schema, never touching tables in an existing search path.
++func TestCNYConcurrentSettlementPostgreSQL(t *testing.T) {
++	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
++	if dsn == "" {
++		t.Skip("TEST_POSTGRES_DSN is not configured")
++	}
++	config, err := pgx.ParseConfig(dsn)
++	require.NoError(t, err)
++	adminSQL := stdlib.OpenDB(*config)
++	t.Cleanup(func() { assert.NoError(t, adminSQL.Close()) })
++	schema := fmt.Sprintf("cny_settlement_%d", time.Now().UnixNano())
++	_, err = adminSQL.Exec(`CREATE SCHEMA "` + schema + `"`)
++	require.NoError(t, err)
++	t.Cleanup(func() {
++		_, dropErr := adminSQL.Exec(`DROP SCHEMA "` + schema + `" CASCADE`)
++		assert.NoError(t, dropErr)
++	})
++	config.RuntimeParams["search_path"] = schema
++	sqlDB := stdlib.OpenDB(*config)
++	sqlDB.SetMaxOpenConns(32)
++	sqlDB.SetMaxIdleConns(32)
++	t.Cleanup(func() { assert.NoError(t, sqlDB.Close()) })
++	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{})
++	require.NoError(t, err)
++	previousDB, previousLogDB := DB, LOG_DB
++	previousMainType, previousLogType := common.MainDatabaseType(), common.LogDatabaseType()
++	previousRedis, previousBatch := common.RedisEnabled, common.BatchUpdateEnabled
++	DB, LOG_DB = db, db
++	common.SetDatabaseTypes(common.DatabaseTypePostgreSQL, common.DatabaseTypePostgreSQL)
++	common.RedisEnabled, common.BatchUpdateEnabled = false, false
++	initCol()
++	t.Cleanup(func() {
++		DB, LOG_DB = previousDB, previousLogDB
++		common.SetDatabaseTypes(previousMainType, previousLogType)
++		common.RedisEnabled, common.BatchUpdateEnabled = previousRedis, previousBatch
++		initCol()
++	})
++	require.NoError(t, db.AutoMigrate(&User{}, &TopUp{}, &Log{}))
++	var version string
++	require.NoError(t, db.Raw("SELECT version()").Scan(&version).Error)
++	t.Logf("PostgreSQL row-lock verification: %s", version)
++	assertCNYConcurrentSettlementCreditOnce(t)
++}
++
++func TestCNYSettlementRejectsCorruptSnapshotWithoutCredit(t *testing.T) {
++	for _, manual := range []bool{false, true} {
++		t.Run(fmt.Sprint(manual), func(t *testing.T) {
++			truncateTables(t)
++			user := insertUserForPaymentGuardTest(t, 700, 19)
++			order := cnySnapshotTestOrder(100)
++			require.NoError(t, order.Insert())
++			require.NoError(t, DB.Model(&TopUp{}).Where("id = ?", order.Id).Update("credited_quota", order.CreditedQuota+1).Error)
++			var err error
++			if manual {
++				err = ManualCompleteTopUp(order.TradeNo, "127.0.0.1")
++			} else {
++				_, err = RechargeEpay(order.TradeNo, "alipay", "127.0.0.1")
++			}
++			require.ErrorIs(t, err, ErrInvalidTopUpQuota)
++			assert.Equal(t, 19, getUserQuotaForPaymentGuardTest(t, user.Id))
++			assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, order.TradeNo))
++		})
++	}
++}
++
++func TestCNYSettlementHonorsWalletLimit(t *testing.T) {
++	truncateTables(t)
++	order := cnySnapshotTestOrder(100)
++	user := insertUserForPaymentGuardTest(t, 700, common.MaxWalletQuota-int(order.CreditedQuota)+1)
++	require.NoError(t, order.Insert())
++	_, err := RechargeEpay(order.TradeNo, "alipay", "127.0.0.1")
++	require.ErrorIs(t, err, ErrTopUpQuotaLimitExceeded)
++	assert.Equal(t, user.Quota, getUserQuotaForPaymentGuardTest(t, user.Id))
++	assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, order.TradeNo))
++}
++
++func TestCNYCallbackRejectsSignedAmountMismatchBeforeSettlement(t *testing.T) {
++	truncateTables(t)
++	user := insertUserForPaymentGuardTest(t, 700, 0)
++	order := cnySnapshotTestOrder(123)
++	require.NoError(t, order.Insert())
++	for _, money := range []string{"0.01", "1.24", "", "1.230", "123e-2", "-1.23", "1.23.0"} {
++		done, err := RechargeEpay(order.TradeNo, "alipay", "127.0.0.1", money)
++		assert.False(t, done)
++		require.ErrorIs(t, err, ErrTopUpPaymentAmountMismatch)
++		assert.Equal(t, 0, getUserQuotaForPaymentGuardTest(t, user.Id))
++		assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, order.TradeNo))
++	}
++	done, err := RechargeEpay(order.TradeNo, "alipay", "127.0.0.1", "1.23")
++	require.NoError(t, err)
++	assert.False(t, done)
++	done, err = RechargeEpay(order.TradeNo, "alipay", "127.0.0.1", "1.23")
++	require.NoError(t, err)
++	assert.True(t, done)
++	assert.Equal(t, int(order.CreditedQuota), getUserQuotaForPaymentGuardTest(t, user.Id))
++}

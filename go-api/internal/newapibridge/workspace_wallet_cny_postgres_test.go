@@ -20,6 +20,8 @@ type cnyWorkspaceFixture struct {
 	pays, credits, quotes                 int
 	dropPay, dishonestQuote, corruptOrder bool
 	hashChanged, rateChanged              bool
+	paymentMethod                         string
+	failNotify, dropNotify                bool
 }
 
 func (f *cnyWorkspaceFixture) quote(fen int64) workspaceCNYQuote {
@@ -59,7 +61,11 @@ func (f *cnyWorkspaceFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		}
 		write(map[string]any{"quota_per_unit": 500000, "quota_display_type": "CNY", "usd_exchange_rate": rate})
 	case "/api/user/topup/info":
-		write(map[string]any{"enable_online_topup": true, "min_topup": 1, "min_amount_fen": 100, "supports_cny_amount_fen": true, "pay_methods": []map[string]any{{"type": "wallet"}}})
+		method := f.paymentMethod
+		if method == "" {
+			method = "wallet"
+		}
+		write(map[string]any{"enable_online_topup": true, "min_topup": 1, "min_amount_fen": 100, "supports_cny_amount_fen": true, "pay_methods": []map[string]any{{"type": method}}})
 	case "/api/user/amount":
 		var b struct {
 			AmountFen int64 `json:"amount_fen"`
@@ -73,6 +79,10 @@ func (f *cnyWorkspaceFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		f.quotes++
 		write(f.quote(b.AmountFen))
 	case "/api/user/pay":
+		method := f.paymentMethod
+		if method == "" {
+			method = "wallet"
+		}
 		var b struct {
 			AmountFen         int64  `json:"amount_fen"`
 			ExpectedQuoteHash string `json:"expected_quote_hash"`
@@ -80,7 +90,7 @@ func (f *cnyWorkspaceFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		}
 		d := json.NewDecoder(r.Body)
 		d.DisallowUnknownFields()
-		if d.Decode(&b) != nil || b.AmountFen < 100 || b.PaymentMethod != "wallet" || b.ExpectedQuoteHash != f.quote(b.AmountFen).QuoteHash {
+		if d.Decode(&b) != nil || b.AmountFen < 100 || b.PaymentMethod != method || b.ExpectedQuoteHash != f.quote(b.AmountFen).QuoteHash {
 			http.Error(w, "invalid CNY payment request", 400)
 			return
 		}
@@ -88,7 +98,7 @@ func (f *cnyWorkspaceFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		trade := fmt.Sprintf("cny-order-%d", f.pays)
 		topup := fixtureCNYTopUp(f.quote(b.AmountFen))
 		topup.ID, topup.UserID, topup.TradeNo = int64(f.pays), 4, trade
-		topup.Money, topup.PaymentMethod, topup.PaymentProvider, topup.Status = json.Number(formatMoneyFen(b.AmountFen)), "wallet", "epay", "pending"
+		topup.Money, topup.PaymentMethod, topup.PaymentProvider, topup.Status = json.Number(formatMoneyFen(b.AmountFen)), method, "epay", "pending"
 		if f.corruptOrder {
 			topup.CreditedQuota = 0
 		}
@@ -100,6 +110,8 @@ func (f *cnyWorkspaceFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		params := walletFixtureParams(f.base.cfg, trade, b.AmountFen)
+		params.Set("type", method)
+		params.Set("sign", epaySignature(params, f.base.cfg.MerchantKey))
 		m := map[string]string{}
 		for key := range params {
 			m[key] = params.Get(key)
@@ -119,6 +131,10 @@ func (f *cnyWorkspaceFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		}
 		write(map[string]any{"items": items, "total": len(items)})
 	case "/api/user/epay/notify":
+		if f.failNotify {
+			http.Error(w, "unavailable", 503)
+			return
+		}
 		_ = r.ParseForm()
 		if !validEpaySignature(r.PostForm, f.base.cfg.MerchantKey) {
 			http.Error(w, "bad callback", 403)
@@ -133,6 +149,12 @@ func (f *cnyWorkspaceFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			order.Status = "success"
 			f.orders[order.TradeNo] = order
 			f.credits++
+		}
+		if f.dropNotify {
+			if c, _, err := w.(http.Hijacker).Hijack(); err == nil {
+				_ = c.Close()
+			}
+			return
 		}
 		_, _ = w.Write([]byte("success"))
 	}

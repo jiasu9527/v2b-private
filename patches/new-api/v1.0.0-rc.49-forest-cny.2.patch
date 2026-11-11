@@ -1,0 +1,3377 @@
+--- a/controller/topup.go
++++ b/controller/topup.go
+@@ -122,12 +122,23 @@
+ 		"discount":                operation_setting.GetPaymentSetting().AmountDiscount,
+ 		"topup_link":              common.TopUpLink,
+ 	}
++	supportsCNY := false
++	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeCNY {
++		group, groupErr := model.GetUserGroup(c.GetInt("id"), true)
++		supportsCNY = groupErr == nil && cnyTopupConfigValid(group)
++	}
++	data["supports_cny_amount_fen"] = supportsCNY
++	if supportsCNY {
++		data["min_amount_fen"] = cnyMinAmountFen()
++	}
+ 	common.ApiSuccess(c, data)
+ }
+ 
+ type EpayRequest struct {
+-	Amount        int64  `json:"amount"`
+-	PaymentMethod string `json:"payment_method"`
++	Amount            *int64 `json:"amount"`
++	AmountFen         *int64 `json:"amount_fen"`
++	ExpectedQuoteHash string `json:"expected_quote_hash"`
++	PaymentMethod     string `json:"payment_method"`
+ }
+ 
+ type AmountRequest struct {
+@@ -281,30 +292,57 @@
+ }
+ 
+ func RequestEpay(c *gin.Context) {
++	if !requirePaymentCompliance(c) {
++		return
++	}
+ 	var req EpayRequest
+ 	err := c.ShouldBindJSON(&req)
+ 	if err != nil {
+ 		paymentError(c, common.NewMessage("Invalid parameters"))
+ 		return
+ 	}
+-	if req.Amount < getMinTopup() {
+-		paymentError(c, common.NewMessage("Top-up amount cannot be less than {{min}}", map[string]any{"min": getMinTopup()}))
++	if (req.Amount == nil) == (req.AmountFen == nil) {
++		paymentError(c, common.NewMessage("Invalid parameters"))
+ 		return
+ 	}
+ 	id := c.GetInt("id")
+-	if rejectInvalidTopUpQuota(c, id, req.Amount) {
+-		return
+-	}
+-
+ 	group, err := model.GetUserGroup(id, true)
+ 	if err != nil {
+ 		paymentError(c, common.NewMessage("Failed to get the user group"))
+ 		return
+ 	}
+-	payMoney := getPayMoney(req.Amount, group)
+-	if payMoney < 0.01 {
+-		paymentError(c, common.NewMessage("Payment amount is too low"))
+-		return
++	var quote *cnyTopupQuote
++	var requestedAmount int64
++	var payMoney float64
++	if req.AmountFen != nil {
++		quote, err = newCNYTopupQuote(id, group, *req.AmountFen)
++		if err != nil {
++			paymentError(c, err)
++			return
++		}
++		if req.ExpectedQuoteHash == "" || req.ExpectedQuoteHash != quote.QuoteHash {
++			paymentError(c, common.NewMessage("Top-up quote changed. Please refresh and confirm the amount again."))
++			return
++		}
++		if err = model.ValidateTopUpQuotaCapacity(id, int(quote.CreditedQuota)); err != nil {
++			paymentError(c, err)
++			return
++		}
++		payMoney = decimal.NewFromInt(quote.AmountFen).Div(decimal.NewFromInt(100)).InexactFloat64()
++	} else {
++		requestedAmount = *req.Amount
++		if requestedAmount < getMinTopup() {
++			paymentError(c, common.NewMessage("Top-up amount cannot be less than {{min}}", map[string]any{"min": getMinTopup()}))
++			return
++		}
++		if rejectInvalidTopUpQuota(c, id, requestedAmount) {
++			return
++		}
++		payMoney = getPayMoney(requestedAmount, group)
++		if payMoney < 0.01 {
++			paymentError(c, common.NewMessage("Payment amount is too low"))
++			return
++		}
+ 	}
+ 
+ 	if !operation_setting.ContainsPayMethod(req.PaymentMethod) {
+@@ -322,21 +360,25 @@
+ 		paymentError(c, common.NewMessage("Payment information has not been configured by administrator"))
+ 		return
+ 	}
++	orderName := fmt.Sprintf("TUC%d", requestedAmount)
++	if quote != nil {
++		orderName = fmt.Sprintf("CNY %.2f", payMoney)
++	}
+ 	uri, params, err := client.Purchase(&epay.PurchaseArgs{
+ 		Type:           req.PaymentMethod,
+ 		ServiceTradeNo: tradeNo,
+-		Name:           fmt.Sprintf("TUC%d", req.Amount),
++		Name:           orderName,
+ 		Money:          strconv.FormatFloat(payMoney, 'f', 2, 64),
+ 		Device:         epay.PC,
+ 		NotifyUrl:      notifyUrl,
+ 		ReturnUrl:      returnUrl,
+ 	})
+ 	if err != nil {
+-		logger.LogError(c.Request.Context(), common.LogText("Epay failed to start payment user_id=%d trade_no=%s payment_method=%s amount=%d error=%q", id, tradeNo, req.PaymentMethod, req.Amount, err.Error()))
++		logger.LogError(c.Request.Context(), common.LogText("Epay failed to start payment user_id=%d trade_no=%s payment_method=%s amount=%d error=%q", id, tradeNo, req.PaymentMethod, requestedAmount, err.Error()))
+ 		paymentError(c, common.NewMessage("Failed to start payment"))
+ 		return
+ 	}
+-	amount := req.Amount
++	amount := requestedAmount
+ 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
+ 		dAmount := decimal.NewFromInt(int64(amount))
+ 		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+@@ -352,13 +394,21 @@
+ 		CreateTime:      time.Now().Unix(),
+ 		Status:          common.TopUpStatusPending,
+ 	}
++	if quote != nil {
++		topUp.AmountFen = quote.AmountFen
++		topUp.CreditedQuota = quote.CreditedQuota
++		topUp.QuotaPerUnit = quote.QuotaPerUnit
++		topUp.Currency = quote.Currency
++		topUp.DisplayRate = quote.DisplayRate
++		topUp.QuoteHash = quote.QuoteHash
++	}
+ 	err = topUp.Insert()
+ 	if err != nil {
+-		logger.LogError(c.Request.Context(), common.LogText("Epay failed to create top-up order user_id=%d trade_no=%s payment_method=%s amount=%d error=%q", id, tradeNo, req.PaymentMethod, req.Amount, err.Error()))
++		logger.LogError(c.Request.Context(), common.LogText("Epay failed to create top-up order user_id=%d trade_no=%s payment_method=%s amount=%d error=%q", id, tradeNo, req.PaymentMethod, requestedAmount, err.Error()))
+ 		paymentError(c, common.NewMessage("Failed to create order"))
+ 		return
+ 	}
+-	logger.LogInfo(c.Request.Context(), common.LogText("Epay top-up order created user_id=%d trade_no=%s payment_method=%s amount=%d money=%.2f uri=%q params=%q", id, tradeNo, req.PaymentMethod, req.Amount, payMoney, uri, common.GetJsonString(params)))
++	logger.LogInfo(c.Request.Context(), common.LogText("Epay top-up order created user_id=%d trade_no=%s payment_method=%s amount=%d money=%.2f uri=%q params=%q", id, tradeNo, req.PaymentMethod, requestedAmount, payMoney, uri, common.GetJsonString(params)))
+ 	c.JSON(http.StatusOK, gin.H{"message": "success", "data": params, "url": uri})
+ }
+ 
+@@ -466,7 +516,7 @@
+ 		// 数据库行锁 + 事务内状态校验保证（多实例部署下同样安全）。
+ 		LockOrder(verifyInfo.ServiceTradeNo)
+ 		defer UnlockOrder(verifyInfo.ServiceTradeNo)
+-		alreadyDone, err := model.RechargeEpay(verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP())
++		alreadyDone, err := model.RechargeEpay(verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP(), verifyInfo.Money)
+ 		if err != nil {
+ 			switch {
+ 			case errors.Is(err, model.ErrTopUpNotFound):
+@@ -497,19 +547,46 @@
+ }
+ 
+ func RequestAmount(c *gin.Context) {
+-	var req AmountRequest
++	if !requirePaymentCompliance(c) {
++		return
++	}
++	var req EpayRequest
+ 	err := c.ShouldBindJSON(&req)
+ 	if err != nil {
+ 		paymentError(c, common.NewMessage("Invalid parameters"))
+ 		return
+ 	}
+ 
+-	if req.Amount < getMinTopup() {
++	if (req.Amount == nil) == (req.AmountFen == nil) {
++		paymentError(c, common.NewMessage("Invalid parameters"))
++		return
++	}
++	if req.AmountFen != nil {
++		id := c.GetInt("id")
++		group, err := model.GetUserGroup(id, true)
++		if err != nil {
++			paymentError(c, common.NewMessage("Failed to get the user group"))
++			return
++		}
++		quote, err := newCNYTopupQuote(id, group, *req.AmountFen)
++		if err == nil {
++			err = model.ValidateTopUpQuotaCapacity(id, int(quote.CreditedQuota))
++		}
++		if err != nil {
++			paymentError(c, err)
++			return
++		}
++		c.JSON(http.StatusOK, gin.H{"message": "success", "data": quote})
++		return
++	}
++	requestedAmount := *req.Amount
++
++	if requestedAmount < getMinTopup() {
+ 		paymentError(c, common.NewMessage("Top-up amount cannot be less than {{min}}", map[string]any{"min": getMinTopup()}))
+ 		return
+ 	}
+ 	id := c.GetInt("id")
+-	if rejectInvalidTopUpQuota(c, id, req.Amount) {
++	if rejectInvalidTopUpQuota(c, id, requestedAmount) {
+ 		return
+ 	}
+ 	group, err := model.GetUserGroup(id, true)
+@@ -517,7 +594,7 @@
+ 		paymentError(c, common.NewMessage("Failed to get the user group"))
+ 		return
+ 	}
+-	payMoney := getPayMoney(req.Amount, group)
++	payMoney := getPayMoney(requestedAmount, group)
+ 	if payMoney <= 0.01 {
+ 		paymentError(c, common.NewMessage("Payment amount is too low"))
+ 		return
+--- /dev/null
++++ b/controller/topup_cny.go
+@@ -0,0 +1,94 @@
++package controller
++
++import (
++	"crypto/sha256"
++	"fmt"
++	"math"
++
++	"github.com/QuantumNous/new-api/common"
++	"github.com/QuantumNous/new-api/setting/operation_setting"
++	"github.com/shopspring/decimal"
++)
++
++const maxCNYAmountFen int64 = 100000000
++
++type cnyTopupQuote struct {
++	AmountFen     int64  `json:"amount_fen"`
++	CreditedQuota int64  `json:"credited_quota"`
++	QuotaPerUnit  int64  `json:"quota_per_unit"`
++	Currency      string `json:"currency"`
++	DisplayRate   string `json:"display_rate"`
++	QuoteHash     string `json:"quote_hash"`
++}
++
++func cnyMinAmountFen() int64 { return max(100, int64(operation_setting.MinTopUp)*100) }
++
++func cnyTopupConfigValid(group string) bool {
++	if operation_setting.GetQuotaDisplayType() != operation_setting.QuotaDisplayTypeCNY {
++		return false
++	}
++	for _, v := range []float64{common.QuotaPerUnit, operation_setting.Price, operation_setting.USDExchangeRate} {
++		if v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
++			return false
++		}
++	}
++	if common.QuotaPerUnit != math.Trunc(common.QuotaPerUnit) || common.QuotaPerUnit > common.MaxWalletQuota {
++		return false
++	}
++	if operation_setting.MinTopUp < 0 || operation_setting.MinTopUp > int(maxCNYAmountFen/100) {
++		return false
++	}
++	if !decimal.NewFromFloat(operation_setting.Price).Equal(decimal.NewFromFloat(operation_setting.USDExchangeRate)) {
++		return false
++	}
++	ratio := common.GetTopupGroupRatio(group)
++	if ratio != 0 && ratio != 1 {
++		return false
++	}
++	for _, discount := range operation_setting.GetPaymentSetting().AmountDiscount {
++		if math.IsNaN(discount) || math.IsInf(discount, 0) || (discount > 0 && discount != 1) {
++			return false
++		}
++	}
++	return true
++}
++
++// RMB cents are the external contract. Internal wallet quotas and model pricing
++// retain their original unit, including for pending orders created before this patch.
++func newCNYTopupQuote(userID int, group string, fen int64) (*cnyTopupQuote, error) {
++	if !cnyTopupConfigValid(group) {
++		return nil, common.NewMessage("CNY top-up configuration is unavailable. Please contact the administrator.")
++	}
++	if fen < cnyMinAmountFen() {
++		return nil, common.NewMessage("Top-up amount cannot be less than {{min}}", map[string]any{"min": decimal.NewFromInt(cnyMinAmountFen()).Div(decimal.NewFromInt(100)).StringFixed(2)})
++	}
++	if fen > maxCNYAmountFen {
++		return nil, common.NewMessage("Top-up amount cannot exceed {{max}}", map[string]any{"max": maxCNYAmountFen / 100})
++	}
++	rate := decimal.NewFromFloat(operation_setting.USDExchangeRate)
++	unit := decimal.NewFromFloat(common.QuotaPerUnit)
++	quota, err := validateCreditedQuota(decimal.NewFromInt(fen).Mul(unit).DivRound(rate.Mul(decimal.NewFromInt(100)), 0))
++	if err != nil {
++		return nil, err
++	}
++	// Credit rounding must not change the user's visible RMB cents.
++	if !decimal.NewFromInt(int64(quota)).Mul(rate).Mul(decimal.NewFromInt(100)).DivRound(unit, 0).Equal(decimal.NewFromInt(fen)) {
++		return nil, common.NewMessage("CNY top-up configuration is unavailable. Please contact the administrator.")
++	}
++	quote := &cnyTopupQuote{AmountFen: fen, CreditedQuota: int64(quota), QuotaPerUnit: int64(common.QuotaPerUnit), Currency: "CNY", DisplayRate: rate.String()}
++	// All configuration which changes eligibility or the amount is bound into the quote.
++	payload, err := common.Marshal(struct {
++		Version     int             `json:"version"`
++		UserID      int             `json:"user_id"`
++		Group       string          `json:"group"`
++		MinFen      int64           `json:"min_amount_fen"`
++		GroupRatios string          `json:"group_ratios"`
++		Discounts   map[int]float64 `json:"discounts"`
++		Quote       *cnyTopupQuote  `json:"quote"`
++	}{1, userID, group, cnyMinAmountFen(), common.TopupGroupRatio2JSONString(), operation_setting.GetPaymentSetting().AmountDiscount, quote})
++	if err != nil {
++		return nil, err
++	}
++	quote.QuoteHash = fmt.Sprintf("%x", sha256.Sum256(payload))
++	return quote, nil
++}
+--- a/controller/topup_quota_limit_test.go
++++ b/controller/topup_quota_limit_test.go
+@@ -4,6 +4,7 @@
+ 	"fmt"
+ 	"net/http"
+ 	"net/http/httptest"
++	"path/filepath"
+ 	"strings"
+ 	"testing"
+ 
+@@ -95,6 +96,7 @@
+ }
+ 
+ func TestRequestAmountRejectsTopUpThatCannotBeSettled(t *testing.T) {
++	confirmPaymentComplianceForTest(t)
+ 	oldQuotaPerUnit := common.QuotaPerUnit
+ 	oldDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+ 	common.QuotaPerUnit = 500000
+@@ -124,6 +126,7 @@
+ }
+ 
+ func TestRequestAmountRejectsTopUpThatWouldOverflowWallet(t *testing.T) {
++	confirmPaymentComplianceForTest(t)
+ 	oldQuotaPerUnit := common.QuotaPerUnit
+ 	oldDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+ 	oldDB := model.DB
+@@ -201,3 +204,149 @@
+ 	require.NoError(t, common.UpdateTopupGroupRatioByJSONString(`{"free":0}`))
+ 	assert.True(t, decimal.NewFromInt(500000).Equal(getStripeCreditedQuota(1, "free")))
+ }
++
++func TestCNYTopupQuotesAndPaymentSnapshots(t *testing.T) {
++	confirmPaymentComplianceForTest(t)
++	oldUnit, oldPrice, oldRate := common.QuotaPerUnit, operation_setting.Price, operation_setting.USDExchangeRate
++	oldDisplay, oldMin := operation_setting.GetGeneralSetting().QuotaDisplayType, operation_setting.MinTopUp
++	oldDiscount := operation_setting.GetPaymentSetting().AmountDiscount
++	oldRatios := common.TopupGroupRatio2JSONString()
++	oldDB := model.DB
++	oldDBType, oldLogType := common.MainDatabaseType(), common.LogDatabaseType()
++	oldMaster, oldRedis, oldSQLite := common.IsMasterNode, common.RedisEnabled, common.SQLitePath
++	common.IsMasterNode, common.RedisEnabled = false, false
++	common.SQLitePath = filepath.Join(t.TempDir(), "cny-topup.db")
++	t.Setenv("SQL_DSN", "")
++	t.Setenv("LOG_SQL_DSN", "")
++	oldAddress, oldID, oldKey, oldMethods := operation_setting.PayAddress, operation_setting.EpayId, operation_setting.EpayKey, operation_setting.PayMethods
++	common.QuotaPerUnit, operation_setting.Price, operation_setting.USDExchangeRate = 500000, 7.3, 7.3
++	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeCNY
++	operation_setting.MinTopUp = 1
++	operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
++	require.NoError(t, common.UpdateTopupGroupRatioByJSONString(`{"default":1}`))
++	operation_setting.PayAddress, operation_setting.EpayId, operation_setting.EpayKey = "https://wallet.invalid", "fixture", "fixture-key"
++	operation_setting.PayMethods = []map[string]string{{"type": "forest"}}
++	require.NoError(t, model.InitDB())
++	db := model.DB
++	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}))
++	model.DB = db
++	require.NoError(t, db.Create(&model.User{Id: 42, Username: "cny_fixture", Group: "default", Status: common.UserStatusEnabled}).Error)
++	t.Cleanup(func() {
++		common.QuotaPerUnit, operation_setting.Price, operation_setting.USDExchangeRate = oldUnit, oldPrice, oldRate
++		operation_setting.GetGeneralSetting().QuotaDisplayType, operation_setting.MinTopUp = oldDisplay, oldMin
++		operation_setting.GetPaymentSetting().AmountDiscount = oldDiscount
++		require.NoError(t, common.UpdateTopupGroupRatioByJSONString(oldRatios))
++		model.DB = oldDB
++		common.SetDatabaseTypes(oldDBType, oldLogType)
++		common.IsMasterNode, common.RedisEnabled, common.SQLitePath = oldMaster, oldRedis, oldSQLite
++		operation_setting.PayAddress, operation_setting.EpayId, operation_setting.EpayKey, operation_setting.PayMethods = oldAddress, oldID, oldKey, oldMethods
++		sqlDB, err := db.DB()
++		require.NoError(t, err)
++		require.NoError(t, sqlDB.Close())
++	})
++	gin.SetMode(gin.TestMode)
++	call := func(body string, handler gin.HandlerFunc) *httptest.ResponseRecorder {
++		recorder := httptest.NewRecorder()
++		ctx, _ := gin.CreateTestContext(recorder)
++		ctx.Set("id", 42)
++		ctx.Request = httptest.NewRequest(http.MethodPost, "/api/user/amount", strings.NewReader(body))
++		ctx.Request.Header.Set("Content-Type", "application/json")
++		handler(ctx)
++		return recorder
++	}
++	t.Run("info advertises cent capability and RMB minimum", func(t *testing.T) {
++		result := call("{}", GetTopUpInfo)
++		var response struct {
++			Data struct {
++				Supports bool  `json:"supports_cny_amount_fen"`
++				Minimum  int64 `json:"min_amount_fen"`
++			} `json:"data"`
++		}
++		require.NoError(t, common.Unmarshal(result.Body.Bytes(), &response))
++		require.True(t, response.Data.Supports)
++		require.Equal(t, int64(100), response.Data.Minimum)
++	})
++	t.Run("cent amounts preserve RMB value", func(t *testing.T) {
++		for _, tc := range []struct{ fen, quota int64 }{{100, 68493}, {123, 84247}, {730, 500000}, {1000, 684932}} {
++			result := call(fmt.Sprintf(`{"amount_fen":%d}`, tc.fen), RequestAmount)
++			var response struct {
++				Message string        `json:"message"`
++				Data    cnyTopupQuote `json:"data"`
++			}
++			require.NoError(t, common.Unmarshal(result.Body.Bytes(), &response))
++			require.Equal(t, "success", response.Message)
++			require.Equal(t, tc.fen, response.Data.AmountFen)
++			require.Equal(t, tc.quota, response.Data.CreditedQuota)
++			require.Equal(t, "CNY", response.Data.Currency)
++			require.Len(t, response.Data.QuoteHash, 64)
++		}
++	})
++	t.Run("invalid contracts do not create orders", func(t *testing.T) {
++		for _, body := range []string{`{}`, `{"amount":1,"amount_fen":100}`, `{"amount_fen":99}`, `{"amount_fen":100.5}`, `{"amount_fen":100000001}`, `{"amount_fen":100,"payment_method":"forest"}`} {
++			result := call(body, RequestEpay)
++			require.Contains(t, result.Body.String(), `"message":"error"`)
++		}
++		var count int64
++		require.NoError(t, db.Model(&model.TopUp{}).Count(&count).Error)
++		require.Zero(t, count)
++	})
++	t.Run("wallet capacity is checked before issuing quotes", func(t *testing.T) {
++		require.NoError(t, db.Model(&model.User{}).Where("id = ?", 42).Update("quota", common.MaxWalletQuota-1).Error)
++		result := call(`{"amount_fen":100}`, RequestAmount)
++		require.Contains(t, result.Body.String(), "Top-up quota limit exceeded")
++		require.NoError(t, db.Model(&model.User{}).Where("id = ?", 42).Update("quota", 0).Error)
++	})
++	t.Run("legacy integer request remains unchanged", func(t *testing.T) {
++		result := call(`{"amount":1}`, RequestAmount)
++		assert.JSONEq(t, `{"message":"success","data":"7.30"}`, result.Body.String())
++	})
++	t.Run("config changes invalidate quotes", func(t *testing.T) {
++		quote, err := newCNYTopupQuote(42, "default", 100)
++		require.NoError(t, err)
++		operation_setting.Price, operation_setting.USDExchangeRate = 6.6, 6.6
++		result := call(fmt.Sprintf(`{"amount_fen":100,"expected_quote_hash":%q,"payment_method":"forest"}`, quote.QuoteHash), RequestEpay)
++		require.Contains(t, result.Body.String(), "Top-up quote changed")
++		operation_setting.Price, operation_setting.USDExchangeRate = 7.3, 7.3
++	})
++	t.Run("new order stores immutable quota and cent amount", func(t *testing.T) {
++		quote, err := newCNYTopupQuote(42, "default", 123)
++		require.NoError(t, err)
++		result := call(fmt.Sprintf(`{"amount_fen":123,"expected_quote_hash":%q,"payment_method":"forest"}`, quote.QuoteHash), RequestEpay)
++		require.Contains(t, result.Body.String(), `"message":"success"`)
++		require.Contains(t, result.Body.String(), `"money":"1.23"`)
++		var order model.TopUp
++		require.NoError(t, db.First(&order).Error)
++		require.Zero(t, order.Amount)
++		require.Equal(t, int64(123), order.AmountFen)
++		require.Equal(t, int64(84247), order.CreditedQuota)
++		require.Equal(t, quote.QuoteHash, order.QuoteHash)
++	})
++	t.Run("non-one discounts and mismatched pricing are rejected", func(t *testing.T) {
++		operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{10: 0.8}
++		_, err := newCNYTopupQuote(42, "default", 100)
++		require.Error(t, err)
++		operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
++		operation_setting.Price = 6.6
++		_, err = newCNYTopupQuote(42, "default", 100)
++		require.Error(t, err)
++		operation_setting.Price = 7.3
++	})
++}
++
++func TestCNYTopupRejectsRequestsWithoutComplianceBeforeCreatingOrders(t *testing.T) {
++	payment := operation_setting.GetPaymentSetting()
++	oldConfirmed := payment.ComplianceConfirmed
++	payment.ComplianceConfirmed = false
++	t.Cleanup(func() { payment.ComplianceConfirmed = oldConfirmed })
++	// Deliberately no DB fixture: both handlers must stop before even reading users.
++	for _, handler := range []gin.HandlerFunc{RequestAmount, RequestEpay} {
++		recorder := httptest.NewRecorder()
++		ctx, _ := gin.CreateTestContext(recorder)
++		ctx.Set("id", 42)
++		ctx.Request = httptest.NewRequest(http.MethodPost, "/api/user/pay", strings.NewReader("{\"amount_fen\":100}"))
++		ctx.Request.Header.Set("Content-Type", "application/json")
++		handler(ctx)
++		assert.Contains(t, recorder.Body.String(), "\"success\":false")
++		assert.Contains(t, recorder.Body.String(), "compliance")
++	}
++}
+--- a/model/topup.go
++++ b/model/topup.go
+@@ -1,9 +1,12 @@
+ package model
+ 
+ import (
++	"encoding/hex"
+ 	"errors"
+ 	"fmt"
+ 	"maps"
++	"math"
++	"strings"
+ 
+ 	"github.com/QuantumNous/new-api/common"
+ 	"github.com/QuantumNous/new-api/logger"
+@@ -23,6 +26,14 @@
+ 	CreateTime      int64   `json:"create_time"`
+ 	CompleteTime    int64   `json:"complete_time"`
+ 	Status          string  `json:"status"`
++	// A CNY checkout freezes its credited quota; legacy rows leave all of these
++	// fields empty and retain their original settlement semantics.
++	AmountFen     int64  `json:"amount_fen" gorm:"default:0"`
++	CreditedQuota int64  `json:"credited_quota" gorm:"default:0"`
++	QuotaPerUnit  int64  `json:"quota_per_unit" gorm:"default:0"`
++	Currency      string `json:"currency" gorm:"type:varchar(8);default:''"`
++	DisplayRate   string `json:"display_rate" gorm:"type:varchar(64);default:''"`
++	QuoteHash     string `json:"quote_hash" gorm:"type:varchar(64);default:''"`
+ }
+ 
+ const (
+@@ -47,15 +58,74 @@
+ 	ErrTopUpNotFound         = errors.New("topup not found")
+ 	ErrTopUpStatusInvalid    = errors.New("topup status invalid")
+ 	// The quota errors reach the web console, so they carry message keys.
+-	ErrInvalidTopUpQuota        error = common.NewMessage("Invalid top-up quota")
+-	ErrTopUpQuotaLimitExceeded  error = common.NewMessage("Top-up quota limit exceeded")
+-	ErrWalletQuotaLimitExceeded error = common.NewMessage("Wallet quota limit exceeded")
++	ErrInvalidTopUpQuota          error = common.NewMessage("Invalid top-up quota")
++	ErrTopUpQuotaLimitExceeded    error = common.NewMessage("Top-up quota limit exceeded")
++	ErrWalletQuotaLimitExceeded   error = common.NewMessage("Wallet quota limit exceeded")
++	ErrTopUpPaymentAmountMismatch       = errors.New("payment amount does not match order")
+ )
+ 
+ func (topUp *TopUp) Insert() error {
++	if topUp.HasCNYQuotaSnapshot() {
++		if _, err := topUp.CNYQuotaSnapshot(); err != nil {
++			return err
++		}
++	}
+ 	var err error
+ 	err = DB.Create(topUp).Error
+ 	return err
++}
++
++// HasCNYQuotaSnapshot also detects partially written snapshots. Those must fail
++// closed instead of falling back to the legacy Amount * current unit formula.
++func (topUp *TopUp) HasCNYQuotaSnapshot() bool {
++	return topUp != nil && (topUp.AmountFen != 0 || topUp.CreditedQuota != 0 || topUp.QuotaPerUnit != 0 || topUp.Currency != "" || topUp.DisplayRate != "" || topUp.QuoteHash != "")
++}
++
++// CNYQuotaSnapshot validates a persisted checkout without consulting mutable
++// global pricing options. Rounding is once, to the nearest internal quota unit;
++// the resulting two-decimal CNY amount must still equal the charged amount.
++func (topUp *TopUp) CNYQuotaSnapshot() (int, error) {
++	if topUp == nil || topUp.PaymentProvider != PaymentProviderEpay || topUp.Currency != "CNY" || topUp.Amount != 0 ||
++		topUp.AmountFen < 100 || topUp.AmountFen > common.MaxWalletQuota || topUp.QuotaPerUnit <= 0 || topUp.QuotaPerUnit > common.MaxWalletQuota ||
++		topUp.CreditedQuota <= 0 || topUp.CreditedQuota > common.MaxWalletQuota || len(topUp.QuoteHash) != 64 ||
++		len(topUp.DisplayRate) == 0 || len(topUp.DisplayRate) > 64 || math.IsNaN(topUp.Money) || math.IsInf(topUp.Money, 0) {
++		return 0, ErrInvalidTopUpQuota
++	}
++	if _, err := hex.DecodeString(topUp.QuoteHash); err != nil {
++		return 0, ErrInvalidTopUpQuota
++	}
++	if strings.Count(topUp.DisplayRate, ".") > 1 {
++		return 0, ErrInvalidTopUpQuota
++	}
++	for _, c := range topUp.DisplayRate {
++		if (c < '0' || c > '9') && c != '.' {
++			return 0, ErrInvalidTopUpQuota
++		}
++	}
++	rate, err := decimal.NewFromString(topUp.DisplayRate)
++	if err != nil || !rate.IsPositive() {
++		return 0, ErrInvalidTopUpQuota
++	}
++	fen := decimal.NewFromInt(topUp.AmountFen)
++	unit := decimal.NewFromInt(topUp.QuotaPerUnit)
++	quota := decimal.NewFromInt(topUp.CreditedQuota)
++	if !fen.Mul(unit).DivRound(rate.Mul(decimal.NewFromInt(100)), 0).Equal(quota) ||
++		!quota.Mul(rate).Mul(decimal.NewFromInt(100)).DivRound(unit, 0).Equal(fen) ||
++		!decimal.NewFromFloat(topUp.Money).Equal(fen.Div(decimal.NewFromInt(100))) {
++		return 0, ErrInvalidTopUpQuota
++	}
++	return int(topUp.CreditedQuota), nil
++}
++
++func (topUp *TopUp) settlementQuota() (int, error) {
++	if topUp.HasCNYQuotaSnapshot() {
++		return topUp.CNYQuotaSnapshot()
++	}
++	amount := decimal.NewFromInt(topUp.Amount)
++	if topUp.PaymentProvider == PaymentProviderStripe {
++		amount = decimal.NewFromFloat(topUp.Money)
++	}
++	return common.WalletQuotaFromDecimalStrict(amount.Mul(decimal.NewFromFloat(common.QuotaPerUnit)))
+ }
+ 
+ func topUpQuotaMaxCurrent(creditedQuota int) (int, error) {
+@@ -174,9 +244,37 @@
+ // 在同一个事务内完成，因此同一订单的并发/重复回调（包括多实例部署下）最多充值一次。
+ // alreadyDone=true 表示订单此前已完成，本次为幂等重复回调。
+ // 进程内的 LockOrder 只是优化，正确性由本函数的数据库行锁保证。
+-func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (alreadyDone bool, err error) {
++func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string, paidAmount ...string) (alreadyDone bool, err error) {
+ 	if tradeNo == "" {
+ 		return false, errors.New("payment order number not provided")
++	}
++	// Webhooks must pass their signed paid amount. The optional form preserves
++	// trusted in-process callers; all HTTP callbacks use the checked form.
++	var paid *decimal.Decimal
++	if len(paidAmount) > 1 {
++		return false, ErrTopUpPaymentAmountMismatch
++	}
++	if len(paidAmount) == 1 {
++		s := paidAmount[0]
++		parts := strings.Split(s, ".")
++		if len(s) == 0 || len(s) > 32 || len(parts) > 2 || (len(parts) == 2 && len(parts[1]) > 2) {
++			return false, ErrTopUpPaymentAmountMismatch
++		}
++		for _, part := range parts {
++			if part == "" {
++				return false, ErrTopUpPaymentAmountMismatch
++			}
++			for _, c := range part {
++				if c < '0' || c > '9' {
++					return false, ErrTopUpPaymentAmountMismatch
++				}
++			}
++		}
++		value, parseErr := decimal.NewFromString(s)
++		if parseErr != nil || !value.IsPositive() {
++			return false, ErrTopUpPaymentAmountMismatch
++		}
++		paid = &value
+ 	}
+ 
+ 	refCol := "`trade_no`"
+@@ -193,6 +291,9 @@
+ 		if topUp.PaymentProvider != PaymentProviderEpay {
+ 			return ErrPaymentMethodMismatch
+ 		}
++		if paid != nil && (math.IsNaN(topUp.Money) || math.IsInf(topUp.Money, 0) || !paid.Equal(decimal.NewFromFloat(topUp.Money).Round(2))) {
++			return ErrTopUpPaymentAmountMismatch
++		}
+ 		if topUp.Status == common.TopUpStatusSuccess {
+ 			alreadyDone = true
+ 			return nil
+@@ -204,9 +305,7 @@
+ 			topUp.PaymentMethod = actualPaymentMethod
+ 		}
+ 		var quotaErr error
+-		quotaToAdd, quotaErr = common.WalletQuotaFromDecimalStrict(
+-			decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
+-		)
++		quotaToAdd, quotaErr = topUp.settlementQuota()
+ 		if quotaErr != nil || quotaToAdd <= 0 {
+ 			return ErrInvalidTopUpQuota
+ 		}
+@@ -461,6 +560,7 @@
+ 	var quotaToAdd int
+ 	var payMoney float64
+ 	var paymentMethod string
++	var alreadyDone bool
+ 
+ 	err := DB.Transaction(func(tx *gorm.DB) error {
+ 		topUp := &TopUp{}
+@@ -471,6 +571,7 @@
+ 
+ 		// 幂等处理：已成功直接返回
+ 		if topUp.Status == common.TopUpStatusSuccess {
++			alreadyDone = true
+ 			return nil
+ 		}
+ 
+@@ -478,19 +579,10 @@
+ 			return common.NewMessage("Order is not pending payment and cannot be completed")
+ 		}
+ 
+-		// 计算应充值额度：
+-		// - Stripe 订单：Money 代表经分组倍率换算后的美元数量，直接 * QuotaPerUnit
+-		// - 其他订单（如易支付）：Amount 为美元数量，* QuotaPerUnit
++		// CNY orders use their immutable checkout snapshot, exactly like Epay's
++		// normal callback. Legacy orders retain the previous conversion formula.
+ 		var quotaErr error
+-		if topUp.PaymentProvider == PaymentProviderStripe {
+-			quotaToAdd, quotaErr = common.WalletQuotaFromDecimalStrict(
+-				decimal.NewFromFloat(topUp.Money).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
+-			)
+-		} else {
+-			quotaToAdd, quotaErr = common.WalletQuotaFromDecimalStrict(
+-				decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
+-			)
+-		}
++		quotaToAdd, quotaErr = topUp.settlementQuota()
+ 		if quotaErr != nil || quotaToAdd <= 0 {
+ 			return ErrInvalidTopUpQuota
+ 		}
+@@ -515,6 +607,9 @@
+ 
+ 	if err != nil {
+ 		return err
++	}
++	if alreadyDone {
++		return nil
+ 	}
+ 
+ 	// 事务外记录日志，避免阻塞
+--- /dev/null
++++ b/model/topup_cny_test.go
+@@ -0,0 +1,294 @@
++package model
++
++import (
++	"fmt"
++	"math"
++	"os"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/QuantumNous/new-api/common"
++	"github.com/QuantumNous/new-api/setting/operation_setting"
++	"github.com/jackc/pgx/v5"
++	"github.com/jackc/pgx/v5/stdlib"
++	"github.com/shopspring/decimal"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++	"gorm.io/driver/postgres"
++	"gorm.io/gorm"
++)
++
++func cnySnapshotTestOrder(fen int64) TopUp {
++	rate := decimal.RequireFromString("7.3")
++	quota := decimal.NewFromInt(fen).Mul(decimal.NewFromInt(500000)).DivRound(rate.Mul(decimal.NewFromInt(100)), 0).IntPart()
++	money, _ := decimal.NewFromInt(fen).Div(decimal.NewFromInt(100)).Float64()
++	return TopUp{
++		UserId: 700, AmountFen: fen, Money: money, CreditedQuota: quota,
++		QuotaPerUnit: 500000, Currency: "CNY", DisplayRate: "7.3", QuoteHash: strings.Repeat("a", 64),
++		TradeNo: fmt.Sprintf("CNY-%d", fen), PaymentProvider: PaymentProviderEpay,
++		PaymentMethod: "alipay", Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp(),
++	}
++}
++
++func TestCNYQuotaSnapshotSupportsYuanAndFen(t *testing.T) {
++	for _, fen := range []int64{100, 101, 123, 730, 1000, 1025, 100000, 100000000} {
++		t.Run(fmt.Sprint(fen), func(t *testing.T) {
++			order := cnySnapshotTestOrder(fen)
++			quota, err := order.CNYQuotaSnapshot()
++			require.NoError(t, err)
++			assert.Equal(t, int(order.CreditedQuota), quota)
++			displayedFen := decimal.NewFromInt(int64(quota)).Mul(decimal.RequireFromString(order.DisplayRate)).Mul(decimal.NewFromInt(100)).DivRound(decimal.NewFromInt(order.QuotaPerUnit), 0)
++			assert.Equal(t, fen, displayedFen.IntPart())
++		})
++	}
++}
++
++func TestCNYQuotaSnapshotRejectsMalformedAndPartialFields(t *testing.T) {
++	tests := map[string]func(*TopUp){
++		"under minimum":           func(o *TopUp) { o.AmountFen = 99 },
++		"missing fen":             func(o *TopUp) { o.AmountFen = 0 },
++		"negative fen":            func(o *TopUp) { o.AmountFen = -100 },
++		"overflow fen":            func(o *TopUp) { o.AmountFen = common.MaxWalletQuota + 1 },
++		"legacy amount populated": func(o *TopUp) { o.Amount = 1 },
++		"foreign provider":        func(o *TopUp) { o.PaymentProvider = PaymentProviderStripe },
++		"missing currency":        func(o *TopUp) { o.Currency = "" },
++		"foreign currency":        func(o *TopUp) { o.Currency = "USD" },
++		"missing quota":           func(o *TopUp) { o.CreditedQuota = 0 },
++		"negative quota":          func(o *TopUp) { o.CreditedQuota = -1 },
++		"tampered quota":          func(o *TopUp) { o.CreditedQuota++ },
++		"overflow quota":          func(o *TopUp) { o.CreditedQuota = common.MaxWalletQuota + 1 },
++		"missing unit":            func(o *TopUp) { o.QuotaPerUnit = 0 },
++		"negative unit":           func(o *TopUp) { o.QuotaPerUnit = -1 },
++		"overflow unit":           func(o *TopUp) { o.QuotaPerUnit = common.MaxWalletQuota + 1 },
++		"missing rate":            func(o *TopUp) { o.DisplayRate = "" },
++		"zero rate":               func(o *TopUp) { o.DisplayRate = "0" },
++		"negative rate":           func(o *TopUp) { o.DisplayRate = "-7.3" },
++		"malformed rate":          func(o *TopUp) { o.DisplayRate = "7..3" },
++		"rate exponent":           func(o *TopUp) { o.DisplayRate = "1e-999999999" },
++		"rate too long":           func(o *TopUp) { o.DisplayRate = strings.Repeat("1", 65) },
++		"missing hash":            func(o *TopUp) { o.QuoteHash = "" },
++		"invalid hash":            func(o *TopUp) { o.QuoteHash = strings.Repeat("z", 64) },
++		"short hash":              func(o *TopUp) { o.QuoteHash = strings.Repeat("a", 63) },
++		"wrong money":             func(o *TopUp) { o.Money += 0.01 },
++		"fractional fen money":    func(o *TopUp) { o.Money += 0.001 },
++		"nan money":               func(o *TopUp) { o.Money = math.NaN() },
++		"infinite money":          func(o *TopUp) { o.Money = math.Inf(1) },
++	}
++	for name, mutate := range tests {
++		t.Run(name, func(t *testing.T) {
++			order := cnySnapshotTestOrder(100)
++			mutate(&order)
++			assert.True(t, order.HasCNYQuotaSnapshot())
++			_, err := order.settlementQuota()
++			require.ErrorIs(t, err, ErrInvalidTopUpQuota)
++			require.ErrorIs(t, order.Insert(), ErrInvalidTopUpQuota)
++		})
++	}
++	var nilOrder *TopUp
++	_, err := nilOrder.CNYQuotaSnapshot()
++	require.ErrorIs(t, err, ErrInvalidTopUpQuota)
++	for _, order := range []TopUp{
++		{Amount: 2, AmountFen: 100}, {Amount: 2, CreditedQuota: 100}, {Amount: 2, QuotaPerUnit: 500000},
++		{Amount: 2, Currency: "CNY"}, {Amount: 2, DisplayRate: "7.3"}, {Amount: 2, QuoteHash: strings.Repeat("a", 64)},
++	} {
++		assert.True(t, order.HasCNYQuotaSnapshot())
++		_, err := order.settlementQuota()
++		require.ErrorIs(t, err, ErrInvalidTopUpQuota)
++	}
++}
++
++func TestCNYQuotaSnapshotPreservesLegacySettlement(t *testing.T) {
++	oldUnit := common.QuotaPerUnit
++	common.QuotaPerUnit = 500000
++	t.Cleanup(func() { common.QuotaPerUnit = oldUnit })
++	for _, tc := range []struct {
++		order TopUp
++		want  int
++	}{
++		{TopUp{Amount: 2, Money: 14.6, PaymentProvider: PaymentProviderEpay}, 1000000},
++		{TopUp{Amount: 2, Money: 1.25, PaymentProvider: PaymentProviderStripe}, 625000},
++	} {
++		assert.False(t, tc.order.HasCNYQuotaSnapshot())
++		quota, err := tc.order.settlementQuota()
++		require.NoError(t, err)
++		assert.Equal(t, tc.want, quota)
++	}
++}
++
++func TestCNYSettlementKeepsCheckoutQuotaWhenGlobalRatesChange(t *testing.T) {
++	truncateTables(t)
++	user := insertUserForPaymentGuardTest(t, 700, 0)
++	order := cnySnapshotTestOrder(1025)
++	require.NoError(t, order.Insert())
++	oldUnit, oldPrice, oldRate := common.QuotaPerUnit, operation_setting.Price, operation_setting.USDExchangeRate
++	common.QuotaPerUnit, operation_setting.Price, operation_setting.USDExchangeRate = 1, 100, 99
++	t.Cleanup(func() {
++		common.QuotaPerUnit, operation_setting.Price, operation_setting.USDExchangeRate = oldUnit, oldPrice, oldRate
++	})
++	done, err := RechargeEpay(order.TradeNo, "alipay", "127.0.0.1")
++	require.NoError(t, err)
++	assert.False(t, done)
++	assert.Equal(t, int(order.CreditedQuota), getUserQuotaForPaymentGuardTest(t, user.Id))
++	require.NoError(t, ManualCompleteTopUp(order.TradeNo, "127.0.0.1"))
++	assert.Equal(t, int(order.CreditedQuota), getUserQuotaForPaymentGuardTest(t, user.Id))
++	var logs int64
++	require.NoError(t, LOG_DB.Model(&Log{}).Where("type = ?", LogTypeTopup).Count(&logs).Error)
++	assert.Equal(t, int64(1), logs)
++}
++
++func TestCNYManualSettlementUsesSnapshotAndIsIdempotent(t *testing.T) {
++	truncateTables(t)
++	user := insertUserForPaymentGuardTest(t, 700, 0)
++	order := cnySnapshotTestOrder(100)
++	require.NoError(t, order.Insert())
++	oldUnit := common.QuotaPerUnit
++	common.QuotaPerUnit = 3
++	t.Cleanup(func() { common.QuotaPerUnit = oldUnit })
++	for i := 0; i < 3; i++ {
++		require.NoError(t, ManualCompleteTopUp(order.TradeNo, "127.0.0.1"))
++	}
++	done, err := RechargeEpay(order.TradeNo, "alipay", "127.0.0.1")
++	require.NoError(t, err)
++	assert.True(t, done)
++	assert.Equal(t, int(order.CreditedQuota), getUserQuotaForPaymentGuardTest(t, user.Id))
++	var logs int64
++	require.NoError(t, LOG_DB.Model(&Log{}).Where("type = ?", LogTypeTopup).Count(&logs).Error)
++	assert.Equal(t, int64(1), logs)
++}
++
++func TestCNYConcurrentCallbackAndManualCompletionCreditOnce(t *testing.T) {
++	truncateTables(t)
++	assertCNYConcurrentSettlementCreditOnce(t)
++}
++
++func assertCNYConcurrentSettlementCreditOnce(t *testing.T) {
++	t.Helper()
++	user := insertUserForPaymentGuardTest(t, 700, 0)
++	order := cnySnapshotTestOrder(123)
++	require.NoError(t, order.Insert())
++	errors := make(chan error, 24)
++	var wg sync.WaitGroup
++	for i := 0; i < 24; i++ {
++		wg.Add(1)
++		go func(i int) {
++			defer wg.Done()
++			if i%2 == 0 {
++				_, err := RechargeEpay(order.TradeNo, "alipay", "127.0.0.1")
++				errors <- err
++			} else {
++				errors <- ManualCompleteTopUp(order.TradeNo, "127.0.0.1")
++			}
++		}(i)
++	}
++	wg.Wait()
++	close(errors)
++	for err := range errors {
++		require.NoError(t, err)
++	}
++	assert.Equal(t, int(order.CreditedQuota), getUserQuotaForPaymentGuardTest(t, user.Id))
++	assert.Equal(t, common.TopUpStatusSuccess, getTopUpStatusForPaymentGuardTest(t, order.TradeNo))
++	var logs int64
++	require.NoError(t, LOG_DB.Model(&Log{}).Where("type = ?", LogTypeTopup).Count(&logs).Error)
++	assert.Equal(t, int64(1), logs)
++}
++
++// SQLite's shared in-memory database serializes its single connection. This
++// optional integration test verifies real PostgreSQL row locks with 24 callers
++// and a separate schema, never touching tables in an existing search path.
++func TestCNYConcurrentSettlementPostgreSQL(t *testing.T) {
++	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
++	if dsn == "" {
++		t.Skip("TEST_POSTGRES_DSN is not configured")
++	}
++	config, err := pgx.ParseConfig(dsn)
++	require.NoError(t, err)
++	adminSQL := stdlib.OpenDB(*config)
++	t.Cleanup(func() { assert.NoError(t, adminSQL.Close()) })
++	schema := fmt.Sprintf("cny_settlement_%d", time.Now().UnixNano())
++	_, err = adminSQL.Exec(`CREATE SCHEMA "` + schema + `"`)
++	require.NoError(t, err)
++	t.Cleanup(func() {
++		_, dropErr := adminSQL.Exec(`DROP SCHEMA "` + schema + `" CASCADE`)
++		assert.NoError(t, dropErr)
++	})
++	config.RuntimeParams["search_path"] = schema
++	sqlDB := stdlib.OpenDB(*config)
++	sqlDB.SetMaxOpenConns(32)
++	sqlDB.SetMaxIdleConns(32)
++	t.Cleanup(func() { assert.NoError(t, sqlDB.Close()) })
++	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{})
++	require.NoError(t, err)
++	previousDB, previousLogDB := DB, LOG_DB
++	previousMainType, previousLogType := common.MainDatabaseType(), common.LogDatabaseType()
++	previousRedis, previousBatch := common.RedisEnabled, common.BatchUpdateEnabled
++	DB, LOG_DB = db, db
++	common.SetDatabaseTypes(common.DatabaseTypePostgreSQL, common.DatabaseTypePostgreSQL)
++	common.RedisEnabled, common.BatchUpdateEnabled = false, false
++	initCol()
++	t.Cleanup(func() {
++		DB, LOG_DB = previousDB, previousLogDB
++		common.SetDatabaseTypes(previousMainType, previousLogType)
++		common.RedisEnabled, common.BatchUpdateEnabled = previousRedis, previousBatch
++		initCol()
++	})
++	require.NoError(t, db.AutoMigrate(&User{}, &TopUp{}, &Log{}))
++	var version string
++	require.NoError(t, db.Raw("SELECT version()").Scan(&version).Error)
++	t.Logf("PostgreSQL row-lock verification: %s", version)
++	assertCNYConcurrentSettlementCreditOnce(t)
++}
++
++func TestCNYSettlementRejectsCorruptSnapshotWithoutCredit(t *testing.T) {
++	for _, manual := range []bool{false, true} {
++		t.Run(fmt.Sprint(manual), func(t *testing.T) {
++			truncateTables(t)
++			user := insertUserForPaymentGuardTest(t, 700, 19)
++			order := cnySnapshotTestOrder(100)
++			require.NoError(t, order.Insert())
++			require.NoError(t, DB.Model(&TopUp{}).Where("id = ?", order.Id).Update("credited_quota", order.CreditedQuota+1).Error)
++			var err error
++			if manual {
++				err = ManualCompleteTopUp(order.TradeNo, "127.0.0.1")
++			} else {
++				_, err = RechargeEpay(order.TradeNo, "alipay", "127.0.0.1")
++			}
++			require.ErrorIs(t, err, ErrInvalidTopUpQuota)
++			assert.Equal(t, 19, getUserQuotaForPaymentGuardTest(t, user.Id))
++			assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, order.TradeNo))
++		})
++	}
++}
++
++func TestCNYSettlementHonorsWalletLimit(t *testing.T) {
++	truncateTables(t)
++	order := cnySnapshotTestOrder(100)
++	user := insertUserForPaymentGuardTest(t, 700, common.MaxWalletQuota-int(order.CreditedQuota)+1)
++	require.NoError(t, order.Insert())
++	_, err := RechargeEpay(order.TradeNo, "alipay", "127.0.0.1")
++	require.ErrorIs(t, err, ErrTopUpQuotaLimitExceeded)
++	assert.Equal(t, user.Quota, getUserQuotaForPaymentGuardTest(t, user.Id))
++	assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, order.TradeNo))
++}
++
++func TestCNYCallbackRejectsSignedAmountMismatchBeforeSettlement(t *testing.T) {
++	truncateTables(t)
++	user := insertUserForPaymentGuardTest(t, 700, 0)
++	order := cnySnapshotTestOrder(123)
++	require.NoError(t, order.Insert())
++	for _, money := range []string{"0.01", "1.24", "", "1.230", "123e-2", "-1.23", "1.23.0"} {
++		done, err := RechargeEpay(order.TradeNo, "alipay", "127.0.0.1", money)
++		assert.False(t, done)
++		require.ErrorIs(t, err, ErrTopUpPaymentAmountMismatch)
++		assert.Equal(t, 0, getUserQuotaForPaymentGuardTest(t, user.Id))
++		assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, order.TradeNo))
++	}
++	done, err := RechargeEpay(order.TradeNo, "alipay", "127.0.0.1", "1.23")
++	require.NoError(t, err)
++	assert.False(t, done)
++	done, err = RechargeEpay(order.TradeNo, "alipay", "127.0.0.1", "1.23")
++	require.NoError(t, err)
++	assert.True(t, done)
++	assert.Equal(t, int(order.CreditedQuota), getUserQuotaForPaymentGuardTest(t, user.Id))
++}
+--- a/web/src/features/models/__tests__/model-listing.test.tsx
++++ b/web/src/features/models/__tests__/model-listing.test.tsx
+@@ -697,7 +697,7 @@
+   expect(write).not.toHaveBeenCalled()
+ })
+ 
+-it('shows an unrecognized expression as special and retains its full source in pricing details', async () => {
++it('keeps an unrecognized expression out of the list and expands its full source in pricing details', async () => {
+   const expression = 'tier("custom", max(p * 2 + c * 8, 100))'
+   await renderList([channel], {
+     pricing: [
+@@ -715,11 +715,15 @@
+   const button = screen.getByRole('button', {
+     name: 'View pricing for channel-only',
+   })
+-  expect(button).toHaveTextContent('Special billing expression')
++  expect(button).toHaveTextContent('View pricing details')
+   expect(button).not.toHaveTextContent('$2')
+   expect(button).not.toHaveTextContent(expression)
+   await userEvent.click(button)
+   const preview = await screen.findByRole('region', { name: 'Current Billing' })
++  expect(preview).not.toHaveTextContent(expression)
++  await userEvent.click(
++    within(preview).getByRole('button', { name: 'Raw expression' })
++  )
+   expect(preview).toHaveTextContent(expression)
+ })
+ 
+--- a/web/src/features/pricing/__tests__/breakdown-tier-match.test.ts
++++ b/web/src/features/pricing/__tests__/breakdown-tier-match.test.ts
+@@ -18,7 +18,7 @@
+ */
+ import assert from 'node:assert/strict'
+ 
+-import { describe, test } from 'vitest'
++import { describe, expect, test } from 'vitest'
+ 
+ import { parseTiersFromExpr, type ParsedTaskTier } from '../lib/billing-expr'
+ import { isBreakdownTierMatched } from '../lib/breakdown-tier-match'
+@@ -53,6 +53,28 @@
+ }
+ 
+ describe('breakdown tier matched-row highlight', () => {
++  test('does not claim a request-specific row matched without the request context', () => {
++    const tiers = [
++      {
++        label: 'standard',
++        conditions: [],
++        inputPrice: 1,
++        expandedDisplay: true,
++        conditionText: 'param("service_tier") == "ultrafast"',
++      },
++      {
++        label: 'standard',
++        conditions: [],
++        inputPrice: 0.5,
++        expandedDisplay: true,
++        conditionText: '!(param("service_tier") == "ultrafast")',
++      },
++    ]
++    expect(
++      tiers.filter((tier) => isBreakdownTierMatched(tier, tiers, 'standard'))
++    ).toHaveLength(0)
++  })
++
+   test('uses the recorded unit and fixed price when token and request branches share a label', () => {
+     const tiers = parseTiersFromExpr(
+       'len < 1000 ? tier("base", p * 2) : tier("base", fixed(0.01))'
+--- a/web/src/features/pricing/__tests__/dynamic-price.test.ts
++++ b/web/src/features/pricing/__tests__/dynamic-price.test.ts
+@@ -20,7 +20,11 @@
+ 
+ import { describe, expect, test } from 'vitest'
+ 
++import { useSystemConfigStore } from '@/stores/system-config-store'
++
+ import { parseTiersFromExpr } from '../lib/billing-expr'
++import { compileBillingExpression } from '../lib/billing-expression/parser'
++import { evaluateBillingExpression } from '../lib/billing-expression/runtime'
+ import { getBillingModeLabelKey } from '../lib/billing-mode'
+ import {
+   getCardExamplePrice,
+@@ -175,7 +179,6 @@
+   })
+   test.each([
+     'tier("custom", max(p * 2 + c * 8, 100))',
+-    'tier("base", p * 2 + c * 8) * 3',
+     'param("premium") ? tier("pro", p * 4 + c * 16) : tier("base", p * 2 + c * 8)',
+     'tier("overflow", p * 1e999 + c * 8)',
+   ])('does not invent structured prices from %s', (expression) => {
+@@ -798,3 +801,180 @@
+     })
+   })
+ })
++
++describe('scaled request-dependent token prices', () => {
++  const expression =
++    '((((param("service_tier") == "priority" || param("service_tier") == "fast")) ? (len <= 272000 ? tier("priority", p * 10 + cr * 1 + cc * 12.5 + c * 60) : tier("priority_long", p * 20 + cr * 2 + cc * 25 + c * 90)) : (len <= 272000 ? tier("standard", p * 5 + cr * 0.5 + cc * 6.25 + c * 30) : tier("long", p * 10 + cr * 1 + cc * 12.5 + c * 45))) * (param("service_tier") == "ultrafast" ? 2 : 1)) * 0.06164383561643835'
++  test('expands complete request and context branches without impossible cross-products', () => {
++    const tiers = parseTiersFromExpr(expression)
++    expect(tiers).toHaveLength(6)
++    expect(tiers.every((row) => row.expandedDisplay && row.conditionText)).toBe(
++      true
++    )
++    const scale = 0.06164383561643835
++    expect(
++      tiers
++        .map((row) => Number((Number(row.inputPrice) / scale).toFixed(10)))
++        .sort((a, b) => a - b)
++    ).toEqual([5, 10, 10, 10, 20, 20])
++    expect(
++      tiers
++        .map((row) => Number((Number(row.outputPrice) / scale).toFixed(10)))
++        .sort((a, b) => a - b)
++    ).toEqual([30, 45, 60, 60, 90, 90])
++    const summary = getDynamicPricingSummary(
++      pricingModel({ billing_mode: 'tiered_expr', billing_expr: expression }),
++      { tokenUnit: 'M' }
++    )
++    expect(summary?.isSpecialExpression).toBe(false)
++    const input = summary?.primaryEntries.find(
++      (entry) => entry.field === 'inputPrice'
++    )
++    expect(input?.minValue).toBeCloseTo(5 * scale, 12)
++    expect(input?.maxValue).toBeCloseTo(20 * scale, 12)
++    expect(input?.formattedRange).toBeTruthy()
++    expect(summary?.hasRequestRules).toBe(true)
++  })
++  test.each([
++    ['tier("base", p * 2 + c * 8) * 3', 6, 24],
++    ['3 * (tier("base", p * 2 + c * 8))', 6, 24],
++    ['(tier("base", p * 2 + c * 8) * 3) * 0.5', 3, 12],
++    ['0 * tier("free", p * 2 + c * 8)', 0, 0],
++  ])(
++    'applies a finite nonnegative scalar exactly once in %s',
++    (expression, input, output) => {
++      const summary = getDynamicPricingSummary(
++        pricingModel({ billing_mode: 'tiered_expr', billing_expr: expression }),
++        { tokenUnit: 'M' }
++      )
++      expect(summary?.isSpecialExpression).toBe(false)
++      expect(summary?.primaryEntries.map((entry) => entry.value)).toEqual([
++        input,
++        output,
++      ])
++    }
++  )
++  test.each([
++    'tier("base", p * 2 + c * 8) * p',
++    'tier("base", p * 2 + c * 8) * -2',
++    'tier("base", p * 2 + c * 8) + tier("extra", p * 2)',
++    'tier("base", p * 2 + c * 8) * (param("x") ? 2 : 1)',
++    'param("x") == "a" ? tier("good", p * 1) : tier("bad", max(p * 2, 1))',
++    'tier("base", p * 2 + c * 8) * 1e308 * 1e308',
++  ])('does not show misleading partial prices for %s', (expression) => {
++    expect(parseTiersFromExpr(expression)).toEqual([])
++  })
++  test('excludes contradictory request and token branches while retaining full conditions', () => {
++    const expr =
++      '(param("tier") == "fast" ? (len <= 10 ? tier("short", p * 2) : tier("long", p * 4)) : tier("base", p * 1)) * (param("tier") == "fast" ? 3 : 1)'
++    const tiers = parseTiersFromExpr(expr)
++    expect(tiers).toHaveLength(3)
++    expect(tiers.map((row) => row.inputPrice)).toEqual([6, 12, 1])
++    expect(tiers[1].conditionText).toContain('!(len <= 10)')
++    expect(tiers[2].conditionText).toContain('!(param("tier") == "fast")')
++  })
++})
++
++test('expanded prices match the unchanged evaluator for each request/context selection', () => {
++  const expression =
++    '((((param("service_tier") == "priority" || param("service_tier") == "fast")) ? (len <= 272000 ? tier("priority", p * 10 + cr * 1 + cc * 12.5 + c * 60) : tier("priority_long", p * 20 + cr * 2 + cc * 25 + c * 90)) : (len <= 272000 ? tier("standard", p * 5 + cr * 0.5 + cc * 6.25 + c * 30) : tier("long", p * 10 + cr * 1 + cc * 12.5 + c * 45))) * (param("service_tier") == "ultrafast" ? 2 : 1)) * 0.06164383561643835'
++  const compiled = compileBillingExpression(expression)
++  expect(compiled.status).toBe('ready')
++  if (compiled.status !== 'ready') return
++  const tiers = parseTiersFromExpr(expression)
++  for (const service_tier of ['default', 'priority', 'fast', 'ultrafast']) {
++    for (const len of [272000, 272001]) {
++      const context = {
++        tokens: { p: 100, c: 50, cr: 10, cc: 20, len },
++        request: { body: { service_tier } },
++      }
++      const actual = evaluateBillingExpression(compiled, context)
++      expect(actual.status).toBe('success')
++      const matches = tiers.filter((row) => {
++        const match = compileBillingExpression(
++          `(${row.conditionText}) ? tier("yes",p * 1) : tier("no",p * 0)`
++        )
++        if (match.status !== 'ready') {
++          throw new Error('invalid generated condition')
++        }
++        const result = evaluateBillingExpression(match, context)
++        return result.status === 'success' && result.matchedTier === 'yes'
++      })
++      expect(matches).toHaveLength(1)
++      const row = matches[0]
++      const displayed =
++        100 * Number(row.inputPrice) +
++        50 * Number(row.outputPrice) +
++        10 * Number(row.cacheReadPrice) +
++        20 * Number(row.cacheCreatePrice)
++      if (actual.status === 'success') {
++        expect(displayed).toBeCloseTo(actual.cost, 10)
++      }
++    }
++  }
++})
++
++test('expanded ranges format RMB once for 1M and 1K units and recharge prices', () => {
++  const previous = useSystemConfigStore.getState().config
++  useSystemConfigStore.setState({
++    config: {
++      ...previous,
++      currency: {
++        ...previous.currency,
++        quotaDisplayType: 'CNY',
++        usdExchangeRate: 7.3,
++      },
++    },
++  })
++  try {
++    const model = pricingModel({
++      billing_mode: 'tiered_expr',
++      billing_expr:
++        '(len <= 272000 ? tier("standard",p * 1 + c * 6) : tier("long",p * 2 + c * 9)) * 0.06164383561643835',
++    })
++    for (const recharge of [false, true]) {
++      const options = {
++        tokenUnit: 'M' as const,
++        showRechargePrice: recharge,
++        priceRate: 7.3,
++        usdExchangeRate: 7.3,
++      }
++      const million = getDynamicPricingSummary(model, options)
++      const thousand = getDynamicPricingSummary(model, {
++        ...options,
++        tokenUnit: 'K',
++      })
++      expect(million?.primaryEntries[0].formattedRange).toBe('¥0.45 – ¥0.9')
++      expect(thousand?.primaryEntries[0].formattedRange).toBe(
++        '¥0.00045 – ¥0.0009'
++      )
++    }
++  } finally {
++    useSystemConfigStore.setState({ config: previous })
++  }
++})
++
++test('expanded conditional base includes appended request multipliers in summary', () => {
++  const model = pricingModel({
++    billing_mode: 'tiered_expr',
++    billing_expr:
++      '(param("tier") == "premium" ? tier("pro", p * 4 + c * 8) : tier("base", p * 1 + c * 2)) * (header("speed") == "fast" ? 3 : 1)',
++  })
++  const summary = getDynamicPricingSummary(model, { tokenUnit: 'M' })
++  expect(summary?.tiers).toHaveLength(4)
++  expect(summary?.primaryEntries[0].minValue).toBe(1)
++  expect(summary?.primaryEntries[0].maxValue).toBe(12)
++})
++
++test('expanded cache price range retains branches priced the same as input', () => {
++  const model = pricingModel({
++    billing_mode: 'tiered_expr',
++    billing_expr:
++      '(param("mode") == "premium" ? tier("pro", p * 10 + cr * 10 + c * 20) : tier("standard", p * 2 + cr * 0.2 + c * 5)) * 0.5',
++  })
++  const summary = getDynamicPricingSummary(model, { tokenUnit: 'M' })
++  const cachePrice = summary?.entries.find((entry) => entry.key === 'cr')
++  expect(cachePrice?.minValue).toBe(0.1)
++  expect(cachePrice?.maxValue).toBe(5)
++  expect(cachePrice?.formattedRange).toBe('$0.1 – $5')
++})
+--- a/web/src/features/pricing/__tests__/model-cards.test.tsx
++++ b/web/src/features/pricing/__tests__/model-cards.test.tsx
+@@ -88,6 +88,36 @@
+ })
+ 
+ describe('model cards', () => {
++  it('shows complete CNY ranges for scaled tiers on cards and cache cells in M and K units', () => {
++    useSystemConfigStore.getState().setConfig({
++      currency: {
++        ...DEFAULT_CURRENCY_CONFIG,
++        quotaDisplayType: 'CNY',
++        usdExchangeRate: 7.3,
++      },
++    })
++    const model = pricingModel({
++      billing_mode: 'tiered_expr',
++      billing_expr:
++        '(len <= 272000 ? tier("standard", p * 1 + cr * 0.1 + c * 6) : tier("long", p * 2 + cr * 0.2 + c * 9)) * 0.06164383561643835',
++    })
++    const { rerender } = render(
++      <ModelCard model={model} onClick={vi.fn()} tokenUnit='M' />
++    )
++    expect(screen.getByText('¥0.45 – ¥0.9')).toBeVisible()
++    expect(screen.getByText('¥2.7 – ¥4.05')).toBeVisible()
++    expect(screen.getByText('¥0.045 – ¥0.09')).toBeVisible()
++    expect(
++      screen.getByText('Price range across tiers · see details')
++    ).toBeVisible()
++    expect(screen.queryByText(model.billing_expr ?? '')).not.toBeInTheDocument()
++    rerender(<ModelCard model={model} onClick={vi.fn()} tokenUnit='K' />)
++    expect(screen.getByText('¥0.00045 – ¥0.0009')).toBeVisible()
++    expect(screen.getByText('¥0.0027 – ¥0.00405')).toBeVisible()
++    rerender(<CachedPriceCell model={model} options={{ tokenUnit: 'M' }} />)
++    expect(screen.getByText('¥0.045 – ¥0.09')).toBeVisible()
++  })
++
+   it('shows separate generic and image cache prices including a free image cache', () => {
+     render(
+       <CachedPriceCell
+@@ -577,7 +607,7 @@
+     expect(screen.getByText(/480p · 5s ≈/)).toBeVisible()
+   })
+ 
+-  it('keeps an unrecognized expression visible with the special billing message', () => {
++  it('keeps unknown prices behind details without exposing the raw expression on cards', () => {
+     const expression =
+       'u("seconds") > 30 ? tier("long", u("seconds") * 0.3) : tier("short", u("seconds") * 0.4)'
+     render(
+@@ -590,8 +620,8 @@
+         onClick={vi.fn()}
+       />
+     )
+-    expect(screen.getByText('Special billing expression')).toBeVisible()
+-    expect(screen.getByText(expression)).toBeVisible()
++    expect(screen.getByText('View pricing details')).toBeVisible()
++    expect(screen.queryByText(expression)).not.toBeInTheDocument()
+   })
+ 
+   it('keeps browsing and missing metric values available after the metrics request fails', async () => {
+--- a/web/src/features/pricing/__tests__/task-price-display.test.tsx
++++ b/web/src/features/pricing/__tests__/task-price-display.test.tsx
+@@ -152,7 +152,7 @@
+   expect(screen.queryByText('Matched')).not.toBeInTheDocument()
+ })
+ 
+-it('explains missing task metadata while retaining the original expression', () => {
++it('explains missing metadata and reveals the raw expression only on keyboard request', async () => {
+   const expression = 'tier("base", u("seconds") * 0.09)'
+   render(<DynamicPricingBreakdown billingExpr={expression} />)
+   expect(
+@@ -160,7 +160,18 @@
+       'Task usage metadata is unavailable. Pricing details cannot be displayed.'
+     )
+   ).toBeVisible()
++  const trigger = screen.getByRole('button', { name: 'Raw expression' })
++  expect(trigger).toHaveAttribute('aria-expanded', 'false')
++  expect(screen.queryByText(expression)).not.toBeInTheDocument()
++  trigger.focus()
++  await userEvent.keyboard('{Enter}')
++  expect(trigger).toHaveAttribute('aria-expanded', 'true')
+   expect(screen.getByText(expression)).toBeVisible()
++  expect(screen.getByText(expression)).toHaveClass(
++    'overflow-auto',
++    'break-all',
++    'max-h-48'
++  )
+ })
+ 
+ it('falls back for omitted count labels and preserves canonical units for other quantities', () => {
+@@ -664,3 +675,45 @@
+   expect(screen.getByText('0.4 – 0.8/s')).toBeVisible()
+   expect(screen.getByText('$0.4 – $0.8')).toBeVisible()
+ })
++
++it('keeps expanded RMB tier prices and their units aligned in details without showing raw formulas by default', async () => {
++  useSystemConfigStore.getState().setConfig({
++    currency: {
++      ...DEFAULT_CURRENCY_CONFIG,
++      quotaDisplayType: 'CNY',
++      usdExchangeRate: 7.3,
++    },
++  })
++  const expression =
++    '(len <= 272000 ? tier("standard", p * 1 + cr * 0.1 + c * 6) : tier("long", p * 2 + cr * 0.2 + c * 9)) * 0.06164383561643835'
++  const { rerender } = render(
++    <DynamicPricingBreakdown billingExpr={expression} tokenUnit='M' />
++  )
++  expect(screen.getAllByText('¥0.45').length).toBeGreaterThan(0)
++  expect(screen.getAllByText('¥4.05').length).toBeGreaterThan(0)
++  expect(screen.queryByText(expression)).not.toBeInTheDocument()
++  rerender(<DynamicPricingBreakdown billingExpr={expression} tokenUnit='K' />)
++  expect(screen.getAllByText('¥0.00045').length).toBeGreaterThan(0)
++  expect(screen.getAllByText('¥0.00405').length).toBeGreaterThan(0)
++  expect(screen.getByText(/Tiered price table.*1K/)).toBeVisible()
++  await userEvent.click(screen.getByRole('button', { name: 'Raw expression' }))
++  expect(screen.getByText(expression)).toBeVisible()
++})
++
++it('includes separated request multipliers in expanded prices without applying them twice', () => {
++  useSystemConfigStore.getState().setConfig({
++    currency: {
++      ...DEFAULT_CURRENCY_CONFIG,
++      quotaDisplayType: 'CNY',
++      usdExchangeRate: 7.3,
++    },
++  })
++  const expression =
++    '((len <= 272000 ? tier("standard", p * 1 + c * 6) : tier("long", p * 2 + c * 9)) * 0.06164383561643835) * (header("x-priority") == "high" ? 2 : 1)'
++  render(<DynamicPricingBreakdown billingExpr={expression} />)
++  expect(screen.getAllByText('¥0.45').length).toBeGreaterThan(0)
++  expect(screen.getAllByText('¥1.8').length).toBeGreaterThan(0)
++  expect(screen.getAllByText('¥8.1').length).toBeGreaterThan(0)
++  expect(screen.getByText('Already included in tier prices')).toBeVisible()
++  expect(screen.queryByText(expression)).not.toBeInTheDocument()
++})
+--- a/web/src/features/pricing/components/cached-price-cell.tsx
++++ b/web/src/features/pricing/components/cached-price-cell.tsx
+@@ -79,7 +79,7 @@
+     if (dynamicSummary.isSpecialExpression) {
+       return (
+         <span className='text-muted-foreground/50 text-xs'>
+-          {t('Special billing expression')}
++          {t('View pricing details')}
+         </span>
+       )
+     }
+@@ -107,7 +107,7 @@
+               </span>
+             )}
+             <span className='font-mono text-sm tabular-nums'>
+-              {stripTrailingZeros(entry.formatted)}
++              {entry.formattedRange ?? stripTrailingZeros(entry.formatted)}
+             </span>
+           </div>
+         ))}
+--- a/web/src/features/pricing/components/dynamic-pricing-breakdown.tsx
++++ b/web/src/features/pricing/components/dynamic-pricing-breakdown.tsx
+@@ -50,6 +50,7 @@
+ import { isBreakdownTierMatched } from '../lib/breakdown-tier-match'
+ import {
+   formatTaskUsageUnitPrice,
++  formatDynamicUnitPrice,
+   type DynamicPriceLabelKind,
+   type DynamicPriceOptions,
+ } from '../lib/dynamic-price'
+@@ -60,9 +61,11 @@
+   taskTierConditions,
+   pricingDisplayFallbackKey,
+ } from '../lib/task-price-display'
+-import type { BillingUsageSchema, BillingUsageUnit } from '../types'
++import type { BillingUsageSchema, BillingUsageUnit, TokenUnit } from '../types'
++import { RawBillingExpression } from './raw-billing-expression'
+ 
+ type DynamicPricingBreakdownProps = {
++  tokenUnit?: TokenUnit
+   billingExpr: string | null | undefined
+   /**
+    * Label of the tier that fired for the current request. When provided,
+@@ -113,13 +116,14 @@
+ 
+ function breakdownPriceFieldLabel(
+   field: BreakdownPriceField,
+-  t: (key: string) => string
++  t: (key: string) => string,
++  tokenUnit: TokenUnit
+ ): ReactNode {
+   if (field.labelKind === 'schema') {
+     return <span className='break-words whitespace-normal'>{field.label}</span>
+   }
+   return field.showTokenUnit
+-    ? `${t(field.label)} / ${t('1M token')}`
++    ? `${t(field.label)} / ${tokenUnit === 'K' ? '1K' : t('1M token')}`
+     : t(field.label)
+ }
+ 
+@@ -197,18 +201,17 @@
+ function formatBreakdownPrice(
+   value: number,
+   field: BreakdownPriceField,
+-  symbol: string,
+-  rate: number,
+   t: (key: string) => string,
+   taskPriceOptions: DynamicPricingBreakdownProps['taskPriceOptions'],
+-  language: string
++  language: string,
++  tokenUnit: TokenUnit
+ ): string {
+   const amount =
+     field.labelKind === 'schema' ||
+     field.unit === 'request' ||
+     field.unit === 'image'
+       ? formatTaskUsageUnitPrice(value, { tokenUnit: 'M', ...taskPriceOptions })
+-      : `${symbol}${(value * rate).toFixed(4)}`
++      : formatDynamicUnitPrice(value, { tokenUnit, ...taskPriceOptions })
+   if (field.unit === 'second') return `${amount}/${t('s')}`
+   if (field.unit === 'count') {
+     return `${amount}/${taskUsageUnitLabel(field, language, t('unit'))}`
+@@ -280,6 +283,7 @@
+ }
+ 
+ export function DynamicPricingBreakdown({
++  tokenUnit = 'M',
+   billingExpr,
+   matchedTierLabel,
+   matchedBillingUnit,
+@@ -293,26 +297,25 @@
+ }: DynamicPricingBreakdownProps) {
+   const { t, i18n } = useTranslation()
+   const expr = billingExpr || ''
+-  const currency = useSystemConfigStore((s) => s.config.currency)
+-
+-  const { symbol, rate } = useMemo(() => {
+-    if (currency.quotaDisplayType === 'CNY') {
+-      return { symbol: '¥', rate: currency.usdExchangeRate || 7 }
+-    }
+-    if (currency.quotaDisplayType === 'CUSTOM') {
+-      return {
+-        symbol: currency.customCurrencySymbol || '¤',
+-        rate: currency.customCurrencyExchangeRate || 1,
+-      }
+-    }
+-    return { symbol: '$', rate: 1 }
+-  }, [currency])
++  // Subscribe so the shared currency formatter updates when display settings change.
++  useSystemConfigStore((s) => s.config.currency)
+ 
+   const { tiers, ruleGroups } = useMemo(() => {
+     const split = splitBillingExprAndRequestRules(expr)
+-    const parsedTiers = usageSchema
++    let parsedTiers = usageSchema
+       ? getTaskPricingDisplayTiers(split.billingExpr, usageSchema)
+       : parseTiersFromExpr(split.billingExpr)
++    // Expanded display rows already include request factors. Parse the complete
++    // expression so a split request multiplier cannot disappear from their rates.
++    if (
++      !usageSchema &&
++      split.requestRuleExpr &&
++      parsedTiers.some(
++        (tier) => 'expandedDisplay' in tier && tier.expandedDisplay
++      )
++    ) {
++      parsedTiers = parseTiersFromExpr(expr)
++    }
+     let parsedRules =
+       requestRules != null
+         ? requestRuleGroupsFromTrace(requestRules)
+@@ -337,6 +340,9 @@
+ 
+   const hasTiers = tiers.length > 0
+   const hasRules = ruleGroups.length > 0
++  const rulesIncludedInPrices = tiers.some(
++    (tier) => 'expandedDisplay' in tier && tier.expandedDisplay
++  )
+ 
+   if (!expr) return null
+ 
+@@ -358,12 +364,7 @@
+             </div>
+           </div>
+         )}
+-        <div className='text-muted-foreground mb-1 text-[10px] font-medium tracking-wider uppercase'>
+-          {t('Raw expression')}
+-        </div>
+-        <code className='text-muted-foreground block text-xs break-all'>
+-          {expr}
+-        </code>
++        <RawBillingExpression expression={expr} />
+       </section>
+     )
+   }
+@@ -484,6 +485,7 @@
+               }
+             >
+               {t('Tiered price table')}
++              {` · ${tokenUnit === 'K' ? '1K' : t('1M token')}`}
+             </div>
+           )}
+           <div className='space-y-1.5 sm:hidden'>
+@@ -534,7 +536,7 @@
+                     )}
+                   </div>
+                   {condSummary && (
+-                    <div className='text-muted-foreground mb-1.5 text-xs'>
++                    <div className='text-muted-foreground mb-1.5 text-xs break-words'>
+                       {condSummary}
+                     </div>
+                   )}
+@@ -549,7 +551,7 @@
+                       return (
+                         <div key={field.id} className='min-w-0'>
+                           <div className='text-muted-foreground text-xs font-medium break-words whitespace-normal'>
+-                            {breakdownPriceFieldLabel(field, t)}
++                            {breakdownPriceFieldLabel(field, t, tokenUnit)}
+                           </div>
+                           <div
+                             className={cn(
+@@ -564,11 +566,10 @@
+                               ? formatBreakdownPrice(
+                                   value,
+                                   field,
+-                                  symbol,
+-                                  rate,
+                                   t,
+                                   taskPriceOptions,
+-                                  i18n.language
++                                  i18n.language,
++                                  tokenUnit
+                                 )
+                               : '-'}
+                           </div>
+@@ -653,7 +654,7 @@
+                         )}
+                       </div>
+                       {condSummary && (
+-                        <div className='text-muted-foreground mt-1 text-xs'>
++                        <div className='text-muted-foreground mt-1 text-xs break-words'>
+                           {condSummary}
+                         </div>
+                       )}
+@@ -663,7 +664,7 @@
+               },
+               ...visiblePriceFields.map((field) => ({
+                 id: field.id,
+-                header: breakdownPriceFieldLabel(field, t),
++                header: breakdownPriceFieldLabel(field, t, tokenUnit),
+                 className: cn(
+                   'text-muted-foreground py-2 text-right font-medium',
+                   compact && 'h-8'
+@@ -681,11 +682,10 @@
+                       {formatBreakdownPrice(
+                         value,
+                         field,
+-                        symbol,
+-                        rate,
+                         t,
+                         taskPriceOptions,
+-                        i18n.language
++                        i18n.language,
++                        tokenUnit
+                       )}
+                     </span>
+                   ) : (
+@@ -708,6 +708,11 @@
+             }
+           >
+             {t('Conditional multipliers')}
++            {rulesIncludedInPrices && (
++              <span className='text-muted-foreground ml-2 font-normal'>
++                {t('Already included in tier prices')}
++              </span>
++            )}
+           </div>
+           <ul className='space-y-1.5'>
+             {ruleGroups.map((group) => {
+@@ -748,6 +753,7 @@
+           </ul>
+         </div>
+       )}
++      <RawBillingExpression expression={expr} />
+     </section>
+   )
+ }
+--- a/web/src/features/pricing/components/model-card.tsx
++++ b/web/src/features/pricing/components/model-card.tsx
+@@ -114,12 +114,7 @@
+     if (dynamicSummary.isSpecialExpression) {
+       priceSummary = (
+         <div className='col-span-full min-w-0'>
+-          <span className='text-warning'>
+-            {t('Special billing expression')}
+-          </span>
+-          <code className='text-muted-foreground mt-1 line-clamp-2 block font-mono text-xs break-all'>
+-            {dynamicSummary.rawExpression}
+-          </code>
++          <span className='text-warning'>{t('View pricing details')}</span>
+         </div>
+       )
+     } else if (
+@@ -176,6 +171,12 @@
+                 </div>
+               )
+             })}
++          {!dynamicSummary.isTaskUsage &&
++            dynamicSummary.entries.some((entry) => entry.formattedRange) && (
++              <span className='text-muted-foreground col-span-full text-xs'>
++                {t('Price range across tiers · see details')}
++              </span>
++            )}
+           {dynamicSummary.isTimePricing && (
+             <span className='text-muted-foreground col-span-full text-xs'>
+               {t('Current period price')}
+--- a/web/src/features/pricing/components/model-details.tsx
++++ b/web/src/features/pricing/components/model-details.tsx
+@@ -104,6 +104,7 @@
+ import { ModelBillingModeBadge } from './model-billing-mode-badge'
+ import { ModelDetailsApi } from './model-details-api'
+ import { ModelDetailsPerformance } from './model-details-performance'
++import { RawBillingExpression } from './raw-billing-expression'
+ 
+ // ----------------------------------------------------------------------------
+ // Local UI helpers
+@@ -729,14 +730,6 @@
+                 )
+               )}
+             </p>
+-            <div className='mt-3'>
+-              <div className='text-muted-foreground mb-1 text-[10px] font-medium tracking-wider uppercase'>
+-                {t('Raw expression')}
+-              </div>
+-              <code className='text-muted-foreground bg-background/80 block max-h-28 overflow-auto rounded-md border px-2 py-1.5 font-mono text-xs break-all'>
+-                {dynamicSummary.rawExpression}
+-              </code>
+-            </div>
+           </div>
+         </section>
+       )
+@@ -1139,14 +1132,6 @@
+                 )
+               )}
+             </p>
+-            <div className='mt-3'>
+-              <div className='text-muted-foreground mb-1 text-[10px] font-medium tracking-wider uppercase'>
+-                {t('Raw expression')}
+-              </div>
+-              <code className='text-muted-foreground bg-background/80 block max-h-28 overflow-auto rounded-md border px-2 py-1.5 font-mono text-xs break-all'>
+-                {props.model.billing_expr}
+-              </code>
+-            </div>
+           </div>
+         </section>
+       )
+@@ -1523,6 +1508,7 @@
+             )}
+             {isDynamic && !simpleTaskPricing && (
+               <DynamicPricingBreakdown
++                tokenUnit={props.tokenUnit}
+                 billingExpr={props.model.billing_expr}
+                 usageSchema={props.model.billing_usage_schema}
+                 taskPriceOptions={{
+@@ -1530,6 +1516,11 @@
+                   priceRate: props.priceRate,
+                   usdExchangeRate: props.usdExchangeRate,
+                 }}
++              />
++            )}
++            {isDynamic && simpleTaskPricing && (
++              <RawBillingExpression
++                expression={props.model.billing_expr || ''}
+               />
+             )}
+             <GroupPricingSection
+--- a/web/src/features/pricing/components/model-price-cell.tsx
++++ b/web/src/features/pricing/components/model-price-cell.tsx
+@@ -100,7 +100,7 @@
+       return (
+         <span className='block max-w-full min-w-0'>
+           <span className='text-muted-foreground block truncate text-sm'>
+-            {t('Special billing expression')}
++            {t('View pricing details')}
+           </span>
+           {providerCaption && (
+             <span className='text-muted-foreground block text-xs'>
+@@ -108,11 +108,6 @@
+                 .filter(Boolean)
+                 .join(' · ')}
+             </span>
+-          )}
+-          {props.showExpression !== false && (
+-            <code className='text-muted-foreground mt-1 line-clamp-2 block text-xs break-all whitespace-normal'>
+-              {dynamic.rawExpression}
+-            </code>
+           )}
+         </span>
+       )
+@@ -158,6 +153,12 @@
+       )
+     }
+     if (dynamic.isTaskUsage || hasRequestPrice) caption = currencyLabel
++    if (
++      !dynamic.isTaskUsage &&
++      dynamic.entries.some((entry) => entry.formattedRange)
++    ) {
++      caption += ` · ${t('Price range across tiers · see details')}`
++    }
+     if (dynamic.isTimePricing) caption += ` · ${t('Current period price')}`
+     if (dynamic.isMixedBilling) {
+       caption += ` · ${t('Token or per-call pricing')}`
+--- /dev/null
++++ b/web/src/features/pricing/components/raw-billing-expression.tsx
+@@ -0,0 +1,64 @@
++/*
++Copyright (C) 2023-2026 QuantumNous
++
++This program is free software: you can redistribute it and/or modify
++it under the terms of the GNU Affero General Public License as
++published by the Free Software Foundation, either version 3 of the
++License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++GNU Affero General Public License for more details.
++
++You should have received a copy of the GNU Affero General Public License
++along with this program. If not, see <https://www.gnu.org/licenses/>.
++
++For commercial licensing, please contact support@quantumnous.com
++*/
++import { ChevronDown } from 'lucide-react'
++import { useTranslation } from 'react-i18next'
++
++import { CopyButton } from '@/components/copy-button'
++import { Button } from '@/components/ui/button'
++import {
++  Collapsible,
++  CollapsibleContent,
++  CollapsibleTrigger,
++} from '@/components/ui/collapsible'
++
++/** The exact billing contract remains inspectable, without overwhelming prices. */
++export function RawBillingExpression(props: { expression: string }) {
++  const { t } = useTranslation()
++  return (
++    <Collapsible className='mt-3 min-w-0' defaultOpen={false}>
++      <CollapsibleTrigger
++        render={
++          <Button
++            variant='ghost'
++            size='sm'
++            className='text-muted-foreground group h-auto gap-1.5 px-0 py-1 text-xs'
++          />
++        }
++      >
++        <ChevronDown
++          aria-hidden='true'
++          className='size-3.5 transition-transform group-data-panel-open:rotate-180'
++        />
++        {t('Raw expression')}
++      </CollapsibleTrigger>
++      <CollapsibleContent>
++        <div className='bg-muted/30 mt-2 flex min-w-0 items-start gap-2 rounded-md border p-2'>
++          <code className='text-muted-foreground block max-h-48 min-w-0 flex-1 overflow-auto font-mono text-xs break-all whitespace-pre-wrap'>
++            {props.expression}
++          </code>
++          <CopyButton
++            value={props.expression}
++            tooltip={t('Copy')}
++            className='size-7 shrink-0'
++          />
++        </div>
++      </CollapsibleContent>
++    </Collapsible>
++  )
++}
+--- /dev/null
++++ b/web/src/features/pricing/lib/__tests__/request-condition-display.test.ts
+@@ -0,0 +1,105 @@
++/*
++Copyright (C) 2023-2026 QuantumNous
++
++This program is free software: you can redistribute it and/or modify
++it under the terms of the GNU Affero General Public License as
++published by the Free Software Foundation, either version 3 of the
++License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++GNU Affero General Public License for more details.
++
++You should have received a copy of the GNU Affero General Public License
++along with this program. If not, see <https://www.gnu.org/licenses/>.
++
++For commercial licensing, please contact support@quantumnous.com
++*/
++import { createInstance } from 'i18next'
++import { describe, expect, test } from 'vitest'
++
++import en from '@/i18n/locales/en.json'
++import fr from '@/i18n/locales/fr.json'
++import ja from '@/i18n/locales/ja.json'
++import ru from '@/i18n/locales/ru.json'
++import vi from '@/i18n/locales/vi.json'
++import zhTW from '@/i18n/locales/zh-TW.json'
++import zh from '@/i18n/locales/zh.json'
++
++import { formatBillingCondition } from '../billing-expression/condition-display'
++
++const i18n = createInstance()
++await i18n.init({
++  lng: 'en',
++  fallbackLng: 'en',
++  resources: {
++    en: { translation: {} },
++    zh: {
++      translation: {
++        'Service tier': '服务档位',
++        'Request parameter': '请求参数',
++        'Not ({{condition}})': '非（{{condition}}）',
++        '{{first}} and {{second}}': '{{first}} 且 {{second}}',
++        '{{first}} or {{second}}': '{{first}} 或 {{second}}',
++        'Full input length': '完整输入长度',
++      },
++    },
++  },
++  interpolation: { escapeValue: false },
++})
++
++describe('request pricing condition labels', () => {
++  test('ships request condition translations in all supported language resources', async () => {
++    const keys = ['Service tier', 'Request parameter', 'Not ({{condition}})']
++    for (const resource of [en, fr, ja, ru, vi, zh, zhTW]) {
++      for (const key of keys) {
++        expect(resource.translation).toHaveProperty(key, expect.any(String))
++      }
++    }
++    const localized = createInstance()
++    await localized.init({
++      lng: 'zh',
++      resources: { zh },
++      interpolation: { escapeValue: false },
++    })
++    expect(
++      formatBillingCondition(
++        '!(param("service_tier") == "ultrafast")',
++        localized.t.bind(localized),
++        'zhCN'
++      )
++    ).toBe('非（服务档位 == "ultrafast"）')
++  })
++  test('preserves branch negation and OR grouping with readable parameter names', () => {
++    const condition =
++      '!(param("service_tier") == "priority" || param("service_tier") == "fast") && len > 272000'
++    const label = formatBillingCondition(condition, i18n.getFixedT('en'), 'en')
++    expect(label).toBe(
++      'Not (Service tier == "priority" or Service tier == "fast") and Full input length > 272,000'
++    )
++    expect(
++      formatBillingCondition(condition, i18n.getFixedT('zh'), 'zhCN')
++    ).toBe(
++      '非（服务档位 == "priority" 或 服务档位 == "fast"） 且 完整输入长度 > 272,000'
++    )
++  })
++  test('does not relabel request negation as a time range', () => {
++    const label = formatBillingCondition(
++      '!(param("service_tier") == "ultrafast")',
++      i18n.t.bind(i18n)
++    )
++    expect(label).toBe('Not (Service tier == "ultrafast")')
++  })
++  test('keeps arbitrary request keys and unknown expressions intact', () => {
++    expect(
++      formatBillingCondition('param("mode") != "premium"', i18n.t.bind(i18n))
++    ).toBe('Request parameter mode != "premium"')
++    expect(
++      formatBillingCondition('header("X-Tier") == "fast"', i18n.t.bind(i18n))
++    ).toBe('Header X-Tier == "fast"')
++    expect(
++      formatBillingCondition('has(param("mode"), "fast")', i18n.t.bind(i18n))
++    ).toBeNull()
++  })
++})
+--- a/web/src/features/pricing/lib/billing-expr.ts
++++ b/web/src/features/pricing/lib/billing-expr.ts
+@@ -30,6 +30,7 @@
+ import type { BillingUsageSchema } from '../types'
+ import {
+   readTokenTierChain,
++  readExpandedTokenPricing,
+   readTaskTierChain,
+   readTimeTokenPricing,
+   type TokenTier,
+@@ -272,6 +273,7 @@
+ }
+ 
+ export type ParsedTier = {
++  expandedDisplay?: boolean
+   billingUnit?: 'token' | 'request'
+   fixedPrice?: number
+   conditionText?: string
+@@ -302,6 +304,7 @@
+ ): ParsedTier {
+   return {
+     label: tier.label,
++    ...(tier.expandedDisplay ? { expandedDisplay: true } : {}),
+     ...(tier.imageCount ? { imageCount: true } : {}),
+     conditions: tier.conditions,
+     ...(tier.billingUnit === 'request'
+@@ -323,7 +326,9 @@
+   if (compiled.status !== 'ready') return []
+   const canonical = readTokenTierChain(compiled.ast)
+   if (canonical) return canonical.map(mapTokenTier)
+-  return readTimeTokenPricing(exprStr)?.tiers.map(mapTokenTier) ?? []
++  const timeTiers = readTimeTokenPricing(exprStr)?.tiers
++  if (timeTiers) return timeTiers.map(mapTokenTier)
++  return readExpandedTokenPricing(compiled)?.map(mapTokenTier) ?? []
+ }
+ 
+ /** Current-time selection is exclusively for summaries; detail and log callers retain all rows. */
+--- a/web/src/features/pricing/lib/billing-expression/condition-display.ts
++++ b/web/src/features/pricing/lib/billing-expression/condition-display.ts
+@@ -140,10 +140,40 @@
+     if (!description) return null
+     return {
+       ...description,
+-      text: t('Outside these times: {{condition}}', {
+-        condition: description.text,
+-      }),
+-      kind: 'combined',
++      text: t(
++        description.timezone
++          ? 'Outside these times: {{condition}}'
++          : 'Not ({{condition}})',
++        {
++          condition: description.text,
++        }
++      ),
++      kind: 'combined',
++      disjunction: false,
++    }
++  }
++  if (
++    node.kind === 'binary' &&
++    ['==', '!='].includes(node.operator) &&
++    node.left.kind === 'call' &&
++    ['param', 'header'].includes(node.left.name) &&
++    node.left.args[0]?.kind === 'literal' &&
++    typeof node.left.args[0].value === 'string' &&
++    node.right.kind === 'literal'
++  ) {
++    const path = node.left.args[0].value
++    let label: string
++    if (node.left.name === 'header') {
++      label = `${t('Header')} ${path}`
++    } else if (path === 'service_tier') {
++      label = t('Service tier')
++    } else {
++      label = `${t('Request parameter')} ${path}`
++    }
++    return {
++      text: `${label} ${node.operator} ${JSON.stringify(node.right.value)}`,
++      kind: 'combined',
++      timezone: '',
+     }
+   }
+   if (
+--- a/web/src/features/pricing/lib/billing-expression/display.ts
++++ b/web/src/features/pricing/lib/billing-expression/display.ts
+@@ -33,6 +33,7 @@
+   value: number
+ }
+ export type TokenTier = {
++  expandedDisplay?: boolean
+   conditionText?: string
+   imageCount?: boolean
+   billingUnit?: 'token' | 'request'
+@@ -241,6 +242,295 @@
+   const fallback = tokenTier(remaining, [])
+   if (!fallback) return null
+   return [...tiers, fallback]
++}
++
++type DisplayGuard = { condition: ExpressionNode; matches: boolean }
++type DisplayAtom = {
++  key: string
++  operator: string
++  value: string | number | boolean | null
++}
++type DisplayBranch = {
++  factor: number
++  tier?: TokenTier
++  guards: DisplayGuard[]
++}
++const MAX_DISPLAY_BRANCHES = 64
++
++/** Limited predicates with decidable intersections. Never infer prices from arbitrary code. */
++function displayPredicate(node: ExpressionNode): DisplayAtom | null {
++  if (node.kind !== 'binary' || node.right.kind !== 'literal') return null
++  const value = node.right.value
++  if (
++    node.left.kind === 'variable' &&
++    ['p', 'c', 'len'].includes(node.left.name)
++  ) {
++    if (
++      !['<', '<=', '>', '>=', '==', '!='].includes(node.operator) ||
++      typeof value !== 'number' ||
++      !Number.isFinite(value)
++    ) {
++      return null
++    }
++    return { key: node.left.name, operator: node.operator, value }
++  }
++  if (
++    node.left.kind !== 'call' ||
++    !['param', 'header'].includes(node.left.name) ||
++    node.left.args[0]?.kind !== 'literal' ||
++    typeof node.left.args[0].value !== 'string' ||
++    !['==', '!='].includes(node.operator)
++  ) {
++    return null
++  }
++  if (typeof value === 'number' && !Number.isFinite(value)) return null
++  if (node.left.name === 'header' && typeof value !== 'string') return null
++  const path =
++    node.left.name === 'header'
++      ? node.left.args[0].value.trim().toLowerCase()
++      : node.left.args[0].value
++  return {
++    key: `${node.left.name}:${JSON.stringify(path)}`,
++    operator: node.operator,
++    value,
++  }
++}
++
++function displayAtomsCanMatch(atoms: DisplayAtom[]): boolean {
++  const domains = new Map<
++    string,
++    {
++      equal?: string
++      excluded: Set<string>
++      min: number
++      max: number
++      minOpen: boolean
++      maxOpen: boolean
++    }
++  >()
++  for (const atom of atoms) {
++    let domain = domains.get(atom.key)
++    if (!domain) {
++      domain = {
++        excluded: new Set(),
++        min: atom.key.includes(':') ? -Infinity : 0,
++        max: Infinity,
++        minOpen: false,
++        maxOpen: false,
++      }
++      domains.set(atom.key, domain)
++    }
++    const value = JSON.stringify(atom.value)
++    if (atom.operator === '==') {
++      if (domain.equal !== undefined && domain.equal !== value) return false
++      domain.equal = value
++    } else if (atom.operator === '!=') {
++      domain.excluded.add(value)
++    } else if (typeof atom.value === 'number') {
++      if (atom.operator === '>' || atom.operator === '>=') {
++        const open = atom.operator === '>'
++        if (atom.value > domain.min || (atom.value === domain.min && open)) {
++          domain.min = atom.value
++          domain.minOpen = open
++        }
++      } else {
++        const open = atom.operator === '<'
++        if (atom.value < domain.max || (atom.value === domain.max && open)) {
++          domain.max = atom.value
++          domain.maxOpen = open
++        }
++      }
++    }
++    if (
++      domain.min > domain.max ||
++      (domain.min === domain.max && (domain.minOpen || domain.maxOpen))
++    ) {
++      return false
++    }
++    if (
++      domain.min === domain.max &&
++      domain.excluded.has(JSON.stringify(domain.min))
++    ) {
++      return false
++    }
++    if (domain.equal !== undefined) {
++      if (domain.excluded.has(domain.equal)) return false
++      const equal: unknown = JSON.parse(domain.equal)
++      if (
++        typeof equal === 'number' &&
++        (equal < domain.min ||
++          equal > domain.max ||
++          (equal === domain.min && domain.minOpen) ||
++          (equal === domain.max && domain.maxOpen))
++      ) {
++        return false
++      }
++    }
++  }
++  return true
++}
++
++function displayConjunction(
++  left: DisplayAtom[][],
++  right: DisplayAtom[][]
++): DisplayAtom[][] | null {
++  if (left.length * right.length > MAX_DISPLAY_BRANCHES) return null
++  return left
++    .flatMap((a) => right.map((b) => [...a, ...b]))
++    .filter(displayAtomsCanMatch)
++}
++
++function displayGuardAlternatives(
++  node: ExpressionNode,
++  matches: boolean
++): DisplayAtom[][] | null {
++  if (node.kind === 'unary' && node.operator === '!') {
++    return displayGuardAlternatives(node.operand, !matches)
++  }
++  if (node.kind === 'binary' && ['&&', '||'].includes(node.operator)) {
++    const left = displayGuardAlternatives(node.left, matches)
++    const right = displayGuardAlternatives(node.right, matches)
++    if (!left || !right) return null
++    if ((node.operator === '&&') === matches) {
++      return displayConjunction(left, right)
++    }
++    return left.length + right.length <= MAX_DISPLAY_BRANCHES
++      ? [...left, ...right]
++      : null
++  }
++  const atom = displayPredicate(node)
++  if (!atom) return null
++  if (!matches) {
++    const inverse: Record<string, string> = {
++      '==': '!=',
++      '!=': '==',
++      '<': '>=',
++      '<=': '>',
++      '>': '<=',
++      '>=': '<',
++    }
++    atom.operator = inverse[atom.operator]
++  }
++  return [[atom]]
++}
++
++function displayGuardsCanMatch(guards: DisplayGuard[]): boolean | null {
++  let alternatives: DisplayAtom[][] = [[]]
++  for (const guard of guards) {
++    const next = displayGuardAlternatives(guard.condition, guard.matches)
++    if (!next) return null
++    const combined = displayConjunction(alternatives, next)
++    if (!combined) return null
++    alternatives = combined
++    if (alternatives.length === 0) return false
++  }
++  return true
++}
++
++function displayPricingBranches(
++  node: ExpressionNode,
++  depth = 0
++): DisplayBranch[] | null {
++  if (depth > 64) return null
++  const scalar = nonnegativePriceLiteral(node)
++  if (scalar !== null) {
++    return Number.isFinite(scalar) ? [{ factor: scalar, guards: [] }] : null
++  }
++  const tier = tokenTier(node, [])
++  if (tier) return [{ factor: 1, tier, guards: [] }]
++  if (node.kind === 'conditional') {
++    if (!displayGuardAlternatives(node.condition, true)) return null
++    const yes = displayPricingBranches(node.yes, depth + 1)
++    const no = displayPricingBranches(node.no, depth + 1)
++    if (!yes || !no || yes.length + no.length > MAX_DISPLAY_BRANCHES) {
++      return null
++    }
++    return [
++      ...yes.map((row) => ({
++        ...row,
++        guards: [{ condition: node.condition, matches: true }, ...row.guards],
++      })),
++      ...no.map((row) => ({
++        ...row,
++        guards: [{ condition: node.condition, matches: false }, ...row.guards],
++      })),
++    ]
++  }
++  if (node.kind !== 'binary' || node.operator !== '*') return null
++  const left = displayPricingBranches(node.left, depth + 1)
++  const right = displayPricingBranches(node.right, depth + 1)
++  if (!left || !right || left.length * right.length > MAX_DISPLAY_BRANCHES) {
++    return null
++  }
++  const rows: DisplayBranch[] = []
++  for (const a of left) {
++    for (const b of right) {
++      if (a.tier && b.tier) return null
++      const factor = a.factor * b.factor
++      if (!Number.isFinite(factor) || factor < 0) return null
++      const guards = [...a.guards, ...b.guards]
++      const matches = displayGuardsCanMatch(guards)
++      if (matches === null) return null
++      if (matches) rows.push({ tier: a.tier ?? b.tier, factor, guards })
++    }
++  }
++  return rows
++}
++
++/** Expand only complete linear pricing trees; the evaluator and stored expression are untouched. */
++export function readExpandedTokenPricing(
++  compiled: CompiledBillingExpression
++): TokenTier[] | null {
++  const branches = displayPricingBranches(compiled.ast)
++  if (!branches || branches.length === 0 || branches.some((row) => !row.tier)) {
++    return null
++  }
++  const rows: TokenTier[] = []
++  for (const branch of branches) {
++    const matches = displayGuardsCanMatch(branch.guards)
++    if (matches === null) return null
++    if (!matches || !branch.tier) continue
++    const prices: TokenTier['prices'] = {}
++    for (const [key, price] of Object.entries(branch.tier.prices)) {
++      const value = price * branch.factor
++      if (!Number.isFinite(value)) return null
++      prices[key as TokenVariable] = value
++    }
++    const fixedPrice =
++      branch.tier.fixedPrice === undefined
++        ? undefined
++        : branch.tier.fixedPrice * branch.factor
++    if (fixedPrice !== undefined && !Number.isFinite(fixedPrice)) return null
++    const conditionText = [
++      ...new Set(
++        branch.guards.map(({ condition, matches }) => {
++          const source = compiled.source.slice(condition.start, condition.end)
++          return matches ? `(${source})` : `!(${source})`
++        })
++      ),
++    ].join(' && ')
++    rows.push({
++      ...branch.tier,
++      prices,
++      fixedPrice,
++      conditionText,
++      expandedDisplay: true,
++    })
++  }
++  if (!rows.length) return null
++  // A missing category means tokens may be billed by another coefficient, not
++  // that its standalone price is zero. Avoid an incomplete cross-tier range.
++  const fields = Object.keys(rows[0].prices).sort().join(',')
++  if (
++    rows.some(
++      (row) =>
++        Object.keys(row.prices).sort().join(',') !== fields ||
++        row.billingUnit !== rows[0].billingUnit
++    )
++  ) {
++    return null
++  }
++  return rows
+ }
+ 
+ export function isTimeCondition(node: ExpressionNode): boolean {
+--- a/web/src/features/pricing/lib/breakdown-tier-match.ts
++++ b/web/src/features/pricing/lib/breakdown-tier-match.ts
+@@ -61,6 +61,17 @@
+     matchedTierLabel ?? undefined
+   )
+   if (tierMatchesNormalizedLabel(tier, normalizedMatchedTierLabel)) {
++    // Expanded request branches can share an engine label but have different
++    // rates. A label alone cannot identify the original request's branch.
++    if (
++      'expandedDisplay' in tier &&
++      tier.expandedDisplay &&
++      tiers.filter((candidate) =>
++        tierMatchesNormalizedLabel(candidate, normalizedMatchedTierLabel)
++      ).length > 1
++    ) {
++      return false
++    }
+     if (
+       'unitPrices' in tier &&
+       tiers.filter((candidate) =>
+--- a/web/src/features/pricing/lib/dynamic-price.ts
++++ b/web/src/features/pricing/lib/dynamic-price.ts
+@@ -261,7 +261,12 @@
+   if (isTaskUsagePricingModel(model)) {
+     return getTaskPricingDisplayTiers(billingExpr, model.billing_usage_schema)
+   }
+-  return parseTiersFromExpr(billingExpr)
++  const tiers = parseTiersFromExpr(billingExpr)
++  if (tiers.some((row) => row.expandedDisplay)) {
++    // Do not drop request factors when the base itself needs branch expansion.
++    return parseTiersFromExpr(model.billing_expr || '')
++  }
++  return tiers
+ }
+ 
+ export function hasDynamicRequestRules(model: PricingModel): boolean {
+@@ -345,9 +350,11 @@
+     if (!Number.isFinite(value) || value < 0) return []
+     // Same-price reads can stay in the expression to preserve accounting for
+     // overlapping usage. They do not need a separate displayed price. Keep
+-    // explicit zero prices visible, even when the input itself is free.
++    // explicit zero prices visible, even when the input itself is free. Expanded
++    // rows must retain every rate so cross-branch ranges cannot lose a maximum.
+     if (
+       variable.key === 'cr' &&
++      !(tier as ParsedTier).expandedDisplay &&
+       value !== 0 &&
+       value === (tier as ParsedTier).inputPrice
+     ) {
+@@ -557,6 +564,37 @@
+           range.min === range.max
+             ? undefined
+             : `${formatTaskUsageUnitPrice(range.min, options)} – ${formatTaskUsageUnitPrice(range.max, options)}`,
++      }
++    })
++  }
++
++  // Expanded request/context trees do not have a universal first/default price.
++  // Include every reachable branch and show ranges, never an arbitrarily chosen tier.
++  if (
++    !isTaskUsage &&
++    summaryTiers.some(
++      (row) => 'expandedDisplay' in row && row.expandedDisplay === true
++    )
++  ) {
++    const grouped = new Map<string, DynamicPriceEntry[]>()
++    for (const row of summaryTiers) {
++      for (const entry of getDynamicPriceEntries(row, options)) {
++        const key = `${entry.unit}:${entry.field}`
++        grouped.set(key, [...(grouped.get(key) ?? []), entry])
++      }
++    }
++    entries = [...grouped.values()].map((variants) => {
++      const sorted = [...variants].sort((a, b) => a.value - b.value)
++      const min = sorted[0]
++      const max = sorted.at(-1) ?? min
++      return {
++        ...min,
++        minValue: min.value,
++        maxValue: max.value,
++        formattedRange:
++          min.value === max.value
++            ? undefined
++            : `${min.formatted} – ${max.formatted}`,
+       }
+     })
+   }
+--- a/web/src/features/wallet/__tests__/copy.test.tsx
++++ b/web/src/features/wallet/__tests__/copy.test.tsx
+@@ -16,7 +16,7 @@
+ 
+ For commercial licensing, please contact support@quantumnous.com
+ */
+-import { act, render, screen } from '@testing-library/react'
++import { act, fireEvent, render, screen } from '@testing-library/react'
+ import { createInstance } from 'i18next'
+ import { I18nextProvider, initReactI18next } from 'react-i18next'
+ import { beforeEach, expect, it, vi } from 'vitest'
+@@ -125,3 +125,124 @@
+     expect(screen.getByPlaceholderText('Minimum 1')).toBeVisible()
+   }
+ )
++
++it('accepts RMB cents and does not multiply CNY recharge presets by the legacy rate', async () => {
++  const onAmount = vi.fn()
++  render(
++    <I18nextProvider i18n={i18n}>
++      <RechargeFormCard
++        topupInfo={{
++          enable_online_topup: true,
++          enable_stripe_topup: false,
++          pay_methods: [],
++          min_topup: 1,
++          stripe_min_topup: 1,
++          amount_options: [1],
++          discount: {},
++          supports_cny_amount_fen: true,
++          min_amount_fen: 100,
++        }}
++        presetAmounts={[{ value: 1 }]}
++        selectedPreset={null}
++        topupAmount={1}
++        paymentAmount={1}
++        priceRatio={7.3}
++        usdExchangeRate={7.3}
++        calculating={false}
++        paymentLoading={null}
++        redemptionCode=''
++        redeeming={false}
++        onSelectPreset={vi.fn()}
++        onTopupAmountChange={onAmount}
++        onPaymentMethodSelect={vi.fn()}
++        onRedemptionCodeChange={vi.fn()}
++        onRedeem={vi.fn()}
++      />
++    </I18nextProvider>
++  )
++  expect(screen.getByRole('button', { name: /^1 / })).toHaveTextContent(
++    '支付 1'
++  )
++  const input = screen.getByRole('spinbutton')
++  expect(input).toHaveAttribute('step', '0.01')
++  fireEvent.change(input, { target: { value: '1.23' } })
++  expect(onAmount).toHaveBeenLastCalledWith(1.23)
++  fireEvent.change(input, { target: { value: '1.234' } })
++  expect(input).toHaveAttribute('aria-invalid', 'true')
++})
++
++it('shows stored RMB cents for CNY orders instead of the legacy zero amount', async () => {
++  vi.spyOn(api, 'get').mockResolvedValue({
++    data: {
++      success: true,
++      data: {
++        total: 1,
++        items: [
++          {
++            id: 99,
++            status: 'success',
++            amount: 0,
++            amount_fen: 123,
++            credited_quota: 84247,
++            quota_per_unit: 500000,
++            currency: 'CNY',
++            display_rate: '7.3',
++            money: 1.23,
++            trade_no: 'cny-order',
++            payment_method: 'forest',
++            create_time: 1,
++          },
++        ],
++      },
++    },
++  })
++  render(
++    <I18nextProvider i18n={i18n}>
++      <BillingHistoryDialog open onOpenChange={vi.fn()} />
++    </I18nextProvider>
++  )
++  await screen.findByText('cny-order')
++  expect(screen.getByText('¥1.23')).toBeVisible()
++})
++
++it('keeps legacy shared-form units when Stripe is also enabled', () => {
++  render(
++    <I18nextProvider i18n={i18n}>
++      <RechargeFormCard
++        topupInfo={{
++          enable_online_topup: true,
++          enable_stripe_topup: true,
++          pay_methods: [
++            { type: 'alipay', name: 'Forest wallet' },
++            { type: 'stripe', name: 'Stripe' },
++          ],
++          min_topup: 1,
++          stripe_min_topup: 1,
++          amount_options: [1],
++          discount: {},
++          supports_cny_amount_fen: true,
++          min_amount_fen: 100,
++        }}
++        presetAmounts={[{ value: 1 }]}
++        selectedPreset={null}
++        topupAmount={1}
++        paymentAmount={7.3}
++        priceRatio={7.3}
++        usdExchangeRate={7.3}
++        calculating={false}
++        paymentLoading={null}
++        redemptionCode=''
++        redeeming={false}
++        onSelectPreset={vi.fn()}
++        onTopupAmountChange={vi.fn()}
++        onPaymentMethodSelect={vi.fn()}
++        onRedemptionCodeChange={vi.fn()}
++        onRedeem={vi.fn()}
++      />
++    </I18nextProvider>
++  )
++  expect(screen.getByRole('spinbutton')).toHaveAttribute('step', '1')
++  expect(screen.getByRole('button', { name: /^7.3 / })).toHaveTextContent(
++    '支付 7.3'
++  )
++})
+--- a/web/src/features/wallet/api.ts
++++ b/web/src/features/wallet/api.ts
+@@ -20,6 +20,8 @@
+ 
+ import type {
+   RedemptionRequest,
++  CNYTopupQuote,
++  CNYPaymentRequest,
+   PaymentRequest,
+   AmountRequest,
+   AffiliateTransferRequest,
+@@ -110,7 +112,7 @@
+  * Request regular payment
+  */
+ export async function requestPayment(
+-  request: PaymentRequest
++  request: PaymentRequest | CNYPaymentRequest
+ ): Promise<PaymentResponse> {
+   const res = await api.post('/api/user/pay', request, {
+     skipBusinessError: true,
+@@ -246,3 +248,12 @@
+   const res = await api.post('/api/user/topup/complete', request)
+   return res.data
+ }
++
++export async function calculateCNYAmount(
++  amountFen: number
++): Promise<ApiResponse<CNYTopupQuote>> {
++  const res = await api.post('/api/user/amount', { amount_fen: amountFen }, {
++    skipBusinessError: true,
++  } as Record<string, unknown>)
++  return res.data
++}
+--- a/web/src/features/wallet/components/dialogs/billing-history-dialog.tsx
++++ b/web/src/features/wallet/components/dialogs/billing-history-dialog.tsx
+@@ -248,11 +248,13 @@
+                             {t('Amount')}
+                           </Label>
+                           <div className='text-sm font-semibold'>
+-                            {formatCurrencyFromUSD(record.amount, {
+-                              digitsLarge: 2,
+-                              digitsSmall: 2,
+-                              abbreviate: false,
+-                            })}
++                            {record.currency === 'CNY' && record.amount_fen
++                              ? `¥${(record.amount_fen / 100).toFixed(2)}`
++                              : formatCurrencyFromUSD(record.amount, {
++                                  digitsLarge: 2,
++                                  digitsSmall: 2,
++                                  abbreviate: false,
++                                })}
+                           </div>
+                         </div>
+                         <div className='space-y-1'>
+--- a/web/src/features/wallet/components/dialogs/payment-confirm-dialog.tsx
++++ b/web/src/features/wallet/components/dialogs/payment-confirm-dialog.tsx
+@@ -145,7 +145,10 @@
+           <AlertDialogCancel disabled={processing}>
+             {t('Cancel')}
+           </AlertDialogCancel>
+-          <AlertDialogAction onClick={onConfirm} disabled={processing}>
++          <AlertDialogAction
++            onClick={onConfirm}
++            disabled={processing || calculating || paymentAmount <= 0}
++          >
+             {processing && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
+             {t('Confirm Payment')}
+           </AlertDialogAction>
+--- a/web/src/features/wallet/components/recharge-form-card.tsx
++++ b/web/src/features/wallet/components/recharge-form-card.tsx
+@@ -43,6 +43,9 @@
+   getPaymentIcon,
+   getMinTopupAmount,
+   calculatePresetPricing,
++  cnyAmountFen,
++  usesCNYTopupForm,
++  isCNYEpayMethod,
+ } from '../lib'
+ import type {
+   PaymentMethod,
+@@ -118,13 +121,18 @@
+   useEffect(() => {
+     // Empty string must survive, otherwise the field can never be cleared
+     setLocalAmount((prev) =>
+-      prev === '' && topupAmount === 0 ? prev : topupAmount.toString()
++      (prev === '' && topupAmount === 0) || Number(prev) === topupAmount
++        ? prev
++        : topupAmount.toString()
+     )
+   }, [topupAmount])
+ 
++  const cnyMode = usesCNYTopupForm(topupInfo)
++  const invalidAmount = cnyMode && cnyAmountFen(Number(localAmount)) === null
++
+   const handleAmountChange = (value: string) => {
+     setLocalAmount(value)
+-    const numValue = Number.parseInt(value) || 0
++    const numValue = (cnyMode ? Number(value) : Number.parseInt(value)) || 0
+     if (numValue >= 0) {
+       onTopupAmountChange(numValue)
+     }
+@@ -239,9 +247,9 @@
+                         hasDiscount,
+                       } = calculatePresetPricing(
+                         preset.value,
+-                        priceRatio,
+-                        discount,
+-                        usdExchangeRate
++                        cnyMode ? 1 : priceRatio,
++                        cnyMode ? 1 : discount,
++                        cnyMode ? 1 : usdExchangeRate
+                       )
+                       return (
+                         <Button
+@@ -305,6 +313,10 @@
+                     value={localAmount}
+                     onChange={(e) => handleAmountChange(e.target.value)}
+                     min={minTopup}
++                    step={cnyMode ? '0.01' : '1'}
++                    max={cnyMode ? 1000000 : undefined}
++                    inputMode='decimal'
++                    aria-invalid={invalidAmount}
+                     placeholder={t('Minimum {{amount}}', { amount: minTopup })}
+                     className='h-9 text-base sm:h-10 sm:text-lg'
+                   />
+@@ -334,7 +346,10 @@
+                         method.min_topup || 0,
+                         getMinTopupAmount(topupInfo)
+                       )
+-                      const disabled = minTopup > topupAmount
++                      const disabled =
++                        minTopup > topupAmount ||
++                        (!isCNYEpayMethod(cnyMode, method.type) &&
++                          !Number.isInteger(topupAmount))
+                       const disabledReason = disabled
+                         ? t('Minimum topup amount: {{amount}}', {
+                             amount: minTopup,
+@@ -349,7 +364,9 @@
+                           key={method.type}
+                           variant='outline'
+                           onClick={() => onPaymentMethodSelect(method)}
+-                          disabled={disabled || !!paymentLoading}
++                          disabled={
++                            disabled || invalidAmount || !!paymentLoading
++                          }
+                           title={disabledReason}
+                           aria-label={
+                             disabledReason
+@@ -417,7 +434,9 @@
+                         const loadingKey = `waffo-${index}`
+                         const methodKey = `${method.payMethodType ?? 'unknown'}-${method.payMethodName ?? method.name}`
+                         const waffoMin = waffoMinTopup || 0
+-                        const belowMin = waffoMin > topupAmount
++                        const belowMin =
++                          waffoMin > topupAmount ||
++                          !Number.isInteger(topupAmount)
+                         const disabledReason = belowMin
+                           ? t('Minimum topup amount: {{amount}}', {
+                               amount: waffoMin,
+--- a/web/src/features/wallet/hooks/use-payment.test.ts
++++ b/web/src/features/wallet/hooks/use-payment.test.ts
+@@ -1,3 +1,4 @@
++import { act, renderHook } from '@testing-library/react'
+ /*
+ Copyright (C) 2023-2026 QuantumNous
+ 
+@@ -16,10 +17,13 @@
+ 
+ For commercial licensing, please contact support@quantumnous.com
+ */
+-import { describe, expect, test } from 'vitest'
++import { describe, expect, test, vi } from 'vitest'
++
++import { api } from '@/lib/api'
+ 
+ import { PAYMENT_TYPES } from '../constants'
+-import { requestPaymentAmount } from './use-payment'
++import { cnyAmountFen } from '../lib'
++import { requestPaymentAmount, usePayment } from './use-payment'
+ 
+ describe('payment amount routing', () => {
+   test('uses the dedicated Waffo amount calculator', async () => {
+@@ -47,3 +51,86 @@
+     expect(calls).toEqual(['waffo:120'])
+   })
+ })
++
++describe('CNY payment quotes', () => {
++  test('uses integer RMB cents and the confirmed quote without flooring the amount', async () => {
++    const post = vi
++      .spyOn(api, 'post')
++      .mockImplementation(async (path, body) => {
++        if (path === '/api/user/amount') {
++          return {
++            data: {
++              message: 'success',
++              data: {
++                amount_fen: (body as { amount_fen: number }).amount_fen,
++                currency: 'CNY',
++                credited_quota: 84247,
++                quota_per_unit: 500000,
++                display_rate: '7.3',
++                quote_hash: 'quote-for-123',
++              },
++            },
++          }
++        }
++        return {
++          data: {
++            message: 'success',
++            data: { money: '1.23' },
++            url: 'https://wallet.invalid/submit',
++          },
++        }
++      })
++    vi.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(() => {})
++    const { result } = renderHook(() => usePayment(true))
++    await act(async () => {
++      await result.current.calculatePaymentAmount(1.23, 'forest')
++    })
++    expect(result.current.amount).toBe(1.23)
++    await act(async () => {
++      await result.current.processPayment(1.23, 'forest')
++    })
++    expect(post).toHaveBeenCalledWith(
++      '/api/user/pay',
++      {
++        amount_fen: 123,
++        expected_quote_hash: 'quote-for-123',
++        payment_method: 'forest',
++      },
++      expect.anything()
++    )
++  })
++
++  test('refuses payment with a quote for a different entered amount', async () => {
++    const post = vi.spyOn(api, 'post').mockResolvedValue({
++      data: {
++        message: 'success',
++        data: {
++          amount_fen: 100,
++          currency: 'CNY',
++          credited_quota: 68493,
++          quota_per_unit: 500000,
++          display_rate: '7.3',
++          quote_hash: 'quote-for-100',
++        },
++      },
++    })
++    const { result } = renderHook(() => usePayment(true))
++    await act(async () => {
++      await result.current.calculatePaymentAmount(1, 'forest')
++    })
++    let success = true
++    await act(async () => {
++      success = await result.current.processPayment(1.23, 'forest')
++    })
++    expect(success).toBe(false)
++    expect(post.mock.calls.map(([path]) => path)).toEqual(['/api/user/amount'])
++  })
++
++  test('does not round third decimals or accept non-finite amounts', () => {
++    expect(cnyAmountFen(1)).toBe(100)
++    expect(cnyAmountFen(1.23)).toBe(123)
++    expect(cnyAmountFen(1.234)).toBeNull()
++    expect(cnyAmountFen(Number.NaN)).toBeNull()
++    expect(cnyAmountFen(1000000.01)).toBeNull()
++  })
++})
+--- a/web/src/features/wallet/hooks/use-payment.ts
++++ b/web/src/features/wallet/hooks/use-payment.ts
+@@ -17,13 +17,14 @@
+ For commercial licensing, please contact support@quantumnous.com
+ */
+ import i18next from 'i18next'
+-import { useState, useCallback } from 'react'
++import { useState, useCallback, useRef } from 'react'
+ import { toast } from 'sonner'
+ 
+ import { handleServerError } from '@/lib/handle-server-error'
+ 
+ import {
+   calculateAmount,
++  calculateCNYAmount,
+   calculateStripeAmount,
+   calculateWaffoAmount,
+   calculateWaffoPancakeAmount,
+@@ -36,8 +37,10 @@
+   isWaffoPayment,
+   isWaffoPancakePayment,
+   submitPaymentForm,
++  cnyAmountFen,
++  isCNYEpayMethod,
+ } from '../lib'
+-import type { AmountRequest, AmountResponse } from '../types'
++import type { AmountRequest, AmountResponse, CNYTopupQuote } from '../types'
+ 
+ // ============================================================================
+ // Payment Hook
+@@ -81,30 +84,55 @@
+   return Number.parseFloat(response.data)
+ }
+ 
+-export function usePayment() {
++export function usePayment(supportsCNY = false) {
++  const quoteRef = useRef<{ quote: CNYTopupQuote; paymentType: string } | null>(
++    null
++  )
++  const calculationId = useRef(0)
+   const [amount, setAmount] = useState<number>(0)
+   const [calculating, setCalculating] = useState(false)
+   const [processing, setProcessing] = useState(false)
+ 
+-  // Calculate payment amount
++  // Ignore stale quotes when users edit amounts while an earlier request is in flight.
+   const calculatePaymentAmount = useCallback(
+     async (topupAmount: number, paymentType: string) => {
++      const id = ++calculationId.current
++      quoteRef.current = null
++      setAmount(0)
++      setCalculating(true)
+       try {
+-        setCalculating(true)
+-        const calculatedAmount = await requestPaymentAmount(
+-          topupAmount,
+-          paymentType
+-        )
++        let calculatedAmount: number
++        if (isCNYEpayMethod(supportsCNY, paymentType)) {
++          const fen = cnyAmountFen(topupAmount)
++          if (fen === null) return 0
++          const response = await calculateCNYAmount(fen)
++          if (
++            !isApiSuccess(response) ||
++            response.data?.amount_fen !== fen ||
++            !response.data.quote_hash ||
++            response.data.currency !== 'CNY'
++          ) {
++            return 0
++          }
++          if (id !== calculationId.current) return 0
++          quoteRef.current = { quote: response.data, paymentType }
++          calculatedAmount = fen / 100
++        } else {
++          calculatedAmount = await requestPaymentAmount(
++            topupAmount,
++            paymentType
++          )
++        }
++        if (id !== calculationId.current) return 0
+         setAmount(calculatedAmount)
+         return calculatedAmount
+       } catch {
+-        setAmount(0)
+         return 0
+       } finally {
+-        setCalculating(false)
++        if (id === calculationId.current) setCalculating(false)
+       }
+     },
+-    []
++    [supportsCNY]
+   )
+ 
+   // Process payment
+@@ -114,17 +142,46 @@
+         setProcessing(true)
+ 
+         const isStripe = isStripePayment(paymentType)
+-        const amount = Math.floor(topupAmount)
+-
+-        const response = isStripe
+-          ? await requestStripePayment({
+-              amount,
+-              payment_method: 'stripe',
+-            })
+-          : await requestPayment({
+-              amount,
+-              payment_method: paymentType,
+-            })
++        const amount = topupAmount
++
++        const cnyMode = isCNYEpayMethod(supportsCNY, paymentType)
++        if (!cnyMode && !Number.isInteger(topupAmount)) {
++          toast.error(i18next.t('Invalid parameters'))
++          return false
++        }
++        const snapshot = quoteRef.current
++        const fen = cnyAmountFen(topupAmount)
++        if (
++          cnyMode &&
++          (!snapshot ||
++            snapshot.paymentType !== paymentType ||
++            snapshot.quote.amount_fen !== fen)
++        ) {
++          toast.error(
++            i18next.t(
++              'Top-up quote changed. Please refresh and confirm the amount again.'
++            )
++          )
++          return false
++        }
++        let response
++        if (isStripe) {
++          response = await requestStripePayment({
++            amount,
++            payment_method: 'stripe',
++          })
++        } else if (cnyMode && snapshot && fen !== null) {
++          response = await requestPayment({
++            amount_fen: fen,
++            expected_quote_hash: snapshot.quote.quote_hash,
++            payment_method: paymentType,
++          })
++        } else {
++          response = await requestPayment({
++            amount,
++            payment_method: paymentType,
++          })
++        }
+ 
+         if (!isApiSuccess(response)) {
+           handleServerError(response, i18next.t('Payment request failed'))
+@@ -156,7 +213,7 @@
+         setProcessing(false)
+       }
+     },
+-    []
++    [supportsCNY]
+   )
+ 
+   return {
+--- a/web/src/features/wallet/index.tsx
++++ b/web/src/features/wallet/index.tsx
+@@ -46,6 +46,8 @@
+   getDefaultPaymentType,
+   getMinTopupAmount,
+   dispatchSelectedPayment,
++  isCNYEpayMethod,
++  usesCNYTopupForm,
+ } from './lib'
+ import type {
+   UserWalletData,
+@@ -96,7 +98,7 @@
+     processing,
+     calculatePaymentAmount,
+     processPayment,
+-  } = usePayment()
++  } = usePayment(usesCNYTopupForm(topupInfo))
+   const {
+     affiliateLink,
+     loading: affiliateLoading,
+@@ -183,8 +185,11 @@
+       }
+ 
+       // Calculate payment amount and show confirmation dialog
+-      await calculatePaymentAmount(topupAmount, method.type)
+-      setConfirmDialogOpen(true)
++      const quotedAmount = await calculatePaymentAmount(
++        topupAmount,
++        method.type
++      )
++      if (quotedAmount > 0) setConfirmDialogOpen(true)
+     } finally {
+       setPaymentLoading(null)
+     }
+@@ -362,7 +367,14 @@
+         calculating={calculating}
+         processing={processing || waffoProcessing || pancakeProcessing}
+         discountRate={getDiscountRate()}
+-        usdExchangeRate={effectiveUsdExchangeRate}
++        usdExchangeRate={
++          isCNYEpayMethod(
++            usesCNYTopupForm(topupInfo),
++            selectedPaymentMethod?.type || getDefaultPaymentType(topupInfo)
++          )
++            ? 1
++            : effectiveUsdExchangeRate
++        }
+       />
+ 
+       <TransferDialog
+--- a/web/src/features/wallet/lib/payment.ts
++++ b/web/src/features/wallet/lib/payment.ts
+@@ -174,6 +174,9 @@
+   }
+ 
+   if (topupInfo.enable_online_topup) {
++    if (usesCNYTopupForm(topupInfo)) {
++      return (topupInfo.min_amount_fen ?? 100) / 100
++    }
+     return topupInfo.min_topup
+   }
+ 
+@@ -217,3 +220,38 @@
+     discount: discounts[amount] || 1.0,
+   }))
+ }
++
++/** Convert a user-entered RMB amount without silently rounding a third decimal. */
++export function cnyAmountFen(amount: number): number | null {
++  if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000) return null
++  const text = String(amount)
++  if (!/^\d+(?:\.\d{1,2})?$/.test(text)) return null
++  const [whole, fraction = ''] = text.split('.')
++  const fen = Number(whole) * 100 + Number(fraction.padEnd(2, '0'))
++  return Number.isSafeInteger(fen) ? fen : null
++}
++
++export function isCNYEpayMethod(
++  enabled: boolean,
++  paymentType: string
++): boolean {
++  return (
++    enabled &&
++    !isStripePayment(paymentType) &&
++    !isWaffoPayment(paymentType) &&
++    !isWaffoPancakePayment(paymentType)
++  )
++}
++
++// This page uses a single amount field before a gateway is selected. Keep
++// legacy units for mixed gateways until each provider supports RMB cents,
++// rather than silently interpreting one visible amount in two currencies.
++export function usesCNYTopupForm(info: TopupInfo | null): boolean {
++  return (
++    info?.supports_cny_amount_fen === true &&
++    !info.enable_stripe_topup &&
++    !info.enable_waffo_topup &&
++    !info.enable_waffo_pancake_topup &&
++    info.pay_methods.every((method) => isCNYEpayMethod(true, method.type))
++  )
++}
+--- a/web/src/features/wallet/types.ts
++++ b/web/src/features/wallet/types.ts
+@@ -120,6 +120,8 @@
+  * Topup configuration information
+  */
+ export interface TopupInfo {
++  supports_cny_amount_fen?: boolean
++  min_amount_fen?: number
+   /** Whether online topup is enabled */
+   enable_online_topup: boolean
+   /** Whether Stripe topup is enabled */
+@@ -253,6 +255,12 @@
+  * Topup billing record
+  */
+ export interface TopupRecord {
++  amount_fen?: number
++  credited_quota?: number
++  quota_per_unit?: number
++  currency?: string
++  display_rate?: string
++  quote_hash?: string
+   /** Record ID */
+   id: number
+   /** User ID */
+@@ -287,3 +295,18 @@
+ export interface CompleteOrderRequest {
+   trade_no: string
+ }
++
++export interface CNYTopupQuote {
++  amount_fen: number
++  credited_quota: number
++  quota_per_unit: number
++  currency: 'CNY'
++  display_rate: string
++  quote_hash: string
++}
++
++export interface CNYPaymentRequest {
++  amount_fen: number
++  expected_quote_hash: string
++  payment_method: string
++}
+--- a/web/src/i18n/locales/en.json
++++ b/web/src/i18n/locales/en.json
+@@ -1,5 +1,10 @@
+ {
+   "translation": {
++    "Service tier": "Service tier",
++    "Request parameter": "Request parameter",
++    "Not ({{condition}})": "Not ({{condition}})",
++    "Top-up quote changed. Please refresh and confirm the amount again.": "Top-up quote changed. Please refresh and confirm the amount again.",
++    "CNY top-up configuration is unavailable. Please contact the administrator.": "CNY top-up configuration is unavailable. Please contact the administrator.",
+     "360": "360",
+     "1000": "1000",
+     "10000": "10000",
+@@ -2857,7 +2862,7 @@
+     "footer.columns.related.links.oneApi": "One API",
+     "footer.columns.related.title": "Related Projects",
+     "footer.defaultCopyright": "All rights reserved.",
+-    "footer.new\u0061pi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
++    "footer.newapi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
+     "For advanced custom channels this applies only to /v1/responses routes without protocol conversion.": "For advanced custom channels this applies only to /v1/responses routes without protocol conversion.",
+     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment",
+     "For private deployments, format: https://fastgpt.run/api/openapi": "For private deployments, format: https://fastgpt.run/api/openapi",
+@@ -7400,6 +7405,9 @@
+     "Zhipu": "Zhipu",
+     "Zhipu GLM": "Zhipu GLM",
+     "Zhipu V4": "Zhipu V4",
+-    "Zoom": "Zoom"
++    "Zoom": "Zoom",
++    "View pricing details": "View pricing details",
++    "Price range across tiers · see details": "Price range across tiers · see details",
++    "Already included in tier prices": "Already included in tier prices"
+   }
+ }
+--- a/web/src/i18n/locales/fr.json
++++ b/web/src/i18n/locales/fr.json
+@@ -1,5 +1,10 @@
+ {
+   "translation": {
++    "Service tier": "Niveau de service",
++    "Request parameter": "Paramètre de requête",
++    "Not ({{condition}})": "Non ({{condition}})",
++    "Top-up quote changed. Please refresh and confirm the amount again.": "Le devis de recharge a changé. Actualisez et confirmez à nouveau le montant.",
++    "CNY top-up configuration is unavailable. Please contact the administrator.": "La configuration de recharge en CNY est indisponible. Contactez l’administrateur.",
+     "360": "360",
+     "1000": "1000",
+     "10000": "10000",
+@@ -2857,7 +2862,7 @@
+     "footer.columns.related.links.oneApi": "One API",
+     "footer.columns.related.title": "Projets liés",
+     "footer.defaultCopyright": "Tous droits réservés.",
+-    "footer.new\u0061pi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
++    "footer.newapi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
+     "For advanced custom channels this applies only to /v1/responses routes without protocol conversion.": "Pour les canaux personnalisés avancés, ceci ne s’applique qu’aux routes /v1/responses sans conversion de protocole.",
+     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Pour les canaux ajoutés après le 10 mai 2025, pas besoin de supprimer \".\" des noms de modèles lors du déploiement",
+     "For private deployments, format: https://fastgpt.run/api/openapi": "Pour les déploiements privés, format : https://fastgpt.run/api/openapi",
+@@ -7400,6 +7405,9 @@
+     "Zhipu": "Zhipu",
+     "Zhipu GLM": "Zhipu GLM",
+     "Zhipu V4": "Zhipu V4",
+-    "Zoom": "Zoom"
++    "Zoom": "Zoom",
++    "View pricing details": "Voir les détails des tarifs",
++    "Price range across tiers · see details": "Fourchette selon le palier · voir les détails",
++    "Already included in tier prices": "Déjà inclus dans les prix par palier"
+   }
+ }
+--- a/web/src/i18n/locales/ja.json
++++ b/web/src/i18n/locales/ja.json
+@@ -1,5 +1,10 @@
+ {
+   "translation": {
++    "Service tier": "サービス階層",
++    "Request parameter": "リクエストパラメータ",
++    "Not ({{condition}})": "否定（{{condition}}）",
++    "Top-up quote changed. Please refresh and confirm the amount again.": "チャージの見積もりが変更されました。更新して金額を再確認してください。",
++    "CNY top-up configuration is unavailable. Please contact the administrator.": "人民元チャージ設定は利用できません。管理者に連絡してください。",
+     "360": "360",
+     "1000": "1000",
+     "10000": "10000",
+@@ -2857,7 +2862,7 @@
+     "footer.columns.related.links.oneApi": "1つのAPI",
+     "footer.columns.related.title": "関連プロジェクト",
+     "footer.defaultCopyright": "すべての権利を留保します。",
+-    "footer.new\u0061pi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
++    "footer.newapi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
+     "For advanced custom channels this applies only to /v1/responses routes without protocol conversion.": "高度なカスタムチャネルでは、プロトコル変換を行わない /v1/responses ルートにのみ適用されます。",
+     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "2025 年 5 月 10 日以降に追加されたチャネルの場合、デプロイ時にモデル名から「.」を削除する必要はありません",
+     "For private deployments, format: https://fastgpt.run/api/openapi": "プライベートデプロイメントの場合、形式: https://fastgpt.run/api/openapi",
+@@ -7400,6 +7405,9 @@
+     "Zhipu": "Zhipu",
+     "Zhipu GLM": "Zhipu GLM",
+     "Zhipu V4": "Zhipu V 4",
+-    "Zoom": "ズーム"
++    "Zoom": "ズーム",
++    "View pricing details": "料金の詳細を見る",
++    "Price range across tiers · see details": "料金帯の範囲 · 詳細を見る",
++    "Already included in tier prices": "各料金に含まれています"
+   }
+ }
+--- a/web/src/i18n/locales/ru.json
++++ b/web/src/i18n/locales/ru.json
+@@ -1,5 +1,10 @@
+ {
+   "translation": {
++    "Service tier": "Уровень обслуживания",
++    "Request parameter": "Параметр запроса",
++    "Not ({{condition}})": "Не ({{condition}})",
++    "Top-up quote changed. Please refresh and confirm the amount again.": "Расчёт пополнения изменился. Обновите страницу и подтвердите сумму снова.",
++    "CNY top-up configuration is unavailable. Please contact the administrator.": "Пополнение в CNY недоступно. Обратитесь к администратору.",
+     "360": "360",
+     "1000": "1000",
+     "10000": "10000",
+@@ -2857,7 +2862,7 @@
+     "footer.columns.related.links.oneApi": "Один API",
+     "footer.columns.related.title": "Связанные проекты",
+     "footer.defaultCopyright": "Все права защищены.",
+-    "footer.new\u0061pi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
++    "footer.newapi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
+     "For advanced custom channels this applies only to /v1/responses routes without protocol conversion.": "Для расширенных пользовательских каналов это действует только для маршрутов /v1/responses без преобразования протокола.",
+     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Для каналов, добавленных после 10 мая 2025 г., не нужно удалять \".\" из имён моделей при развёртывании",
+     "For private deployments, format: https://fastgpt.run/api/openapi": "Для частных развертываний, формат: https://fastgpt.run/api/openapi",
+@@ -7400,6 +7405,9 @@
+     "Zhipu": "Zhipu",
+     "Zhipu GLM": "Zhipu GLM",
+     "Zhipu V4": "Zhipu V4",
+-    "Zoom": "Zoom"
++    "Zoom": "Zoom",
++    "View pricing details": "Подробнее о тарифах",
++    "Price range across tiers · see details": "Диапазон тарифов · подробнее",
++    "Already included in tier prices": "Уже учтено в ценах тарифов"
+   }
+ }
+--- a/web/src/i18n/locales/vi.json
++++ b/web/src/i18n/locales/vi.json
+@@ -1,5 +1,10 @@
+ {
+   "translation": {
++    "Service tier": "Cấp dịch vụ",
++    "Request parameter": "Tham số yêu cầu",
++    "Not ({{condition}})": "Không ({{condition}})",
++    "Top-up quote changed. Please refresh and confirm the amount again.": "Báo giá nạp tiền đã thay đổi. Vui lòng tải lại và xác nhận số tiền.",
++    "CNY top-up configuration is unavailable. Please contact the administrator.": "Cấu hình nạp CNY không khả dụng. Vui lòng liên hệ quản trị viên。",
+     "360": "360",
+     "1000": "1000",
+     "10000": "10000",
+@@ -2857,7 +2862,7 @@
+     "footer.columns.related.links.oneApi": "One API",
+     "footer.columns.related.title": "Các Dự Án Liên Quan",
+     "footer.defaultCopyright": "Bản quyền được bảo lưu.",
+-    "footer.new\u0061pi.projectAttributionSuffix": "Bản quyền được bảo lưu. Được thiết kế và phát triển bởi các cộng tác viên dự án.",
++    "footer.newapi.projectAttributionSuffix": "Bản quyền được bảo lưu. Được thiết kế và phát triển bởi các cộng tác viên dự án.",
+     "For advanced custom channels this applies only to /v1/responses routes without protocol conversion.": "Với kênh tùy chỉnh nâng cao, thiết lập này chỉ áp dụng cho các route /v1/responses không chuyển đổi giao thức.",
+     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Đối với các kênh được thêm sau ngày 10 tháng 5 năm 2025, không cần loại bỏ \".\" khỏi tên mô hình trong quá trình triển khai",
+     "For private deployments, format: https://fastgpt.run/api/openapi": "Đối với các triển khai riêng tư, định dạng: https://fastgpt.run/api/openapi",
+@@ -7400,6 +7405,9 @@
+     "Zhipu": "Zhipu",
+     "Zhipu GLM": "Zhipu GLM",
+     "Zhipu V4": "Zhipu V4",
+-    "Zoom": "Zoom"
++    "Zoom": "Zoom",
++    "View pricing details": "Xem chi tiết giá",
++    "Price range across tiers · see details": "Khoảng giá theo bậc · xem chi tiết",
++    "Already included in tier prices": "Đã bao gồm trong giá theo bậc"
+   }
+ }
+--- a/web/src/i18n/locales/zh-TW.json
++++ b/web/src/i18n/locales/zh-TW.json
+@@ -1,5 +1,10 @@
+ {
+   "translation": {
++    "Service tier": "服務級別",
++    "Request parameter": "請求參數",
++    "Not ({{condition}})": "非（{{condition}}）",
++    "Top-up quote changed. Please refresh and confirm the amount again.": "儲值報價已變更，請重新整理並再次確認金額。",
++    "CNY top-up configuration is unavailable. Please contact the administrator.": "人民幣儲值設定無法使用，請聯絡管理員。",
+     "360": "360",
+     "1000": "1000",
+     "10000": "10000",
+@@ -2857,7 +2862,7 @@
+     "footer.columns.related.links.oneApi": "One API",
+     "footer.columns.related.title": "相關項目",
+     "footer.defaultCopyright": "版權所有。",
+-    "footer.new\u0061pi.projectAttributionSuffix": "版權所有，由項目貢獻者設計與開發。",
++    "footer.newapi.projectAttributionSuffix": "版權所有，由項目貢獻者設計與開發。",
+     "For advanced custom channels this applies only to /v1/responses routes without protocol conversion.": "進階自訂渠道僅對 /v1/responses 且不做協定轉換的路由生效。",
+     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "對於 2025 年 5 月 10 日之後新增的渠道，在部署時無需從模型名稱中移除 \".\"",
+     "For private deployments, format: https://fastgpt.run/api/openapi": "對於私有部署，格式為：https://fastgpt.run/api/openapi",
+@@ -7400,6 +7405,9 @@
+     "Zhipu": "智譜",
+     "Zhipu GLM": "智譜GLM",
+     "Zhipu V4": "智譜 V4",
+-    "Zoom": "縮放"
++    "Zoom": "縮放",
++    "View pricing details": "檢視計費詳情",
++    "Price range across tiers · see details": "各級距價格範圍 · 檢視詳情",
++    "Already included in tier prices": "已包含在各級距價格中"
+   }
+ }
+--- a/web/src/i18n/locales/zh.json
++++ b/web/src/i18n/locales/zh.json
+@@ -1,5 +1,10 @@
+ {
+   "translation": {
++    "Service tier": "服务档位",
++    "Request parameter": "请求参数",
++    "Not ({{condition}})": "非（{{condition}}）",
++    "Top-up quote changed. Please refresh and confirm the amount again.": "充值报价已变化，请刷新后重新确认金额。",
++    "CNY top-up configuration is unavailable. Please contact the administrator.": "人民币充值配置不可用，请联系管理员。",
+     "360": "360",
+     "1000": "1000",
+     "10000": "10000",
+@@ -2857,7 +2862,7 @@
+     "footer.columns.related.links.oneApi": "One API",
+     "footer.columns.related.title": "相关项目",
+     "footer.defaultCopyright": "版权所有。",
+-    "footer.new\u0061pi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
++    "footer.newapi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
+     "For advanced custom channels this applies only to /v1/responses routes without protocol conversion.": "高级自定义渠道仅对 /v1/responses 且不做协议转换的路由生效。",
+     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "对于 2025 年 5 月 10 日之后添加的渠道，在部署时无需从模型名称中移除 \".\"",
+     "For private deployments, format: https://fastgpt.run/api/openapi": "对于私有部署，格式为：https://fastgpt.run/api/openapi",
+@@ -7400,6 +7405,9 @@
+     "Zhipu": "智谱",
+     "Zhipu GLM": "智谱GLM",
+     "Zhipu V4": "智谱 V4",
+-    "Zoom": "缩放"
++    "Zoom": "缩放",
++    "View pricing details": "查看计费详情",
++    "Price range across tiers · see details": "各档位价格范围 · 查看详情",
++    "Already included in tier prices": "已包含在各档位价格中"
+   }
+ }

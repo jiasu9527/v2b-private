@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"forest/go-api/internal/config"
+	"forest/go-api/internal/payment"
 )
 
 var (
@@ -28,12 +29,13 @@ var (
 )
 
 type Service struct {
-	db          *sql.DB
-	appKey      string
-	client      *http.Client
-	siteURL     string
-	schemaMu    sync.Mutex
-	schemaReady bool
+	db               *sql.DB
+	appKey           string
+	client           *http.Client
+	siteURL          string
+	schemaMu         sync.Mutex
+	schemaReady      bool
+	rechargePayments payment.Service
 }
 
 func NewService(cfg config.Config, db *sql.DB) *Service {
@@ -114,7 +116,7 @@ func (s *Service) EnsureSchema(ctx context.Context) error {
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(763918201)`); err != nil {
 		return err
 	}
-	statements := append(append(append([]string{}, schemaStatements...), workspaceAccountSchema...), workspaceChatSchema...)
+	statements := append(append(append(append([]string{}, schemaStatements...), workspaceAccountSchema...), workspaceChatSchema...), rechargeSchema...)
 	for _, statement := range statements {
 		if _, err = tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("newapi schema: %w", err)

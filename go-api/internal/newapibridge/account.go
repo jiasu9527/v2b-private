@@ -369,7 +369,11 @@ func (s *Service) workspaceAccountView(ctx context.Context, cfg Settings, c work
 	if e != nil {
 		return nil, e
 	}
-	return map[string]any{"connected": true, "remote_user_id": u.ID, "username": u.Username, "api_url": cfg.APIURL, "quota": u.Quota, "used_quota": u.UsedQuota, "quota_per_unit": unit, "currency": currency, "display_balance": display, "display_rate": displayRate, "has_password": u.HasPassword, "managed_password_available": managed && u.HasPassword, "updated_at": time.Now().Unix(), "balance_fen": bal, "wallet_billing_enabled": s.workspaceWalletOnly(ctx, cfg, c, false) == nil, "pending_transfer_quote": pending}, nil
+	loginAccount := u.Email
+	if loginAccount == "" {
+		loginAccount = u.Username
+	}
+	return map[string]any{"connected": true, "remote_user_id": u.ID, "username": u.Username, "email": u.Email, "login_account": loginAccount, "api_url": cfg.APIURL, "quota": u.Quota, "used_quota": u.UsedQuota, "quota_per_unit": unit, "currency": currency, "display_balance": display, "display_rate": displayRate, "has_password": u.HasPassword, "managed_password_available": managed && u.HasPassword, "updated_at": time.Now().Unix(), "balance_fen": bal, "wallet_billing_enabled": s.workspaceWalletOnly(ctx, cfg, c, false) == nil, "pending_transfer_quote": pending}, nil
 }
 func workspaceDecimal(n, unit int64, rate string) string {
 	r, ok := new(big.Rat).SetString(rate)

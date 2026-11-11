@@ -35,6 +35,7 @@ type Checkout struct {
 	paymentMethod  string
 	configRevision int64
 	configCipher   string
+	fundingSource  string
 }
 
 type Transfer struct {
@@ -68,14 +69,14 @@ type TransferPage struct {
 	PageSize int        `json:"page_size"`
 }
 
-const checkoutColumns = `id,api_url,remote_trade_no,user_id,remote_user_id,amount_fen,payment_method,config_revision,config_cipher,expires_at`
+const checkoutColumns = `id,api_url,remote_trade_no,user_id,remote_user_id,amount_fen,payment_method,config_revision,config_cipher,expires_at,funding_source`
 const transferColumns = `id,user_id,remote_user_id,remote_trade_no,amount_fen,balance_before,balance_after,status,attempts,last_error,created_at,completed_at,last_retry_by`
 
 type walletScanner interface{ Scan(...any) error }
 
 func scanCheckout(row walletScanner) (Checkout, error) {
 	var c Checkout
-	err := row.Scan(&c.ID, &c.apiURL, &c.RemoteTradeNo, &c.userID, &c.RemoteUserID, &c.AmountFen, &c.paymentMethod, &c.configRevision, &c.configCipher, &c.ExpiresAt)
+	err := row.Scan(&c.ID, &c.apiURL, &c.RemoteTradeNo, &c.userID, &c.RemoteUserID, &c.AmountFen, &c.paymentMethod, &c.configRevision, &c.configCipher, &c.ExpiresAt, &c.fundingSource)
 	c.Status = "awaiting_confirmation"
 	c.ReturnURL = strings.TrimRight(c.apiURL, "/") + "/usage-logs"
 	return c, err
@@ -117,6 +118,13 @@ func validRemoteReturnURL(value, base string) bool {
 }
 
 func (s *Service) CreateCheckout(ctx context.Context, params url.Values) (Checkout, error) {
+	return s.createCheckoutForSource(ctx, params, "wallet")
+}
+
+func (s *Service) createCheckoutForSource(ctx context.Context, params url.Values, source string) (Checkout, error) {
+	if source != "wallet" && source != "direct" {
+		return Checkout{}, ErrInvalid
+	}
 	cfg, err := s.loadSettings(ctx)
 	if err != nil {
 		return Checkout{}, err
@@ -177,7 +185,7 @@ func (s *Service) CreateCheckout(ctx context.Context, params url.Values) (Checko
 	// Replayed signed checkout requests return the same opaque confirmation ID.
 	existing, err := scanCheckout(s.db.QueryRowContext(ctx, `SELECT `+checkoutColumns+` FROM v2_newapi_checkout WHERE api_url=$1 AND remote_trade_no=$2`, cfg.APIURL, tradeNo))
 	if err == nil {
-		if existing.userID != userID || existing.RemoteUserID != topup.UserID || existing.AmountFen != amount || existing.paymentMethod != method {
+		if existing.userID != userID || existing.RemoteUserID != topup.UserID || existing.AmountFen != amount || existing.paymentMethod != method || existing.fundingSource != source {
 			return Checkout{}, ErrConflict
 		}
 		return existing, nil
@@ -201,7 +209,7 @@ func (s *Service) CreateCheckout(ctx context.Context, params url.Values) (Checko
 		return Checkout{}, err
 	}
 	now := time.Now().Unix()
-	_, err = s.db.ExecContext(ctx, `INSERT INTO v2_newapi_checkout(id,api_url,remote_trade_no,user_id,remote_user_id,amount_fen,payment_method,config_revision,config_cipher,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(api_url,remote_trade_no) DO NOTHING`, id, cfg.APIURL, tradeNo, userID, topup.UserID, amount, method, cfg.Revision, cipher, now, now+1800)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO v2_newapi_checkout(id,api_url,remote_trade_no,user_id,remote_user_id,amount_fen,payment_method,config_revision,config_cipher,created_at,expires_at,funding_source) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(api_url,remote_trade_no) DO NOTHING`, id, cfg.APIURL, tradeNo, userID, topup.UserID, amount, method, cfg.Revision, cipher, now, now+1800, source)
 	if err != nil {
 		return Checkout{}, err
 	}
@@ -209,7 +217,7 @@ func (s *Service) CreateCheckout(ctx context.Context, params url.Values) (Checko
 	if err != nil {
 		return Checkout{}, err
 	}
-	if checkout.userID != userID || checkout.RemoteUserID != topup.UserID || checkout.AmountFen != amount || checkout.paymentMethod != method {
+	if checkout.userID != userID || checkout.RemoteUserID != topup.UserID || checkout.AmountFen != amount || checkout.paymentMethod != method || checkout.fundingSource != source {
 		return Checkout{}, ErrConflict
 	}
 	return checkout, nil
@@ -228,6 +236,9 @@ func (s *Service) GetCheckout(ctx context.Context, userID int64, id string) (Che
 	}
 	if err != nil {
 		return Checkout{}, err
+	}
+	if c.fundingSource != "wallet" {
+		return Checkout{}, ErrForbidden
 	}
 	var banned int64
 	if err = s.db.QueryRowContext(ctx, `SELECT balance,banned FROM v2_user WHERE id=$1`, userID).Scan(&c.BalanceFen, &banned); err != nil {
@@ -278,6 +289,9 @@ func (s *Service) Pay(ctx context.Context, userID int64, id string) (Transfer, e
 	}
 	if c.ExpiresAt <= time.Now().Unix() {
 		return Transfer{}, ErrExpired
+	}
+	if c.fundingSource != "wallet" {
+		return Transfer{}, ErrForbidden
 	}
 	if c.apiURL != cfg.APIURL || c.configRevision != cfg.Revision {
 		return Transfer{}, ErrConflict

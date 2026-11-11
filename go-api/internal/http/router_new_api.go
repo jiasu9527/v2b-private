@@ -161,6 +161,10 @@ func handleNewAPIAdmin(w http.ResponseWriter, r *http.Request, sessions session.
 	if !ok {
 		return
 	}
+	if action == "conversations" || action == "conversations/detail" || action == "conversations/messages" {
+		handleNewAPIAdminConversations(w, r, svc, actor.ID, action)
+		return
+	}
 	if svc == nil {
 		newAPIError(w, newapibridge.ErrUnavailable)
 		return

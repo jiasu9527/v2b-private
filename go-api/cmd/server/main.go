@@ -146,7 +146,10 @@ func main() {
 		go func() { defer close(newAPIDone); newAPIService.Run(newAPICtx) }()
 		defer func() { stopNewAPI(); <-newAPIDone }()
 		migrationService = usermigration.NewDBService(cfg, db).WithRuntimeConfig(runtimeConfig)
-		paymentService = payment.NewDBService(cfg, db, userDBService).WithExternalOrderManager(appleIDService).WithRuntimeConfig(runtimeConfig)
+		paymentService = payment.NewDBService(cfg, db, userDBService).
+			WithExternalOrderManager(payment.NewExternalOrderManagers(appleIDService, newAPIService)).
+			WithRuntimeConfig(runtimeConfig)
+		newAPIService.WithRechargePayments(paymentService)
 		adminDBService := admin.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithQueueRuntime(jobQueue).WithAuthCache(authCache).WithOnlineGeoResolver(onlineGeo)
 		evidenceCtx, stopEvidence := context.WithCancel(ctx)
 		evidenceDone := make(chan struct{})

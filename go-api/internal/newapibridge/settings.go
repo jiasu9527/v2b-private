@@ -163,11 +163,11 @@ func (s *Service) SaveConfig(ctx context.Context, actorID int64, req SettingsSav
 	// settlement. Credential rotation for that same destination remains possible.
 	if revision > 0 && (apiURL != current.APIURL || strings.TrimSpace(req.MerchantID) != current.MerchantID) {
 		var pending bool
-		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_newapi_transfer WHERE status='pending')`).Scan(&pending); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_newapi_transfer WHERE status='pending') OR EXISTS(SELECT 1 FROM v2_newapi_recharge WHERE status IN ('preparing','prepare_unknown','pending','paid_pending_credit'))`).Scan(&pending); err != nil {
 			return nil, err
 		}
 		if pending {
-			return nil, fmt.Errorf("%w：有待到账划转时不能切换 AI 站或商户", ErrConflict)
+			return nil, fmt.Errorf("%w：有待到账划转或未完成充值时不能切换 AI 站或商户", ErrConflict)
 		}
 	}
 	c := Settings{Enabled: req.Enabled, APIURL: apiURL, SiteURL: strings.TrimSpace(req.SiteURL), ClientID: strings.TrimSpace(req.ClientID), MerchantID: strings.TrimSpace(req.MerchantID), AdminUserID: req.AdminUserID, MinAmountFen: req.MinAmountFen, MaxAmountFen: req.MaxAmountFen, DailyLimitFen: req.DailyLimitFen, ClientSecret: current.ClientSecret, MerchantKey: current.MerchantKey, AdminToken: current.AdminToken, SigningKey: current.SigningKey, Revision: revision + 1}

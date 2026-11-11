@@ -123,6 +123,80 @@ func TestWorkspaceSSECompletePartialAndNoToolExecution(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSSEEmptyReplyRequiresVisibleAnswer(t *testing.T) {
+	cases := []struct {
+		name, input, want string
+		err               error
+	}{
+		{"done_only", "data: [DONE]\n\n", "", ErrChatEmptyReply},
+		{"empty_stop", "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n", "", ErrChatEmptyReply},
+		{"usage_only", "data: {\"choices\":[],\"usage\":{\"total_tokens\":20}}\n\ndata: [DONE]\n\n", "", ErrChatEmptyReply},
+		{"whitespace", "data: {\"choices\":[{\"delta\":{\"content\":\" \\n\\t　\"}}]}\n\ndata: [DONE]\n\n", " \n\t　", ErrChatEmptyReply},
+		{"reasoning_is_not_answer", "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"hidden reasoning\",\"content\":null},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n", "", ErrChatEmptyReply},
+		{"normal", "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n", "OK", nil},
+		{"partial", "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\n", "OK", ErrChatInterrupted},
+		{"unterminated_empty_is_unknown", "data: {\"choices\":[{\"delta\":{}}]}\n\n", "", ErrChatInterrupted},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var answer strings.Builder
+			_, err := readWorkspaceStream(strings.NewReader(tc.input), func(text string) error {
+				answer.WriteString(text)
+				return nil
+			})
+			if !errors.Is(err, tc.err) || answer.String() != tc.want {
+				t.Fatalf("answer %q error %v; want %q, %v", answer.String(), err, tc.want, tc.err)
+			}
+		})
+	}
+	if view := chatError(ErrChatEmptyReply); view["code"] != "empty_model_reply" || !strings.Contains(view["message"].(string), "可能已产生用量") {
+		t.Fatal("empty response must not promise no charge", view)
+	}
+}
+
+func TestChatPostgresEmptyReplyIsFailedAndNeverAutomaticallyRetried(t *testing.T) {
+	s := chatFixture(t)
+	ctx := context.Background()
+	for name, text := range map[string]string{"empty": "", "whitespace": " \n\t　"} {
+		c := chatCreateFixture(t, s, 1)
+		calls := 0
+		payload, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"content": text}, "finish_reason": "stop"}}})
+		open := func(context.Context, int64, string, map[string]any) (io.ReadCloser, error) {
+			calls++
+			return io.NopCloser(strings.NewReader("data: " + string(payload) + "\n\ndata: [DONE]\n\n")), nil
+		}
+		req := ChatSendRequest{ConversationID: c.ID, ClientRequestID: "request-empty-" + name, Content: "hello"}
+		var events []string
+		emit := func(event string, data any) error {
+			events = append(events, event)
+			if event == "error" && data.(map[string]any)["code"] != "empty_model_reply" {
+				t.Fatal(data)
+			}
+			if event == "done" && data.(map[string]any)["status"] != "failed" {
+				t.Fatal("empty answer presented as complete", data)
+			}
+			return nil
+		}
+		if err := s.sendChatWithOpener(ctx, 1, "test", req, emit, open); !errors.Is(err, ErrChatEmptyReply) {
+			t.Fatal(err)
+		}
+		detail, err := s.GetConversation(ctx, 1, c.ID)
+		if err != nil || len(detail.Messages) != 2 || detail.Messages[1].Status != "failed" || detail.Messages[1].Content != text {
+			t.Fatal(detail, err)
+		}
+		receipt, err := s.GetChatRequest(ctx, 1, req.ClientRequestID)
+		if err != nil || !receipt.Found || receipt.Status != "failed" {
+			t.Fatal(receipt, err)
+		}
+		if len(events) < 3 || events[len(events)-2] != "error" || events[len(events)-1] != "done" {
+			t.Fatal(events)
+		}
+		if err = s.sendChatWithOpener(ctx, 1, "test", req, emit, open); err != nil || calls != 1 {
+			t.Fatal("empty answer replay invoked paid endpoint twice", calls, err)
+		}
+	}
+}
+
 func chatFixture(t *testing.T) *Service {
 	t.Helper()
 	s, _, _ := walletPostgresFixture(t)
@@ -366,6 +440,8 @@ func TestChatPostgresPreGenerationErrorsAreFailedAndIdempotent(t *testing.T) {
 		{ErrWorkspaceRateLimit, "model_rate_limit"},
 		{ErrWorkspaceContext, "model_context_limit"},
 		{ErrWorkspaceModel, "model_unavailable"},
+		{ErrWorkspaceCapacity, "model_capacity_unavailable"},
+		{ErrWorkspaceInvalidRequest, "upstream_invalid_request"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.code, func(t *testing.T) {

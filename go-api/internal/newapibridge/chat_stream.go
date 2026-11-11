@@ -98,6 +98,10 @@ func (s *Service) sendChatWithOpener(ctx context.Context, userID int64, auth str
 		}
 		if runCtx.Err() != nil {
 			streamErr = runCtx.Err()
+		} else if errors.Is(streamErr, ErrChatEmptyReply) {
+			// A clean end with no answer is a failed generation, not proof that
+			// nothing was billed. Keep its consumed request ID for replay.
+			status = "failed"
 		}
 	}
 	saved, saveErr := s.finishChat(userID, plan, content.String(), status)
@@ -105,8 +109,8 @@ func (s *Service) sendChatWithOpener(ctx context.Context, userID int64, auth str
 		return saveErr
 	}
 	if streamErr != nil {
-		if errors.Is(streamErr, context.Canceled) {
-			_ = emit("error", chatError(context.Canceled))
+		if errors.Is(streamErr, context.Canceled) || errors.Is(streamErr, ErrChatEmptyReply) {
+			_ = emit("error", chatError(streamErr))
 		} else {
 			_ = emit("error", chatError(ErrChatInterrupted))
 		}
@@ -115,6 +119,9 @@ func (s *Service) sendChatWithOpener(ctx context.Context, userID int64, auth str
 		return err
 	}
 	if streamErr != nil {
+		if errors.Is(streamErr, ErrChatEmptyReply) {
+			return ErrChatEmptyReply
+		}
 		return ErrChatInterrupted
 	}
 	return nil
@@ -431,6 +438,13 @@ func readWorkspaceStream(body io.Reader, delta func(string) error) (string, erro
 	frameBytes := 0
 	finishReason := ""
 	done := false
+	hasAnswer := false
+	finish := func() (string, error) {
+		if !hasAnswer {
+			return finishReason, ErrChatEmptyReply
+		}
+		return finishReason, nil
+	}
 	consume := func() error {
 		if len(lines) == 0 {
 			return nil
@@ -474,6 +488,9 @@ func readWorkspaceStream(body io.Reader, delta func(string) error) (string, erro
 					return ErrChatInterrupted
 				}
 				if text != "" {
+					if strings.TrimSpace(text) != "" {
+						hasAnswer = true
+					}
 					if err := delta(text); err != nil {
 						return err
 					}
@@ -489,7 +506,7 @@ func readWorkspaceStream(body io.Reader, delta func(string) error) (string, erro
 				return finishReason, err
 			}
 			if done {
-				return finishReason, nil
+				return finish()
 			}
 			continue
 		}
@@ -512,13 +529,13 @@ func readWorkspaceStream(body io.Reader, delta func(string) error) (string, erro
 	if !done && finishReason == "" {
 		return finishReason, ErrChatInterrupted
 	}
-	return finishReason, nil
+	return finish()
 }
 
 // These are fixed, classified rejections before receiving a generation stream.
 // A transport failure remains unknown because the request may have been accepted.
 func chatOpenFailedBeforeGeneration(err error) bool {
-	for _, known := range []error{ErrForbidden, ErrInvalid, ErrDisabled, ErrWorkspaceNotConnected, ErrWorkspaceQuota, ErrWorkspaceRateLimit, ErrWorkspaceContext, ErrWorkspaceModel} {
+	for _, known := range []error{ErrForbidden, ErrInvalid, ErrDisabled, ErrWorkspaceNotConnected, ErrWorkspaceQuota, ErrWorkspaceRateLimit, ErrWorkspaceContext, ErrWorkspaceModel, ErrWorkspaceCapacity, ErrWorkspaceInvalidRequest} {
 		if errors.Is(err, known) {
 			return true
 		}

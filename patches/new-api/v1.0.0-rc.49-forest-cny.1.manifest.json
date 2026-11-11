@@ -1,0 +1,32 @@
+{
+  "upstream_tar_sha256": "84eeed2085fbc90266f74898b601b4303707180d8dde7944d5e61342c3a3b30d",
+  "changes": {
+    "web/src/features/wallet/index.tsx": "5d02ccc215ddce703a08c9abf869bdade53713a5f3db24685779576fc15c8359",
+    "web/src/features/wallet/api.ts": "0052d1b66f565be59bef6b7de0acbd241a73bc04546688788cedab17185e27f1",
+    "web/src/features/wallet/types.ts": "cc4f7124bca453b4011b8e4ad869fdcb930d9ff202c21c1fa527e7e8a15395b6",
+    "web/src/features/wallet/components/recharge-form-card.tsx": "f19f34b2960fe309d1b1133a0ab28849729411ab495bd993a471e319474e329a",
+    "web/src/features/wallet/components/dialogs/payment-confirm-dialog.tsx": "0891a5546c1dab10859243fc583a326510e04d29e845f71c4e96ad337f28b82d",
+    "web/src/features/wallet/components/dialogs/billing-history-dialog.tsx": "b4c3410ecaa8de88783c4541c6ae08123cee3880767f9ad5b2a7dcc76780c4fb",
+    "web/src/features/wallet/__tests__/copy.test.tsx": "eaf47b2ff70ab1d5e6c6d1876ae4621e1ea84b4bea88e86a81aa8f98f17f3442",
+    "web/src/features/wallet/hooks/use-payment.test.ts": "d3ce8da68b2cda434d89c91284dfc1a17294a69738f40317dcee589090f123f4",
+    "web/src/features/wallet/hooks/use-payment.ts": "614e4d0571f691609aea2d07e321003359db1d8ac4463bc79f9eef01b8bbf4e3",
+    "web/src/features/wallet/lib/payment.ts": "1cc1ae6a3ccedd71eb6433c25a5124c7ae491561987509d9a35c5add5f23c66e",
+    "web/src/i18n/locales/zh.json": "fb2386bf0fa44b093da5232e0ffe9c259c38e07436c5ca07469f65fd9ba88670",
+    "web/src/i18n/locales/ja.json": "6e55f112742b3ea59c3baf1f85d363540a422bba276fd682f0621566b763e71a",
+    "web/src/i18n/locales/ru.json": "27361b32b104acb76af71e1a645df406b1a5a8d7a942579a31c864f327da59c9",
+    "web/src/i18n/locales/en.json": "5e857e150e6612a59f0e8d3e49b0afbecc2be4c9930eaed1bba8c10c920febdc",
+    "web/src/i18n/locales/fr.json": "86d44c0e8a09d5181c98c54c1f8988dd6fc5ca45600ef685899c2a6382397556",
+    "web/src/i18n/locales/zh-TW.json": "5df86cc5498ec4f40e93af5faf225bccce9f6e589e636d45fb2ae6ca89874358",
+    "web/src/i18n/locales/vi.json": "bea52140a8a49e3b7ee7b81d8631d1cc259c01b042e15612b91d2d52036ef9ce",
+    "controller/topup.go": "97b6bc1539f0d46409574bd0e2aefbcd53806ea5ef9716e4f7ae683d18c9a86c",
+    "controller/topup_quota_limit_test.go": "1ca37cf93487c99a77c5f393a057703ef74ce48b2565291438729279684cbc1c",
+    "controller/topup_cny.go": "023f914215b03e742e18cd942b412be8b032195411d19ecb7d1f4032c32a7ba9",
+    "model/topup.go": "240680cabbfa67f03f7fbb52114f953c601c2f9abec065f6562219e95003991a",
+    "model/topup_cny_test.go": "b232e79ab9ac92863f56bc13737d31a86a7beebff95d61658b6e84adfe7267ad"
+  },
+  "upstream_tag": "v1.0.0-rc.49",
+  "release": "v1.0.0-rc.49-forest-cny.1",
+  "source_archive_url": "https://apizhuan.com/source/new-api-v1.0.0-rc.49-forest-cny.1-source.tar.gz",
+  "source_archive_sha256": "87e3bb64240e9f891db81d541eaed846bfdd40698fd104bd9b9ae1893d6d13aa",
+  "binary_linux_amd64_sha256": "83b09bc51e17b597777a3ca80f0cf8a2bd6cb8b0319c50192bf6d01ad7c387c9"
+}

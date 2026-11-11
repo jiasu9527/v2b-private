@@ -20,6 +20,7 @@ func TestWorkspaceSecurityContextErrorIsNotModelContext(t *testing.T) {
 	for _, raw := range []string{
 		`{"error":{"code":"context_length_exceeded"}}`,
 		`{"error":{"message":"maximum context length exceeded"}}`,
+		`{"error":{"type":"context_window_exceeded"}}`,
 	} {
 		if err := workspaceRemoteError(400, []byte(raw)); !errors.Is(err, ErrWorkspaceContext) {
 			t.Fatalf("model context failure misclassified: %v", err)

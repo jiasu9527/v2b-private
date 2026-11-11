@@ -59,6 +59,7 @@ type newAPIWorkspaceChatService interface {
 }
 
 var workspaceMethods = map[string]string{
+	"recharge/options": "GET", "recharge/create": "POST", "recharge/checkout": "POST", "recharge/orders": "GET", "recharge/detail": "GET",
 	"account": "GET", "account/connect": "POST", "account/verify": "POST", "models": "GET", "pricing": "GET", "usage": "GET", "keys": "GET|POST", "keys/reveal": "POST", "keys/delete": "POST",
 	"transfer/quote": "POST", "transfer/confirm": "POST", "transfer/review": "GET", "transfer/resolve": "POST", "password/prepare": "POST", "password/confirm": "POST", "password/reveal": "POST",
 	"conversations": "GET", "conversations/create": "POST", "conversations/detail": "GET", "conversations/messages": "GET", "conversations/delete": "POST", "chat/send": "POST", "chat/request": "GET",
@@ -182,6 +183,10 @@ func handleNewAPIWorkspace(w http.ResponseWriter, r *http.Request, sessions sess
 	defer cancel()
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(65 * time.Second))
 	r = r.WithContext(ctx)
+	if strings.HasPrefix(action, "recharge/") {
+		handleWorkspaceRecharge(w, r, svc, actor.ID, auth, action)
+		return true
+	}
 	var result any
 	var err error
 	if action == "pricing" {
@@ -516,8 +521,18 @@ func workspaceError(w http.ResponseWriter, err error) {
 		status, code, message = 400, "model_context_limit", "当前模型上下文不足，请减少历史或换用更大上下文的模型"
 	case errors.Is(err, newapibridge.ErrWorkspaceModel):
 		status, code, message = 400, "model_unavailable", "当前模型不可用，请检查 AI 站模型渠道或选择其他模型"
+	case errors.Is(err, newapibridge.ErrWorkspaceCapacity):
+		status, code, message = 503, "model_capacity_unavailable", newapibridge.ErrWorkspaceCapacity.Error()
+	case errors.Is(err, newapibridge.ErrWorkspaceInvalidRequest):
+		status, code, message = 400, "upstream_invalid_request", newapibridge.ErrWorkspaceInvalidRequest.Error()
+	case errors.Is(err, newapibridge.ErrWorkspaceResponse):
+		status, code, message = 502, "upstream_invalid_response", newapibridge.ErrWorkspaceResponse.Error()
+	case errors.Is(err, newapibridge.ErrRemoteUnavailable), errors.Is(err, context.DeadlineExceeded):
+		status, code, message = 503, "upstream_unavailable", "AI 上游服务暂时不可用，请核对操作记录；同一请求不会自动重发"
 	case errors.Is(err, newapibridge.ErrChatBusy):
 		status, code, message = 409, "conversation_busy", "此会话仍在生成，请停止或等待结束"
+	case errors.Is(err, newapibridge.ErrChatEmptyReply):
+		status, code, message = 502, "empty_model_reply", newapibridge.ErrChatEmptyReply.Error()
 	case errors.Is(err, newapibridge.ErrChatInterrupted):
 		status, code, message = 409, "generation_interrupted", "生成未完整结束，已保存现有内容，请刷新查看"
 	}

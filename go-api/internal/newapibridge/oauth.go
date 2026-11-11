@@ -64,7 +64,10 @@ func (s *Service) userIdentity(ctx context.Context, id int64) (OAuthUser, error)
 	if id <= 0 || email == "" {
 		return OAuthUser{}, ErrForbidden
 	}
-	return OAuthUser{Subject: fmt.Sprintf("forest:%d", id), Name: fmt.Sprintf("Forest #%d", id), PreferredUsername: fmt.Sprintf("forest_%d", id), Email: email}, nil
+	// Keep the immutable subject for account ownership. New API can use the
+	// email as a username when its length/uniqueness rules permit; longer email
+	// addresses remain valid login identifiers through its separate email field.
+	return OAuthUser{Subject: fmt.Sprintf("forest:%d", id), Name: fmt.Sprintf("Forest #%d", id), PreferredUsername: email, Email: email}, nil
 }
 
 func (s *Service) putToken(ctx context.Context, purpose string, payload any, ttl time.Duration) (string, error) {

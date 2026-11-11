@@ -31,6 +31,7 @@ func (s *Service) Run(ctx context.Context) {
 			return
 		case <-timer.C:
 			_ = s.ProcessTransfers(ctx, 5)
+			_ = s.ProcessRecharges(ctx, 5)
 			if time.Since(lastCleanup) >= time.Hour {
 				if s.Cleanup(ctx) == nil {
 					lastCleanup = time.Now()
@@ -106,6 +107,9 @@ func (s *Service) deliverWalletTransfer(ctx context.Context, lease walletLease) 
 	c, err := scanCheckout(s.db.QueryRowContext(ctx, `SELECT `+checkoutColumns+` FROM v2_newapi_checkout WHERE id=$1`, lease.CheckoutID))
 	if err != nil {
 		return err
+	}
+	if c.fundingSource != "wallet" {
+		return ErrConflict
 	}
 	raw, err := s.open(c.configCipher)
 	if err != nil {

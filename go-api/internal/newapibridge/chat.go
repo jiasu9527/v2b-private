@@ -18,6 +18,7 @@ const chatStreamTimeout = 5 * time.Minute
 
 var ErrChatBusy = errors.New("此会话仍在生成，请等待完成或停止后再试")
 var ErrChatInterrupted = errors.New("生成未完整结束，已保存现有内容；同一请求不会重复计费重发")
+var ErrChatEmptyReply = errors.New("模型未返回有效文本，可能已产生用量；请核对用量记录，同一请求不会自动重发")
 
 type Conversation struct {
 	ID          int64  `json:"id"`
@@ -130,6 +131,7 @@ var workspaceChatSchema = []string{
 	`CREATE INDEX IF NOT EXISTS v2_newapi_character_user ON v2_newapi_character(user_id,updated_at DESC,id DESC)`,
 	`CREATE TABLE IF NOT EXISTS v2_newapi_chat(id BIGSERIAL PRIMARY KEY,user_id BIGINT NOT NULL,title TEXT NOT NULL,mode TEXT NOT NULL CHECK(mode IN ('chat','character')),model TEXT NOT NULL,character_id BIGINT NOT NULL DEFAULT 0,character_snapshot JSONB NOT NULL DEFAULT '{}',persona TEXT NOT NULL DEFAULT '',parent_id BIGINT NOT NULL DEFAULT 0,active_request TEXT NOT NULL DEFAULT '',active_until BIGINT NOT NULL DEFAULT 0,created_at BIGINT NOT NULL,updated_at BIGINT NOT NULL)`,
 	`CREATE INDEX IF NOT EXISTS v2_newapi_chat_user ON v2_newapi_chat(user_id,updated_at DESC,id DESC)`,
+	`CREATE INDEX IF NOT EXISTS v2_newapi_chat_admin_order ON v2_newapi_chat(updated_at DESC,id DESC)`,
 	`CREATE TABLE IF NOT EXISTS v2_newapi_chat_message(id BIGSERIAL PRIMARY KEY,conversation_id BIGINT NOT NULL REFERENCES v2_newapi_chat(id) ON DELETE CASCADE,user_id BIGINT NOT NULL,role TEXT NOT NULL CHECK(role IN ('user','assistant')),content TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('complete','streaming','partial','failed','unknown')),client_request_id TEXT NOT NULL DEFAULT '',created_at BIGINT NOT NULL,updated_at BIGINT NOT NULL)`,
 	`CREATE INDEX IF NOT EXISTS v2_newapi_chat_message_conversation ON v2_newapi_chat_message(user_id,conversation_id,id DESC)`,
 	// Retain idempotency tombstones after deleting a conversation; otherwise a lost
@@ -374,6 +376,14 @@ func chatError(err error) map[string]any {
 		code, message = "model_context_limit", ErrWorkspaceContext.Error()
 	case errors.Is(err, ErrWorkspaceModel):
 		code, message = "model_unavailable", ErrWorkspaceModel.Error()
+	case errors.Is(err, ErrWorkspaceCapacity):
+		code, message = "model_capacity_unavailable", ErrWorkspaceCapacity.Error()
+	case errors.Is(err, ErrWorkspaceInvalidRequest):
+		code, message = "upstream_invalid_request", ErrWorkspaceInvalidRequest.Error()
+	case errors.Is(err, ErrWorkspaceResponse):
+		code, message = "upstream_invalid_response", ErrWorkspaceResponse.Error()
+	case errors.Is(err, ErrRemoteUnavailable), errors.Is(err, context.DeadlineExceeded):
+		code, message = "upstream_unavailable", "AI 上游服务暂时不可用，请核对已保存消息与用量；同一请求不会自动重发"
 	case errors.Is(err, ErrWorkspaceNotConnected):
 		code, message = "not_connected", ErrWorkspaceNotConnected.Error()
 	case errors.Is(err, ErrDisabled):
@@ -386,6 +396,8 @@ func chatError(err error) map[string]any {
 		code, message = "forbidden", "无权读取或修改此会话"
 	case errors.Is(err, ErrConflict):
 		code, message = "conflict", "请求编号已使用或会话已变化，请刷新核对"
+	case errors.Is(err, ErrChatEmptyReply):
+		code, message = "empty_model_reply", ErrChatEmptyReply.Error()
 	case errors.Is(err, ErrChatInterrupted):
 		code, message = "interrupted", ErrChatInterrupted.Error()
 	case errors.Is(err, context.Canceled):

@@ -14,14 +14,17 @@ import (
 )
 
 var (
-	ErrWorkspaceNotConnected = errors.New("请先连接本人的 AI 账号")
-	ErrWorkspaceVerification = errors.New("AI 账号需要完成本人安全验证")
-	ErrWorkspaceUnknown      = errors.New("远端操作结果尚未确认，未自动重试；请查看记录后核对")
-	ErrWorkspaceAmount       = errors.New("当前充值费率无法生成该金额，请选择更高金额或在 AI 站查看充值档位")
-	ErrWorkspaceQuota        = errors.New("AI 余额不足，请先转入余额")
-	ErrWorkspaceRateLimit    = errors.New("AI 请求过于频繁，请稍后重试")
-	ErrWorkspaceContext      = errors.New("模型无法接受当前上下文或请求参数，请缩短对话或调整模型")
-	ErrWorkspaceModel        = errors.New("当前模型暂时无可用渠道，请选择其他模型")
+	ErrWorkspaceNotConnected   = errors.New("请先连接本人的 AI 账号")
+	ErrWorkspaceVerification   = errors.New("AI 账号需要完成本人安全验证")
+	ErrWorkspaceUnknown        = errors.New("远端操作结果尚未确认，未自动重试；请查看记录后核对")
+	ErrWorkspaceAmount         = errors.New("当前充值费率无法生成该金额，请选择更高金额或在 AI 站查看充值档位")
+	ErrWorkspaceQuota          = errors.New("AI 余额不足，请先转入余额")
+	ErrWorkspaceRateLimit      = errors.New("AI 请求过于频繁，请稍后重试")
+	ErrWorkspaceContext        = errors.New("模型无法接受当前上下文或请求参数，请缩短对话或调整模型")
+	ErrWorkspaceModel          = errors.New("当前模型暂时无可用渠道，请选择其他模型")
+	ErrWorkspaceCapacity       = errors.New("该模型上游暂无可用服务资源，请稍后重试或手动切换其他模型")
+	ErrWorkspaceInvalidRequest = errors.New("上游拒绝当前请求参数，请检查模型和参数后再试")
+	ErrWorkspaceResponse       = errors.New("模型上游返回了无效响应，请核对已保存消息与用量；同一请求不会自动重发")
 )
 
 type workspaceSession struct {
@@ -35,6 +38,7 @@ type workspaceSession struct {
 type workspaceUser struct {
 	ID          int64  `json:"id"`
 	Username    string `json:"username"`
+	Email       string `json:"email"`
 	DisplayName string `json:"display_name"`
 	OIDCID      string `json:"oidc_id"`
 	Status      int    `json:"status"`
@@ -94,6 +98,9 @@ func (s *Service) workspaceRequest(ctx context.Context, cfg Settings, cred *work
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	res, e := client.Do(req)
 	if e != nil {
+		if ctx.Err() != nil {
+			return out, nil, ctx.Err()
+		}
 		return out, nil, ErrRemoteUnavailable
 	}
 	defer res.Body.Close()
@@ -222,12 +229,22 @@ func (s *Service) OpenWorkspaceChat(ctx context.Context, userID int64, auth stri
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	res, e := client.Do(req)
 	if e != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, ErrRemoteUnavailable
 	}
 	if res.StatusCode != 200 || !strings.HasPrefix(res.Header.Get("Content-Type"), "text/event-stream") {
-		raw, _ := io.ReadAll(io.LimitReader(res.Body, 65536))
+		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 65536))
 		res.Body.Close()
-		return nil, workspaceRemoteError(res.StatusCode, raw)
+		if readErr != nil {
+			return nil, ErrRemoteUnavailable
+		}
+		err := workspaceRemoteError(res.StatusCode, raw)
+		if res.StatusCode == http.StatusOK && errors.Is(err, ErrRemoteUnavailable) {
+			return nil, ErrWorkspaceResponse
+		}
+		return nil, err
 	}
 	return &workspaceBoundedBody{ReadCloser: res.Body, remaining: 32 << 20}, nil
 }
@@ -284,17 +301,38 @@ func workspaceRemoteError(status int, raw []byte) error {
 	if strings.Contains(code, "quota") || strings.Contains(msg, "insufficient quota") || strings.Contains(msg, "余额不足") || strings.Contains(msg, "额度不足") {
 		return ErrWorkspaceQuota
 	}
-	if strings.Contains(code, "context") || strings.Contains(msg, "context length") || strings.Contains(msg, "maximum context") {
+	for _, structuredCode := range []string{v.Code, v.Data.Code, v.Error.Code, v.Error.Type} {
+		switch strings.ToLower(strings.TrimSpace(structuredCode)) {
+		case "context_length_exceeded", "context_window_exceeded", "max_context_length_exceeded":
+			return ErrWorkspaceContext
+		}
+	}
+	// Preserve known provider token-window errors without treating arbitrary
+	// request/security context codes or every HTTP 400 as context exhaustion.
+	if strings.Contains(msg, "context length exceeded") || strings.Contains(msg, "maximum context length") {
 		return ErrWorkspaceContext
 	}
 	if strings.Contains(code, "channel_not_found") || strings.Contains(msg, "no available channel") || strings.Contains(msg, "无可用渠道") {
 		return ErrWorkspaceModel
 	}
+	// Only explicit capacity signals identify a rejected generation. Generic
+	// server/transport failures remain unknown and must not imply no charge.
+	if status == http.StatusServiceUnavailable {
+		if strings.Contains(msg, "号池当前没有可用账号") || strings.Contains(msg, "no available accounts") {
+			return ErrWorkspaceCapacity
+		}
+		for _, structuredCode := range []string{v.Code, v.Data.Code, v.Error.Code, v.Error.Type} {
+			switch strings.ToLower(strings.TrimSpace(structuredCode)) {
+			case "model_capacity_unavailable", "no_available_accounts", "account_pool_exhausted", "insufficient_capacity":
+				return ErrWorkspaceCapacity
+			}
+		}
+	}
 	if status == 403 {
 		return ErrForbidden
 	}
 	if status == 400 || status == 422 {
-		return ErrWorkspaceContext
+		return ErrWorkspaceInvalidRequest
 	}
 	return ErrRemoteUnavailable
 }
