@@ -40,7 +40,8 @@ func panelActionRecovery(a Action) panelRecoveryKind {
 		return panelRecoveryNone
 	}
 	switch marker.Code {
-	case "dns_invalid_arguments", "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed", "node_invalid_arguments", "ip_pool_invalid_arguments", "entry_order_invalid_arguments", "entry_order_conflict":
+	case "dns_invalid_arguments", "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed", "node_invalid_arguments", "ip_pool_invalid_arguments", "entry_order_invalid_arguments", "entry_order_conflict", "entry_monitor_invalid_arguments", "entry_monitor_conflict",
+		"entry_retirement_invalid_arguments", "entry_retirement_conflict", "entry_retirement_blocked", "entry_retirement_not_found":
 		return panelRecoveryPreflight
 	default:
 		return panelRecoveryNone
@@ -116,7 +117,8 @@ func panelRecoveryReadOnlyOperation(name string) bool {
 	case "dns.config", "dns.domains", "dns.records", "dns.record_types", "dns.record_lines",
 		"entry_evidence.delivery_hosts", "entry_evidence.delivery_stats", "entry_evidence.delivery_users", "entry_evidence.delivery_versions",
 		"nodes.list", "node_groups.list", "node_routes.list",
-		"entry_rules.list", "entry_rules.order", "entry_rules.simulate", "entry_split.users", "entry_collections.list", "entry_monitors.runs", "ip_pool.list",
+		"entry_rules.list", "entry_rules.order", "entry_rules.simulate", "entry_split.users", "entry_collections.list", "entry_monitors.config", "entry_monitors.runs", "ip_pool.list",
+		"entry_groups.audit", "entry_groups.retirement",
 		"users.detail", "orders.list", "orders.detail", "plans.list", "notices.list", "tickets.list", "config.read":
 		return true
 	default:

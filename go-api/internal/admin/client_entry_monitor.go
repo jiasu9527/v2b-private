@@ -287,6 +287,10 @@ func buildClientEntryMonitorPolicies(policies []ClientEntryUserPolicyRecord, nod
 }
 
 func (s *DBService) loadClientEntryMonitorNodes(ctx context.Context, policies []ClientEntryUserPolicyRecord) (map[string]clientEntryMonitorNode, error) {
+	return readClientEntryMonitorNodes(ctx, s.db, policies)
+}
+
+func readClientEntryMonitorNodes(ctx context.Context, q clientEntryPolicyQueryer, policies []ClientEntryUserPolicyRecord) (map[string]clientEntryMonitorNode, error) {
 	byType := make(map[string]map[int64]struct{})
 	for _, policy := range policies {
 		if policy.Action != cliententry.ActionOriginal {
@@ -317,7 +321,7 @@ func (s *DBService) loadClientEntryMonitorNodes(ctx context.Context, policies []
 			args[index] = id
 		}
 		table := managedServerTypeTable[serverType]
-		rows, err := s.db.QueryContext(ctx, `SELECT id, COALESCE(name, ''), COALESCE(host, ''), COALESCE(CAST(port AS text), '')
+		rows, err := q.QueryContext(ctx, `SELECT id, COALESCE(name, ''), COALESCE(host, ''), COALESCE(CAST(port AS text), '')
 FROM `+quoteIdentifier(table)+`
 WHERE id IN (`+strings.Join(placeholders, ",")+`)`, args...)
 		if err != nil {
@@ -353,7 +357,19 @@ func clientEntryMonitorNodeKey(serverType string, serverID int64) string {
 }
 
 func (s *DBService) refreshClientEntryMonitorTargets(ctx context.Context) error {
-	policies, err := s.resolveClientEntryMonitorPolicies(ctx)
+	if err := s.ensureClientEntrySchema(ctx); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin client entry monitor refresh: %w", err)
+	}
+	defer tx.Rollback()
+	monitors, err := lockClientEntryMonitorTopology(ctx, tx)
+	if err != nil {
+		return err
+	}
+	policies, err := readClientEntryMonitorPolicies(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -361,30 +377,6 @@ func (s *DBService) refreshClientEntryMonitorTargets(ctx context.Context) error 
 	for _, policy := range policies {
 		policyByID[policy.ID] = policy
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin client entry monitor refresh: %w", err)
-	}
-	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT id, policy_id FROM v2_client_entry_monitor ORDER BY id FOR UPDATE`)
-	if err != nil {
-		return fmt.Errorf("query client entry monitors for refresh: %w", err)
-	}
-	type monitorRef struct{ id, policyID int64 }
-	monitors := make([]monitorRef, 0)
-	for rows.Next() {
-		var item monitorRef
-		if err := rows.Scan(&item.id, &item.policyID); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("scan client entry monitor for refresh: %w", err)
-		}
-		monitors = append(monitors, item)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return fmt.Errorf("iterate client entry monitors for refresh: %w", err)
-	}
-	_ = rows.Close()
 	now := time.Now().Unix()
 	for _, monitor := range monitors {
 		policy, ok := policyByID[monitor.policyID]
@@ -687,8 +679,22 @@ func (s *DBService) SaveClientEntryMonitors(ctx context.Context, request ClientE
 // SaveClientEntryMonitorReceipt returns only values determined by the save
 // transaction. It deliberately performs no query or refresh after Commit.
 func (s *DBService) SaveClientEntryMonitorReceipt(ctx context.Context, request ClientEntryMonitorSaveRequest) (ClientEntryMonitorSaveReceipt, error) {
+	return s.saveClientEntryMonitorReceipt(ctx, request, true)
+}
+
+func (s *DBService) UpsertClientEntryMonitorReceipt(ctx context.Context, request ClientEntryMonitorSaveRequest) (ClientEntryMonitorSaveReceipt, error) {
+	return s.saveClientEntryMonitorReceipt(ctx, request, false)
+}
+
+func (s *DBService) saveClientEntryMonitorReceipt(ctx context.Context, request ClientEntryMonitorSaveRequest, replaceAll bool) (ClientEntryMonitorSaveReceipt, error) {
 	if s == nil || s.db == nil {
 		return ClientEntryMonitorSaveReceipt{}, ErrUnavailable
+	}
+	if request.Items == nil {
+		return ClientEntryMonitorSaveReceipt{}, clientEntryMonitorValidation("入口检测规则列表不能为空")
+	}
+	if !replaceAll && (len(request.Items) == 0 || len(request.Items) > 20) {
+		return ClientEntryMonitorSaveReceipt{}, clientEntryMonitorValidation("增量保存一次必须包含 1 到 20 条入口检测规则")
 	}
 	if err := s.ensureDNSFailoverSchema(ctx); err != nil {
 		return ClientEntryMonitorSaveReceipt{}, err
@@ -702,19 +708,19 @@ func (s *DBService) SaveClientEntryMonitorReceipt(ctx context.Context, request C
 		policyByID[policy.ID] = policy
 	}
 	if len(request.Items) > clientEntryMonitorRunMaxPolicies {
-		return ClientEntryMonitorSaveReceipt{}, errors.New("入口检测规则数量过多")
+		return ClientEntryMonitorSaveReceipt{}, clientEntryMonitorValidation("入口检测规则数量过多")
 	}
 	seenPolicies := make(map[int64]struct{}, len(request.Items))
 	requiresEnabledProbe := false
 	for index := range request.Items {
 		item := &request.Items[index]
 		if _, exists := seenPolicies[item.PolicyID]; exists {
-			return ClientEntryMonitorSaveReceipt{}, errors.New("入口检测规则重复")
+			return ClientEntryMonitorSaveReceipt{}, clientEntryMonitorValidation("入口检测规则重复")
 		}
 		seenPolicies[item.PolicyID] = struct{}{}
 		policy, ok := policyByID[item.PolicyID]
 		if !ok || policy.Action == cliententry.ActionHide || len(policy.Targets) == 0 {
-			return ClientEntryMonitorSaveReceipt{}, errors.New("所选用户入口规则不可检测")
+			return ClientEntryMonitorSaveReceipt{}, clientEntryMonitorValidation("所选用户入口规则不可检测")
 		}
 		if item.CheckIntervalSec == 0 {
 			item.CheckIntervalSec = defaultClientEntryMonitorIntervalSec
@@ -726,10 +732,10 @@ func (s *DBService) SaveClientEntryMonitorReceipt(ctx context.Context, request C
 			return ClientEntryMonitorSaveReceipt{}, err
 		}
 		if item.CheckIntervalSec < 5 || item.CheckIntervalSec > 3600 {
-			return ClientEntryMonitorSaveReceipt{}, errors.New("检测间隔必须在 5 到 3600 秒之间")
+			return ClientEntryMonitorSaveReceipt{}, clientEntryMonitorValidation("检测间隔必须在 5 到 3600 秒之间")
 		}
 		if item.TCPTimeoutMS < 100 || item.TCPTimeoutMS > 60000 {
-			return ClientEntryMonitorSaveReceipt{}, errors.New("TCP 超时必须在 100 到 60000 毫秒之间")
+			return ClientEntryMonitorSaveReceipt{}, clientEntryMonitorValidation("TCP 超时必须在 100 到 60000 毫秒之间")
 		}
 		requiresEnabledProbe = requiresEnabledProbe || item.Enabled
 		candidateByKey := make(map[string]ClientEntryMonitorCandidateTarget, len(policy.Targets))
@@ -739,20 +745,28 @@ func (s *DBService) SaveClientEntryMonitorReceipt(ctx context.Context, request C
 		portByKey := make(map[string]int64, len(item.Targets))
 		autoSplitByKey := make(map[string]bool, len(item.Targets))
 		for _, target := range item.Targets {
+			if _, exists := portByKey[target.SourceKey]; exists {
+				return ClientEntryMonitorSaveReceipt{}, clientEntryMonitorValidation("入口检测目标重复")
+			}
 			if _, ok := candidateByKey[target.SourceKey]; !ok {
-				return ClientEntryMonitorSaveReceipt{}, errors.New("入口检测地址已变化，请刷新后重试")
+				return ClientEntryMonitorSaveReceipt{}, clientEntryMonitorValidation("入口检测地址已变化，请刷新后重试")
 			}
 			if target.Port < 1 || target.Port > 65535 {
-				return ClientEntryMonitorSaveReceipt{}, errors.New("TCP 端口必须在 1 到 65535 之间")
+				return ClientEntryMonitorSaveReceipt{}, clientEntryMonitorValidation("TCP 端口必须在 1 到 65535 之间")
 			}
 			if target.AutoSplitEnabled {
 				policyID, _, ok := parseClientEntryMonitorSplitGroupSourceKey(target.SourceKey)
 				if !ok || policyID != item.PolicyID || policy.Mode != ClientEntryUserPolicyModeSplit {
-					return ClientEntryMonitorSaveReceipt{}, errors.New("自动二分容灾只能用于固定二分叶子规则")
+					return ClientEntryMonitorSaveReceipt{}, clientEntryMonitorValidation("自动二分容灾只能用于固定二分叶子规则")
 				}
 			}
 			portByKey[target.SourceKey] = target.Port
 			autoSplitByKey[target.SourceKey] = target.AutoSplitEnabled
+		}
+		// A partial target list could silently reset a sibling's port or turn
+		// off its automatic split. Upserts require the policy's complete set.
+		if !replaceAll && len(portByKey) != len(candidateByKey) {
+			return ClientEntryMonitorSaveReceipt{}, clientEntryMonitorValidation("增量保存必须包含该规则的全部当前检测目标及自动二分设置")
 		}
 		item.Targets = make([]ClientEntryMonitorTargetSaveRequest, 0, len(policy.Targets))
 		for _, target := range policy.Targets {
@@ -778,6 +792,12 @@ func (s *DBService) SaveClientEntryMonitorReceipt(ctx context.Context, request C
 		if err := requireEnabledClientEntryMonitorProbe(ctx, tx); err != nil {
 			return ClientEntryMonitorSaveReceipt{}, err
 		}
+	}
+	if _, err := lockClientEntryMonitorTopology(ctx, tx); err != nil {
+		return ClientEntryMonitorSaveReceipt{}, err
+	}
+	if err := revalidateClientEntryMonitorPolicies(ctx, tx, policyByID, request.Items); err != nil {
+		return ClientEntryMonitorSaveReceipt{}, err
 	}
 	for _, item := range request.Items {
 		policy := policyByID[item.PolicyID]
@@ -849,30 +869,33 @@ WHERE current_target.name IS DISTINCT FROM EXCLUDED.name
 			return ClientEntryMonitorSaveReceipt{}, err
 		}
 	}
-	var deleteResult sql.Result
-	if len(seenPolicies) == 0 {
-		if deleteResult, err = tx.ExecContext(ctx, `DELETE FROM v2_client_entry_monitor`); err != nil {
-			return ClientEntryMonitorSaveReceipt{}, fmt.Errorf("delete unselected client entry monitors: %w", err)
+	deletedPolicies := int64(0)
+	if replaceAll {
+		var deleteResult sql.Result
+		if len(seenPolicies) == 0 {
+			if deleteResult, err = tx.ExecContext(ctx, `DELETE FROM v2_client_entry_monitor`); err != nil {
+				return ClientEntryMonitorSaveReceipt{}, fmt.Errorf("delete unselected client entry monitors: %w", err)
+			}
+		} else {
+			ids := make([]int64, 0, len(seenPolicies))
+			for policyID := range seenPolicies {
+				ids = append(ids, policyID)
+			}
+			sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+			placeholders := make([]string, len(ids))
+			args := make([]any, len(ids))
+			for index, id := range ids {
+				placeholders[index] = fmt.Sprintf("$%d", index+1)
+				args[index] = id
+			}
+			if deleteResult, err = tx.ExecContext(ctx, `DELETE FROM v2_client_entry_monitor WHERE policy_id NOT IN (`+strings.Join(placeholders, ",")+`)`, args...); err != nil {
+				return ClientEntryMonitorSaveReceipt{}, fmt.Errorf("delete unselected client entry monitors: %w", err)
+			}
 		}
-	} else {
-		ids := make([]int64, 0, len(seenPolicies))
-		for policyID := range seenPolicies {
-			ids = append(ids, policyID)
+		deletedPolicies, err = deleteResult.RowsAffected()
+		if err != nil {
+			return ClientEntryMonitorSaveReceipt{}, fmt.Errorf("count deleted client entry monitors: %w", err)
 		}
-		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-		placeholders := make([]string, len(ids))
-		args := make([]any, len(ids))
-		for index, id := range ids {
-			placeholders[index] = fmt.Sprintf("$%d", index+1)
-			args[index] = id
-		}
-		if deleteResult, err = tx.ExecContext(ctx, `DELETE FROM v2_client_entry_monitor WHERE policy_id NOT IN (`+strings.Join(placeholders, ",")+`)`, args...); err != nil {
-			return ClientEntryMonitorSaveReceipt{}, fmt.Errorf("delete unselected client entry monitors: %w", err)
-		}
-	}
-	deletedPolicies, err := deleteResult.RowsAffected()
-	if err != nil {
-		return ClientEntryMonitorSaveReceipt{}, fmt.Errorf("count deleted client entry monitors: %w", err)
 	}
 	receipt := ClientEntryMonitorSaveReceipt{
 		SavedPolicyCount: int64(len(request.Items)), DeletedPolicyCount: deletedPolicies,
@@ -893,7 +916,7 @@ SET revision = revision + 1, updated_at = $1 WHERE id = 1 RETURNING revision`, n
 
 func normalizeClientEntryMonitorThresholds(item *ClientEntryMonitorSaveItem) error {
 	if item == nil {
-		return errors.New("入口检测规则不能为空")
+		return clientEntryMonitorValidation("入口检测规则不能为空")
 	}
 	if item.FailureThreshold == 0 {
 		item.FailureThreshold = defaultClientEntryMonitorFailureThreshold
@@ -902,10 +925,10 @@ func normalizeClientEntryMonitorThresholds(item *ClientEntryMonitorSaveItem) err
 		item.SuccessThreshold = defaultClientEntryMonitorSuccessThreshold
 	}
 	if item.FailureThreshold < minClientEntryMonitorFailureThreshold || item.FailureThreshold > maxClientEntryMonitorThreshold {
-		return errors.New("故障确认次数必须在 2 到 10 之间")
+		return clientEntryMonitorValidation("故障确认次数必须在 2 到 10 之间")
 	}
 	if item.SuccessThreshold < 1 || item.SuccessThreshold > maxClientEntryMonitorThreshold {
-		return errors.New("恢复确认次数必须在 1 到 10 之间")
+		return clientEntryMonitorValidation("恢复确认次数必须在 1 到 10 之间")
 	}
 	return nil
 }
@@ -918,7 +941,7 @@ ORDER BY id
 LIMIT 1
 FOR SHARE`).Scan(&probeID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return errors.New("启用入口检测前请先启用至少一个探针")
+		return clientEntryMonitorValidation("启用入口检测前请先启用至少一个探针")
 	}
 	if err != nil {
 		return fmt.Errorf("query enabled client entry monitor probe: %w", err)

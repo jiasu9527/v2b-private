@@ -39,8 +39,13 @@ func handleAdminClientEntryUserPolicySplitPreview(w http.ResponseWriter, r *http
 			}
 		}
 	}
+	historyGroups, historyExcludes, err := parseHistoricalSplitSelection(r.URL.Query())
+	if err != nil {
+		handleEntryEvidenceError(w, admin.ErrEntryEvidenceInvalid)
+		return true
+	}
 	disableResponseCache(w)
-	result, err := adminService.PreviewClientEntryUserPolicySplit(r.Context(), admin.ClientEntryUserPolicySplitPreviewRequest{Minutes: minutes, HistoryHost: r.URL.Query().Get("history_host"), HistoryFrom: historyFrom, HistoryTo: historyTo})
+	result, err := adminService.PreviewClientEntryUserPolicySplit(r.Context(), admin.ClientEntryUserPolicySplitPreviewRequest{Minutes: minutes, HistoryHost: r.URL.Query().Get("history_host"), HistoryGroupIDs: historyGroups, HistoryExcludeHosts: historyExcludes, HistoryFrom: historyFrom, HistoryTo: historyTo})
 	if err != nil {
 		if errors.Is(err, admin.ErrEntryEvidenceInvalid) {
 			handleEntryEvidenceError(w, err)
@@ -116,26 +121,29 @@ func handleAdminClientEntryUserPolicySplitCreate(w http.ResponseWriter, r *http.
 		return true
 	}
 	var payload struct {
-		HistorySingleGroup bool         `json:"history_single_group"`
-		HistoryHost        string       `json:"history_host"`
-		HistoryFrom        int64        `json:"history_from"`
-		HistoryTo          int64        `json:"history_to"`
-		SnapshotHash       string       `json:"snapshot_hash"`
-		Name               string       `json:"name"`
-		Minutes            *json.Number `json:"minutes"`
-		EntryHostA         string       `json:"entry_host_a"`
-		EntryHostB         string       `json:"entry_host_b"`
-		ResolveEntryHost   *json.Number `json:"resolve_entry_host"`
-		Enabled            *json.Number `json:"enabled"`
-		Remarks            string       `json:"remarks"`
-		Members            []struct {
+		AuthData            string       `json:"auth_data"`
+		HistorySingleGroup  bool         `json:"history_single_group"`
+		HistoryHost         string       `json:"history_host"`
+		HistoryGroupIDs     []int64      `json:"history_group_ids"`
+		HistoryExcludeHosts []string     `json:"history_exclude_hosts"`
+		HistoryFrom         int64        `json:"history_from"`
+		HistoryTo           int64        `json:"history_to"`
+		SnapshotHash        string       `json:"snapshot_hash"`
+		Name                string       `json:"name"`
+		Minutes             *json.Number `json:"minutes"`
+		EntryHostA          string       `json:"entry_host_a"`
+		EntryHostB          string       `json:"entry_host_b"`
+		ResolveEntryHost    *json.Number `json:"resolve_entry_host"`
+		Enabled             *json.Number `json:"enabled"`
+		Remarks             string       `json:"remarks"`
+		Members             []struct {
 			ServerType string       `json:"server_type"`
 			ServerID   *json.Number `json:"server_id"`
 			Sort       *json.Number `json:"sort"`
 		} `json:"members"`
 	}
-	if err := decodeClientEntrySplitPayload(r, &payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+	if err := decodeDNSProbeJSON(w, r, 256<<10, &payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "请求格式无效，仅接受声明字段的 JSON 对象"})
 		return true
 	}
 	minutes, err := jsonNumberToInt64Pointer(payload.Minutes)
@@ -163,7 +171,7 @@ func handleAdminClientEntryUserPolicySplitCreate(w http.ResponseWriter, r *http.
 		return true
 	}
 	result, err := adminService.CreateClientEntryUserPolicySplit(r.Context(), admin.ClientEntryUserPolicySplitCreateRequest{
-		HistorySingleGroup: payload.HistorySingleGroup, HistoryHost: payload.HistoryHost, HistoryFrom: payload.HistoryFrom, HistoryTo: payload.HistoryTo, SnapshotHash: payload.SnapshotHash,
+		HistorySingleGroup: payload.HistorySingleGroup, HistoryHost: payload.HistoryHost, HistoryGroupIDs: payload.HistoryGroupIDs, HistoryExcludeHosts: payload.HistoryExcludeHosts, HistoryFrom: payload.HistoryFrom, HistoryTo: payload.HistoryTo, SnapshotHash: payload.SnapshotHash,
 		Name:             payload.Name,
 		Minutes:          minutesValue,
 		Members:          members,

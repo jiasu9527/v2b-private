@@ -222,7 +222,7 @@ func (s *Service) executePanelOperation(ctx context.Context, a Action, snapshot 
 				// This marker originates in the private HTTP adapter, never from an
 				// upstream response body or a model-supplied status. Failures after
 				// dispatch remain unknown regardless of their HTTP status.
-				if panelError.NotExecuted && oneOf(code, "ip_pool_invalid_arguments", "entry_order_invalid_arguments", "entry_order_conflict") {
+				if panelError.NotExecuted && oneOf(code, "ip_pool_invalid_arguments", "entry_order_invalid_arguments", "entry_order_conflict", "entry_monitor_invalid_arguments", "entry_monitor_conflict", "entry_retirement_invalid_arguments", "entry_retirement_conflict", "entry_retirement_blocked", "entry_retirement_not_found") {
 					return "failed", panelPreflightOutput(code), message
 				}
 				if panelError.NotExecuted && strings.HasPrefix(code, "dns_") {

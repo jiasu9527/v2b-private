@@ -65,13 +65,15 @@ func panelNetworkOperations() []aiops.PanelOperation {
 	add("entry_rules.sort", "entries", "替换全局完整排序，items必须包含所有普通policy及所有当前split_group叶子（包括停用项），每项一次；不得只提交A/B，不含split父容器、历史非叶子、合集。kind仅policy/split_group，id为对应空间真实ID。仅需把A/B放在某规则后时优先使用entry_rules.order+entry_rules.move，避免全表遗漏", "POST", base+"/sort", true, false, panelSchema{"items": poMerge(poArray(orderItem), panelSchema{"minItems": 1})}, "items")
 	add("entry_rules.delete", "entries", "删除入口分配规则", "POST", base+"/drop", true, false, panelSchema{"id": poID()}, "id")
 	historyFields := panelSchema{
-		"history_host": poText("历史实际下发的入口IP/host；指定时跨原规则、分组、合集、UA、节点和端口取用户并集，不是请求来源IP"),
-		"history_from": poInt("历史查询开始Unix秒，包含开始；与history_to一起原样传递"),
-		"history_to":   poInt("历史查询结束Unix秒，不含结束；创建时必须使用预览返回值"),
-		"minutes":      poInt("仅未指定history_host时表示近期拉取窗口；不能用任意订阅拉取代替目标IP实际下发"),
+		"history_host":          poText("历史实际下发的入口IP/host；指定时跨原规则、分组、合集、UA、节点和端口取用户并集，不是请求来源IP"),
+		"history_group_ids":     panelSchema{"type": "array", "items": poID(), "minItems": 1, "maxItems": 100, "description": "从历史下发快照选择1至100个来源叶子group_id，取实际下发过这些组的用户并集；不是policy_id，不按当前分配表推算。与history_host同传时须同一历史节点同时符合，取交集。至少提供history_host或本字段"},
+		"history_exclude_hosts": panelSchema{"type": "array", "items": poText("要排除的实际下发host/IP，不带端口或链接"), "maxItems": 20, "description": "排除同一history_from/to窗口内，任意来源完整成功下发过这些入口的整个用户；不限来源组/节点/UA/端口。不是仅从选中组内排除该IP节点"},
+		"history_from":          poInt("历史查询开始Unix秒，包含开始；与history_to一起原样传递"),
+		"history_to":            poInt("历史查询结束Unix秒，不含结束；创建时必须使用预览返回值"),
+		"minutes":               poInt("仅history_host及history_group_ids都未指定时表示近期任意订阅拉取窗口；历史模式请明确history_from/to，不能用任意拉取代替实际入口下发"),
 	}
-	add("entry_split.preview", "entries", "预览新建固定名单：指定history_host及history_from/history_to可按历史实际下发IP跨来源去重，返回现存user_count及snapshot_hash/from/to；只计完整成功响应。必须读取预览，不能沿用旧人数或猜hash；历史已删除账号不加入新组。未指定history_host才是最近minutes分钟任意订阅拉取模式", "GET", base+"/split-preview", false, false, historyFields)
-	add("entry_split.create", "entries", "与后台历史拉取IP页面相同：按历史实际下发IP名单新建独立固定组或平均二分，不要求原来源是单规则，来源属于合集也可选人。历史模式必须传预览返回的history_host/history_from=from/history_to=to/snapshot_hash，省略minutes；名单变化返回冲突需重查，不复制上千个ID。history_single_group=false或省略创建A/B，true只建一个组并省略entry_host_b。members必须明确选择且仅作用于这些共同节点，继承原端口；新规则不自动继承各来源UA或用户/节点差异，不能宣称已保留，无法表达时先说明。新规则默认追加，需核对排序并保留特殊置顶规则，不先删除/重建/移出旧规则或合集；创建成功后再按需排序并模拟验证。历史模式不是永久快照ID接口，只支持时间窗口加hash校验。非历史模式才传minutes", "POST", base+"/split-create", true, false, poMerge(historyFields, poFields("name entry_host_a entry_host_b resolve_entry_host:i enabled:i remarks snapshot_hash history_single_group:b"), panelSchema{"members": members}), "name", "members", "entry_host_a")
+	add("entry_split.preview", "entries", "预览新建固定名单：history_host按历史实际下发IP取人，history_group_ids按一批历史来源叶子取用户并集；二者同传取同节点交集。history_exclude_hosts排除同窗口任何来源实际获得指定IP的整个用户。返回规范化筛选、现存user_count及snapshot_hash/from/to；只计完整成功响应，名单服务端去重，不累加组人数。必须读取预览，不能沿用旧人数或猜hash；已删除账号不加入新组。host及groups都未指定才是最近minutes分钟任意订阅拉取模式", "GET", base+"/split-preview", false, false, historyFields)
+	add("entry_split.create", "entries", "与后台历史拉取IP页面相同：按历史实际下发IP或来源叶子并集名单新建独立固定组或平均二分，不要求原来源是单规则，来源属于合集也可选人。历史模式必须原样传预览返回的history_host/history_group_ids/history_exclude_hosts及history_from=from/history_to=to/snapshot_hash，省略minutes；名单或筛选变化返回冲突需重查，不复制上千个ID。history_single_group=false或省略创建A/B，true只建一个组并省略entry_host_b。members必须明确选择且仅作用于这些共同节点，继承原端口；新规则不自动继承各来源UA或用户/节点差异，不能宣称已保留，无法表达时先说明。新规则默认追加，需核对排序并保留特殊置顶规则，不先删除/重建/移出旧规则或合集；创建成功后再按需排序并模拟验证。历史模式不是永久快照ID接口，只支持时间窗口加hash校验。非历史模式才传minutes", "POST", base+"/split-create", true, false, poMerge(historyFields, poFields("name entry_host_a entry_host_b resolve_entry_host:i enabled:i remarks snapshot_hash history_single_group:b"), panelSchema{"members": members}), "name", "members", "entry_host_a")
 
 	split := poFields("policy_id:i group_id:i entry_host_a entry_host_b use_backup_ip_pool:b")
 	convert := poMerge(split)
@@ -134,8 +136,14 @@ func panelNetworkOperations() []aiops.PanelOperation {
 	add("dns_failover.events", "dns_failover", "分页查询DNS故障切换事件", "GET", df+"/events", false, false, poMerge(poSmallPage(), poFields("group:i event_type")))
 	add("dns_failover.logs", "dns_failover", "分页查询DNS检测日志", "GET", df+"/logs", false, false, poMerge(poSmallPage(), poFields("group:i probe_id:i target_id:i stage level outcome")))
 	em := df + "/entry-monitors"
-	add("entry_monitors.list", "entries", "查询入口检测规则和当前revision", "GET", em, false, false, panelSchema{})
-	addSchema("entry_monitors.save", "entries", "完整保存入口检测设置，必须用最新revision并保留全部items；targets.auto_split_enabled控制指定入口自动二分。仅返回事务提交回执、revision及保存/删除数量，不回传全量快照；保存数量含未变化项，不是差异计数", "PUT", em+"/save-receipt", true, false, poReflect(admin.ClientEntryMonitorSaveRequest{}))
+	add("entry_monitors.list", "entries", "完整入口检测概览；补配或修改少量监测优先使用entry_monitors.config分页读取精简配置，避免读取大量实时状态", "GET", em, false, false, panelSchema{})
+	add("entry_monitors.config", "entries", "只读分页查询可检测规则的精简保存配置及最新revision；policy_id筛选单条。configured=false表示尚未配置，返回默认设置及真实source_key。更新时只复制保存字段，保留该规则全部targets及原auto_split_enabled；不要回传name/configured。用entry_monitors.upsert提交选中规则，其他监测自动保留", "GET", em+"/config", false, false, panelSchema{
+		"policy_id": poID(),
+		"limit":     panelSchema{"type": "integer", "minimum": 1, "maximum": 20, "description": "每页规则数，默认10"},
+		"offset":    panelSchema{"type": "integer", "minimum": 0, "maximum": 10000},
+	})
+	addSchema("entry_monitors.save", "entries", "完整替换全部入口检测设置，未携带的规则会被删除，禁止分批调用。必须用最新revision并保留全部items；补配或修改少量规则请用entry_monitors.config和entry_monitors.upsert，避免全量参数超过24000字节。仅返回事务提交回执及revision", "PUT", em+"/save-receipt", true, false, panelMonitorSaveSchema(false))
+	addSchema("entry_monitors.upsert", "entries", "增量保存1至20条指定规则的监测，未携带的其他规则及自动二分状态完全保留。先读entry_monitors.config；每条携带完整保存字段及全部targets，保留原auto_split_enabled。补配新监测默认auto_split_enabled=false。每批使用最新revision，下一批用成功回执revision；参数错误未执行时修正，版本冲突先重读；禁止原样重试结果未知的写入", "PUT", em+"/upsert", true, false, panelMonitorSaveSchema(true))
 	add("entry_monitors.run", "entries", "发起指定入口检测，省略policy_ids或空数组检测全部", "POST", em+"/run", true, false, poFields("policy_ids:ids"))
 	add("entry_monitors.runs", "entries", "读取入口检测执行记录", "GET", em+"/runs", false, false, poFields("limit:i"))
 	add("entry_monitors.clear_runs", "entries", "管理员清空入口检测记录", "DELETE", em+"/runs", true, true, panelSchema{})

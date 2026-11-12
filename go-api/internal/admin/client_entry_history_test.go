@@ -34,6 +34,32 @@ func TestHistoricalEntryWindowValidation(t *testing.T) {
 	}
 }
 
+func TestHistoricalEntrySelectionHashBindsFiltersAndMembership(t *testing.T) {
+	now := time.Now().Unix()
+	selection, err := normalizeHistoricalEntrySelection("", []int64{9, 7, 9}, []string{"Fault.Example.TEST", "fault.example.test"}, now-60, now)
+	if err != nil || !reflect.DeepEqual(selection.GroupIDs, []int64{7, 9}) || !reflect.DeepEqual(selection.ExcludeHosts, []string{"fault.example.test"}) {
+		t.Fatal(selection, err)
+	}
+	ids := []int64{1, 2}
+	hash := historicalEntrySelectionHash(selection, now-60, now, ids)
+	for _, changed := range []entryevidence.HistorySelection{
+		{GroupIDs: []int64{7}, ExcludeHosts: selection.ExcludeHosts},
+		{GroupIDs: selection.GroupIDs},
+		{GroupIDs: selection.GroupIDs, ExcludeHosts: []string{"192.0.2.7"}},
+		{Host: "192.0.2.8", GroupIDs: selection.GroupIDs, ExcludeHosts: selection.ExcludeHosts},
+	} {
+		if historicalEntrySelectionHash(changed, now-60, now, ids) == hash {
+			t.Fatal("filter mutation did not invalidate preview", changed)
+		}
+	}
+	if historicalEntrySelectionHash(selection, now-59, now, ids) == hash || historicalEntrySelectionHash(selection, now-60, now, []int64{1, 3}) == hash {
+		t.Fatal("window or membership mutation did not invalidate preview")
+	}
+	if historicalEntrySelectionHash(entryevidence.HistorySelection{Host: "192.0.2.7"}, 1, 2, ids) != historicalEntryHash("192.0.2.7", 1, 2, ids) {
+		t.Fatal("existing host-only preview compatibility lost")
+	}
+}
+
 func TestHistoricalEntrySplitPostgres(t *testing.T) {
 	dsn := os.Getenv("FOREST_ENTRY_EVIDENCE_TEST_DSN")
 	if dsn == "" {

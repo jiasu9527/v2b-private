@@ -19,3 +19,20 @@ type ClientEntryMonitorSaveReceipt struct {
 type ClientEntryMonitorReceiptService interface {
 	SaveClientEntryMonitorReceipt(context.Context, ClientEntryMonitorSaveRequest) (ClientEntryMonitorSaveReceipt, error)
 }
+
+// Upserts replace the supplied policies only; omitted monitors and their
+// targets, states and automatic-split settings remain untouched.
+type ClientEntryMonitorUpsertService interface {
+	UpsertClientEntryMonitorReceipt(context.Context, ClientEntryMonitorSaveRequest) (ClientEntryMonitorSaveReceipt, error)
+}
+
+// ClientEntryMonitorValidationError is produced only by controlled validation
+// before monitor configuration writes. SQL failures and uncertain commits must
+// never be converted to this type.
+type ClientEntryMonitorValidationError struct{ message string }
+
+func (e *ClientEntryMonitorValidationError) Error() string { return e.message }
+
+func clientEntryMonitorValidation(message string) error {
+	return &ClientEntryMonitorValidationError{message: message}
+}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path"
 	"regexp"
 	"sort"
@@ -50,6 +51,18 @@ func (e *PanelOperationError) Error() string {
 func panelOperationErrorText(e *PanelOperationError) (string, string) {
 	if e.NotExecuted {
 		switch e.Code {
+		case "entry_retirement_invalid_arguments":
+			return e.Code, "旧入口组清理参数校验失败，未执行清理；请读取entry_groups.retire_preview和entry_groups.retire的schema，使用真实叶子ID和预览返回的preview_id/preview_hash，不要原样重试"
+		case "entry_retirement_conflict":
+			return e.Code, "旧入口组清理预览已过期或配置、名单已变化，未执行清理；先用entry_groups.retirement按preview_id核对回执，再用entry_groups.audit重新核对范围并生成新预览，不要原样重试"
+		case "entry_retirement_blocked":
+			return e.Code, "旧入口组清理未通过覆盖或引用校验，未执行清理；请查询entry_groups.audit及相关规则，核对替代组、保底范围、合集和IP引用，不要改用整条规则删除绕过，也不要原样重试"
+		case "entry_retirement_not_found":
+			return e.Code, "旧入口组或清理预览不存在，未执行清理；请核对entry_groups.audit及entry_groups.retirement，后者id使用preview_id而不是operation_id，不要原样重试"
+		case "entry_monitor_invalid_arguments":
+			return e.Code, "入口监测参数校验失败，未执行监测配置写入；请查看操作schema并查询现状后修正参数。增量修改或分批添加请用entry_monitors.upsert；entry_monitors.save是全量替换，不能分批提交，不要原样重试"
+		case "entry_monitor_conflict":
+			return e.Code, "入口监测版本或目标已变化，未执行监测配置写入；请重新查询监测配置取得最新revision并核对目标，再提交修正后的请求。增量修改请用entry_monitors.upsert，不要原样重试"
 		case "entry_order_invalid_arguments":
 			return e.Code, "入口排序参数校验失败，未执行排序；请读取entry_rules.order取得真实kind/id和revision，用entry_rules.move将选中行移到after锚点后；完整sort必须包含所有普通规则和当前叶子，不能传父容器或仅A/B，不要原样重试"
 		case "entry_order_conflict":
@@ -106,7 +119,21 @@ func (s *Service) getPanelOperations() PanelOperations {
 var panelOperationName = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
 
 const maxPanelResultBytes = 4 << 20
+const maxPanelParametersBytes = 24000
 const panelResultLifetime = 30 * time.Minute
+
+// This error carries only byte counts. Parameter contents may contain secrets
+// and must never be attached to validation diagnostics.
+type panelParametersTooLargeError struct {
+	Bytes int
+	Limit int
+}
+
+func (e *panelParametersTooLargeError) Error() string {
+	return fmt.Sprintf("后台操作parameters为%d字节，超过%d字节上限，未执行操作；请缩小参数并优先使用增量操作。入口监测分批添加或修改请用entry_monitors.upsert；entry_monitors.save是全量替换，不能分批提交。不要原样重试", e.Bytes, e.Limit)
+}
+
+func (e *panelParametersTooLargeError) Unwrap() error { return ErrValidation }
 
 func panelOperationPermitted(op PanelOperation) bool {
 	if !panelOperationName.MatchString(op.Name) || op.Path == "" || !strings.HasPrefix(op.Path, "/") || path.Clean(op.Path) != op.Path || strings.ContainsAny(op.Path, "%?#\\\x00") || strings.Contains(op.Path, ":") || strings.Contains(op.Path, "//") {
@@ -177,7 +204,10 @@ func panelAdminSession(ctx context.Context, q interface {
 }
 
 func normalizedPanelParameters(raw json.RawMessage) (json.RawMessage, error) {
-	if len(raw) == 0 || len(raw) > 24000 || !utf8.Valid(raw) {
+	if len(raw) > maxPanelParametersBytes {
+		return nil, &panelParametersTooLargeError{Bytes: len(raw), Limit: maxPanelParametersBytes}
+	}
+	if len(raw) == 0 || !utf8.Valid(raw) {
 		return nil, ErrValidation
 	}
 	var object map[string]json.RawMessage

@@ -63,15 +63,17 @@ func handleClientEntryMonitorSaveReceipt(w http.ResponseWriter, r *http.Request,
 	}
 	var request admin.ClientEntryMonitorSaveRequest
 	if !decodeStrictDNSFailoverJSON(w, r, &request) {
+		capturePanelOperationPreflight(r.Context(), "entry_monitor_invalid_arguments", false)
 		return true
 	}
 	if request.Items == nil {
+		capturePanelOperationPreflight(r.Context(), "entry_monitor_invalid_arguments", false)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "入口检测规则列表不能为空"})
 		return true
 	}
 	result, err := receiptService.SaveClientEntryMonitorReceipt(r.Context(), request)
 	if err != nil {
-		return writeClientEntryMonitorError(w, err)
+		return writeClientEntryMonitorMutationError(w, r, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": result})
 	return true

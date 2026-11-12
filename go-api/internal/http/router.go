@@ -831,6 +831,12 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleAdminClientEntryGroupDrop(w, r, state.session, state.admin) {
 				return
 			}
+		case r.URL.Path == adminPrefix+"/server/client-entry-user-policy/group-audit":
+			handleAdminClientEntryRetirement(w, r, state.session, state.admin, "audit")
+			return
+		case strings.HasPrefix(r.URL.Path, adminPrefix+"/server/client-entry-user-policy/retirement/"):
+			handleAdminClientEntryRetirement(w, r, state.session, state.admin, strings.TrimPrefix(r.URL.Path, adminPrefix+"/server/client-entry-user-policy/retirement/"))
+			return
 		case strings.HasPrefix(r.URL.Path, adminPrefix+"/server/client-entry-user-policy/investigations/"):
 			handleEntryEvidence(w, r, state.session, state.admin, state.entryEvidence, strings.TrimPrefix(r.URL.Path, adminPrefix+"/server/client-entry-user-policy/investigations/"))
 			return

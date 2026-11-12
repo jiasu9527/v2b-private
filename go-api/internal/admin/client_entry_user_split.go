@@ -38,10 +38,10 @@ func (s *DBService) PreviewClientEntryUserPolicySplit(ctx context.Context, req C
 	if err := s.ensureClientEntrySchema(ctx); err != nil {
 		return ClientEntryUserPolicySplitPreviewResult{}, err
 	}
-	if req.HistoryHost != "" {
+	if req.HistoryHost != "" || len(req.HistoryGroupIDs) > 0 {
 		return s.previewHistoricalEntrySplit(ctx, req)
 	}
-	if req.HistoryFrom != 0 || req.HistoryTo != 0 {
+	if req.HistoryFrom != 0 || req.HistoryTo != 0 || len(req.HistoryExcludeHosts) > 0 {
 		return ClientEntryUserPolicySplitPreviewResult{}, ErrEntryEvidenceInvalid
 	}
 	minutes, err := normalizeClientEntryUserPolicySplitMinutes(req.Minutes)
@@ -67,7 +67,7 @@ func (s *DBService) CreateClientEntryUserPolicySplit(ctx context.Context, req Cl
 	if err := s.ensureClientEntrySchema(ctx); err != nil {
 		return ClientEntryUserPolicyRecord{}, err
 	}
-	if req.HistorySingleGroup && req.HistoryHost == "" {
+	if req.HistorySingleGroup && req.HistoryHost == "" && len(req.HistoryGroupIDs) == 0 {
 		return ClientEntryUserPolicyRecord{}, ErrEntryEvidenceInvalid
 	}
 	prepared, err := normalizeClientEntryUserPolicySplitCreateRequest(req)
@@ -78,15 +78,15 @@ func (s *DBService) CreateClientEntryUserPolicySplit(ctx context.Context, req Cl
 	now := time.Now().Unix()
 	from := now - prepared.Minutes*60
 	snapshotTo := now
-	history := req.HistoryHost != ""
+	history := req.HistoryHost != "" || len(req.HistoryGroupIDs) > 0
+	var selection entryevidence.HistorySelection
 	if history {
-		host, err := normalizeHistoricalEntryWindow(req.HistoryHost, req.HistoryFrom, req.HistoryTo)
+		selection, err = normalizeHistoricalEntrySelection(req.HistoryHost, req.HistoryGroupIDs, req.HistoryExcludeHosts, req.HistoryFrom, req.HistoryTo)
 		if err != nil || req.SnapshotHash == "" {
 			return ClientEntryUserPolicyRecord{}, ErrEntryEvidenceInvalid
 		}
-		req.HistoryHost = host
 		from, snapshotTo = req.HistoryFrom, req.HistoryTo
-	} else if req.HistoryFrom != 0 || req.HistoryTo != 0 || req.SnapshotHash != "" {
+	} else if req.HistoryFrom != 0 || req.HistoryTo != 0 || req.SnapshotHash != "" || len(req.HistoryExcludeHosts) > 0 {
 		return ClientEntryUserPolicyRecord{}, ErrEntryEvidenceInvalid
 	}
 
@@ -97,11 +97,11 @@ func (s *DBService) CreateClientEntryUserPolicySplit(ctx context.Context, req Cl
 	defer tx.Rollback()
 	var historyIDs []int64
 	if history {
-		historyIDs, err = entryevidence.HistoricalUserIDs(ctx, tx, req.HistoryHost, from, snapshotTo)
+		historyIDs, err = entryevidence.HistoricalSelectionUserIDs(ctx, tx, selection, from, snapshotTo)
 		if err != nil {
 			return ClientEntryUserPolicyRecord{}, err
 		}
-		if historicalEntryHash(req.HistoryHost, from, snapshotTo, historyIDs) != req.SnapshotHash {
+		if historicalEntrySelectionHash(selection, from, snapshotTo, historyIDs) != req.SnapshotHash {
 			return ClientEntryUserPolicyRecord{}, ErrEntryEvidenceConflict
 		}
 		locked, e := tx.QueryContext(ctx, `SELECT id FROM v2_user WHERE id=ANY($1) ORDER BY id FOR SHARE`, historyIDs)
@@ -1097,6 +1097,10 @@ func (s *DBService) SetClientEntryUserPolicyEnabled(ctx context.Context, id, ena
 }
 
 func (s *DBService) loadClientEntryUserPolicySplitGroups(ctx context.Context, policyIDs []int64) (map[int64][]ClientEntryUserPolicySplitGroupRecord, map[int64]int64, error) {
+	return readClientEntryUserPolicySplitGroups(ctx, s.db, policyIDs)
+}
+
+func readClientEntryUserPolicySplitGroups(ctx context.Context, q clientEntryPolicyQueryer, policyIDs []int64) (map[int64][]ClientEntryUserPolicySplitGroupRecord, map[int64]int64, error) {
 	groups := make(map[int64][]ClientEntryUserPolicySplitGroupRecord, len(policyIDs))
 	counts := make(map[int64]int64, len(policyIDs))
 	if len(policyIDs) == 0 {
@@ -1108,7 +1112,7 @@ func (s *DBService) loadClientEntryUserPolicySplitGroups(ctx context.Context, po
 		placeholders[index] = fmt.Sprintf("$%d", index+1)
 		args[index] = id
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT split_group.id, split_group.policy_id, split_group.parent_id,
+	rows, err := q.QueryContext(ctx, `SELECT split_group.id, split_group.policy_id, split_group.parent_id,
 	       split_group.name, split_group.path, split_group.entry_host, split_group.sort, split_group.global_sort,
        COUNT(users.id)::BIGINT AS user_count,
        NOT EXISTS (
@@ -1200,7 +1204,7 @@ func normalizeClientEntryUserPolicySplitCreateRequest(req ClientEntryUserPolicyS
 	}
 	result.Minutes = minutes
 	if req.HistorySingleGroup {
-		if req.HistoryHost == "" || strings.TrimSpace(req.EntryHostB) != "" {
+		if (req.HistoryHost == "" && len(req.HistoryGroupIDs) == 0) || strings.TrimSpace(req.EntryHostB) != "" {
 			return result, ErrEntryEvidenceInvalid
 		}
 		result.EntryHostA, err = cliententry.NormalizeHost(req.EntryHostA)

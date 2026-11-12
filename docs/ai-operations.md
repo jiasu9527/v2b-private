@@ -111,6 +111,12 @@ API：`config/save.model_endpoints` 按精确模型 ID 映射，省略字段保�
 
 `entry_monitors.save` 改走专用 `PUT /dns-failover/entry-monitors/save-receipt`，返回事务确认的 `committed`、新 `revision`、`saved_policy_count`、`saved_target_count`、`deleted_policy_count`；这些是完整保存后的数量，不是假称“仅改变字段”的 diff。提交后不再拉取整套概览，避免已保存却因后续读取失败被 AI 误报为写入失败。普通后台原保存接口和完整概览响应保持兼容。非管理员专属操作的小回执直接保存在原动作中，不再另建分块结果；大结果仍可通过 `panel_result_read` 续读，管理员专属结果仍保留权限校验。
 
+补配或修改少量监测时，使用 `entry_monitors.config` 查询精简配置（可按 `policy_id`，每页最多20条），再用 `entry_monitors.upsert` 增量保存1至20条规则。未携带的其他监测、目标和自动二分开关由后台保留；每条提交规则必须携带完整当前 targets、port、auto_split_enabled，不能遗漏兄弟目标。读取响应的 name/configured 是辅助字段，不回传写接口。每批使用最新 revision，成功后可使用回执的新 revision。`entry_monitors.save` 仍为全量替换，不能分批调用，否则会删除未携带的监测。
+
+保存前在事务内锁定监测并复核当前入口目标；并发二分、换入口或拓扑正在修改时，写前拒绝过期配置。目标自动刷新同样在锁内读取当前入口，避免旧列表覆盖新叶子。写入结果未知时，`entry_monitors.config` 仍允许只读核对，不因此放开重复写入。
+
+后台操作 parameters 独立上限为24000 UTF-8字节，超限返回 `panel_parameters_too_large`、bytes、limit 和 `execution_state=not_executed`，不创建执行动作。监测参数及版本错误仅在可信的写前校验路径标记未执行，允许查询后修正请求；SQL或提交结果不明仍需先核对，不会自动重放写入。
+
 **无条件规则确认**：新建 `conditions=[]`，或把原非空条件清空时，普通后台须勾选确认，AI／API须显式传 `confirm_match_all=true`。专用更新工具在 `changes` 中传，普通 `entry_rules.save` 在参数顶层传。确认只表示明确接受“所选节点范围全部合资格用户”的匹配，不改变权限组及规则优先级；不写入业务字段。已存在的无条件规则可继续原样编辑，`email in []` 仍是无人命中，不会变成全员。
 
 ## 权限与连续运维
@@ -458,7 +464,22 @@ Key 应由临时环境或秘密管理设施注入，不写进源码、测试快�
 
 `entry_split.preview` / `entry_split.create` 现在暴露后台页面已支持的历史参数。先通过 `panel_query` 查询 `entry_split.preview`，传 `history_host/history_from/history_to`；将返回的 `history_host/from/to/snapshot_hash` 原样对应到创建请求的 `history_host/history_from/history_to/snapshot_hash`。历史模式不用 `minutes`，不能替换成近期任意订阅用户；名单由后端重查并用 hash 校验，不用模型回传全部用户 ID。`entry_evidence.delivery_users` 可分页核对历史身份。创建传明确的共同 `members`、名称、A/B入口；`history_single_group=true` 时只建一个组并省略B。创建独立规则不需要删除旧规则或解除合集关系。
 
-这只是补齐现有页面接口的 AI 契约，不新增永久快照ID，不自动继承不同来源的UA，也不自动完成特殊规则保护排序。新规则默认追加，需读取当前顺序、保留指定置顶规则，必要时排序并按真实用户/UA/节点模拟验证；未验证不得声称已生效。若无法用共同节点/条件表达用户要求的差异，应说明边界而非扩大范围。
+历史来源也支持 `history_group_ids`（最多 100 个历史叶子 ID）：按下发时保存的 `group_id` 取用户并集，不使用当前 assignment 反推过去；与 `history_host` 同传时，要求同一历史下发节点同时匹配。`history_exclude_hosts`（最多 20 个入口）会排除同一时间窗口内从任意来源完整成功获得过这些地址的整个人，不局限选中组、节点、UA 或端口。预览返回规范化筛选，创建时原样传回；hash 同时绑定筛选、排除条件、窗口和现存用户去重名单。比如“把 37 个旧组实际拉取用户合并，但排除拉过故障 IP 的用户”，一个预览即可完成，不需要模型拼接数千 ID。已删除的历史组仍可按历史 ID 查询，已删除账号不分配新组。
+
+这只是补齐历史筛选与 AI 契约，不新增永久快照ID，不自动继承不同来源的UA，也不自动完成特殊规则保护排序。新规则默认追加，需读取当前顺序、保留指定置顶规则，必要时排序并按真实用户/UA/节点模拟验证；未验证不得声称已生效。若无法用共同节点/条件表达用户要求的差异，应说明边界而非扩大范围。
+
+### 提取用户后批量清理旧固定组
+
+旧版只有整条 `entry_rules.delete`，不能表达“只删除旧树的一部分叶子，保留兄弟组，同时回收监测占用”；逐组读取名单也容易混淆实际下发人数与分配人数。现在通过以下目录操作完成同一流程，不需要 AI 拼接 SQL、上传整份用户名单或逐条删除规则：
+
+1. `panel_query` → `entry_groups.audit`：指定旧叶子 `group_ids`、已创建的新叶子 `replacement_group_ids` 和时间窗口 `from/to`，返回分页分组统计及按用户去重的汇总。分配、实际完整成功响应下发、被新组覆盖、剩余人数分别统计。跨页使用 `expected_revision`；历史日志覆盖不足会明确提示，不能根据空日志断言从未换 IP 或从未下发。名单交集不代表新规则在节点、UA 和优先级上已有效覆盖。
+2. `propose_panel_operation` → `entry_groups.retire_preview`：传旧叶子、新叶子、`reason`；默认 `allow_fallback=false`。用户已经明确授权其余用户走保底时，传 `allow_fallback=true` 和已核实的 `fallback_policy_id`，沿用用户授权与当前会话权限，不重复索要同样的确认。后端冻结名单与配置、校验替代组和保底覆盖，返回 `preview_id`、`preview_hash`、有效期及清理影响。预览只保存计划，不删除业务配置。
+3. `propose_panel_operation` → `entry_groups.retire`：仅传预览 ID、hash 和 `idempotency_key`。后端在事务中核实快照，清理选中叶子、空祖先、空父规则及对应监测，只取消相关待处理自动任务；不清理未选兄弟组，不改其他规则、排序、IP 库存与健康记录。执行回执持久化；同一请求使用同一幂等键，不能换键绕过冲突。过期或配置、名单已变化时重新核对并生成预览。
+4. `panel_query` → `entry_groups.retirement`：`id` 使用 **preview_id，不是 operation_id**，用于查询执行回执。提交返回中断或结果未知时，先读此回执与现状，不能为了取回输出重新发起删除。成功后核对新组、保底和 IP 池；分别报告解除占用、仍有引用、健康可用及故障资源，不能将故障 IP 计为健康备用。
+
+“其余走保底”不代表绕过现有更高优先级的专线、VIP、特殊假地址规则。客户端需要更新订阅后才获得新分配；回收的 IP 可能曾经下发过，不能当成从未暴露的新 IP。集合引用、无法证明的覆盖及其他阻塞应在预览里处理，不能绕过检查改为整条规则删除。
+
+可信写前错误 `entry_retirement_invalid_arguments`、`entry_retirement_conflict`、`entry_retirement_blocked`、`entry_retirement_not_found` 标记为 `not_executed/panel_preflight`，可先查询再修正；不会自动重复写入。普通 HTTP 状态、错误正文、SQL 失败或不明的事务提交结果都不能证明未执行。`entry_groups.audit` 与 `entry_groups.retirement` 可用于未知动作后的只读核对；持久化预览与执行不在只读白名单。
 
 ### 入口规则与固定叶子的相对排序
 

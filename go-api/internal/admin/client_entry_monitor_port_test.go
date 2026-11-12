@@ -74,10 +74,12 @@ func TestClientEntryMonitorRefreshKeepsSavedPortWhenDefaultChanges(t *testing.T)
 			defer db.Close()
 			service := &DBService{db: db}
 			readyClientEntrySchemaForPolicyTest(service)
-			expectClientEntryMonitorPortPolicy(mock, "override", "")
 			mock.ExpectBegin()
 			mock.ExpectQuery(`SELECT id, policy_id FROM v2_client_entry_monitor ORDER BY id FOR UPDATE`).
 				WillReturnRows(sqlmock.NewRows([]string{"id", "policy_id"}).AddRow(int64(3), int64(7)))
+			mock.ExpectQuery(`SELECT pg_try_advisory_xact_lock\(\$1\)`).WithArgs(clientEntryVisibleOrderLockKey).
+				WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+			expectClientEntryMonitorPortPolicy(mock, "override", "")
 			mock.ExpectQuery(`(?s)SELECT id, host, port, auto_split_enabled.*FROM v2_client_entry_monitor_target.*FOR UPDATE`).
 				WithArgs(int64(3), "policy:7").WillReturnRows(sqlmock.NewRows([]string{"id", "host", "port", "auto_split_enabled"}).AddRow(int64(9), "entry.example.com", savedPort, int64(0)))
 			query := `INSERT INTO v2_client_entry_monitor_target AS current_target

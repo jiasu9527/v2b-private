@@ -39,6 +39,8 @@ func TestSaveClientEntryMonitorReceiptCommitsWithoutOverviewRead(t *testing.T) {
 			mock.ExpectBegin()
 			mock.ExpectQuery(`SELECT revision FROM v2_client_entry_monitor_config WHERE id = 1 FOR UPDATE`).
 				WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(int64(7)))
+			expectMonitorTopologyLock(mock, true)
+			expectReceiptPolicies(mock, populated)
 			request := ClientEntryMonitorSaveRequest{Revision: 7, Items: []ClientEntryMonitorSaveItem{}}
 			want := ClientEntryMonitorSaveReceipt{Committed: true, Revision: 8, DeletedPolicyCount: 2}
 			if populated {
@@ -100,6 +102,8 @@ func TestSaveClientEntryMonitorReceiptDoesNotClaimCommitOnConflictOrFailure(t *t
 			if stage == "conflict" {
 				mock.ExpectRollback()
 			} else {
+				expectMonitorTopologyLock(mock, true)
+				expectReceiptPolicies(mock, false)
 				mock.ExpectExec(`DELETE FROM v2_client_entry_monitor$`).WillReturnResult(sqlmock.NewResult(0, 2))
 				revision := mock.ExpectQuery(`(?s)UPDATE v2_client_entry_monitor_config.*RETURNING revision`).WithArgs(sqlmock.AnyArg())
 				if stage == "revision" {

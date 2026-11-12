@@ -28,7 +28,19 @@ func (s *DBService) ListClientEntryUserPolicies(ctx context.Context) ([]ClientEn
 
 // Search uses this read-only loader without schema initialization or UI counts.
 func (s *DBService) listClientEntryUserPolicies(ctx context.Context, includeRangeCounts bool) ([]ClientEntryUserPolicyRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.name, p.sort, p.mode, p.snapshot_from, p.snapshot_to, p.action, p.conditions, p.entry_host, p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at
+	result, err := readClientEntryUserPolicies(ctx, s.db)
+	if err == nil && includeRangeCounts {
+		err = s.attachClientEntryUserPolicyIDRangeCounts(ctx, result)
+	}
+	return result, err
+}
+
+type clientEntryPolicyQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func readClientEntryUserPolicies(ctx context.Context, q clientEntryPolicyQueryer) ([]ClientEntryUserPolicyRecord, error) {
+	rows, err := q.QueryContext(ctx, `SELECT p.id, p.name, p.sort, p.mode, p.snapshot_from, p.snapshot_to, p.action, p.conditions, p.entry_host, p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at
 FROM v2_client_entry_user_policy p
 ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 	if err != nil {
@@ -117,14 +129,14 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 	if len(ids) == 0 {
 		return result, nil
 	}
-	members, err := s.loadClientEntryUserPolicyMembers(ctx, ids)
+	members, err := readClientEntryUserPolicyMembers(ctx, q, ids)
 	if err != nil {
 		return nil, err
 	}
 	for index := range result {
 		result[index].Members = members[result[index].ID]
 	}
-	groups, counts, err := s.loadClientEntryUserPolicySplitGroups(ctx, splitIDs)
+	groups, counts, err := readClientEntryUserPolicySplitGroups(ctx, q, splitIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -134,11 +146,6 @@ ORDER BY p.sort ASC NULLS LAST, p.id ASC`)
 		}
 		result[index].SplitGroups = groups[result[index].ID]
 		result[index].SnapshotUserCount = counts[result[index].ID]
-	}
-	if includeRangeCounts {
-		if err := s.attachClientEntryUserPolicyIDRangeCounts(ctx, result); err != nil {
-			return nil, err
-		}
 	}
 	return result, nil
 }
@@ -229,6 +236,10 @@ func combinedClientEntryUserIDRange(conditions []cliententry.Condition) (int64, 
 }
 
 func (s *DBService) loadClientEntryUserPolicyMembers(ctx context.Context, ids []int64) (map[int64][]ClientEntryGroupMemberRecord, error) {
+	return readClientEntryUserPolicyMembers(ctx, s.db, ids)
+}
+
+func readClientEntryUserPolicyMembers(ctx context.Context, q clientEntryPolicyQueryer, ids []int64) (map[int64][]ClientEntryGroupMemberRecord, error) {
 	result := make(map[int64][]ClientEntryGroupMemberRecord, len(ids))
 	if len(ids) == 0 {
 		return result, nil
@@ -239,7 +250,7 @@ func (s *DBService) loadClientEntryUserPolicyMembers(ctx context.Context, ids []
 		placeholders[i] = fmt.Sprintf("$%d", i+1)
 		args[i] = id
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT policy_id, server_type, server_id, sort
+	rows, err := q.QueryContext(ctx, `SELECT policy_id, server_type, server_id, sort
 FROM v2_client_entry_user_policy_member
 WHERE policy_id IN (`+strings.Join(placeholders, ",")+`)
 ORDER BY policy_id ASC, sort ASC NULLS LAST, id ASC`, args...)

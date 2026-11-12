@@ -9,6 +9,7 @@ import (
 	"forest/go-api/internal/session"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -35,6 +36,57 @@ func TestHistoricalEntrySplitHTTPParameters(t *testing.T) {
 		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/localadmin/server/client-entry-user-policy/split-preview?auth_data=jwt-admin&history_host=192.0.2.7&history_from="+raw, nil))
 		if w.Code != 400 {
 			t.Fatal("bad history time accepted", w.Code)
+		}
+	}
+}
+
+func TestHistoricalGroupSelectionHTTPAndPanelAdapter(t *testing.T) {
+	service := &fakeAdminService{clientEntrySplitPreview: admin.ClientEntryUserPolicySplitPreviewResult{HistoryGroupIDs: []int64{7, 9}, HistoryExcludeHosts: []string{"192.0.2.3"}, SnapshotHash: "selection-hash", From: 100, To: 200, UserCount: 7}}
+	p := newPanelOperations(config.Config{}, &routerState{admin: service})
+	actor := aiops.PanelOperationActor{ID: 1, IsAdmin: true}
+	preview := `{"history_group_ids":[7,9],"history_exclude_hosts":["192.0.2.3"],"history_from":100,"history_to":200}`
+	out, err := p.Execute(context.Background(), actor, "entry_split.preview", json.RawMessage(preview))
+	if err != nil || !strings.Contains(string(out), `"history_group_ids":[7,9]`) || !strings.Contains(string(out), "selection-hash") || !reflect.DeepEqual(service.lastClientEntrySplitPreview.HistoryGroupIDs, []int64{7, 9}) || !reflect.DeepEqual(service.lastClientEntrySplitPreview.HistoryExcludeHosts, []string{"192.0.2.3"}) {
+		t.Fatal("adapter dropped history filters", string(out), err, service.lastClientEntrySplitPreview)
+	}
+	create := `{"name":"selected histories","history_group_ids":[7,9],"history_exclude_hosts":["192.0.2.3"],"history_from":100,"history_to":200,"snapshot_hash":"selection-hash","history_single_group":true,"members":[{"server_type":"vmess","server_id":11}],"entry_host_a":"192.0.2.8"}`
+	_, err = p.Execute(context.Background(), actor, "entry_split.create", json.RawMessage(create))
+	got := service.lastClientEntrySplitCreate
+	if err != nil || got.HistoryHost != "" || !reflect.DeepEqual(got.HistoryGroupIDs, []int64{7, 9}) || !reflect.DeepEqual(got.HistoryExcludeHosts, []string{"192.0.2.3"}) || !got.HistorySingleGroup || got.SnapshotHash != "selection-hash" {
+		t.Fatal("create adapter dropped selection", got, err)
+	}
+	router := NewRouter(config.Config{AdminPath: "localadmin"}, WithSessionService(&fakeSessionService{user: &session.Identity{ID: 1, IsAdmin: 1}}), WithAdminService(service))
+	// The existing browser apiPost includes auth_data in its JSON body.
+	bodyAuth := strings.Replace(create, `{"name":`, `{"auth_data":"jwt-admin","name":`, 1)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/v1/localadmin/server/client-entry-user-policy/split-create", strings.NewReader(bodyAuth))
+	r.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatal("legacy browser auth field rejected", w.Code, w.Body.String())
+	}
+	for _, query := range []string{
+		"history_group_ids[1]=7", "history_group_ids[0]=7&history_group_ids[]=9", "history_group_ids[bad]=7", "history_group_ids[0]=0",
+		"history_exclude_hosts[1]=192.0.2.1", "history_exclude_hosts[0]=192.0.2.1&history_exclude_hosts[0]=192.0.2.2",
+		"history_exclude_host=192.0.2.1", "history_groups[0]=7", "history_host=192.0.2.1&history_host=192.0.2.2",
+	} {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/localadmin/server/client-entry-user-policy/split-preview?auth_data=jwt-admin&"+query, nil))
+		if w.Code != 400 {
+			t.Fatal("malformed filter silently ignored", query, w.Code, w.Body.String())
+		}
+	}
+	for _, raw := range []string{
+		strings.Replace(create, `"history_group_ids"`, `"history_groups"`, 1),
+		strings.Replace(create, `"history_exclude_hosts"`, `"history_exclude_host"`, 1),
+		create + ` {"extra":true}`,
+	} {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/v1/localadmin/server/client-entry-user-policy/split-create?auth_data=jwt-admin", strings.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, req)
+		if w.Code != 400 {
+			t.Fatal("create silently dropped filter", w.Code, w.Body.String())
 		}
 	}
 }

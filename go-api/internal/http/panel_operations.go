@@ -114,6 +114,12 @@ func (p *panelOperations) Validate(ctx context.Context, actor aiops.PanelOperati
 	if len(op.Parameters) > 0 {
 		var schema map[string]any
 		if json.Unmarshal(op.Parameters, &schema) != nil || !panelSchemaMatches(params, schema) {
+			if name == "entry_monitors.upsert" || name == "entry_monitors.save" {
+				return &aiops.PanelOperationError{Status: http.StatusBadRequest, Code: "entry_monitor_invalid_arguments", NotExecuted: true}
+			}
+			if name == "entry_groups.retire_preview" || name == "entry_groups.retire" {
+				return &aiops.PanelOperationError{Status: http.StatusBadRequest, Code: "entry_retirement_invalid_arguments", NotExecuted: true}
+			}
 			return aiops.ErrValidation
 		}
 	}
@@ -288,10 +294,11 @@ type panelOperationPreflightCapture struct {
 
 func capturePanelOperationPreflight(ctx context.Context, code string, retryable bool) {
 	switch code {
-	case "dns_invalid_arguments", "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed", "ip_pool_invalid_arguments", "entry_order_invalid_arguments", "entry_order_conflict":
+	case "dns_invalid_arguments", "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed", "ip_pool_invalid_arguments", "entry_order_invalid_arguments", "entry_order_conflict", "entry_monitor_invalid_arguments", "entry_monitor_conflict",
+		"entry_retirement_invalid_arguments", "entry_retirement_conflict", "entry_retirement_blocked", "entry_retirement_not_found":
 		if capture, ok := ctx.Value(panelOperationPreflightKey{}).(*panelOperationPreflightCapture); ok {
 			capture.code = code
-			capture.retryable = retryable && code != "dns_invalid_arguments" && code != "ip_pool_invalid_arguments" && code != "entry_order_invalid_arguments" && code != "entry_order_conflict"
+			capture.retryable = retryable && (code == "dns_domain_metadata" || code == "dns_record_line_unavailable" || code == "dns_preflight_failed")
 		}
 	}
 }

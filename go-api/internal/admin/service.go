@@ -1339,35 +1339,41 @@ type ClientEntryUserPolicySplitGroupRecord struct {
 }
 
 type ClientEntryUserPolicySplitPreviewRequest struct {
-	HistoryHost string
-	HistoryFrom int64
-	HistoryTo   int64
-	Minutes     int64
+	HistoryHost         string
+	HistoryGroupIDs     []int64
+	HistoryExcludeHosts []string
+	HistoryFrom         int64
+	HistoryTo           int64
+	Minutes             int64
 }
 
 type ClientEntryUserPolicySplitPreviewResult struct {
-	HistoryHost  string `json:"history_host,omitempty"`
-	SnapshotHash string `json:"snapshot_hash,omitempty"`
-	Minutes      int64  `json:"minutes"`
-	From         int64  `json:"from"`
-	To           int64  `json:"to"`
-	UserCount    int64  `json:"user_count"`
+	HistoryHost         string   `json:"history_host,omitempty"`
+	HistoryGroupIDs     []int64  `json:"history_group_ids,omitempty"`
+	HistoryExcludeHosts []string `json:"history_exclude_hosts,omitempty"`
+	SnapshotHash        string   `json:"snapshot_hash,omitempty"`
+	Minutes             int64    `json:"minutes"`
+	From                int64    `json:"from"`
+	To                  int64    `json:"to"`
+	UserCount           int64    `json:"user_count"`
 }
 
 type ClientEntryUserPolicySplitCreateRequest struct {
-	HistorySingleGroup bool
-	HistoryHost        string
-	HistoryFrom        int64
-	HistoryTo          int64
-	SnapshotHash       string
-	Name               string
-	Minutes            int64
-	Members            []ClientEntryGroupMemberSaveRequest
-	EntryHostA         string
-	EntryHostB         string
-	ResolveEntryHost   *int64
-	Enabled            *int64
-	Remarks            string
+	HistorySingleGroup  bool
+	HistoryHost         string
+	HistoryGroupIDs     []int64
+	HistoryExcludeHosts []string
+	HistoryFrom         int64
+	HistoryTo           int64
+	SnapshotHash        string
+	Name                string
+	Minutes             int64
+	Members             []ClientEntryGroupMemberSaveRequest
+	EntryHostA          string
+	EntryHostB          string
+	ResolveEntryHost    *int64
+	Enabled             *int64
+	Remarks             string
 }
 
 type ClientEntryUserPolicySplitConvertRequest struct {

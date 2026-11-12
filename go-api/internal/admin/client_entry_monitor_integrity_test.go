@@ -297,11 +297,10 @@ func TestRequireEnabledClientEntryMonitorProbe(t *testing.T) {
 }
 
 func expectEmptyClientEntryMonitorRefresh(mock sqlmock.Sqlmock) {
+	mock.ExpectBegin()
+	expectMonitorTopologyLock(mock, true)
 	mock.ExpectQuery(`(?s)SELECT p.id, p.name, p.sort, p.mode, p.snapshot_from, p.snapshot_to, p.action, p.conditions, p.entry_host, p.resolve_entry_host, p.extra_nodes, p.extra_nodes_position, p.enabled, p.remarks, p.created_at, p.updated_at.*FROM v2_client_entry_user_policy p`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "sort", "mode", "snapshot_from", "snapshot_to", "action", "conditions", "entry_host", "resolve_entry_host", "extra_nodes", "extra_nodes_position", "enabled", "remarks", "created_at", "updated_at"}))
-	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, policy_id FROM v2_client_entry_monitor ORDER BY id FOR UPDATE`).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "policy_id"}))
 	mock.ExpectCommit()
 }
 

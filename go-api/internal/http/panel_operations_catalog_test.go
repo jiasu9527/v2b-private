@@ -61,7 +61,7 @@ func TestPanelOperationCatalogContracts(t *testing.T) {
 			t.Errorf("log deletion exposed to staff: %s", op.Name)
 		}
 	}
-	for _, name := range []string{"orders.cancel", "orders.refund", "plans.save", "nodes.v2node.save", "dns.record_save", "entry_monitors.save", "ip_pool.create", "apple.order_refund", "migration.apply", "subscribe_guard.search", "config.save", "entry_rules.order", "entry_rules.move"} {
+	for _, name := range []string{"orders.cancel", "orders.refund", "plans.save", "nodes.v2node.save", "dns.record_save", "entry_monitors.save", "entry_monitors.upsert", "entry_monitors.config", "ip_pool.create", "apple.order_refund", "migration.apply", "subscribe_guard.search", "config.save", "entry_rules.order", "entry_rules.move"} {
 		if !names[name] {
 			t.Errorf("missing backend capability %s", name)
 		}
@@ -70,8 +70,8 @@ func TestPanelOperationCatalogContracts(t *testing.T) {
 
 func TestPanelOperationDeploymentCredentialContracts(t *testing.T) {
 	operations := panelOperationCatalog()
-	// Includes the two independent order-query/relative-move operations.
-	if len(operations) != 228 {
+	// Includes ordering, incremental monitors and four group audit/retirement operations.
+	if len(operations) != 234 {
 		t.Fatalf("credential access must not duplicate backend operations: got %d", len(operations))
 	}
 	byName := map[string]aiops.PanelOperation{}
@@ -135,6 +135,7 @@ func TestPanelOperationCatalogCoversAdminRoutes(t *testing.T) {
 		"/new-api/":        "wallet payment integration, credentials and settlement are administrator-only and excluded from AI operations",
 		"/commission-log/": "subroutes checked below",
 		"/server/client-entry-user-policy/investigations/": "subroutes checked below",
+		"/server/client-entry-user-policy/retirement/":     "preview/execute/receipt covered by TestAIEntryGroupCatalogDispatch; audit has a separate fixed route",
 		"/ai-ops/telegram/": "Telegram authorization/configuration is managed by humans; never recursively invoke",
 		"/payment/fetch":    "payment configuration forbidden", "/payment/getPaymentMethods": "payment configuration forbidden", "/payment/getPaymentForm": "payment configuration forbidden", "/payment/save": "payment configuration forbidden", "/payment/drop": "payment configuration forbidden", "/payment/show": "payment configuration forbidden", "/payment/sort": "payment configuration forbidden",
 		"/ai-ops/": "delegated to AI session/settings/SSH management; never recursively invoke", "/support/": "subroutes checked below", "/migration/xboard/": "subroutes checked below", "/apple-id/": "subroutes checked below", "/server/client-entry-user-policy/collection/": "subroutes checked below", "/dns-failover/": "dynamic REST routes checked below", "/server/": "protocol routes checked below",
@@ -197,7 +198,7 @@ func TestPanelOperationCatalogCoversAdminRoutes(t *testing.T) {
 			}
 		}
 	}
-	for _, route := range []string{"/support/operations", "/support/operations/clear", "/dns-failover/settings", "/dns-failover/probes", "/dns-failover/probes/{id}", "/dns-failover/probes/{id}/enabled", "/dns-failover/probes/{id}/revoke", "/dns-failover/rules", "/dns-failover/rules/{id}", "/dns-failover/rules/{id}/status", "/dns-failover/rules/{id}/enabled", "/dns-failover/rules/{id}/manual-switch", "/dns-failover/events", "/dns-failover/logs", "/dns-failover/entry-monitors", "/dns-failover/entry-monitors/save-receipt", "/dns-failover/entry-monitors/run", "/dns-failover/entry-monitors/runs", "/dns-failover/entry-monitors/backup-ips", "/dns-failover/entry-monitors/backup-ips/{id}", "/dns-failover/entry-monitors/backup-ips/refresh", "/dns-failover/entry-monitors/backup-ips/delete"} {
+	for _, route := range []string{"/support/operations", "/support/operations/clear", "/dns-failover/settings", "/dns-failover/probes", "/dns-failover/probes/{id}", "/dns-failover/probes/{id}/enabled", "/dns-failover/probes/{id}/revoke", "/dns-failover/rules", "/dns-failover/rules/{id}", "/dns-failover/rules/{id}/status", "/dns-failover/rules/{id}/enabled", "/dns-failover/rules/{id}/manual-switch", "/dns-failover/events", "/dns-failover/logs", "/dns-failover/entry-monitors", "/dns-failover/entry-monitors/save-receipt", "/dns-failover/entry-monitors/upsert", "/dns-failover/entry-monitors/config", "/dns-failover/entry-monitors/run", "/dns-failover/entry-monitors/runs", "/dns-failover/entry-monitors/backup-ips", "/dns-failover/entry-monitors/backup-ips/{id}", "/dns-failover/entry-monitors/backup-ips/refresh", "/dns-failover/entry-monitors/backup-ips/delete"} {
 		if !paths[route] {
 			t.Errorf("missing dynamic operation %s", route)
 		}
@@ -291,6 +292,8 @@ func TestPanelOperationDynamicDispatcherCoverage(t *testing.T) {
 		`len(parts) == 1 && parts[0] == "logs"`,
 		`len(parts) == 1 && parts[0] == "entry-monitors"`,
 		`len(parts) == 2 && parts[0] == "entry-monitors" && parts[1] == "save-receipt"`,
+		`len(parts) == 2 && parts[0] == "entry-monitors" && parts[1] == "upsert"`,
+		`len(parts) == 2 && parts[0] == "entry-monitors" && parts[1] == "config"`,
 		`len(parts) == 2 && parts[0] == "entry-monitors" && parts[1] == "run"`,
 		`len(parts) == 2 && parts[0] == "entry-monitors" && parts[1] == "runs"`,
 		`len(parts) == 2 && parts[0] == "entry-monitors" && parts[1] == "backup-ips"`,

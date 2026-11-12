@@ -409,6 +409,10 @@ func oneOf(s string, v ...string) bool {
 	return false
 }
 func safeAIError(e error) error {
+	var parametersTooLarge *panelParametersTooLargeError
+	if errors.As(e, &parametersTooLarge) {
+		return &panelParametersTooLargeError{Bytes: parametersTooLarge.Bytes, Limit: parametersTooLarge.Limit}
+	}
 	if errors.Is(e, errEntryInspectionRevision) {
 		return errEntryInspectionRevision
 	}
@@ -427,7 +431,7 @@ func safeAIError(e error) error {
 	var panelError *PanelOperationError
 	if errors.As(e, &panelError) {
 		code, message := panelOperationErrorText(panelError)
-		notExecuted := panelError.NotExecuted && (strings.HasPrefix(code, "dns_") || oneOf(code, "ip_pool_invalid_arguments", "entry_order_invalid_arguments", "entry_order_conflict"))
+		notExecuted := panelError.NotExecuted && (strings.HasPrefix(code, "dns_") || oneOf(code, "ip_pool_invalid_arguments", "entry_order_invalid_arguments", "entry_order_conflict", "entry_monitor_invalid_arguments", "entry_monitor_conflict", "entry_retirement_invalid_arguments", "entry_retirement_conflict", "entry_retirement_blocked", "entry_retirement_not_found"))
 		retryable := notExecuted && panelError.Retryable && oneOf(code, "dns_domain_metadata", "dns_record_line_unavailable", "dns_preflight_failed")
 		return &PanelOperationError{Status: panelError.Status, Code: code, Message: message, NotExecuted: notExecuted, Retryable: retryable}
 	}
@@ -454,6 +458,14 @@ func safeAIError(e error) error {
 // Only fixed error categories reach the model. SQL, network error bodies and
 // administrator credentials must never be copied into a tool result.
 func toolErrorContent(err error) string {
+	var parametersTooLarge *panelParametersTooLargeError
+	if errors.As(err, &parametersTooLarge) {
+		raw, _ := json.Marshal(map[string]any{
+			"status": "error", "code": "panel_parameters_too_large", "execution_state": "not_executed",
+			"bytes": parametersTooLarge.Bytes, "limit": parametersTooLarge.Limit, "message": parametersTooLarge.Error(),
+		})
+		return string(raw)
+	}
 	code, message := "unavailable", "当前查询暂不可用，请核对后台服务状态；不要连续重复请求"
 	var nodeValidation *admin.ManagedServerValidationError
 	var panelError *PanelOperationError
