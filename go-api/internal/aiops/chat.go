@@ -495,6 +495,7 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 	failedPanelOperations := map[string]int64{}
 	var panelReadOnlyActionID int64
 	var emptyTicketQueries ticketEmptyQueryGuard
+	var entryQueries entryQueryProgressGuard
 	for round := 0; full || round < standardMaxRounds; round++ {
 		if err = s.requireOperator(ctx, actorID); err != nil {
 			errText = "运维权限已变化，处理已停止"
@@ -659,6 +660,7 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 			outcomes = append(outcomes, result)
 		}
 		stopEmptyQueries := false
+		stopEntryQueries := false
 		if !pending && !halt && !recoverSSH && !recoverPanel {
 			var warn bool
 			warn, stopEmptyQueries = emptyTicketQueries.observe(assistant.ToolCalls, outcomes)
@@ -666,9 +668,16 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 			if stopEmptyQueries {
 				batch = append(batch, providerMessage{Role: "assistant", Content: ticketEmptyQueryStoppedMessage})
 			}
+			warn, stopEntryQueries = entryQueries.observe(assistant.ToolCalls, outcomes)
+			messages = entryQueryCorrectionContext(messages, warn)
+			if stopEntryQueries {
+				batch = append(batch, providerMessage{Role: "assistant", Content: entryQueryStoppedMessage})
+			}
 		} else {
 			emptyTicketQueries = ticketEmptyQueryGuard{}
 			messages = ticketQueryCorrectionContext(messages, false)
+			entryQueries = entryQueryProgressGuard{}
+			messages = entryQueryCorrectionContext(messages, false)
 		}
 		if pending {
 			batch = append(batch, providerMessage{Role: "assistant", Content: "已生成待确认操作，尚未执行。请检查目标、命令和影响范围，在本页人工确认或拒绝；执行后可以发送消息继续分析结果。"})
@@ -681,7 +690,7 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 		}
 		batch = redactPanelMessages(batch)
 		messages = append(messages, batch...)
-		if stopEmptyQueries {
+		if stopEmptyQueries || stopEntryQueries {
 			// End only an unchanged empty-query loop, not productive full-access
 			// work. All calls/results are persisted, and a new user turn is fresh.
 			if panelReadOnlyActionID > 0 {

@@ -113,7 +113,7 @@ func (a *completionToolAssembler) append(delta completionToolDelta, frameCount i
 	// The name may still be fragmented. Apply its exact argument budget only
 	// after the entire response has finished and passed validation.
 	if len(call.Function.Arguments) > 32768 {
-		return errors.New("AI 工具参数过长，未执行工具；请缩小单次参数或分批操作")
+		return newProviderToolArgumentError(call.Function.Name, len(call.Function.Arguments), 32768)
 	}
 	if len(call.ID) > 200 || len(call.Function.Name) > 100 {
 		return errors.New("AI 工具请求超出单轮限制")

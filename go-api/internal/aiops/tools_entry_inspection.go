@@ -5,11 +5,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 
 	"forest/go-api/internal/admin"
 )
+
+var errEntryInspectionRevision = fmt.Errorf("%w: invalid entry inspection revision", ErrValidation)
+
+const entryInspectionRevisionHint = "入口拓扑revision格式不正确：首次查询请省略revision并从offset=0开始；翻页只能原样使用本接口在同一查询范围返回的64位小写十六进制revision，不能使用entry_probe_targets的数字revision、规则ID或其他接口的版本号。请修正参数，不要原样重试。"
 
 func entryInspectionToolDefinitions() []ToolDefinition {
 	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
@@ -17,7 +22,7 @@ func entryInspectionToolDefinitions() []ToolDefinition {
 		return map[string]any{
 			"limit":    map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "默认20，最多50；按实际next_offset继续"},
 			"offset":   map[string]any{"type": "integer", "minimum": 0, "maximum": 100000},
-			"revision": str("首读省略，后续携带返回的拓扑revision；offset>0必填，配置变化返回conflict。不是探针结果时间快照"),
+			"revision": str("首读省略；offset>0必填本接口在同一查询范围返回的64位小写十六进制拓扑revision，不能使用entry_probe_targets的数字revision或规则版本。配置变化返回conflict时从offset=0重读。不是探针结果时间快照"),
 		}
 	}
 	out := []ToolDefinition{}
@@ -26,7 +31,8 @@ func entryInspectionToolDefinitions() []ToolDefinition {
 			required = []string{}
 		}
 		raw, _ := json.Marshal(map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": false})
-		out = append(out, ToolDefinition{Type: "function", Function: ToolFunctionDefinition{Name: name, Description: desc, Parameters: raw}})
+		strict := false
+		out = append(out, ToolDefinition{Type: "function", Function: ToolFunctionDefinition{Name: name, Description: desc, Parameters: raw, Strict: &strict}})
 	}
 	p := page()
 	p["key"] = str("entry_health返回的完整key，不是节点ID")
@@ -66,8 +72,11 @@ func (s *Service) callEntryInspectionTool(ctx context.Context, call ToolCall) (T
 	if a.Limit > 50 {
 		a.Limit = 50
 	}
-	if a.Limit < 1 || a.Offset < 0 || a.Offset > 100000 || !validReadRevision(a.Revision, a.Offset) {
+	if a.Limit < 1 || a.Offset < 0 || a.Offset > 100000 {
 		return ToolOutcome{}, ErrValidation
+	}
+	if !validReadRevision(a.Revision, a.Offset) {
+		return ToolOutcome{}, errEntryInspectionRevision
 	}
 	var result any
 	if call.Function.Name == "entry_health_detail" {

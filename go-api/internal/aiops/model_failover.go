@@ -33,6 +33,7 @@ func (s *Service) completeWithModelFailover(ctx context.Context, cfg Config, cip
 	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, completionTimeout)
 	defer cancel()
+	ctx = withProviderArgumentCorrection(ctx)
 	models := []string{selected}
 	if cfg.FailoverEnabled {
 		for _, m := range cfg.FallbackModels {

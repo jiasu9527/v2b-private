@@ -28,12 +28,15 @@ func probeToolDefinitions() []ToolDefinition {
 			required = []string{}
 		}
 		raw, _ := json.Marshal(map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": false})
-		out = append(out, ToolDefinition{Type: "function", Function: ToolFunctionDefinition{Name: name, Description: description, Parameters: raw}})
+		// Optional IDs must stay optional through relays that convert tools
+		// to strict schemas; filling an unknown target with 1 is not a default.
+		strict := false
+		out = append(out, ToolDefinition{Type: "function", Function: ToolFunctionDefinition{Name: name, Description: description, Parameters: raw, Strict: &strict}})
 	}
 	p := page()
-	p["policy_id"] = integer("只看指定规则")
-	p["target_id"] = integer("只看指定检测入口目标；不是节点或二分组 ID")
-	add("entry_probe_targets", "查找现有入口检测目标、规则及已登记探针 ID，不发探测。target_id 对应具体入口（含二分叶子），probe_id 对应探针。按 targets.next_offset 翻页；未配置监测的入口不会出现。", p)
+	p["policy_id"] = integer("可选，只看指定规则；可以使用entry_simulate返回的matched.id")
+	p["target_id"] = integer("可选，仅使用本工具已返回的target_id；未知时省略，不能填1或复制policy_id、节点ID、二分组ID。与policy_id同时传入时取交集")
+	add("entry_probe_targets", "查找现有入口检测目标、规则及已登记探针 ID，不发探测。仅知规则ID时只传policy_id，省略target_id；空列表不是故障也不是正常，不可原样循环查询或猜ID。按 targets.next_offset 翻页；未配置监测的入口不会出现。返回的数字revision仅属监测配置，不能用于host_references/entry_coverage的字符串revision。", p)
 	add("entry_probe_run", "提议对指定入口通过探针发起一次新 TCP 检测，完全访问自动执行，逐次确认模式等待批准。policy_ids 与 target_ids 至少填一项；都填时取交集。target_ids 精确到入口，未填时检查选中规则全部入口；probe_ids 未填时使用全部启用探针，最多50目标×50探针。任务已受理不等于检测通过，需用 entry_probe_result 查结果；上报仍可能触发现有自动切换/二分。", map[string]any{"policy_ids": ids("规则 ID，可省略"), "target_ids": ids("entry_probe_targets 返回的入口目标 ID，可省略"), "probe_ids": ids("指定探针 ID，可省略"), "reason": map[string]any{"type": "string", "description": "检测目的与预期影响"}}, "reason")
 	p = page()
 	p["run_id"] = integer("检测任务 run_id；审批完成后从动作输出取得")
@@ -172,7 +175,8 @@ func (s *Service) callProbeTool(ctx context.Context, actorID, sessionID int64, c
 			Targets          pageDTO[probeTargetDTO] `json:"targets"`
 			Probes           []probeAgentDTO         `json:"enabled_probes"`
 			AutomaticEffects string                  `json:"automatic_effects"`
-		}{Revision: v.Revision, Probes: probes, AutomaticEffects: "检测上报仍按原配置触发自动切换或二分；禁用目标不可发起"}
+			QueryHint        string                  `json:"query_hint,omitempty"`
+		}{Revision: v.Revision, Probes: probes, AutomaticEffects: "检测上报仍按原配置触发自动切换或二分；禁用目标不可发起", QueryHint: probeTargetQueryHint(a, len(items))}
 		budget := maxToolOutputBytes - jsonSize(envelope) - 64
 		envelope.Targets = boundedPage(window(items, a.Limit, a.Offset), int64(len(items)), a.Limit, a.Offset, budget)
 		value = envelope
@@ -226,6 +230,18 @@ func (s *Service) callProbeTool(ctx context.Context, actorID, sessionID int64, c
 		return ToolOutcome{}, ErrUnavailable
 	}
 	return ToolOutcome{Content: string(raw)}, nil
+}
+
+// Do not silently broaden a filter or fabricate target IDs. An empty lookup
+// must explain how to discover the real ID, not invite an unchanged poll.
+func probeTargetQueryHint(a probeToolArgs, total int) string {
+	if total != 0 {
+		return ""
+	}
+	if a.TargetID > 0 {
+		return "当前筛选未命中检测目标；target_id不是policy_id、节点或二分组ID，不可猜测。请省略target_id、保留已核实的policy_id重新查询，从返回项取得真实target_id；仍为空则核对entry_coverage，不要原样重复或据此判定入口正常/故障。"
+	}
+	return "当前范围没有匹配的已配置监测目标；不要原样重复查询。用entry_coverage核对覆盖缺口，或host_references按已核实的地址查询来源；其首次查询省略revision。缺少监测不代表入口正常或故障。"
 }
 
 type probeRunResultDTO struct {

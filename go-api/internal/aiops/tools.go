@@ -409,6 +409,9 @@ func oneOf(s string, v ...string) bool {
 	return false
 }
 func safeAIError(e error) error {
+	if errors.Is(e, errEntryInspectionRevision) {
+		return errEntryInspectionRevision
+	}
 	var readExhausted *readToolRetryExhausted
 	if errors.As(e, &readExhausted) {
 		return readExhausted
@@ -456,6 +459,8 @@ func toolErrorContent(err error) string {
 	var panelError *PanelOperationError
 	var readExhausted *readToolRetryExhausted
 	switch {
+	case errors.Is(err, errEntryInspectionRevision):
+		code, message = "invalid_arguments", entryInspectionRevisionHint
 	case errors.As(err, &readExhausted):
 		code, message = "read_retry_exhausted", readExhausted.Error()
 	case errors.As(err, &nodeValidation):

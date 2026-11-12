@@ -46,12 +46,26 @@ func canRetryRelay(err error) bool {
 
 // A completion is the retry boundary. The caller receives either one whole
 // valid response or no tools at all; previously executed chat turns and tools
-// are never replayed. Messages/model/tools stay fixed. Only an explicit length
-// completion may increase max_tokens; incomplete tools never reach the caller.
+// are never replayed. Model/tools and the original messages stay fixed. A size
+// failure may add one corrective instruction; an explicit length completion
+// may increase max_tokens. Incomplete tools never reach the caller.
 func (s *Service) completeWithRelays(ctx context.Context, cfg Config, endpoints []RelayEndpoint, model string, payload []byte, onContent func(string) error) (providerMessage, error) {
 	var empty providerMessage
 	if len(endpoints) == 0 {
 		return empty, errors.New("AI 中转配置不可用")
+	}
+	correction, _ := ctx.Value(providerArgumentCorrectionKey{}).(*providerArgumentCorrectionState)
+	if correction == nil {
+		correction = &providerArgumentCorrectionState{}
+	}
+	if correction.failure != nil {
+		// A genuine availability failure may have switched models after the
+		// one permitted correction. Preserve that guidance, not a new budget.
+		corrected, ok := correctProviderToolArguments(payload, correction.failure)
+		if !ok {
+			return empty, correction.failure
+		}
+		payload = corrected
 	}
 	if !cfg.FailoverEnabled {
 		endpoints = endpoints[:1]
@@ -118,6 +132,9 @@ func (s *Service) completeWithRelays(ctx context.Context, cfg Config, endpoints 
 		}
 		healthKey := relayFingerprint(endpoint, model)
 		for {
+			if completionCtx.Err() != nil {
+				return empty, contextError()
+			}
 			// A failed streaming attempt may already have displayed some text.
 			// Clear it before contacting the next relay so their drafts never mix.
 			if draftVisible && onContent != nil {
@@ -144,6 +161,20 @@ func (s *Service) completeWithRelays(ctx context.Context, cfg Config, endpoints 
 			if err == nil {
 				s.clearRelayCooldown(healthKey)
 				return out, nil
+			}
+			var sizeErr *providerToolArgumentError
+			if errors.As(err, &sizeErr) {
+				// A model planning/size problem is not a relay outage. Do not
+				// cool down or blindly replay the same payload at another relay.
+				if correction.failure != nil {
+					return empty, fmt.Errorf("AI 已尝试精简参数一次，仍未通过校验；%w", err)
+				}
+				corrected, ok := correctProviderToolArguments(payload, sizeErr)
+				if !ok {
+					return empty, err
+				}
+				payload, correction.failure = corrected, sizeErr
+				continue
 			}
 			if errors.Is(err, errProviderOutputLimit) {
 				larger, ok := expandCompletionOutputBudget(payload)

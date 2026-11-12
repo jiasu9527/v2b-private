@@ -32,6 +32,10 @@ func TestKnowledgeWriteSchemasKeepCreateSeparate(t *testing.T) {
 	for _, tool := range ticketToolDefinitions() {
 		ticketTools[tool.Function.Name] = true
 	}
+	entryTools := map[string]bool{}
+	for _, tool := range append(probeToolDefinitions(), entryInspectionToolDefinitions()...) {
+		entryTools[tool.Function.Name] = true
+	}
 	for _, tool := range s.toolDefinitions() {
 		var wire struct {
 			Function map[string]json.RawMessage `json:"function"`
@@ -45,7 +49,7 @@ func TestKnowledgeWriteSchemasKeepCreateSeparate(t *testing.T) {
 			if !exists || string(strict) != "false" {
 				t.Fatal("knowledge tools must explicitly preserve optional parameters", tool.Function.Name, string(strict))
 			}
-		} else if exists && !ticketTools[tool.Function.Name] {
+		} else if exists && !ticketTools[tool.Function.Name] && !entryTools[tool.Function.Name] {
 			t.Fatal("knowledge compatibility changed other tool strict settings", tool.Function.Name)
 		}
 		if tool.Function.Name != "knowledge_create" && tool.Function.Name != "knowledge_save" {

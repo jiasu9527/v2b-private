@@ -154,7 +154,7 @@ func (s *Service) completeAtRelay(ctx context.Context, endpoint RelayEndpoint, p
 		if activity.expired() && !errors.Is(err, errProviderContentUpdate) {
 			return empty, transientProviderError("AI 流式响应空闲超时，未执行工具")
 		}
-		if err != nil && !errors.Is(err, errProviderContentUpdate) && !canSwitchRelay(err) && !errors.Is(err, errProviderOutputLimit) {
+		if err != nil && !errors.Is(err, errProviderContentUpdate) && !canSwitchRelay(err) && !errors.Is(err, errProviderOutputLimit) && !isProviderToolArgumentError(err) {
 			return empty, retryableProviderError(err.Error())
 		}
 		return out, err
@@ -187,7 +187,7 @@ func (s *Service) completeAtRelay(ctx context.Context, endpoint RelayEndpoint, p
 		return empty, retryableProviderError("AI 完成状态与工具请求不匹配，未执行工具")
 	}
 	if err = validateCompletion(out); err != nil {
-		if canSwitchRelay(err) {
+		if canSwitchRelay(err) || isProviderToolArgumentError(err) {
 			return empty, err
 		}
 		return empty, retryableProviderError(err.Error())
@@ -213,7 +213,7 @@ func validateCompletion(out providerMessage) error {
 	seen := map[string]bool{}
 	for _, call := range out.ToolCalls {
 		if len(call.Function.Arguments) > providerToolArgumentLimit(call.Function.Name) {
-			return errors.New("AI 工具参数过长，未执行工具；请缩小单次参数或分批操作")
+			return newProviderToolArgumentError(call.Function.Name, len(call.Function.Arguments), providerToolArgumentLimit(call.Function.Name))
 		}
 		if call.ID == "" || len(call.ID) > 200 || seen[call.ID] || call.Type != "function" || call.Function.Name == "" || len(call.Function.Name) > 100 || !json.Valid([]byte(call.Function.Arguments)) || !strings.HasPrefix(strings.TrimSpace(call.Function.Arguments), "{") {
 			return errors.New("AI 工具请求格式无效")
