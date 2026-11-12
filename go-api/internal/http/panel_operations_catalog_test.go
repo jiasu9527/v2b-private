@@ -70,8 +70,8 @@ func TestPanelOperationCatalogContracts(t *testing.T) {
 
 func TestPanelOperationDeploymentCredentialContracts(t *testing.T) {
 	operations := panelOperationCatalog()
-	// Includes ordering, incremental monitors and four group audit/retirement operations.
-	if len(operations) != 234 {
+	// Includes ordering, incremental monitors, group retirement and six persisted investigation operations.
+	if len(operations) != 240 {
 		t.Fatalf("credential access must not duplicate backend operations: got %d", len(operations))
 	}
 	byName := map[string]aiops.PanelOperation{}

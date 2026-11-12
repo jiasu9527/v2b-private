@@ -6,7 +6,7 @@ import { AI_DEFAULT_MODELS, AI_DEFAULT_ACCESS_MODE, AI_DEFAULT_FAILOVER_TIMEOUT,
 import { aiReadSessionStream } from './aiOpsStream';
 import { aiReadMiniSession, aiWriteMiniSession, aiClearMiniSession, aiPickMiniSession } from './aiOpsMiniSession';
 import AIOpsTranscript, { ActionDetails, aiDisplayTime as time } from './AIOpsTranscript';
-import AIOpsComposer, { type AIOpsComposerHandle } from './AIOpsComposer';
+import AIOpsComposer, { type AIOpsComposerHandle, type AIOpsSendOptions } from './AIOpsComposer';
 import AIOpsRelaySettings from './AIOpsRelaySettings';
 import AIOpsModelEndpointSettings from './AIOpsModelEndpointSettings';
 import AIOpsKnowledge from './AIOpsKnowledge';
@@ -324,7 +324,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
     } catch (e) { fail(e, '停止请求失败，请刷新核对执行状态'); }
     finally { finish(); }
   };
-  const send = async (contentOverride?: string) => {
+  const send = async (contentOverride?: string, { preserveDraft = false }: AIOpsSendOptions = {}) => {
     const content = contentOverride ?? draft.current;
     if (aiMessageTooLarge(content)) { message.error(AI_CHAT_SIZE_ERROR); return; }
     if (!content.trim() || !aiModelReady(config, model) || (selectedRef.current > 0 && !detail) || aiSessionBusy(detail) || foreignFullAccess || !begin('send')) return;
@@ -340,7 +340,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
       const session = response?.data?.session as AISession;
       if (!session?.id) throw new Error('发送状态未确认，请刷新后重试同一消息');
       setSendRetry(null);
-      if (selectedRef.current === originalID && selectionSequence.current === selection) { reasoningEdited.current = false; setReasoningEffort(aiSessionReasoning(session)); selectedRef.current = session.id; setSelectedID(session.id); setDraft(''); setTab('chat'); await loadDetail(session.id); }
+      if (selectedRef.current === originalID && selectionSequence.current === selection) { reasoningEdited.current = false; setReasoningEffort(aiSessionReasoning(session)); selectedRef.current = session.id; setSelectedID(session.id); if (!preserveDraft && draft.current === content) setDraft(''); setTab('chat'); await loadDetail(session.id); }
       await loadLists();
     } catch (e) { fail(e, '发送失败，可刷新后重试同一消息'); }
     finally { finish(); }
@@ -445,7 +445,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
       <div className="ai-ops-messages" ref={mountMessageViewport} onScroll={() => chatScroll.current?.onScroll()}>
         <AIOpsTranscript detail={detail} selectedID={selectedID} miniApp={miniApp} busy={!!busy} enabled={config.enabled} now={now} streamConnected={streamConnected} onReview={reviewAction} onLayout={refreshTranscriptLayout} />
       </div>
-      <AIOpsComposer ref={composer} draftRef={draft} miniApp={miniApp} compact={compact} loaded={loaded} busy={busy} sessionBusy={aiSessionBusy(detail)} unavailable={unavailable} sendBlocked={foreignFullAccess || (selectedID > 0 && !detail)} isAdmin={isAdmin} onSend={(content) => void send(content)} onStop={() => void stop()} />
+      <AIOpsComposer ref={composer} draftRef={draft} miniApp={miniApp} compact={compact} loaded={loaded} busy={busy} sessionBusy={aiSessionBusy(detail)} unavailable={unavailable} sendBlocked={foreignFullAccess || (selectedID > 0 && !detail)} isAdmin={isAdmin} onSend={(content, options) => void send(content, options)} onStop={() => void stop()} />
     </section>
     <Drawer title="历史会话" aria-label="历史会话" placement={miniApp ? 'bottom' : 'left'} rootClassName={miniApp ? 'mini-ops-history-drawer' : 'ai-ops-history-drawer'} width="min(360px, 90vw)" height={miniApp ? '80%' : undefined} open={compact && historyOpen} onClose={() => setHistoryOpen(false)} destroyOnHidden>{compact && sessionHistory}</Drawer>
     <Drawer title="对话设置" aria-label="对话设置" placement={compact ? 'bottom' : 'right'} rootClassName={miniApp ? 'mini-ops-settings-drawer' : 'ai-ops-settings-drawer'} width={360} height={compact ? 'auto' : undefined} open={settingsOpen} onClose={() => setSettingsOpen(false)} destroyOnHidden>

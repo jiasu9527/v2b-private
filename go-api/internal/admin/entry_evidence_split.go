@@ -43,9 +43,16 @@ func (s *DBService) ExecuteEntryEvidenceSplit(ctx context.Context, actor int64, 
 		return c, err
 	}
 	now := time.Now().Unix()
+	if err = s.validateEntryInvestigationSplit(ctx, tx, c, now); err != nil {
+		return c, err
+	}
 	hostA, hostB := req.EntryHostA, req.EntryHostB
 	if req.UseBackupIPPool {
-		ips, e := claimHealthyEntryEvidenceBackupIPs(ctx, tx, 2, c.Query.Port, now)
+		var independent bool
+		if e := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_entry_investigation WHERE case_id=$1)`, c.ID).Scan(&independent); e != nil {
+			return c, e
+		}
+		ips, e := claimHealthyEntryEvidenceBackupIPsMode(ctx, tx, 2, c.Query.Port, now, independent)
 		if e != nil {
 			return c, e
 		}
@@ -59,6 +66,9 @@ func (s *DBService) ExecuteEntryEvidenceSplit(ctx context.Context, actor int64, 
 	}
 	if strings.EqualFold(hostA, c.Target.EntryHost) || strings.EqualFold(hostB, c.Target.EntryHost) || strings.EqualFold(hostA, c.Query.Host) || strings.EqualFold(hostB, c.Query.Host) || strings.EqualFold(hostA, hostB) {
 		return c, fmt.Errorf("%w：两个新入口不能相同或等于原入口", ErrEntryEvidenceInvalid)
+	}
+	if err = validateInvestigationEntryHosts(ctx, tx, c, hostA, hostB, now); err != nil {
+		return c, err
 	}
 	// Changes use the same visible-order transaction lock as existing editors.
 	// New branches occupy the source position; shifting later rows preserves order.

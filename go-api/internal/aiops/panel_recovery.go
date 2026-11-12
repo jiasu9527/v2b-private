@@ -116,6 +116,7 @@ func panelRecoveryReadOnlyOperation(name string) bool {
 	switch name {
 	case "dns.config", "dns.domains", "dns.records", "dns.record_types", "dns.record_lines",
 		"entry_evidence.delivery_hosts", "entry_evidence.delivery_stats", "entry_evidence.delivery_users", "entry_evidence.delivery_versions",
+		"entry_evidence.investigation", "entry_evidence.investigation_list", "entry_evidence.cases",
 		"nodes.list", "node_groups.list", "node_routes.list",
 		"entry_rules.list", "entry_rules.order", "entry_rules.simulate", "entry_split.users", "entry_collections.list", "entry_monitors.config", "entry_monitors.runs", "ip_pool.list",
 		"entry_groups.audit", "entry_groups.retirement",

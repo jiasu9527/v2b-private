@@ -17,7 +17,10 @@ func EnsureEntryEvidenceCasesSchema(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("ensure entry evidence cases: %w", err)
 		}
 	}
-	return EnsureEntryEvidenceObservationSchema(ctx, db)
+	if err := EnsureEntryEvidenceObservationSchema(ctx, db); err != nil {
+		return err
+	}
+	return EnsureEntryInvestigationSchema(ctx, db)
 }
 
 var entryEvidenceCasesStatements = []string{

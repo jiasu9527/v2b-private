@@ -12,6 +12,7 @@ import {
   type EvidenceFilters, type EvidencePage, type EvidenceSplitInput, type EvidenceSplitPreview, type EvidenceStatus,
 } from './entryEvidence';
 import './EntryEvidencePanel.css';
+import EntryInvestigationPanel from './EntryInvestigationPanel';
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : '请求失败，请重试';
 const emptyPage = <T,>(): EvidencePage<T> => ({ items: [], total: 0, current: 1, page_size: 20 });
@@ -90,6 +91,7 @@ export default function EntryEvidencePanel({ rows, onRulesChanged }: { rows: unk
   const [loading, setLoading] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
+  const [investigationBusy, setInvestigationBusy] = useState(false);
   const [freezeMode, setFreezeMode] = useState<'selected' | 'all' | null>(null);
   const [caseTitle, setCaseTitle] = useState('');
   const [parentCaseID, setParentCaseID] = useState<number | null>(null);
@@ -118,7 +120,7 @@ export default function EntryEvidencePanel({ rows, onRulesChanged }: { rows: unk
   const patch = (values: Partial<EvidenceFilters>) => setDraft((old) => ({ ...old, ...values }));
   const invalidatePreview = () => { setPreview(null); setPreviewInput(null); };
   const mutation = async (name: string, action: () => Promise<void>) => {
-    if (busyRef.current) return;
+    if (busyRef.current || investigationBusy) return;
     busyRef.current = true; setBusy(name);
     try { await action(); } catch (error) { if (mounted.current) message.error(errorText(error)); }
     finally { busyRef.current = false; if (mounted.current) setBusy(''); }
@@ -205,7 +207,7 @@ export default function EntryEvidencePanel({ rows, onRulesChanged }: { rows: unk
     finally { if (mounted.current && sequence === caseSequence.current) setLoading(''); }
   };
   const closeCase = (discardDraft = false) => {
-    if (busyRef.current) return;
+    if (busyRef.current || investigationBusy) return;
     if (observationDirty && !discardDraft) { Modal.confirm({ title: '观察结论尚未保存', content: '关闭会放弃未保存内容，是否继续？', okText: '放弃并关闭', cancelText: '继续编辑', onOk: () => closeCase(true) }); return; }
     caseSequence.current++; caseRequest.current?.abort(); draftCaseID.current = 0; setCaseID(0); setRecord(null); setCaseError(''); invalidatePreview();
   };
@@ -353,6 +355,7 @@ export default function EntryEvidencePanel({ rows, onRulesChanged }: { rows: unk
           { key: 'target', label: '来源入口', children: record.target.name }, { key: 'state', label: '档案状态', children: record.status === 'executed' ? '已执行二分' : '名单已冻结' }, { key: 'revision', label: '档案版本', children: record.revision }, { key: 'parent', label: '父轮次', children: record.parent_case_id ? <Button type="link" onClick={() => void openCase(record.parent_case_id!)}>#{record.parent_case_id}</Button> : '独立档案' },
           { key: 'window', label: '证据窗口', children: `${evidenceTime(record.query.from)} ～ ${evidenceTime(record.query.to)}` }, { key: 'selected', label: '选中 / 候选', children: `${record.selected_count} / ${record.total_candidates}` }, { key: 'residual', label: '保留原入口', children: record.residual_count },
         ]} />
+        <EntryInvestigationPanel key={record.id} record={record} disabled={!!busy || loading === 'case'} onBusyChange={setInvestigationBusy} onOpenCase={(id) => openCase(id)} />
         <Tabs items={[
           { key: 'users', label: '冻结名单', children: <><Space wrap className="entry-evidence-actions"><Button icon={<CopyOutlined />} loading={busy === 'export'} disabled={!!busy} onClick={() => exportUsers(true)}>复制选中邮箱</Button><Button icon={<DownloadOutlined />} disabled={!!busy} onClick={() => exportUsers()}>导出选中邮箱 TXT</Button><Typography.Text type="secondary">包含全部候选，标记选中及 A／B／R 分支；不随新请求自动增减。</Typography.Text></Space><Table<EvidenceCandidate> size="small" rowKey="user_id" dataSource={caseUsers.items} columns={candidateColumns} scroll={{ x: 1400 }} expandable={{ expandedRowRender: (user) => <CandidateEvidence user={user} /> }} pagination={{ current: caseUsers.current, pageSize: caseUsers.page_size, total: caseUsers.total, showSizeChanger: true, onChange: (page, size) => void openCase(record.id, page, size) }} /></> },
           { key: 'evidence', label: '不可变证据', children: <Space direction="vertical" style={{ width: '100%' }}><EvidenceJSON title="冻结查询条件及名单摘要" value={{ query: record.query, candidates_hash: record.candidates_hash, source_users_revision: record.source_users_revision, source_user_count: record.source_user_count }} /><EvidenceJSON title="节点及 UA 条件快照" value={{ members: record.target.members, conditions: record.target.conditions, revision: record.target.revision }} /><EvidenceJSON title="冻结时探针快照" value={record.probe_snapshot} /><EvidenceJSON title="执行结果" value={record.execution} /></Space> },

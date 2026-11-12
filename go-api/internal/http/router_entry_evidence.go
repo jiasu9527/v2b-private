@@ -50,8 +50,8 @@ func handleEntryEvidence(w http.ResponseWriter, r *http.Request, sessions sessio
 	w.Header().Set("Vary", "Authorization")
 	method := http.MethodGet
 	switch action {
-	case "status", "deliveries", "delivery-stats", "delivery-users", "delivery-versions", "delivery-hosts", "candidates", "cases", "case", "context":
-	case "freeze", "split-preview", "split-execute", "case-update", "case-delete", "settings":
+	case "status", "deliveries", "delivery-stats", "delivery-users", "delivery-versions", "delivery-hosts", "candidates", "cases", "case", "context", "investigation", "investigation-list":
+	case "freeze", "split-preview", "split-execute", "case-update", "case-delete", "settings", "investigation-start", "investigation-refresh", "investigation-confirm", "investigation-next":
 		method = http.MethodPost
 	default:
 		http.NotFound(w, r)
@@ -71,6 +71,9 @@ func handleEntryEvidence(w http.ResponseWriter, r *http.Request, sessions sessio
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	r = r.WithContext(ctx)
+	if handleEntryInvestigation(w, r, service, actor.ID, action) {
+		return
+	}
 	var result any
 	var err error
 	switch action {

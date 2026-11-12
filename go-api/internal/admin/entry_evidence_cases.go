@@ -224,6 +224,13 @@ func (s *DBService) DeleteEntryEvidenceCase(ctx context.Context, actor, id int64
 	if _, err = readEvidenceCase(ctx, tx, id, true); err != nil {
 		return err
 	}
+	var tracked bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_entry_investigation WHERE case_id=$1 OR root_case_id=$1 OR next_case_id=$1)`, id).Scan(&tracked); err != nil {
+		return err
+	}
+	if tracked {
+		return fmt.Errorf("%w：档案已关联持久排查任务，不能直接删除调查证据", ErrEntryEvidenceConflict)
+	}
 	// Deleting a dossier never reverses the routing changes it recorded.
 	result, err := tx.ExecContext(ctx, `DELETE FROM v2_entry_evidence_case WHERE id=$1`, id)
 	if err != nil {

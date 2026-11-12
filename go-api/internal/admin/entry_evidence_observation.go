@@ -156,6 +156,9 @@ func (s *DBService) RunEntryEvidenceMaintenance(ctx context.Context, store *entr
 	for {
 		run, cancel := context.WithTimeout(ctx, time.Minute)
 		err := s.RefreshEntryEvidenceObservations(run)
+		if refreshErr := s.RefreshEntryInvestigations(run); refreshErr != nil && ctx.Err() == nil {
+			log.Print("entry investigation: report refresh incomplete; will retry")
+		}
 		cancel()
 		if ctx.Err() != nil {
 			return

@@ -442,6 +442,15 @@ func (s *DBService) CreateEntryEvidenceCase(ctx context.Context, actor int64, re
 		return c, err
 	}
 	defer tx.Rollback()
+	c, err = s.createEntryEvidenceCaseTx(ctx, tx, actor, req, q)
+	if err != nil {
+		return c, err
+	}
+	return c, tx.Commit()
+}
+
+func (s *DBService) createEntryEvidenceCaseTx(ctx context.Context, tx *sql.Tx, actor int64, req CreateEntryEvidenceCaseRequest, q EntryEvidenceQueryRequest) (EntryEvidenceCase, error) {
+	var c EntryEvidenceCase
 	preview, items, ids, err := s.evidencePreviewTx(ctx, tx, q)
 	if err != nil {
 		return c, err
@@ -509,5 +518,5 @@ func (s *DBService) CreateEntryEvidenceCase(ctx context.Context, actor int64, re
 		}
 	}
 	c.Preview.CaseID = c.ID
-	return c, tx.Commit()
+	return c, nil
 }

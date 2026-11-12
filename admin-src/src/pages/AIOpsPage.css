@@ -80,6 +80,9 @@
 .ai-ops-composer-hint{font-size:12px;overflow-wrap:anywhere}
 .ai-ops-composer-meta{position:relative;display:flex;align-items:center;justify-content:flex-end;gap:8px 12px;flex-wrap:wrap;min-width:0}
 .ai-ops-composer-error{font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+.ai-ops-shortcuts{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.ai-ops-shortcut.ant-btn{height:32px;padding:0 12px;border-radius:16px;background:#f5f7fa;border-color:#e2e7ee;font-size:12px;box-shadow:none}
+.ai-ops-shortcuts-hint{font-size:11px;line-height:1.5}
 .ai-ops-server-help{flex-shrink:0;color:#777;font-size:12px;line-height:1.5}
 .ai-ops-server-help>summary{cursor:pointer;white-space:nowrap;user-select:none;padding:3px 0;outline-offset:3px}
 .ai-ops-server-help-content{position:absolute;right:0;bottom:calc(100% + 8px);width:min(440px,calc(100vw - 48px));max-height:min(300px,45dvh);box-sizing:border-box;overflow:auto;overscroll-behavior:contain;z-index:4;padding:12px 14px;background:#fff;color:#333;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 6px 24px #0002;overflow-wrap:anywhere}

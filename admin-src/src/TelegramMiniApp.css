@@ -275,6 +275,10 @@ body.telegram-mini-body .ai-ops-markdown td { padding: 8px 10px; border-color: v
 .telegram-mini-app .mini-ops-send-button .anticon { font-size: 20px; }
 .telegram-mini-app .mini-ops-composer .mini-ops-send-button.ant-btn-dangerous { background: var(--mini-danger); color: var(--mini-button-text); }
 .telegram-mini-app .mini-ops-composer .mini-ops-send-button:disabled { background: var(--mini-soft); color: var(--mini-hint); }
+.telegram-mini-app .ai-ops-shortcuts { gap: 8px; padding-bottom: 2px; }
+.telegram-mini-app .ai-ops-shortcut.ant-btn { min-height: 36px; height: auto; padding: 6px 12px; border-color: var(--mini-line); background: var(--mini-surface); color: var(--mini-link); box-shadow: none; }
+.telegram-mini-app .ai-ops-shortcut.ant-btn:disabled { color: var(--mini-hint); background: var(--mini-soft); }
+.telegram-mini-app .ai-ops-shortcuts-hint { color: var(--mini-hint); }
 .telegram-mini-app .mini-ops-composer-hint,
 .telegram-mini-app .mini-ops-composer-notice,
 .telegram-mini-app .ai-ops-composer-hint { padding-inline: 5px; color: var(--mini-hint); font-size: 10px; line-height: 1.5; }

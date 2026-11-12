@@ -92,7 +92,7 @@ func TestAIPanelRecoveryReadOnlyFailClosed(t *testing.T) {
 	for _, tc := range []struct {
 		op   string
 		want bool
-	}{{"dns.records", true}, {"dns.record_save", false}, {"dns.not_found", false}, {"entry_monitors.list", false}, {"client_entries.list", false}, {"client_entries.resolve", false}, {"future.read", false}, {"users.list", false}, {"entry_evidence.case", false}, {"entry_evidence.cases", false}} {
+	}{{"dns.records", true}, {"dns.record_save", false}, {"dns.not_found", false}, {"entry_monitors.list", false}, {"client_entries.list", false}, {"client_entries.resolve", false}, {"future.read", false}, {"users.list", false}, {"entry_evidence.case", false}, {"entry_evidence.cases", true}} {
 		raw, _ := json.Marshal(map[string]any{"operation": tc.op, "parameters": map[string]any{}})
 		if s.panelRecoveryReadOnlyCall(ToolCall{Function: ToolFunction{Name: "panel_query", Arguments: string(raw)}}) != tc.want {
 			t.Fatal("operation metadata not enforced", tc.op)
@@ -104,7 +104,7 @@ func TestAIPanelRecoveryReadOnlyFailClosed(t *testing.T) {
 			t.Fatal("operation alias bypassed side-effect exclusion", path)
 		}
 	}
-	for _, name := range []string{"entry_evidence.delivery_stats", "entry_evidence.delivery_users", "entry_evidence.delivery_versions", "dns.config", "dns.domains", "dns.records", "dns.record_types", "dns.record_lines", "nodes.list", "node_groups.list", "node_routes.list", "entry_rules.list", "entry_rules.simulate", "entry_split.users", "entry_collections.list", "entry_monitors.runs", "ip_pool.list", "users.detail", "orders.list", "orders.detail", "plans.list", "notices.list", "tickets.list", "config.read"} {
+	for _, name := range []string{"entry_evidence.cases", "entry_evidence.investigation", "entry_evidence.investigation_list", "entry_evidence.delivery_stats", "entry_evidence.delivery_users", "entry_evidence.delivery_versions", "dns.config", "dns.domains", "dns.records", "dns.record_types", "dns.record_lines", "nodes.list", "node_groups.list", "node_routes.list", "entry_rules.list", "entry_rules.simulate", "entry_split.users", "entry_collections.list", "entry_monitors.runs", "ip_pool.list", "users.detail", "orders.list", "orders.detail", "plans.list", "notices.list", "tickets.list", "config.read"} {
 		for _, mutating := range []bool{false, true} {
 			runtime.ops = []PanelOperation{fixtureOperation(name, "/fixture/read", mutating, false)}
 			args, _ := json.Marshal(map[string]any{"operation": name, "parameters": map[string]any{}})

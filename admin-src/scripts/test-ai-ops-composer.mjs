@@ -13,7 +13,7 @@ new Function('exports', compile(await readFile(new URL('../src/pages/aiOpsModel.
 // Run the actual component and handlers with a small synchronous hook host.
 // Browser performance/DOM behavior is checked separately against the built UI.
 function composer(initial = '', options = {}, nativeSizing = false) {
-  const slots = []; let cursor = 0; const sent = []; let stopped = 0;
+  const slots = []; let cursor = 0; const sent = [], sendOptions = []; let stopped = 0;
   const react = {
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat() }),
     forwardRef: (render) => render,
@@ -32,18 +32,97 @@ function composer(initial = '', options = {}, nativeSizing = false) {
     assert.fail(name);
   }, exports, { supports: (property, value) => nativeSizing && property === 'field-sizing' && value === 'content' });
   const ref = { current: null }, draftRef = { current: initial };
-  const props = { draftRef, miniApp: true, compact: true, loaded: true, busy: '', sessionBusy: false, unavailable: false, sendBlocked: false, isAdmin: true, onSend: (content) => sent.push(content), onStop: () => stopped++, ...options };
+  const props = { draftRef, miniApp: true, compact: true, loaded: true, busy: '', sessionBusy: false, unavailable: false, sendBlocked: false, isAdmin: true, onSend: (content, options) => { sent.push(content); sendOptions.push(options); }, onStop: () => stopped++, ...options };
   let tree;
   const render = () => { cursor = 0; tree = exports.default(props, ref); return tree; };
-  const find = (type, node = tree) => node?.type === type ? node : node?.children?.map((child) => typeof child === 'object' ? find(type, child) : null).find(Boolean);
+  const find = (type, node = tree) => node?.type === type && (type !== 'button' || node.props.className !== 'ai-ops-shortcut') ? node : node?.children?.map((child) => typeof child === 'object' ? find(type, child) : null).find(Boolean);
+  const shortcut = (node = tree) => node?.props?.['aria-label'] === '发送入口排查快捷消息' ? node : node?.children?.map((child) => typeof child === 'object' ? shortcut(child) : null).find(Boolean);
   const key = (extra = {}) => {
     let prevented = false;
     find('textarea').props.onKeyDown({ key: 'Enter', nativeEvent: {}, keyCode: 13, preventDefault: () => { prevented = true; }, ...extra });
     return prevented;
   };
   render();
-  return { draftRef, props, ref, sent, render, find, key, stopped: () => stopped };
+  return { draftRef, props, ref, sent, sendOptions, render, find, shortcut, key, stopped: () => stopped };
 }
+
+test('entry investigation shortcut sends directly on desktop and Telegram without overwriting drafts', () => {
+  for (const miniApp of [true, false]) for (const draft of ['', '未发送的服务器资料\npassword: keep-me']) {
+    const instance = composer(draft, { miniApp });
+    const button = instance.shortcut();
+    assert.ok(button);
+    assert.equal(button.props.disabled, false);
+    button.props.onClick();
+    assert.equal(instance.sent.length, 1);
+    assert.match(instance.sent[0], /没有明确目标就先问我组名或入口 IP/);
+    assert.match(instance.sent[0], /核实封锁和时间后/);
+    assert.match(instance.sent[0], /已有任务就继续，不要重复建组/);
+    assert.doesNotMatch(instance.sent[0], /确定被墙了|已确认被墙|开启完全访问/);
+    assert.deepEqual(instance.sendOptions, [{ preserveDraft: true }]);
+    assert.equal(instance.draftRef.current, draft);
+    instance.render();
+    assert.equal(instance.find('textarea').props.value, draft);
+  }
+});
+
+test('shortcuts keep existing loading, authorization and busy guards without relying on draft text', () => {
+  for (const miniApp of [true, false]) for (const guard of [{ busy: 'send' }, { busy: 'access' }, { sessionBusy: true }, { unavailable: true }, { sendBlocked: true }, ...(miniApp ? [{ loaded: false }] : [])]) {
+    const instance = composer('', { miniApp, ...guard });
+    assert.equal(instance.shortcut().props.disabled, true);
+    instance.shortcut().props.onClick();
+    assert.equal(instance.sent.length, 0);
+  }
+  const instance = composer('正在选中文候选');
+  instance.find('textarea').props.onCompositionStart();
+  instance.shortcut().props.onClick();
+  assert.equal(instance.sent.length, 0);
+  assert.match(page, /onSend=\{\(content, options\) => void send\(content, options\)\}/);
+  assert.match(page, /if \(!preserveDraft && draft\.current === content\) setDraft\(''\)/);
+  assert.match(miniCss, /\.telegram-mini-app \.ai-ops-shortcut\.ant-btn[^}]*var\(--mini-surface\)[^}]*var\(--mini-link\)/);
+});
+
+test('real send handler preserves quick-message drafts, prevents double clicks and keeps the normal API envelope', async () => {
+  const ast = ts.createSourceFile('AIOpsPage.tsx', page, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const component = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'AIOpsPage');
+  const declaration = component.body.statements.flatMap((node) => ts.isVariableStatement(node) ? [...node.declarationList.declarations] : []).find((node) => node.name.getText(ast) === 'send');
+  const program = compile(`exports.send = ${declaration.initializer.getText(ast)};`);
+  for (const scenario of ['shortcut', 'normal', 'edited', 'failed', 'switched']) {
+    let locked = false, resolveRequest, rejectRequest;
+    const calls = [], failures = [], clears = [];
+    const draft = { current: '保留这个草稿' }, selectedRef = { current: 0 }, selectionSequence = { current: 0 };
+    const bindings = {
+      draft, selectedRef, selectionSequence, detail: null, config: {}, model: 'fixture-model', foreignFullAccess: false,
+      aiMessageTooLarge: model.aiMessageTooLarge, AI_CHAT_SIZE_ERROR: model.AI_CHAT_SIZE_ERROR, message: { error() { assert.fail('unexpected size error'); } },
+      aiModelReady: () => true, aiSessionBusy: () => false,
+      begin: () => { if (locked) return false; locked = true; return true; }, finish: () => { locked = false; },
+      followOutput: { current: false }, sendRetry: null, accessMode: 'standard', reasoningChoice: 'default', aiRequestID: () => 'same-transport-id', setSendRetry() {},
+      apiJsonPost: (path, body) => { calls.push({ path, body }); return new Promise((resolve, reject) => { resolveRequest = resolve; rejectRequest = reject; }); },
+      alive: { current: true }, reasoningEdited: { current: false }, setReasoningEffort() {}, aiSessionReasoning: () => 'default', setSelectedID() {}, setTab() {},
+      setDraft: (value) => { clears.push(value); draft.current = value; }, loadDetail: async () => {}, loadLists: async () => {}, fail: (error) => failures.push(error.message),
+    };
+    const exports = {};
+    new Function('exports', ...Object.keys(bindings), program)(exports, ...Object.values(bindings));
+    const quick = scenario !== 'normal' && scenario !== 'edited';
+    const content = quick ? '入口排查快捷消息' : draft.current;
+    const sending = exports.send(content, { preserveDraft: quick });
+    await exports.send(content, { preserveDraft: quick });
+    assert.equal(calls.length, 1, 'synchronous send lock must block double-clicks');
+    assert.equal(calls[0].path, '/ai-ops/chat/send');
+    assert.equal(calls[0].body.content, content);
+    assert.equal(calls[0].body.access_mode, 'standard', 'shortcut must not elevate access');
+    assert.equal(calls[0].body.request_id, 'same-transport-id');
+    assert.equal('preserveDraft' in calls[0].body, false, 'draft preference is UI-only');
+    if (scenario === 'edited') draft.current = '发送途中修改的草稿';
+    if (scenario === 'switched') { selectedRef.current = 99; selectionSequence.current++; }
+    if (scenario === 'failed') rejectRequest(new Error('fixture network error'));
+    else resolveRequest({ data: { session: { id: 21 } } });
+    await sending;
+    assert.equal(locked, false);
+    assert.deepEqual(clears, scenario === 'normal' ? [''] : []);
+    assert.equal(draft.current, scenario === 'normal' ? '' : scenario === 'edited' ? '发送途中修改的草稿' : '保留这个草稿');
+    assert.equal(failures.length, scenario === 'failed' ? 1 : 0);
+  }
+});
 
 test('typing stays in composer state with exact untrimmed ref content, not parent page state', () => {
   const instance = composer();

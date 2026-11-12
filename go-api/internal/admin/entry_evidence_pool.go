@@ -12,6 +12,10 @@ import (
 // splits preserve the delivered node port, so probing another port is not proof
 // of suitability. The legacy allocator remains unchanged for existing callers.
 func claimHealthyEntryEvidenceBackupIPs(ctx context.Context, tx *sql.Tx, count, port, now int64) ([]ClientEntryBackupIPRecord, error) {
+	return claimHealthyEntryEvidenceBackupIPsMode(ctx, tx, count, port, now, false)
+}
+
+func claimHealthyEntryEvidenceBackupIPsMode(ctx context.Context, tx *sql.Tx, count, port, now int64, independent bool) ([]ClientEntryBackupIPRecord, error) {
 	if tx == nil || count <= 0 || count > clientEntryBackupIPMaxBatch || port < 1 || port > 65535 {
 		return nil, errors.New("备用 IP 领取参数无效")
 	}
@@ -51,9 +55,16 @@ WHERE backup.enabled = 1
 		      2 * (backup.check_interval_sec::BIGINT + (backup.tcp_timeout_ms::BIGINT + 999) / 1000))
 	  )
   )
+  AND (NOT $6::BOOLEAN OR (
+    NOT EXISTS(SELECT 1 FROM v2_entry_delivery_node n JOIN v2_entry_delivery_request r ON r.id=n.request_id WHERE LOWER(n.delivered_host)=LOWER(backup.ip) AND r.response_complete AND r.coverage='complete' AND r.status BETWEEN 200 AND 299)
+    AND NOT EXISTS(SELECT 1 FROM v2_entry_evidence_case c WHERE LOWER(c.execution->>'entry_host_a')=LOWER(backup.ip) OR LOWER(c.execution->>'entry_host_b')=LOWER(backup.ip))
+    AND NOT EXISTS(SELECT 1 FROM v2_client_entry_collection c WHERE LOWER(btrim(c.entry_host))=LOWER(backup.ip))
+    AND NOT EXISTS(SELECT 1 FROM v2_client_entry_group_ip i WHERE LOWER(btrim(i.ip))=LOWER(backup.ip))
+    AND (`+investigationNodeHostCountSQL("backup.ip")+`)=0
+  ))
 ORDER BY backup.sort ASC, backup.id ASC
 LIMIT $4
-FOR UPDATE OF backup SKIP LOCKED`, now, defaultProbeOfflineSec, clientEntryBackupIPSuccessThreshold, count, port)
+FOR UPDATE OF backup SKIP LOCKED`, now, defaultProbeOfflineSec, clientEntryBackupIPSuccessThreshold, count, port, independent)
 	if err != nil {
 		return nil, fmt.Errorf("领取健康备用 IP 失败: %w", err)
 	}
