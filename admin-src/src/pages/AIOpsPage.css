@@ -2,28 +2,35 @@
 .ai-ops-messages>*{flex-shrink:0}.ai-ops-turn{display:flex;flex-direction:column;gap:12px;min-width:0}.ai-ops-process{min-width:0;color:#7b8491;font-size:12px;padding:2px 4px}.ai-ops-process>summary{cursor:pointer;line-height:24px;overflow-wrap:anywhere;outline-offset:4px}.ai-ops-process>summary::marker{font-size:10px;color:#9ca3af}.ai-ops-process-status{margin-left:10px;color:#8b929c}.ai-ops-process-status.is-pending{color:#9a762d}.ai-ops-process-status.is-failed{color:#b65757}.ai-ops-process-review{border:0;background:none;color:#577ba8;font:inherit;line-height:inherit;margin-left:10px;padding:0 2px;cursor:pointer}.ai-ops-process-review:hover{text-decoration:underline}.ai-ops-process-review:disabled{color:#aaa;cursor:not-allowed;text-decoration:none}.ai-ops-process-content{margin-top:8px;padding-left:12px;min-width:0}.ai-ops-process-item{padding:12px 0;min-width:0;color:#454d58;font-size:13px}.ai-ops-process-item+.ai-ops-process-item{border-top:1px solid #edf0f3}.ai-ops-process-item-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;overflow-wrap:anywhere}.ai-ops-process-item-head .ant-typography{font-size:12px}.ai-ops-process-item-head .ant-tag{margin:0;font-size:11px}.ai-ops-process-item .ai-ops-pre{margin-top:6px}.ai-ops-process-item.ai-ops-action{display:flex;flex-direction:column;gap:8px}.ai-ops-markdown{line-height:1.7;overflow-wrap:anywhere;min-width:0;margin-top:8px}.ai-ops-markdown p{margin:0 0 10px}.ai-ops-markdown p:last-child{margin-bottom:0}.ai-ops-markdown ul,.ai-ops-markdown ol{padding-left:24px;margin:8px 0}.ai-ops-markdown code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#e9edf2;border-radius:3px;padding:1px 4px;font-size:.93em;white-space:pre-wrap}.ai-ops-markdown-code{padding:12px;background:#eef0f3;border-radius:5px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}.ai-ops-markdown-code code{background:transparent;padding:0}.ai-ops-markdown-table{max-width:100%;overflow:auto;margin:12px 0}.ai-ops-markdown table{border-collapse:collapse;min-width:240px;width:100%;background:#fff}.ai-ops-markdown th,.ai-ops-markdown td{border:1px solid #dfe3e9;padding:7px 10px;text-align:left;vertical-align:top}.ai-ops-markdown th{background:#eef2f6;font-weight:600}.ai-ops-markdown-heading{font-weight:600;font-size:1.08em}.ai-ops-markdown-heading.level-1{font-size:1.22em}.ai-ops-stream-cursor{display:inline-block;width:6px;height:14px;background:#4974a5;margin-top:4px;animation:ai-ops-blink 1s steps(2,start) infinite}@keyframes ai-ops-blink{to{opacity:0}}@media(prefers-reduced-motion:reduce){.ai-ops-stream-cursor{animation:none}}
 .ai-ops-message-assistant{background:transparent;padding:4px 6px}.ai-ops-message-meta{display:flex;gap:10px;flex-wrap:wrap;color:#9299a3;font-size:11px;line-height:18px}.ai-ops-message-meta>span{font-weight:500;color:#788291}
 
-/* A fixed desktop action column covers the name on narrow viewports. */
+/* Ultra-compact server cards - display more servers per row */
 .ai-ops-server-panel,.ai-ops-servers{display:flex;flex-direction:column;gap:12px;min-width:0}
-.ai-ops-server-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;min-width:0}
-.ai-ops-server-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-width:0}
-.ai-ops-server-toolbar>.ant-input-affix-wrapper{flex:1 1 300px;min-width:0}
+.ai-ops-server-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;min-width:0}
+.ai-ops-server-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.ai-ops-server-toolbar>.ant-input-affix-wrapper{flex:1 1 200px;min-width:0}
+.ai-ops-server-toolbar>.ant-select{flex:0 0 150px}
 .ai-ops-server-toolbar>.ant-space{flex:0 0 auto}
 .ai-ops-server-name,.ai-ops-server-address{white-space:normal;overflow-wrap:anywhere;word-break:break-word}
-.ai-ops-server-card{display:flex;flex-direction:column;gap:8px;min-width:0;padding:12px;border:1px solid #e5e7eb;border-radius:8px;background:var(--mini-surface,#fff);color:var(--mini-text,inherit);transition:box-shadow .2s}
-.ai-ops-server-card:hover{box-shadow:0 2px 8px rgba(0,0,0,.08)}
-.ai-ops-server-card>header{min-width:0}
-.ai-ops-server-card h3{margin:2px 0 0;font-size:14px;line-height:1.5;color:inherit;font-weight:600}
-.ai-ops-server-address{display:block;min-width:0;max-width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.6}
-.ai-ops-server-fingerprint{min-width:0;font-size:11px;line-height:1.5}
-.ai-ops-server-fingerprint>summary{cursor:pointer;color:var(--mini-hint,#777);padding-block:4px}
-.ai-ops-server-fingerprint>.ant-typography{display:block;overflow-wrap:anywhere;white-space:normal;margin-top:4px;font-size:11px}
-.ai-ops-server-actions{display:flex;flex-wrap:wrap;gap:4px}
-.ai-ops-server-card .ai-ops-server-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;padding-top:4px}
-.ai-ops-server-card .ai-ops-server-actions>.ant-btn{min-width:0;min-height:32px;height:auto;white-space:normal;padding:6px 8px;font-size:12px;touch-action:manipulation}
-.ai-ops-servers>.ant-pagination{align-self:center;max-width:100%;margin-top:8px}
-.ai-ops-server-table .ant-table-cell{padding:8px 12px;font-size:13px}
-.ai-ops-server-table .ai-ops-server-name{font-size:13px}
-.ai-ops-server-table .ai-ops-server-address{font-size:12px}
+.ai-ops-server-card{display:flex;flex-direction:column;gap:6px;min-width:0;padding:10px;border:1px solid #e5e7eb;border-radius:6px;background:var(--mini-surface,#fff);color:var(--mini-text,inherit);transition:all .2s}
+.ai-ops-server-card:hover{box-shadow:0 2px 12px rgba(0,0,0,.1);border-color:#d0d7de}
+.ai-ops-server-card>header{min-width:0;display:flex;align-items:flex-start;justify-content:space-between;gap:6px}
+.ai-ops-server-card-title{flex:1;min-width:0}
+.ai-ops-server-card h3{margin:0;font-size:13px;line-height:1.4;color:inherit;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ai-ops-server-card .ant-typography-secondary{font-size:11px}
+.ai-ops-server-card .ant-tag{margin:0;font-size:11px;padding:0 6px;line-height:20px}
+.ai-ops-server-card header .ant-tag{flex-shrink:0}
+.ai-ops-server-address{display:block;min-width:0;max-width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ai-ops-server-fingerprint{display:none}
+.ai-ops-server-meta{display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap}
+.ai-ops-server-meta .ant-space{flex:1}
+.ai-ops-server-meta .ant-btn{padding:0 4px;height:22px;font-size:11px}
+.ai-ops-server-meta .ant-tag{font-size:10px;padding:0 5px;line-height:18px}
+.ai-ops-server-actions{display:flex;flex-wrap:wrap;gap:0;justify-content:space-around}
+.ai-ops-server-card .ai-ops-server-actions{padding-top:4px;border-top:1px solid #f0f0f0}
+.ai-ops-server-card .ai-ops-server-actions>.ant-btn{min-width:0;padding:2px 6px;height:auto;font-size:11px;border:none}
+.ai-ops-servers>.ant-pagination{align-self:center;max-width:100%;margin-top:12px}
+.ai-ops-server-table .ant-table-cell{padding:6px 10px;font-size:12px}
+.ai-ops-server-table .ai-ops-server-name{font-size:12px}
+.ai-ops-server-table .ai-ops-server-address{font-size:11px}
 .ai-ops-server-form-grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(80px,1fr) minmax(0,1fr);gap:0 12px}
 .ai-ops-server-form-grid .ant-input-number{width:100%}
 .ai-ops-modal .ant-modal-title{overflow-wrap:anywhere;white-space:normal;padding-right:32px}
@@ -34,11 +41,14 @@
 .ai-ops-dialog-model.ant-select .ant-select-selector{height:auto!important;min-height:44px;align-items:center}
 .ai-ops-dialog-model.ant-select .ant-select-selection-item{white-space:normal!important;overflow-wrap:anywhere;word-break:break-word;text-overflow:clip!important;line-height:1.5!important;padding-block:9px}
 .ai-ops-dialog-model-popup .ant-select-item-option-content{white-space:normal;overflow-wrap:anywhere;word-break:break-word;line-height:1.6}
-@media(max-width:1400px){.ai-ops-server-cards{grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}}
-@media(max-width:992px){.ai-ops-server-cards{grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}.ai-ops-server-card{padding:10px}}
-@media(max-width:768px){.ai-ops-server-cards{grid-template-columns:1fr;gap:8px}.ai-ops-server-card{padding:10px}.ai-ops-server-toolbar>.ant-input-affix-wrapper{flex-basis:100%}}
-@media(min-width:1600px){.ai-ops-server-cards{grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}}
-@media(min-width:1920px){.ai-ops-server-cards{grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}}
+@media(min-width:2560px){.ai-ops-server-cards{grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px}}
+@media(min-width:1920px)and(max-width:2559px){.ai-ops-server-cards{grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}}
+@media(min-width:1600px)and(max-width:1919px){.ai-ops-server-cards{grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:9px}}
+@media(min-width:1400px)and(max-width:1599px){.ai-ops-server-cards{grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px}}
+@media(min-width:1200px)and(max-width:1399px){.ai-ops-server-cards{grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px}}
+@media(min-width:992px)and(max-width:1199px){.ai-ops-server-cards{grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}.ai-ops-server-card{padding:9px}}
+@media(min-width:768px)and(max-width:991px){.ai-ops-server-cards{grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}.ai-ops-server-card{padding:10px}.ai-ops-server-toolbar>.ant-input-affix-wrapper{flex-basis:100%}}
+@media(max-width:767px){.ai-ops-server-cards{grid-template-columns:1fr;gap:8px}.ai-ops-server-card{padding:10px}.ai-ops-server-toolbar{flex-direction:column;align-items:stretch}.ai-ops-server-toolbar>.ant-input-affix-wrapper,.ai-ops-server-toolbar>.ant-select{flex-basis:100%;width:100%}}
 @media(max-width:575.98px){
   .ai-ops-server-toolbar>.ant-input-affix-wrapper{flex-basis:100%}
   .ai-ops-server-toolbar>.ant-space .ant-btn{min-height:44px}

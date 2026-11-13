@@ -19,11 +19,12 @@ type serverRegisterPayload struct {
 	TrustSource   string `json:"trust_source"`
 	HasPassword   bool   `json:"has_password"`
 	HasPrivateKey bool   `json:"has_private_key"`
+	Group         string `json:"group"` // 新增分组字段
 }
 
 type registrationIntake struct {
 	ID, SessionID, TurnID, ActorID                     int64
-	Name, Host, Username, HostKeySHA256                string
+	Name, Host, Username, HostKeySHA256, Group         string
 	Port                                               int
 	PasswordCipher, PrivateKeyCipher, PassphraseCipher string
 	CreatedAt, ExpiresAt, RegisteredServerID           int64
@@ -33,11 +34,11 @@ func loadRegistrationIntake(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, id, sessionID, actorID int64, lock bool) (registrationIntake, error) {
 	var v registrationIntake
-	query := `SELECT id,session_id,turn_id,actor_id,name,host,port,username,host_key_sha256,password_cipher,private_key_cipher,key_passphrase_cipher,created_at,expires_at,registered_server_id FROM v2_ai_server_intake WHERE id=$1 AND session_id=$2 AND actor_id=$3`
+	query := `SELECT id,session_id,turn_id,actor_id,name,host,port,username,host_key_sha256,password_cipher,private_key_cipher,key_passphrase_cipher,created_at,expires_at,registered_server_id,COALESCE(group_name,'') FROM v2_ai_server_intake WHERE id=$1 AND session_id=$2 AND actor_id=$3`
 	if lock {
 		query += ` FOR UPDATE`
 	}
-	err := q.QueryRowContext(ctx, query, id, sessionID, actorID).Scan(&v.ID, &v.SessionID, &v.TurnID, &v.ActorID, &v.Name, &v.Host, &v.Port, &v.Username, &v.HostKeySHA256, &v.PasswordCipher, &v.PrivateKeyCipher, &v.PassphraseCipher, &v.CreatedAt, &v.ExpiresAt, &v.RegisteredServerID)
+	err := q.QueryRowContext(ctx, query, id, sessionID, actorID).Scan(&v.ID, &v.SessionID, &v.TurnID, &v.ActorID, &v.Name, &v.Host, &v.Port, &v.Username, &v.HostKeySHA256, &v.PasswordCipher, &v.PrivateKeyCipher, &v.PassphraseCipher, &v.CreatedAt, &v.ExpiresAt, &v.RegisteredServerID, &v.Group)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrNotFound
 	}
@@ -87,6 +88,7 @@ func (s *Service) captureServerRegisterAction(ctx context.Context, tx *sql.Tx, s
 	
 	// 允许没有凭据或两者都有
 	// 移除严格的格式验证
+	// 分组名称可选，允许为空
 	
 	// This same lock protects SaveServer creations and the 200-server cap.
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(2026102904)`); err != nil {
@@ -155,7 +157,8 @@ func (s *Service) applyServerRegisterAction(ctx context.Context, tx *sql.Tx, a A
 	
 	now := time.Now().Unix()
 	var serverID int64
-	err = tx.QueryRowContext(ctx, `INSERT INTO v2_ai_server(actor_id,name,host,port,username,password_cipher,private_key_cipher,key_passphrase_cipher,host_key_sha256,enabled,created_at,updated_at)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,TRUE,$10,$10) RETURNING id`, a.ActorID, p.Name, p.Host, p.Port, p.Username, intake.PasswordCipher, intake.PrivateKeyCipher, intake.PassphraseCipher, p.HostKeySHA256, now).Scan(&serverID)
+	// 新增group_name字段
+	err = tx.QueryRowContext(ctx, `INSERT INTO v2_ai_server(actor_id,name,host,port,username,password_cipher,private_key_cipher,key_passphrase_cipher,host_key_sha256,enabled,group_name,created_at,updated_at)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,TRUE,$10,$11,$11) RETURNING id`, a.ActorID, p.Name, p.Host, p.Port, p.Username, intake.PasswordCipher, intake.PrivateKeyCipher, intake.PassphraseCipher, p.HostKeySHA256, p.Group, now).Scan(&serverID)
 	if err != nil {
 		return "", err
 	}
