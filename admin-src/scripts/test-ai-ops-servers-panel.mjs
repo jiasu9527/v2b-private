@@ -31,11 +31,38 @@ test('compact servers show full names and IPv6, with actions outside any fixed t
   assert.match(html, /aria-label="搜索服务器"/);
 });
 
-test('desktop servers retain the table and the full long identity', () => {
+test('desktop servers use cards instead of the wide table, keeping identity and actions available', () => {
   const html = render({ compact: false });
-  assert.match(html, /<table/);
+  assert.match(html, /class="ai-ops-server-cards"/);
+  assert.match(html, /<article[^>]*class="ai-ops-server-card"/);
+  assert.doesNotMatch(html, /<table|ant-table-cell-fix-right/);
   assert.ok(html.includes(server.name));
-  assert.doesNotMatch(html, /<article class="ai-ops-server-card"/);
+  assert.ok(html.includes('root@[2001:db8::1234]:54101'));
+  const buttons = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) || [];
+  for (const label of ['编辑', '分组', '检查', '部署', '删除']) {
+    assert.ok(buttons.some((button) => button.includes(label)), `${label} action is hidden`);
+  }
+});
+
+test('desktop card grid is responsive and allows multiple servers per row', async () => {
+  const css = await readFile(new URL('../src/pages/AIOpsPage.css', import.meta.url), 'utf8');
+  assert.match(css, /\.ai-ops-server-cards\s*\{[^}]*display:grid/);
+  assert.match(css, /\.ai-ops-server-cards\s*\{[^}]*grid-template-columns:repeat\(auto-(?:fill|fit),minmax\((?:2[0-6]\d|1\d\d)px,1fr\)\)/);
+  assert.match(css, /@media\(max-width:767px\)\s*\{[^}]*\.ai-ops-server-cards\s*\{grid-template-columns:1fr/);
+  assert.match(css, /\.ai-ops-server-card h3\s*\{[^}]*overflow-wrap:anywhere/);
+  assert.match(css, /\.ai-ops-server-meta>\.ant-tag\s*\{[^}]*white-space:normal/);
+  assert.match(css, /\.ai-ops-server-address\s*\{[^}]*overflow-wrap:anywhere/);
+});
+
+test('desktop card pagination shows at most 50 cards and preserves group filtering', () => {
+  const servers = Array.from({ length: 51 }, (_, index) => ({ ...server, id: index + 1, name: `fixture-${index + 1}`, group: index < 3 ? '香港线路' : '' }));
+  assert.equal((render({ servers, compact: false }).match(/<article\b/g) || []).length, 50);
+  const secondPage = render({ servers, compact: false }, ['', 2]);
+  assert.equal((secondPage.match(/<article\b/g) || []).length, 1);
+  assert.ok(secondPage.includes('fixture-51'));
+  const hongKong = render({ servers, compact: false }, ['', 1, 'group:香港线路']);
+  assert.equal((hongKong.match(/<article\b/g) || []).length, 3);
+  assert.ok(hongKong.includes('香港线路 · 共 3 台'));
 });
 
 test('server filtering matches name, host, username or ID without mutating the source', () => {

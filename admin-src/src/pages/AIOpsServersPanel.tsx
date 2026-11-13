@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Button, Empty, Input, Pagination, Space, Table, Tag, Typography, Select, Modal, Form, message } from 'antd';
+import { Button, Empty, Input, Pagination, Space, Tag, Typography, Select, Modal, Form, message } from 'antd';
 import { PlusOutlined, ReloadOutlined, SearchOutlined, FolderOutlined } from '@ant-design/icons';
 import type { AIServer } from './aiOpsModel';
 import { aiServerConnection } from './aiOpsServerIdentity';
@@ -27,7 +27,7 @@ export function normalizeAIServerGroup(value: unknown): string {
   return group;
 }
 
-export default function AIOpsServersPanel({ servers, compact, busy, unavailable, onEdit, onCheck, onDeploy, onDelete, onRefresh, onSetGroup }: Props) {
+export default function AIOpsServersPanel({ servers, busy, unavailable, onEdit, onCheck, onDeploy, onDelete, onRefresh, onSetGroup }: Props) {
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
   const [selectedGroup, setSelectedGroup] = useState<string>('__all__');
@@ -57,7 +57,7 @@ export default function AIOpsServersPanel({ servers, compact, busy, unavailable,
   
   const actions = (server: AIServer) => <div className="ai-ops-server-actions">
     <Button type="link" size="small" disabled={busy} onClick={() => onEdit(server)}>编辑</Button>
-    <Button type="link" size="small" icon={<FolderOutlined />} disabled={busy || savingGroup} onClick={() => { setEditingServer(server); form.setFieldsValue({ group: server.group?.trim() ? [server.group.trim()] : [] }); setGroupModalVisible(true); }}>分组</Button>
+    <Button type="link" size="small" disabled={busy || savingGroup} onClick={() => { setEditingServer(server); form.setFieldsValue({ group: server.group?.trim() ? [server.group.trim()] : [] }); setGroupModalVisible(true); }}>分组</Button>
     <Button type="link" size="small" disabled={busy || !server.enabled || unavailable} onClick={() => onCheck(server)}>检查</Button>
     <Button type="link" size="small" disabled={busy || !server.enabled || unavailable} onClick={() => onDeploy(server)}>部署</Button>
     <Button type="link" size="small" danger disabled={busy} onClick={() => onDelete(server)}>删除</Button>
@@ -109,32 +109,24 @@ export default function AIOpsServersPanel({ servers, compact, busy, unavailable,
       {selectedGroup !== '__all__' && `${selectedGroup === '__none__' ? '未分组' : selectedGroup.slice('group:'.length)} · `}
       {query.trim() ? `找到 ${filtered.length} / ${servers.length} 台` : `共 ${filtered.length} 台`} · 每页 {PAGE_SIZE} 台
     </Typography.Text>
-    {compact ? <>
-      <div className="ai-ops-server-cards">
-        {filtered.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE).map((server) => <article key={server.id} className="ai-ops-server-card" aria-label={`服务器 #${server.id}`}>
-          <header>
-            <div className="ai-ops-server-card-title">
-              <Typography.Text type="secondary">#{server.id}</Typography.Text>
-              <h3 className="ai-ops-server-name">{server.name}</h3>
-            </div>
-            {!!server.group?.trim() && <Tag icon={<FolderOutlined />} color="blue">{server.group}</Tag>}
-          </header>
-          <Typography.Text className="ai-ops-server-address" copyable={{ text: aiServerConnection(server) }}>{aiServerConnection(server)}</Typography.Text>
-          <div className="ai-ops-server-meta">
-            {status(server)}
+    <div className="ai-ops-server-cards">
+      {filtered.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE).map((server) => <article key={server.id} className={`ai-ops-server-card${server.enabled ? '' : ' is-disabled'}`} aria-label={`服务器 #${server.id}`}>
+        <header>
+          <div className="ai-ops-server-card-title">
+            <h3 className="ai-ops-server-name">{server.name}</h3>
+            <Typography.Text type="secondary">#{server.id}</Typography.Text>
           </div>
-          {actions(server)}
-        </article>)}
-        {!filtered.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={query.trim() ? '没有匹配的服务器' : '暂无登记的服务器'} />}
-      </div>
-      {!!filtered.length && <Pagination aria-label="服务器分页" current={current} pageSize={PAGE_SIZE} total={filtered.length} onChange={setPage} showSizeChanger={false} hideOnSinglePage />}
-    </> : <Table<AIServer> className="ai-ops-server-table" rowKey="id" size="small" dataSource={filtered} scroll={{ x: 1160 }} columns={[
-      { title: '名称', dataIndex: 'name', width: 160, render: (name, server) => <><strong className="ai-ops-server-name">{name}</strong><div>#{server.id}</div></> },
-      { title: '分组', dataIndex: 'group', width: 120, render: (group) => group ? <Tag icon={<FolderOutlined />} color="blue">{group}</Tag> : <span>—</span> },
-      { title: '连接', width: 260, render: (_, server) => <Typography.Text className="ai-ops-server-address" copyable={{ text: aiServerConnection(server) }}>{aiServerConnection(server)}</Typography.Text> },
-      { title: '状态', width: 150, render: (_, server) => status(server) },
-      { title: '操作', fixed: 'right', width: 310, render: (_, server) => actions(server) },
-    ]} pagination={{ current, pageSize: PAGE_SIZE, total: filtered.length, onChange: setPage, showSizeChanger: false }} locale={{ emptyText: query.trim() ? '没有匹配的服务器' : '暂无登记的服务器' }} />}
+        </header>
+        <Typography.Text className="ai-ops-server-address" copyable={{ text: aiServerConnection(server) }}>{aiServerConnection(server)}</Typography.Text>
+        <div className="ai-ops-server-meta">
+          {!!server.group?.trim() && <Tag icon={<FolderOutlined />} color="blue" title={server.group}>{server.group}</Tag>}
+          {status(server)}
+        </div>
+        {actions(server)}
+      </article>)}
+      {!filtered.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={query.trim() ? '没有匹配的服务器' : '暂无登记的服务器'} />}
+    </div>
+    {!!filtered.length && <Pagination aria-label="服务器分页" current={current} pageSize={PAGE_SIZE} total={filtered.length} onChange={setPage} showSizeChanger={false} hideOnSinglePage />}
     
     <Modal
       title="设置服务器分组"
