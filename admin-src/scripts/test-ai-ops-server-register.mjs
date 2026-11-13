@@ -56,6 +56,13 @@ test('completed registrations report encrypted storage and absent credentials ar
   assert.ok(!empty.includes('已安全暂存'));
 });
 
+test('existing SSH server group actions show before and after without credential details', () => {
+  assert.equal(aiActionNames.server_group_set, '修改 SSH 服务器分组');
+  const html = render({ kind: 'server_group_set', target_id: 19, server_label: '洛杉矶服务器', payload: { server_id: 19, version: 3, before_group: '旧分组', group: '新分组' } });
+  for (const text of ['洛杉矶服务器', '旧分组', '新分组', '不更改 SSH 凭据']) assert.ok(html.includes(text));
+  assert.ok(render({ kind: 'server_group_set', target_id: 19, payload: { server_id: 19, before_group: '旧分组', group: '' } }).includes('未分组（移出分组）'));
+});
+
 test('manual split distinguishes an accepted asynchronous operation from completed splitting', () => {
   const html = render({kind:'entry_manual_split',target_id:4,payload:{target:{target_id:4,name:'入口一',host:'192.0.2.40',port:54101,user_count:64,auto_split_enabled:false}},output:JSON.stringify({operation_id:8,operation_status:'pending',split_completed:false})});
   assert.equal(aiActionNames.entry_manual_split,'手动触发入口二分');

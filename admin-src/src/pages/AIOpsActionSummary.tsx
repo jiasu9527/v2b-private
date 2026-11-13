@@ -3,7 +3,7 @@ import type { AIAction } from './aiOpsModel';
 import { aiServerConnection } from './aiOpsServerIdentity';
 
 export const aiActionNames: Record<string, string> = {
-  ssh_command: '服务器命令', server_register: '登记 SSH 服务器', entry_host: '修改入口地址', node_change: '修改节点',
+  ssh_command: '服务器命令', server_register: '登记 SSH 服务器', server_group_set: '修改 SSH 服务器分组', entry_host: '修改入口地址', node_change: '修改节点',
   monitor_run: '按入口规则发起检测', entry_probe_run: '指定入口与探针检测',
   user_update: '修改用户', ticket_update: '处理工单', ticket_settings: '全站工单设置',
   panel_operation: '后台业务操作',
@@ -76,6 +76,12 @@ export default function AIOpsActionSummary({ action }: { action: AIAction }) {
     <Descriptions.Item label="凭据">{[p.has_password && `密码${action.status === 'succeeded' ? '已加密保存' : '已安全暂存'}`, p.has_private_key && `私钥${action.status === 'succeeded' ? '已加密保存' : '已安全暂存'}`].filter(Boolean).join('；') || '未提供'}</Descriptions.Item>
     <Descriptions.Item label="主机指纹"><Typography.Text code>{String(p.host_key_sha256 || '—')}</Typography.Text></Descriptions.Item>
     <Descriptions.Item label="指纹来源">{p.trust_source === 'first_use' ? '首次连接记录的指纹，未经独立验证；后续连接必须匹配。' : '使用提供的固定指纹；后续连接必须匹配。'}</Descriptions.Item>
+  </Descriptions>;
+  if (action.kind === 'server_group_set') return <Descriptions size="small" column={1}>
+    <Descriptions.Item label="服务器">{action.server_label || '已登记服务器'} · #{String(p.server_id || action.target_id)}</Descriptions.Item>
+    <Descriptions.Item label="原分组">{String(p.before_group || '未分组')}</Descriptions.Item>
+    <Descriptions.Item label="目标分组">{String(p.group || '未分组（移出分组）')}</Descriptions.Item>
+    <Descriptions.Item label="范围">仅修改分组标签；不连接服务器，不更改 SSH 凭据或连接配置。</Descriptions.Item>
   </Descriptions>;
   if (action.kind === 'ssh_command') return <Descriptions size="small" column={1}>
     <Descriptions.Item label="最长执行时间">{Number(p.timeout_seconds || 120)} 秒</Descriptions.Item>

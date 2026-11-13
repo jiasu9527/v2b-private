@@ -206,6 +206,8 @@ func (s *Service) captureActionTarget(ctx context.Context, tx *sql.Tx, spec acti
 		return s.capturePanelOperation(ctx, tx, spec)
 	case "server_register":
 		return s.captureServerRegisterAction(ctx, tx, spec)
+	case "server_group_set":
+		return captureServerGroupAction(ctx, tx, spec)
 	case "user_update":
 		return s.captureUserAction(ctx, tx, spec)
 	case "ticket_update", "ticket_settings":
@@ -550,11 +552,13 @@ func (s *Service) changeActionAuthorizedOnce(ctx context.Context, actorID, sessi
 			return empty, err
 		}
 	}
-	if a.Kind == "server_register" || a.Kind == "entry_host" || a.Kind == "node_change" || a.Kind == "node_update" || a.Kind == "entry_rule_update" || a.Kind == "user_update" || a.Kind == "ticket_update" || a.Kind == "entry_manual_split" || a.Kind == "entry_auto_split" || a.Kind == "entry_split" {
+	if a.Kind == "server_register" || a.Kind == "server_group_set" || a.Kind == "entry_host" || a.Kind == "node_change" || a.Kind == "node_update" || a.Kind == "entry_rule_update" || a.Kind == "user_update" || a.Kind == "ticket_update" || a.Kind == "entry_manual_split" || a.Kind == "entry_auto_split" || a.Kind == "entry_split" {
 		a.ApprovedBy = actorID
 		output := panelActionOutput(approvalMode)
 		if a.Kind == "server_register" {
 			output, err = s.applyServerRegisterAction(ctx, tx, a)
+		} else if a.Kind == "server_group_set" {
+			output, err = applyServerGroupAction(ctx, tx, a)
 		} else if a.Kind == "entry_manual_split" || a.Kind == "entry_auto_split" || a.Kind == "entry_split" {
 			output, err = applyEntrySplitAction(ctx, tx, a)
 		} else {

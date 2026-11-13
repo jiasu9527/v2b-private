@@ -74,6 +74,7 @@ var toolCapabilities = map[string]toolCapability{
 	"ssh_status":                 {domainServers, "ssh_command"},
 	"propose_ssh_command":        {domainServers, "ssh_command"},
 	"ssh_server_register":        {domainServers, "server_register"},
+	"propose_server_group":       {domainServers, "server_group_set"},
 	"ssh_intakes_list":           {domainServers, ""},
 }
 
@@ -93,6 +94,7 @@ var actionCapabilities = map[string]capabilityDomain{
 	"ticket_settings":    domainTickets,
 	"ssh_command":        domainServers,
 	"server_register":    domainServers,
+	"server_group_set":   domainServers,
 }
 
 func capabilityDomainAllowed(domain capabilityDomain) bool {

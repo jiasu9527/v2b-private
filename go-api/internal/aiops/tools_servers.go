@@ -18,7 +18,42 @@ func serverToolDefinitions() []ToolDefinition {
 		"group":     map[string]any{"type": "string", "maxLength": 100, "description": "可选服务器分组名称，未填沿用提交资料中的分组；不包含凭据"},
 		"reason":    map[string]any{"type": "string", "minLength": 1, "maxLength": 500, "description": "登记原因及后续用途"},
 	}, "required": []string{"intake_id", "reason"}, "additionalProperties": false})
-	return []ToolDefinition{sshIntakesToolDefinition(), {Type: "function", Function: ToolFunctionDefinition{Name: "ssh_server_register", Description: "将本会话已安全收取的SSH资料提议登记到服务器列表，标准模式待审批、完全访问按当前授权执行。批量资料逐个intake_id调用，可用ssh_intakes_list核对进度。只接受intake_id，不接受密码私钥。先无认证读取主机指纹；未提供指纹时固定首次观测值（first_use），提供指纹必须匹配。仅新建、不覆盖已有服务器或凭据。登记成功不等于已登录，返回server_id后可用ssh_status检查。", Parameters: raw}}}
+	groupRaw, _ := json.Marshal(map[string]any{"type": "object", "properties": map[string]any{
+		"server_id": map[string]any{"type": "integer", "minimum": 1, "description": "通过servers_list取得的已登记SSH服务器ID；不是面板节点ID或intake_id"},
+		"version":   map[string]any{"type": "integer", "minimum": 1, "description": "servers_list中该服务器当前version；修改前必须重新读取，过期版本会拒绝"},
+		"group":     map[string]any{"type": "string", "maxLength": 100, "description": "目标分组名称；空字符串表示移出分组，不能省略"},
+		"reason":    map[string]any{"type": "string", "minLength": 1, "maxLength": 500, "description": "修改原因"},
+	}, "required": []string{"server_id", "version", "group", "reason"}, "additionalProperties": false})
+	return []ToolDefinition{
+		sshIntakesToolDefinition(),
+		{Type: "function", Function: ToolFunctionDefinition{Name: "ssh_server_register", Description: "将本会话已安全收取的SSH资料提议登记到服务器列表，标准模式待审批、完全访问按当前授权执行。批量资料逐个intake_id调用，可用ssh_intakes_list核对进度。只接受intake_id，不接受密码私钥。先无认证读取主机指纹；未提供指纹时固定首次观测值（first_use），提供指纹必须匹配。仅新建、不覆盖已有服务器或凭据。登记成功不等于已登录，返回server_id后可用ssh_status检查。", Parameters: raw}},
+		{Type: "function", Function: ToolFunctionDefinition{Name: "propose_server_group", Description: "仅修改已登记SSH服务器的分组标签，不重新登记、不连接服务器、不修改地址、指纹或凭据。先用servers_list核对server_id和version；逐次确认生成审核卡，完全访问按本轮授权执行；成功后重新读取列表核对。", Parameters: groupRaw}},
+	}
+}
+
+func (s *Service) callServerGroupTool(ctx context.Context, actorID, sessionID int64, call ToolCall) (ToolOutcome, error) {
+	var args struct {
+		ServerID int64  `json:"server_id"`
+		Version  int64  `json:"version"`
+		Group    string `json:"group"`
+		Reason   string `json:"reason"`
+	}
+	d := json.NewDecoder(strings.NewReader(call.Function.Arguments))
+	d.DisallowUnknownFields()
+	if call.Function.Name != "propose_server_group" || d.Decode(&args) != nil || d.Decode(new(any)) != io.EOF || args.ServerID <= 0 || args.Version <= 0 || strings.TrimSpace(args.Reason) == "" || len([]rune(args.Reason)) > 500 {
+		return ToolOutcome{}, ErrValidation
+	}
+	group, err := normalizeServerGroup(args.Group)
+	if err != nil {
+		return ToolOutcome{}, err
+	}
+	payload, _ := json.Marshal(serverGroupPayload{ServerID: args.ServerID, Version: args.Version, Group: group})
+	action, err := s.proposeAction(ctx, actorID, sessionID, call.ID, actionSpec{Kind: "server_group_set", TargetID: args.ServerID, TargetType: "server", Payload: payload, Reason: strings.TrimSpace(args.Reason)})
+	if err != nil {
+		return ToolOutcome{}, err
+	}
+	result, _ := json.Marshal(actionToolSummary(action))
+	return ToolOutcome{Content: string(result), Pending: true, ActionID: action.ID}, nil
 }
 
 func registrationOnlyBatch(calls []ToolCall) bool {
