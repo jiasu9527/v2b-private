@@ -367,7 +367,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
   };
   const openServer = (server: AIServer | null) => {
     fingerprintSequence.current += 1; setFingerprintLoading(false); setFingerprint(null); setEditing(server); serverForm.resetFields();
-    serverForm.setFieldsValue({ name: server?.name || '', host: server?.host || '', port: server?.port || 22, username: server?.username || 'root', host_key_sha256: server?.host_key_sha256 || '', enabled: server?.enabled ?? true, password: '', private_key: '', key_passphrase: '', clear_password: false, clear_private_key: false, clear_key_passphrase: false });
+    serverForm.setFieldsValue({ name: server?.name || '', group: server?.group || '', host: server?.host || '', port: server?.port || 22, username: server?.username || 'root', host_key_sha256: server?.host_key_sha256 || '', enabled: server?.enabled ?? true, password: '', private_key: '', key_passphrase: '', clear_password: false, clear_private_key: false, clear_key_passphrase: false });
     setServerOpen(true);
   };
   const closeServer = () => { if (busy) return; fingerprintSequence.current += 1; setFingerprintLoading(false); setFingerprint(null); setServerOpen(false); serverForm.resetFields(); setEditing(null); };
@@ -389,11 +389,22 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
       const values = await serverForm.validateFields();
       const identityChanged = editing && (editing.host !== String(values.host).trim() || editing.port !== Number(values.port) || editing.username !== String(values.username).trim() || editing.host_key_sha256 !== String(values.host_key_sha256).trim());
       if (identityChanged && !values.password && !values.private_key) throw new Error('连接身份已变更，请重新输入密码或私钥；旧凭据不会沿用');
-      await apiJsonPost('/ai-ops/server/save', { id: editing?.id || 0, version: editing?.version || 0, ...values, host: String(values.host).trim(), username: String(values.username).trim(), port: Number(values.port), enabled: !!values.enabled });
+      await apiJsonPost('/ai-ops/server/save', { id: editing?.id || 0, version: editing?.version || 0, ...values, group: String(values.group || '').trim(), host: String(values.host).trim(), username: String(values.username).trim(), port: Number(values.port), enabled: !!values.enabled });
       if (!alive.current) return;
       fingerprintSequence.current += 1; setServerOpen(false); setFingerprint(null); serverForm.resetFields(); setEditing(null); message.success('服务器已保存'); await loadLists();
     } catch (e) { fail(e, '保存服务器失败'); }
     finally { finish(); }
+  };
+  const setServerGroup = async (server: AIServer, group: string) => {
+    if (!begin('server-group')) throw new Error('请等待当前操作完成');
+    try {
+      const response = await apiJsonPost('/ai-ops/server/group', { id: server.id, version: server.version, group });
+      if (!alive.current) return;
+      const saved = response?.data as AIServer | undefined;
+      if (!saved || saved.id !== server.id || saved.group !== group || saved.version <= server.version) throw new Error('服务器已保存，但回执不完整；请刷新列表核对，不要重复提交');
+      setServers((items) => items.map((item) => item.id === saved.id ? saved : item));
+      void loadServers().catch((e) => fail(e, '刷新服务器分组失败'));
+    } finally { finish(); }
   };
   const approve = async () => {
     if (!review || !begin('review')) return;
@@ -460,7 +471,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
       </Space>
     </Drawer>
   </div>;
-  const serverPanel = <div className="ai-ops-server-panel"><Alert type="info" showIcon message="支持在聊天中批量粘贴 SSH 资料，凭据由后端加密保存" description="每次最多 50 台，可粘贴多段文字、表格或 JSON，无需逐台填表；AI 只接收服务器信息和登记编号，不接收密码或私钥。表单需填写已核对的 SSH 主机指纹；聊天未提供指纹时，记录首次连接指纹并在后续连接中核对。操作仍按会话的逐次确认或完全访问模式执行。" /><AIOpsServersPanel servers={servers} compact={compact} busy={!!busy} unavailable={unavailable} onEdit={openServer} onCheck={checkServer} onDeploy={deployServer} onDelete={(server) => setConfirmation({ kind: 'server-delete', server })} onRefresh={() => { void loadServers().catch((e) => fail(e, '读取服务器列表失败')); }} /></div>;
+  const serverPanel = <div className="ai-ops-server-panel"><Alert type="info" showIcon message="支持在聊天中批量粘贴 SSH 资料，凭据由后端加密保存" description="每次最多 50 台，可粘贴多段文字、表格或 JSON，无需逐台填表；AI 只接收服务器信息和登记编号，不接收密码或私钥。表单需填写已核对的 SSH 主机指纹；聊天未提供指纹时，记录首次连接指纹并在后续连接中核对。操作仍按会话的逐次确认或完全访问模式执行。" /><AIOpsServersPanel servers={servers} compact={compact} busy={!!busy} unavailable={unavailable} onEdit={openServer} onSetGroup={setServerGroup} onCheck={checkServer} onDeploy={deployServer} onDelete={(server) => setConfirmation({ kind: 'server-delete', server })} onRefresh={() => { void loadServers().catch((e) => fail(e, '读取服务器列表失败')); }} /></div>;
   const settings = isAdmin ? <Space direction="vertical" size="middle" style={{ width: '100%' }}><Card title="模型中转设置" size="small"><Form form={configForm} layout="vertical" disabled={!!busy} onFinish={saveConfig}>
     <Form.Item name="enabled" label="启用 AI 运维" valuePropName="checked"><Switch /></Form.Item>
     <Form.Item name="base_url" label="默认中转 Base URL" extra="未配置独立中转的模型使用此地址；所有模型均独立配置时可留空。使用兼容 OpenAI Chat Completions 的基址，修改地址需重新输入 Key 或明确清除旧 Key。"><Input placeholder="https://relay.example.com/v1" autoComplete="off" /></Form.Item>
@@ -486,6 +497,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
       <Alert type="warning" showIcon message="凭据与连接身份绑定" description="修改地址、端口、用户名或主机指纹后，必须重新输入密码或私钥；旧的密码、私钥和口令都不会沿用。" style={{ marginBottom: 16 }} />
       <Form form={serverForm} layout="vertical" disabled={!!busy} onValuesChange={(changed) => { if ('host' in changed || 'port' in changed) { fingerprintSequence.current += 1; setFingerprint(null); setFingerprintLoading(false); } }}>
         <Form.Item name="name" label="名称" rules={[{ required: true, whitespace: true }]}><Input maxLength={100} /></Form.Item>
+        <Form.Item name="group" label="分组（可选）" extra="新建服务器时可直接指定分组；已有服务器可使用列表中的“分组”操作移出分组。"><Input maxLength={100} placeholder="例如：香港线路" /></Form.Item>
         <div className="ai-ops-server-form-grid"><Form.Item className="ai-ops-server-form-host" name="host" label="服务器地址" rules={[{ required: true, whitespace: true }]}><Input placeholder="IP 或主机名，不带协议" /></Form.Item><Form.Item name="port" label="SSH 端口" rules={[{ required: true }]}><InputNumber min={1} max={65535} precision={0} /></Form.Item><Form.Item name="username" label="用户名" rules={[{ required: true, whitespace: true }]}><Input autoComplete="off" /></Form.Item></div>
         <Form.Item name="host_key_sha256" label="已核对的 SSH 主机指纹" rules={[{ required: true, whitespace: true, message: '请核对并填写主机指纹' }]} extra="建议通过服务器控制台或可信渠道核对。获取指纹不会自动填入或修改这里。"><Input placeholder="SHA256:..." /></Form.Item>
         <Button loading={fingerprintLoading} disabled={!!busy} onClick={() => void probeFingerprint()}>获取主机指纹（仅观察）</Button>

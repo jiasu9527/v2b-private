@@ -15,6 +15,7 @@ func serverToolDefinitions() []ToolDefinition {
 	raw, _ := json.Marshal(map[string]any{"type": "object", "properties": map[string]any{
 		"intake_id": map[string]any{"type": "integer", "minimum": 1, "description": "当前管理员在本会话提交SSH资料后由后台生成的intake_id；不可猜测或使用其他会话资料"},
 		"name":      map[string]any{"type": "string", "maxLength": 128, "description": "可选服务器名称，未填沿用提交名称或主机地址"},
+		"group":     map[string]any{"type": "string", "maxLength": 100, "description": "可选服务器分组名称，未填沿用提交资料中的分组；不包含凭据"},
 		"reason":    map[string]any{"type": "string", "minLength": 1, "maxLength": 500, "description": "登记原因及后续用途"},
 	}, "required": []string{"intake_id", "reason"}, "additionalProperties": false})
 	return []ToolDefinition{sshIntakesToolDefinition(), {Type: "function", Function: ToolFunctionDefinition{Name: "ssh_server_register", Description: "将本会话已安全收取的SSH资料提议登记到服务器列表，标准模式待审批、完全访问按当前授权执行。批量资料逐个intake_id调用，可用ssh_intakes_list核对进度。只接受intake_id，不接受密码私钥。先无认证读取主机指纹；未提供指纹时固定首次观测值（first_use），提供指纹必须匹配。仅新建、不覆盖已有服务器或凭据。登记成功不等于已登录，返回server_id后可用ssh_status检查。", Parameters: raw}}}
@@ -36,12 +37,17 @@ func (s *Service) callServerTool(ctx context.Context, actorID, sessionID int64, 
 	var args struct {
 		IntakeID int64  `json:"intake_id"`
 		Name     string `json:"name"`
+		Group    string `json:"group"`
 		Reason   string `json:"reason"`
 	}
 	d := json.NewDecoder(strings.NewReader(call.Function.Arguments))
 	d.DisallowUnknownFields()
 	if call.Function.Name != "ssh_server_register" || d.Decode(&args) != nil || d.Decode(new(any)) != io.EOF || args.IntakeID <= 0 || strings.TrimSpace(args.Reason) == "" || len([]rune(args.Reason)) > 500 || len([]rune(strings.TrimSpace(args.Name))) > 128 {
 		return ToolOutcome{}, ErrValidation
+	}
+	group, err := normalizeServerGroup(args.Group)
+	if err != nil {
+		return ToolOutcome{}, err
 	}
 	if err := s.ensureSchema(ctx); err != nil {
 		return ToolOutcome{}, err
@@ -97,7 +103,10 @@ func (s *Service) callServerTool(ctx context.Context, actorID, sessionID int64, 
 	if name == "" {
 		name = intake.Host
 	}
-	payload, _ := json.Marshal(serverRegisterPayload{IntakeID: intake.ID, Name: name, Host: intake.Host, Port: intake.Port, Username: intake.Username, HostKeySHA256: observed.Fingerprint, TrustSource: trustSource, HasPassword: intake.PasswordCipher != "", HasPrivateKey: intake.PrivateKeyCipher != ""})
+	if group == "" {
+		group = intake.Group
+	}
+	payload, _ := json.Marshal(serverRegisterPayload{IntakeID: intake.ID, Name: name, Host: intake.Host, Port: intake.Port, Username: intake.Username, HostKeySHA256: observed.Fingerprint, TrustSource: trustSource, HasPassword: intake.PasswordCipher != "", HasPrivateKey: intake.PrivateKeyCipher != "", Group: group})
 	action, err := s.proposeAction(ctx, actorID, sessionID, call.ID, actionSpec{Kind: "server_register", TargetID: intake.ID, TargetType: "server_intake", Payload: payload, Reason: args.Reason})
 	if err != nil {
 		return ToolOutcome{}, err

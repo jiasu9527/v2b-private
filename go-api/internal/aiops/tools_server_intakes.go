@@ -14,6 +14,7 @@ type sshIntakePublic struct {
 	IntakeID           int64  `json:"intake_id"`
 	ItemIndex          int    `json:"item_index"`
 	Name               string `json:"name"`
+	Group              string `json:"group"`
 	Host               string `json:"host"`
 	Port               int    `json:"port"`
 	Username           string `json:"username"`
@@ -68,7 +69,7 @@ func (s *Service) callSSHIntakesList(ctx context.Context, actorID, sessionID int
 	now := time.Now().Unix()
 	rows, err := s.db.QueryContext(ctx, `SELECT i.id,i.item_index,i.name,i.host,i.port,i.username,i.host_key_sha256,i.password_cipher<>'',i.private_key_cipher<>'',i.key_passphrase_cipher<>'',i.expires_at,i.registered_server_id,
 		CASE WHEN i.registered_server_id>0 THEN 'registered' WHEN i.expires_at<=$6 THEN 'expired'
-		WHEN EXISTS(SELECT 1 FROM v2_ai_action a WHERE a.session_id=i.session_id AND a.actor_id=i.actor_id AND a.kind='server_register' AND a.target_id=i.id AND a.status='pending' AND a.expires_at>$6) THEN 'pending' ELSE 'unregistered' END
+		WHEN EXISTS(SELECT 1 FROM v2_ai_action a WHERE a.session_id=i.session_id AND a.actor_id=i.actor_id AND a.kind='server_register' AND a.target_id=i.id AND a.status='pending' AND a.expires_at>$6) THEN 'pending' ELSE 'unregistered' END,i.group_name
 		FROM v2_ai_server_intake i WHERE i.session_id=$1 AND i.actor_id=$2 AND i.turn_id=$3 ORDER BY i.item_index LIMIT $4 OFFSET $5`, sessionID, actorID, args.TurnID, args.Limit, args.Offset, now)
 	if err != nil {
 		return ToolOutcome{}, err
@@ -78,7 +79,7 @@ func (s *Service) callSSHIntakesList(ctx context.Context, actorID, sessionID int
 	size := 0
 	for rows.Next() {
 		var item sshIntakePublic
-		if err := rows.Scan(&item.IntakeID, &item.ItemIndex, &item.Name, &item.Host, &item.Port, &item.Username, &item.HostKeySHA256, &item.HasPassword, &item.HasPrivateKey, &item.HasKeyPassphrase, &item.ExpiresAt, &item.RegisteredServerID, &item.State); err != nil {
+		if err := rows.Scan(&item.IntakeID, &item.ItemIndex, &item.Name, &item.Host, &item.Port, &item.Username, &item.HostKeySHA256, &item.HasPassword, &item.HasPrivateKey, &item.HasKeyPassphrase, &item.ExpiresAt, &item.RegisteredServerID, &item.State, &item.Group); err != nil {
 			return ToolOutcome{}, err
 		}
 		raw, err := json.Marshal(item)

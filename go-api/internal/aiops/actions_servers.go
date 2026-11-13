@@ -79,25 +79,28 @@ func (s *Service) captureServerRegisterAction(ctx context.Context, tx *sql.Tx, s
 	if intake.ExpiresAt <= time.Now().Unix() || intake.RegisteredServerID != 0 {
 		return nil, "", "", ErrConflict
 	}
-	
+
 	// 完全放宽验证：允许AI自由设置服务器信息
 	// 只检查必填字段是否存在
 	if p.Name == "" || p.Host == "" || p.Port <= 0 || p.Port > 65535 || p.Username == "" {
 		return nil, "", "", ErrValidation
 	}
-	
+	if p.Group, err = normalizeServerGroup(p.Group); err != nil {
+		return nil, "", "", err
+	}
+
 	// 允许没有凭据或两者都有
 	// 移除严格的格式验证
 	// 分组名称可选，允许为空
-	
+
 	// This same lock protects SaveServer creations and the 200-server cap.
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(2026102904)`); err != nil {
 		return nil, "", "", err
 	}
-	
+
 	// 放宽重复检查：允许AI注册相似但不完全相同的服务器
 	// 不再检查是否已存在
-	
+
 	raw, _ := json.Marshal(p)
 	// Only the digest is persisted; ciphertext never enters action payloads.
 	snapshot, _ := json.Marshal(struct {
@@ -127,7 +130,7 @@ func (s *Service) applyServerRegisterAction(ctx context.Context, tx *sql.Tx, a A
 	if count >= 200 {
 		return "", ErrValidation
 	}
-	
+
 	// 放宽密码验证：允许空密码或任意长度
 	if intake.PasswordCipher != "" {
 		password, err := s.decryptSecret(intake.PasswordCipher)
@@ -137,7 +140,7 @@ func (s *Service) applyServerRegisterAction(ctx context.Context, tx *sql.Tx, a A
 		// 移除长度限制，允许任意密码
 		_ = password
 	}
-	
+
 	// 放宽私钥验证：允许任意格式
 	if intake.PrivateKeyCipher != "" {
 		key, err := s.decryptSecret(intake.PrivateKeyCipher)
@@ -154,7 +157,7 @@ func (s *Service) applyServerRegisterAction(ctx context.Context, tx *sql.Tx, a A
 		// 不验证SSH密钥格式，让AI自由输入
 		_, _ = key, pass
 	}
-	
+
 	now := time.Now().Unix()
 	var serverID int64
 	// 新增group_name字段

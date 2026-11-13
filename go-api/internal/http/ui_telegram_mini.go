@@ -3,7 +3,6 @@ package httpapi
 import (
 	"html/template"
 	"net/http"
-	"path/filepath"
 
 	"forest/go-api/internal/config"
 )
@@ -38,5 +37,5 @@ func renderTelegramMiniShell(w http.ResponseWriter, r *http.Request, cfg config.
 		return
 	}
 	public := resolvePublicDir(cfg.PublicDir)
-	renderHTML(w, telegramMiniTemplate, adminShellData{VersionSuffix: assetVersionSuffix(filepath.Join(public, "assets", "admin-new", "admin.js"), filepath.Join(public, "assets", "admin-new", "index.css"))})
+	renderHTML(w, telegramMiniTemplate, adminShellData{VersionSuffix: adminAssetVersionSuffix(public)})
 }

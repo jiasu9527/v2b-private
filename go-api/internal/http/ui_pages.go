@@ -87,10 +87,7 @@ func resolveUIPageKind(cfg config.Config, requestPath string) uiPageKind {
 func renderAdminShell(w http.ResponseWriter, cfg config.Config) {
 	settings := loadUISiteSettings(cfg)
 	publicDir := resolvePublicDir(cfg.PublicDir)
-	versionSuffix := assetVersionSuffix(
-		filepath.Join(publicDir, "assets", "admin-new", "admin.js"),
-		filepath.Join(publicDir, "assets", "admin-new", "index.css"),
-	)
+	versionSuffix := adminAssetVersionSuffix(publicDir)
 
 	renderHTML(w, adminShellTemplate, adminShellData{
 		Title:         settings.Title,

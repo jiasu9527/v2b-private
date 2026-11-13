@@ -56,7 +56,7 @@ func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Servic
 	switch action {
 	case "config", "sessions", "session", "session/stream", "servers", "knowledge", "knowledge/detail":
 		expected = "GET"
-	case "config/save", "session/create", "chat/send", "session/access", "chat/stop", "session/delete", "session/clear", "reset", "server/save", "server/delete", "server/fingerprint", "action/approve", "action/reject", "knowledge/save", "knowledge/delete":
+	case "config/save", "session/create", "chat/send", "session/access", "chat/stop", "session/delete", "session/clear", "reset", "server/save", "server/group", "server/delete", "server/fingerprint", "action/approve", "action/reject", "knowledge/save", "knowledge/delete":
 	default:
 		writeJSON(w, 404, map[string]string{"message": "Not found"})
 		return

@@ -24,9 +24,9 @@ var ErrSSHIntakeInvalid = fmt.Errorf("%w：检测到 SSH 凭据，但无法完�
 var ErrSSHIntakeMultiple = fmt.Errorf("%w：SSH 资料存在重复或冲突字段，请核对每台对应的资料；凭据未发送给模型", ErrValidation)
 
 type SSHRegistrationInput struct {
-	Name, Host, Username, HostKeySHA256 string
-	Password, PrivateKey, KeyPassphrase string
-	Port                                int
+	Name, Host, Username, HostKeySHA256, Group string
+	Password, PrivateKey, KeyPassphrase        string
+	Port                                       int
 }
 
 const sshIntakeKeyMarker = "[LOCAL_SSH_PRIVATE_KEY_BLOCK]"
@@ -73,6 +73,7 @@ func sshIntakeLabel(line string) (string, string, bool) {
 		"privatekey": "private_key", "private key": "private_key", "private_key": "private_key", "私钥": "private_key", "ssh私钥": "private_key", "ssh 私钥": "private_key",
 		"passphrase": "passphrase", "key passphrase": "passphrase", "key_passphrase": "passphrase", "私钥口令": "passphrase", "私钥密码": "passphrase", "口令": "passphrase",
 		"name": "name", "名称": "name", "服务器名称": "name", "备注": "name",
+		"group": "group", "group_name": "group", "分组": "group", "服务器分组": "group",
 		"fingerprint": "fingerprint", "host key": "fingerprint", "host_key_sha256": "fingerprint", "主机指纹": "fingerprint", "指纹": "fingerprint", "ssh指纹": "fingerprint",
 	}
 	k, ok := aliases[key]
@@ -215,6 +216,12 @@ func parseSSHRegistrationSingle(content string) (string, []SSHRegistrationInput,
 			explicit = true
 		case "name":
 			input.Name = strings.TrimSpace(value)
+		case "group":
+			var err error
+			input.Group, err = normalizeServerGroup(value)
+			if err != nil {
+				return ErrSSHIntakeInvalid
+			}
 		case "fingerprint":
 			input.HostKeySHA256 = strings.TrimSpace(value)
 		}
@@ -404,7 +411,7 @@ func parseSSHRegistrationSingle(content string) (string, []SSHRegistrationInput,
 		if secret == "" {
 			continue
 		}
-		for _, public := range []string{input.Host, input.Username, input.Name, input.HostKeySHA256} {
+		for _, public := range []string{input.Host, input.Username, input.Name, input.Group, input.HostKeySHA256} {
 			if strings.Contains(public, secret) {
 				return fail(ErrSSHIntakeInvalid)
 			}
@@ -436,11 +443,15 @@ func (s *Service) storeSSHIntakesTx(ctx context.Context, tx *sql.Tx, actorID, se
 			}
 		}
 		var id int64
-		err := tx.QueryRowContext(ctx, `INSERT INTO v2_ai_server_intake(session_id,turn_id,actor_id,item_index,name,host,port,username,host_key_sha256,password_cipher,private_key_cipher,key_passphrase_cipher,created_at,expires_at)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`, sessionID, turnID, actorID, index+1, input.Name, input.Host, input.Port, input.Username, input.HostKeySHA256, ciphers[0], ciphers[1], ciphers[2], now, now+86400).Scan(&id)
+		group, groupErr := normalizeServerGroup(input.Group)
+		if groupErr != nil {
+			return "", ErrSSHIntakeInvalid
+		}
+		err := tx.QueryRowContext(ctx, `INSERT INTO v2_ai_server_intake(session_id,turn_id,actor_id,item_index,name,host,port,username,host_key_sha256,password_cipher,private_key_cipher,key_passphrase_cipher,group_name,created_at,expires_at)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`, sessionID, turnID, actorID, index+1, input.Name, input.Host, input.Port, input.Username, input.HostKeySHA256, ciphers[0], ciphers[1], ciphers[2], group, now, now+86400).Scan(&id)
 		if err != nil {
 			return "", err
 		}
-		items = append(items, sshIntakePublic{IntakeID: id, ItemIndex: index + 1, Name: input.Name, Host: input.Host, Port: input.Port, Username: input.Username, HostKeySHA256: input.HostKeySHA256, HasPassword: input.Password != "", HasPrivateKey: input.PrivateKey != "", HasKeyPassphrase: input.KeyPassphrase != "", ExpiresAt: now + 86400})
+		items = append(items, sshIntakePublic{IntakeID: id, ItemIndex: index + 1, Name: input.Name, Group: group, Host: input.Host, Port: input.Port, Username: input.Username, HostKeySHA256: input.HostKeySHA256, HasPassword: input.Password != "", HasPrivateKey: input.PrivateKey != "", HasKeyPassphrase: input.KeyPassphrase != "", ExpiresAt: now + 86400})
 	}
 	raw, err := json.Marshal(map[string]any{"turn_id": turnID, "total": len(items), "items": items})
 	if err != nil {

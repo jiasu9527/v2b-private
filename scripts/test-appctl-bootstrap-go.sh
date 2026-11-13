@@ -96,7 +96,7 @@ if [[ ! -s "${TAR_LOG}" ]]; then
   exit 1
 fi
 
-EXPECTED=$'mod tidy\nbuild -o '"${TMP_DIR}"'/go-api/bin/forest ./cmd/server'
+EXPECTED=$'build -o '"${TMP_DIR}"'/go-api/bin/forest ./cmd/server'
 EXPECTED+=$'\nbuild -o '"${TMP_DIR}"'/storage/probe/forest-probe-linux-amd64 ./cmd/probe'
 EXPECTED+=$'\nbuild -o '"${TMP_DIR}"'/storage/probe/forest-probe-linux-arm64 ./cmd/probe'
 ACTUAL="$(cat "${GO_LOG}")"

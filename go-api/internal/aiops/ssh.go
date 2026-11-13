@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"forest/go-api/internal/cliententry"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -26,7 +27,7 @@ var sshSlots = make(chan struct{}, 2)
 var sshUserRE = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 var errFingerprintObserved = errors.New("SSH host key observed without authentication")
 
-const serverColumns = `id,name,host,port,username,host_key_sha256,enabled,version,password_cipher<>'',private_key_cipher<>'',key_passphrase_cipher<>'',created_at,updated_at`
+const serverColumns = `id,name,host,port,username,host_key_sha256,enabled,version,password_cipher<>'',private_key_cipher<>'',key_passphrase_cipher<>'',created_at,updated_at,group_name`
 const diagnosticCommand = `printf '%s\n' '--- system ---'; uname -a; printf '%s\n' '--- uptime ---'; uptime; printf '%s\n' '--- memory ---'; free -m; printf '%s\n' '--- disk ---'; df -h; printf '%s\n' '--- listening sockets ---'; ss -lnt`
 
 type sshSecretServer struct {
@@ -36,7 +37,7 @@ type sshSecretServer struct {
 
 func scanServer(row interface{ Scan(...any) error }) (Server, error) {
 	var v Server
-	err := row.Scan(&v.ID, &v.Name, &v.Host, &v.Port, &v.Username, &v.HostKeySHA256, &v.Enabled, &v.Version, &v.HasPassword, &v.HasPrivateKey, &v.HasKeyPassphrase, &v.CreatedAt, &v.UpdatedAt)
+	err := row.Scan(&v.ID, &v.Name, &v.Host, &v.Port, &v.Username, &v.HostKeySHA256, &v.Enabled, &v.Version, &v.HasPassword, &v.HasPrivateKey, &v.HasKeyPassphrase, &v.CreatedAt, &v.UpdatedAt, &v.Group)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrNotFound
 	}
@@ -44,6 +45,11 @@ func scanServer(row interface{ Scan(...any) error }) (Server, error) {
 }
 func normalizeServer(r ServerSaveRequest) (ServerSaveRequest, error) {
 	r.Name = strings.TrimSpace(r.Name)
+	var groupErr error
+	r.Group, groupErr = normalizeServerGroup(r.Group)
+	if groupErr != nil {
+		return r, groupErr
+	}
 	r.Username = strings.TrimSpace(r.Username)
 	r.HostKeySHA256 = strings.TrimSpace(r.HostKeySHA256)
 	host, err := cliententry.NormalizeHost(r.Host)
@@ -68,6 +74,19 @@ func normalizeServer(r ServerSaveRequest) (ServerSaveRequest, error) {
 		return r, ErrValidation
 	}
 	return r, nil
+}
+
+func normalizeServerGroup(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if len([]rune(value)) > 100 || len(value) > 400 {
+		return "", ErrValidation
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return "", ErrValidation
+		}
+	}
+	return value, nil
 }
 func (s *Service) ListServers(ctx context.Context, actorID int64) ([]Server, error) {
 	if err := s.ensureSchema(ctx); err != nil {
@@ -194,12 +213,58 @@ func (s *Service) SaveServer(ctx context.Context, actorID int64, r ServerSaveReq
 	now := time.Now().Unix()
 	var result Server
 	if r.ID == 0 {
-		result, err = scanServer(tx.QueryRowContext(ctx, `INSERT INTO v2_ai_server(actor_id,name,host,port,username,password_cipher,private_key_cipher,key_passphrase_cipher,host_key_sha256,enabled,created_at,updated_at)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11) RETURNING `+serverColumns, actorID, r.Name, r.Host, r.Port, r.Username, password, key, pass, r.HostKeySHA256, r.Enabled, now))
+		result, err = scanServer(tx.QueryRowContext(ctx, `INSERT INTO v2_ai_server(actor_id,name,host,port,username,password_cipher,private_key_cipher,key_passphrase_cipher,host_key_sha256,enabled,group_name,created_at,updated_at)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12) RETURNING `+serverColumns, actorID, r.Name, r.Host, r.Port, r.Username, password, key, pass, r.HostKeySHA256, r.Enabled, r.Group, now))
 	} else {
-		result, err = scanServer(tx.QueryRowContext(ctx, `UPDATE v2_ai_server SET name=$2,host=$3,port=$4,username=$5,password_cipher=$6,private_key_cipher=$7,key_passphrase_cipher=$8,host_key_sha256=$9,enabled=$10,version=version+1,updated_at=$11 WHERE id=$1 RETURNING `+serverColumns, r.ID, r.Name, r.Host, r.Port, r.Username, password, key, pass, r.HostKeySHA256, r.Enabled, now))
+		result, err = scanServer(tx.QueryRowContext(ctx, `UPDATE v2_ai_server SET name=$2,host=$3,port=$4,username=$5,password_cipher=$6,private_key_cipher=$7,key_passphrase_cipher=$8,host_key_sha256=$9,enabled=$10,group_name=CASE WHEN $11='' THEN group_name ELSE $11 END,version=version+1,updated_at=$12 WHERE id=$1 RETURNING `+serverColumns, r.ID, r.Name, r.Host, r.Port, r.Username, password, key, pass, r.HostKeySHA256, r.Enabled, r.Group, now))
 	}
 	if err != nil {
 		return empty, err
+	}
+	return result, tx.Commit()
+}
+
+// SetServerGroup changes display metadata only. It does not need the SSH
+// credentials or host fingerprint required by the full SaveServer editor.
+// Version CAS prevents concurrent edits from silently overwriting each other.
+func (s *Service) SetServerGroup(ctx context.Context, actorID, id, version int64, group string) (Server, error) {
+	if id <= 0 || version <= 0 {
+		return Server{}, ErrValidation
+	}
+	var err error
+	group, err = normalizeServerGroup(group)
+	if err != nil {
+		return Server{}, err
+	}
+	if err = s.ensureSchema(ctx); err != nil {
+		return Server{}, err
+	}
+	if err = s.requireOperator(ctx, actorID); err != nil {
+		return Server{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Server{}, err
+	}
+	defer tx.Rollback()
+	if err = lockAIState(ctx, tx); err != nil {
+		return Server{}, err
+	}
+	if err = s.requireOperatorTx(ctx, tx, actorID); err != nil {
+		return Server{}, err
+	}
+	result, err := scanServer(tx.QueryRowContext(ctx, `UPDATE v2_ai_server SET group_name=$3,version=version+1,updated_at=$4 WHERE id=$1 AND version=$2 RETURNING `+serverColumns, id, version, group, time.Now().Unix()))
+	if errors.Is(err, ErrNotFound) {
+		var exists bool
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_ai_server WHERE id=$1)`, id).Scan(&exists); err != nil {
+			return Server{}, err
+		}
+		if exists {
+			return Server{}, ErrConflict
+		}
+		return Server{}, ErrNotFound
+	}
+	if err != nil {
+		return Server{}, err
 	}
 	return result, tx.Commit()
 }

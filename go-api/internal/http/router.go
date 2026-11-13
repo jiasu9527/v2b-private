@@ -1202,6 +1202,8 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			}
 		case maybeServeUIPage(cfg, w, r):
 			return
+		case serveRuntimeAdminAsset(w, r, cfg.PublicDir):
+			return
 		case shouldServeStatic(cfg.PublicDir, r.URL.Path):
 			fileServer.ServeHTTP(w, r)
 			return

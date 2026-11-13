@@ -82,6 +82,11 @@ func (f *fakeAIOps) SaveServer(_ context.Context, actor int64, r aiops.ServerSav
 	f.called(actor)
 	return aiops.Server{ID: 1, HasPassword: r.Password != ""}, f.err
 }
+func (f *fakeAIOps) SetServerGroup(_ context.Context, actor, id, version int64, group string) (aiops.Server, error) {
+	f.called(actor)
+	f.id = id
+	return aiops.Server{ID: id, Version: version + 1, Group: group}, f.err
+}
 func (f *fakeAIOps) DeleteServer(_ context.Context, actor, id, version int64) error {
 	f.called(actor)
 	f.id = id

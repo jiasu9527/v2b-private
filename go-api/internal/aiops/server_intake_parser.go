@@ -61,12 +61,16 @@ func ParseSSHRegistrationInput(content string) (string, []SSHRegistrationInput, 
 		boundary := labeled && field == "host"
 		if labeled && field == "name" {
 			// A name immediately preceding the next host belongs to that
-			// record; a trailing name still belongs to the current record.
+			// record, even when a group label appears between them. A trailing
+			// name without another host still belongs to the current record.
 			for next := index + 1; next < len(lines); next++ {
 				if strings.TrimSpace(lines[next]) == "" {
 					continue
 				}
 				nextField, _, nextLabeled := sshIntakeLabel(lines[next])
+				if nextLabeled && nextField == "group" {
+					continue
+				}
 				_, _, endpointErr := sshIntakeEndpoint(lines[next], false)
 				_, command := sshIntakeSSHCommand(lines[next])
 				boundary = nextLabeled && nextField == "host" || endpointErr == nil || command
@@ -134,7 +138,7 @@ func ParseSSHRegistrationInput(content string) (string, []SSHRegistrationInput, 
 			continue
 		}
 		for index, input := range inputs {
-			for _, public := range []string{input.Host, input.Username, input.Name, input.HostKeySHA256} {
+			for _, public := range []string{input.Host, input.Username, input.Name, input.Group, input.HostKeySHA256} {
 				if strings.Contains(public, secret) {
 					return fail(sshIntakeRecordError(index+1, ErrSSHIntakeInvalid))
 				}
@@ -194,7 +198,7 @@ func sshIntakeJSONObject(dec *json.Decoder) (string, error) {
 		return "", ErrSSHIntakeInvalid
 	}
 	var out []string
-	for _, field := range []string{"name", "host", "port", "username", "password", "private_key", "passphrase", "fingerprint"} {
+	for _, field := range []string{"name", "group", "host", "port", "username", "password", "private_key", "passphrase", "fingerprint"} {
 		if value, ok := fields[field]; ok {
 			out = append(out, sshIntakeFormatField(field, value))
 		}

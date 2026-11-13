@@ -31,11 +31,11 @@ Telegram 是现有 AI 运维的入口，不是另一套 AI。推荐通过 **Bot 
 - 历史会话从顶部按钮打开；Telegram 返回键优先关闭当前弹层或返回聊天，不会停止后台任务。停止任务需点击对话的停止按钮。
 - 手机键盘弹出时隐藏底部导航，保留输入和发送区域；支持安全区、窄屏和桌面 Telegram 窗口。
 
-仅更新小程序样式时，部署仓库中的 `public/assets/admin-new/admin.js` 和 `index.css` 即可，无需重新绑定或重新安装 Bot 菜单；重新打开小程序加载新资源。
+仅更新小程序样式时，在服务端执行 `./update.sh` 即可重新构建并发布管理前端（包括小程序共用的资源），无需重新绑定或重新安装 Bot 菜单；重新打开小程序加载新资源。构建产物在 `.local/admin-new/releases/`，不要手工覆盖 Git 跟踪的 `public/assets/admin-new/`。详见 [管理前端更新说明](admin-frontend-update.md)。
 
 ## 私聊通道启用（兼容）
 
-1. 更新代码、构建／重启 Go 后端，并更新仓库中的管理员静态资源。所需 PostgreSQL 表由后端自动初始化。
+1. 在服务端执行 `./update.sh`，更新 Go 后端并构建／启用管理前端；所需 PostgreSQL 表由后端自动初始化。
 2. 在面板原有 Telegram 设置中配置并启用 Bot，在 AI 运维设置中配置可用模型与中转。
 3. 打开 **AI 运维 → Telegram**，选择默认模型、权限模式、流式更新和完成通知，启用并保存。
 4. 点击 **更新 Webhook**。这会给现有 Webhook 添加独立的 `secret_token` 验证，不另建 Bot，也不移除原来的工单／检测功能。

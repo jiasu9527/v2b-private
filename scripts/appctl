@@ -55,6 +55,11 @@ prepare_go_env() {
   if [[ " ${GOFLAGS:-} " != *" -modcacherw "* ]]; then
     export GOFLAGS="${GOFLAGS:+${GOFLAGS} }-modcacherw"
   fi
+  # Runtime builds must never rewrite tracked go.mod/go.sum. Missing module
+  # metadata is an update failure, not a local change for the next pull.
+  if [[ " ${GOFLAGS:-} " != *" -mod=readonly "* ]]; then
+    export GOFLAGS="${GOFLAGS:+${GOFLAGS} }-mod=readonly"
+  fi
   mkdir -p "${HOME}" "${GOPATH}" "${GOMODCACHE}" "${GOCACHE}"
 }
 
@@ -1022,7 +1027,6 @@ run_ops_migrate_config() {
 build() {
   ensure_go
   cd "${GO_DIR}"
-  GOPROXY="${GOPROXY:-https://goproxy.cn,direct}" "${GO_BIN}" mod tidy
   "${GO_BIN}" build -o "${BIN_PATH}" ./cmd/server
   build_probe
   if [[ -f "${ROOT_DIR}/scripts/prepare-ipgeo.sh" ]]; then
@@ -1030,6 +1034,80 @@ build() {
       echo "地区库暂未完整准备，网站仍可正常运行；在线分析页会标注未识别地区。" >&2
     fi
   fi
+}
+
+# Build the Vite admin UI outside Git's tracked public/assets tree. The Go
+# server serves this validated release through the runtime admin asset overlay.
+# A failed build leaves the previous release untouched and never restarts the
+# service with a half-written bundle.
+ADMIN_BUILD_STAGED=""
+ADMIN_PREVIOUS_LINK=""
+ADMIN_PREVIOUS_PRESENT=false
+ADMIN_ACTIVATED=false
+build_admin_frontend() {
+  if [[ ! -f "${ROOT_DIR}/admin-src/package.json" ]]; then
+    return 0 # API-only/test installations do not ship the admin source.
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "后台前端源码存在但未找到 npm，更新未完成；请安装 Node.js/npm 后重试" >&2
+    return 1
+  fi
+  if [[ ! -f "${ROOT_DIR}/admin-src/package-lock.json" ]]; then
+    echo "缺少 admin-src/package-lock.json，拒绝非确定性前端更新" >&2
+    return 1
+  fi
+
+  local releases="${LOCAL_TOOL_DIR}/admin-new/releases"
+  local staged="${releases}/$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  mkdir -p "${staged}"
+  (
+    cd "${ROOT_DIR}/admin-src"
+    npm ci --no-audit --no-fund
+    npm run check
+    npm run build -- --outDir "${staged}"
+  )
+  if [[ ! -s "${staged}/admin.js" || ! -s "${staged}/index.css" || ! -s "${staged}/index.html" ]]; then
+    echo "后台前端编译结果不完整，保留旧版本并终止更新：${staged}" >&2
+    return 1
+  fi
+  ADMIN_BUILD_STAGED="${staged}"
+}
+
+activate_admin_frontend() {
+  [[ -n "${ADMIN_BUILD_STAGED}" ]] || return 0
+  local base="${LOCAL_TOOL_DIR}/admin-new"
+  local current="${base}/current"
+  local next="${base}/.current.$$"
+  if [[ -e "${current}" && ! -L "${current}" ]]; then
+    echo "运行时前端目录已被占用且不是受管软链接：${current}" >&2
+    return 1
+  fi
+  ADMIN_PREVIOUS_PRESENT=false
+  ADMIN_PREVIOUS_LINK=""
+  if [[ -L "${current}" ]]; then
+    ADMIN_PREVIOUS_PRESENT=true
+    ADMIN_PREVIOUS_LINK="$(readlink "${current}")"
+  fi
+  : > "${ADMIN_BUILD_STAGED}/.published"
+  ln -s "releases/$(basename "${ADMIN_BUILD_STAGED}")" "${next}"
+  mv -f "${next}" "${current}"
+  ADMIN_ACTIVATED=true
+  echo "后台前端已启用：$(basename "${ADMIN_BUILD_STAGED}")"
+}
+
+rollback_admin_frontend() {
+  [[ "${ADMIN_ACTIVATED}" == "true" ]] || return 0
+  local base="${LOCAL_TOOL_DIR}/admin-new"
+  local current="${base}/current"
+  local next="${base}/.rollback.$$"
+  if [[ "${ADMIN_PREVIOUS_PRESENT}" == "true" ]]; then
+    ln -s "${ADMIN_PREVIOUS_LINK}" "${next}"
+    mv -f "${next}" "${current}"
+  else
+    rm -f "${current}"
+  fi
+  ADMIN_ACTIVATED=false
+  echo "服务启动失败，已恢复上一版管理前端" >&2
 }
 
 build_probe() {
@@ -1305,7 +1383,7 @@ restart_running_service_after_update() {
   local previous_pid="${1:-}"
   if systemd_service_active; then
     run_systemctl_checked restart "${FOREST_SERVICE_NAME}" >/dev/null
-    return 0
+    return $?
   fi
 
   local old_pid current_pid
@@ -1526,7 +1604,9 @@ cmd_install() {
     exit 1
   fi
   run_ops_install
+  build_admin_frontend
   build
+  activate_admin_frontend
   ensure_systemd_service_running || {
     start_binary
     echo "已启动，PID $(cat "${PID_PATH}")"
@@ -1568,14 +1648,56 @@ cmd_install_legacy() {
   if ! run_legacy_mysql_migration_flow "${legacy_env}"; then
     exit 1
   fi
+  build_admin_frontend
   build
+  activate_admin_frontend
   ensure_systemd_service_running || {
     start_binary
     echo "已启动，PID $(cat "${PID_PATH}")"
   }
 }
 
+finish_update_build_and_restart() {
+  local previous_pid="${1:-}"
+  local had_running_service="${2:-false}"
+  print_update_step "5/5" "构建并应用更新"
+  build_admin_frontend
+  build
+  # A service running the previous Go binary cannot serve the new overlay;
+  # activate immediately before restart to minimize the mixed-version window.
+  activate_admin_frontend
+  if ensure_systemd_service_running >/dev/null; then
+    if [[ "${had_running_service}" == "true" ]]; then
+      print_update_summary restarted
+    else
+      print_update_summary started
+    fi
+    return 0
+  fi
+  if restart_running_service_after_update "${previous_pid}" >/dev/null; then
+    print_update_summary restarted
+    return 0
+  fi
+  if [[ "${had_running_service}" == "true" ]]; then
+    rollback_admin_frontend
+    echo "服务重启失败；管理前端已回滚，但数据库更新和后端二进制可能已写入，请检查 systemd 与应用日志后重试" >&2
+    return 1
+  fi
+  warn_if_service_stopped_after_update
+}
+
 cmd_update() {
+  # A shell executing appctl does not reload functions after git pull. Re-exec
+  # the checked-out script once so the very first direct upgrade uses the new
+  # migration/build logic. update.sh does its pull before spawning this script.
+  if [[ "${APPCTL_SKIP_PULL_ONCE:-0}" == "1" ]]; then
+    unset APPCTL_SKIP_PULL_ONCE
+  else
+    print_update_step "1/5" "拉取最新代码"
+    update_source_code_from_git
+    export APPCTL_SKIP_PULL_ONCE=1
+    exec bash "${ROOT_DIR}/scripts/appctl" update
+  fi
   local previous_pid=""
   local had_running_service=false
   if ! systemd_service_active; then
@@ -1587,9 +1709,6 @@ cmd_update() {
     had_running_service=true
   fi
 
-  print_update_step "1/5" "拉取最新代码"
-  update_source_code_from_git
-
   print_update_step "2/5" "检查运行环境"
   ensure_go
   cleanup_legacy_runtime_artifacts true
@@ -1600,41 +1719,12 @@ cmd_update() {
 
   print_update_step "4/5" "执行数据库更新"
   if auto_migrate_legacy_mysql_if_needed; then
-    print_update_step "5/5" "构建并应用更新"
-    build
-    if ensure_systemd_service_running >/dev/null; then
-      if [[ "${had_running_service}" == "true" ]]; then
-        print_update_summary restarted
-      else
-        print_update_summary started
-      fi
-      return 0
-    fi
-    if restart_running_service_after_update "${previous_pid}" >/dev/null; then
-      print_update_summary restarted
-    else
-      warn_if_service_stopped_after_update
-    fi
-    return 0
+    finish_update_build_and_restart "${previous_pid}" "${had_running_service}"
+    return
   fi
   resolve_postgres_dsn
   run_ops_update
-
-  print_update_step "5/5" "构建并应用更新"
-  build
-  if ensure_systemd_service_running >/dev/null; then
-    if [[ "${had_running_service}" == "true" ]]; then
-      print_update_summary restarted
-    else
-      print_update_summary started
-    fi
-    return 0
-  fi
-  if restart_running_service_after_update "${previous_pid}" >/dev/null; then
-    print_update_summary restarted
-  else
-    warn_if_service_stopped_after_update
-  fi
+  finish_update_build_and_restart "${previous_pid}" "${had_running_service}"
 }
 
 cmd_start() {

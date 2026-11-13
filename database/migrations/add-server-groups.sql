@@ -1,18 +1,12 @@
--- 添加服务器分组功能
--- 执行时间：2026-11-14
+-- 兼容旧部署的可选手工迁移；正常使用新版本 AI 运维接口时会自动执行相同迁移。
+-- 空字符串表示未分组，不创建名为“未分组”的实际分组。
+ALTER TABLE v2_ai_server ADD COLUMN IF NOT EXISTS group_name TEXT NOT NULL DEFAULT '';
+UPDATE v2_ai_server SET group_name = '' WHERE group_name IS NULL;
+ALTER TABLE v2_ai_server ALTER COLUMN group_name SET DEFAULT '';
+ALTER TABLE v2_ai_server ALTER COLUMN group_name SET NOT NULL;
+CREATE INDEX IF NOT EXISTS v2_ai_server_group_idx ON v2_ai_server(group_name);
 
--- 1. 为 v2_ai_server 表添加分组字段
-ALTER TABLE v2_ai_server ADD COLUMN IF NOT EXISTS group_name VARCHAR(100);
-
--- 2. 为 v2_ai_server_intake 表添加分组字段
-ALTER TABLE v2_ai_server_intake ADD COLUMN IF NOT EXISTS group_name VARCHAR(100);
-
--- 3. 创建分组索引以提升查询性能
-CREATE INDEX IF NOT EXISTS idx_ai_server_group ON v2_ai_server(group_name) WHERE group_name IS NOT NULL;
-
--- 4. 添加注释
-COMMENT ON COLUMN v2_ai_server.group_name IS '服务器分组名称，用于组织管理多个服务器';
-COMMENT ON COLUMN v2_ai_server_intake.group_name IS '服务器注册时的分组名称';
-
--- 示例：更新现有服务器到默认分组（可选）
--- UPDATE v2_ai_server SET group_name = '未分组' WHERE group_name IS NULL;
+ALTER TABLE v2_ai_server_intake ADD COLUMN IF NOT EXISTS group_name TEXT NOT NULL DEFAULT '';
+UPDATE v2_ai_server_intake SET group_name = '' WHERE group_name IS NULL;
+ALTER TABLE v2_ai_server_intake ALTER COLUMN group_name SET DEFAULT '';
+ALTER TABLE v2_ai_server_intake ALTER COLUMN group_name SET NOT NULL;

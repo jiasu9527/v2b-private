@@ -63,13 +63,16 @@ fi
 cd "${ROOT_DIR}"
 backup_legacy_config
 
+# Pull before launching appctl so an installation still using the previous
+# update.sh executes the newly checked-out appctl on its first upgrade.
 before_rev="$(git rev-parse HEAD 2>/dev/null || true)"
-echo "正在同步代码..."
+echo "正在同步代码和构建后端、管理前端..."
 git config --global --add safe.directory "${ROOT_DIR}"
-git fetch --all --prune --quiet
-git pull --ff-only --quiet
+if ! git pull --ff-only --quiet; then
+  echo "代码拉取失败，请先处理本地改动、冲突或网络问题后重试" >&2
+  exit 1
+fi
 after_rev="$(git rev-parse HEAD 2>/dev/null || true)"
-
 if [[ -n "${before_rev}" && "${before_rev}" == "${after_rev}" ]]; then
   echo "代码已经是最新版本"
 else
@@ -83,4 +86,4 @@ fi
 if [[ -n "${LEGACY_BACKUP_DIR}" ]]; then
   export LEGACY_CONFIG_ROOT="${LEGACY_BACKUP_DIR}"
 fi
-"${ROOT_DIR}/scripts/appctl" update
+APPCTL_SKIP_PULL_ONCE=1 "${ROOT_DIR}/scripts/appctl" update

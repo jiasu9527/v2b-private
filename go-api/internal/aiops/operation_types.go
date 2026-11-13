@@ -9,6 +9,7 @@ import (
 type Server struct {
 	ID               int64  `json:"id"`
 	Name             string `json:"name"`
+	Group            string `json:"group"`
 	Host             string `json:"host"`
 	Port             int    `json:"port"`
 	Username         string `json:"username"`
@@ -25,6 +26,7 @@ type ServerSaveRequest struct {
 	ID                 int64  `json:"id"`
 	Version            int64  `json:"version"`
 	Name               string `json:"name"`
+	Group              string `json:"group"`
 	Host               string `json:"host"`
 	Port               int    `json:"port"`
 	Username           string `json:"username"`
@@ -78,6 +80,11 @@ const actionColumns = `id,session_id,actor_id,approved_by,rejected_by,tool_call_
 func ensureActionSchema(ctx context.Context, tx *sql.Tx) error {
 	for _, statement := range []string{
 		`CREATE TABLE IF NOT EXISTS v2_ai_server(id BIGSERIAL PRIMARY KEY,actor_id BIGINT NOT NULL REFERENCES v2_user(id),name TEXT NOT NULL,host TEXT NOT NULL,port INTEGER NOT NULL CHECK(port BETWEEN 1 AND 65535),username TEXT NOT NULL,password_cipher TEXT NOT NULL DEFAULT '',private_key_cipher TEXT NOT NULL DEFAULT '',key_passphrase_cipher TEXT NOT NULL DEFAULT '',host_key_sha256 TEXT NOT NULL,enabled BOOLEAN NOT NULL DEFAULT TRUE,version BIGINT NOT NULL DEFAULT 1,created_at BIGINT NOT NULL,updated_at BIGINT NOT NULL)`,
+		`ALTER TABLE v2_ai_server ADD COLUMN IF NOT EXISTS group_name TEXT NOT NULL DEFAULT ''`,
+		`UPDATE v2_ai_server SET group_name='' WHERE group_name IS NULL`,
+		`ALTER TABLE v2_ai_server ALTER COLUMN group_name SET DEFAULT ''`,
+		`ALTER TABLE v2_ai_server ALTER COLUMN group_name SET NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS v2_ai_server_group_idx ON v2_ai_server(group_name)`,
 		`CREATE TABLE IF NOT EXISTS v2_ai_action(id BIGSERIAL PRIMARY KEY,session_id BIGINT NOT NULL REFERENCES v2_ai_session(id) ON DELETE CASCADE,actor_id BIGINT NOT NULL REFERENCES v2_user(id),tool_call_id TEXT NOT NULL,kind TEXT NOT NULL,target_id BIGINT NOT NULL DEFAULT 0,target_type TEXT NOT NULL DEFAULT '',server_label TEXT NOT NULL DEFAULT '',payload JSONB NOT NULL,snapshot_hash TEXT NOT NULL,request_hash TEXT NOT NULL,reason TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',expires_at BIGINT NOT NULL,claimed_at BIGINT NOT NULL DEFAULT 0,completed_at BIGINT NOT NULL DEFAULT 0,output TEXT NOT NULL DEFAULT '',error TEXT NOT NULL DEFAULT '',created_at BIGINT NOT NULL,updated_at BIGINT NOT NULL,UNIQUE(session_id,tool_call_id))`,
 		`ALTER TABLE v2_ai_action ADD COLUMN IF NOT EXISTS stop_requested BOOLEAN NOT NULL DEFAULT FALSE`,
 		`ALTER TABLE v2_ai_action ADD COLUMN IF NOT EXISTS approval_mode TEXT NOT NULL DEFAULT 'manual'`,

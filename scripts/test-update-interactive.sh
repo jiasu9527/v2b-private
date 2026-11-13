@@ -30,6 +30,7 @@ chmod +x "${TMP_DIR}/scripts/appctl"
 cat > "${TMP_DIR}/fakebin/git" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' "$*" >> "${GIT_LOG}"
 case "${1:-}" in
   config|fetch|pull|rev-parse)
     if [[ "${1:-}" == "rev-parse" ]]; then
@@ -45,7 +46,8 @@ EOF
 chmod +x "${TMP_DIR}/fakebin/git"
 
 APPCTL_LOG="${TMP_DIR}/appctl.log"
-export APPCTL_LOG
+GIT_LOG="${TMP_DIR}/git.log"
+export APPCTL_LOG GIT_LOG
 
 printf 'n\n' | PATH="${TMP_DIR}/fakebin:${PATH}" FORCE_INTERACTIVE_DB_CONFIG=1 bash "${TMP_DIR}/update.sh" >/tmp/test-update-interactive.out 2>/tmp/test-update-interactive.err
 
@@ -56,16 +58,12 @@ if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
   printf 'expected:\n%s\nactual:\n%s\n' "${EXPECTED}" "${ACTUAL}"
   exit 1
 fi
-
-if ! rg -n '正在同步代码' /tmp/test-update-interactive.out >/dev/null 2>&1; then
-  echo "expected chinese sync message"
-  cat /tmp/test-update-interactive.out
+if [[ "$(grep -c '^pull --ff-only --quiet$' "${GIT_LOG}")" != 1 ]]; then
+  echo "update.sh did not make exactly one pull" >&2
   exit 1
 fi
-
-if ! rg -n '代码已经是最新版本' /tmp/test-update-interactive.out >/dev/null 2>&1; then
-  echo "expected chinese up-to-date message"
-  cat /tmp/test-update-interactive.out
+if ! grep -q '代码已经是最新版本' /tmp/test-update-interactive.out; then
+  echo "expected up-to-date message" >&2
   exit 1
 fi
 

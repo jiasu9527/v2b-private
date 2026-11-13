@@ -9,6 +9,7 @@ import (
 type aiOpsToolsService interface {
 	ListServers(context.Context, int64) ([]aiops.Server, error)
 	SaveServer(context.Context, int64, aiops.ServerSaveRequest) (aiops.Server, error)
+	SetServerGroup(context.Context, int64, int64, int64, string) (aiops.Server, error)
 	DeleteServer(context.Context, int64, int64, int64) error
 	ProbeHostKey(context.Context, int64, aiops.HostKeyRequest) (aiops.HostKeyResult, error)
 	ListActions(context.Context, int64, int64) ([]aiops.Action, error)
@@ -35,6 +36,20 @@ func handleAIOpsTools(w http.ResponseWriter, r *http.Request, base aiOpsService,
 			return
 		}
 		result, err = service.SaveServer(ctx, actorID, req)
+	case "server/group":
+		var req struct {
+			ID      int64  `json:"id"`
+			Version int64  `json:"version"`
+			Group   string `json:"group"`
+		}
+		if !decodeSupportJSON(w, r, &req) {
+			return
+		}
+		if req.ID <= 0 || req.Version <= 0 {
+			handleAIOpsError(w, aiops.ErrValidation)
+			return
+		}
+		result, err = service.SetServerGroup(ctx, actorID, req.ID, req.Version, req.Group)
 	case "server/delete":
 		var req struct {
 			ID      int64 `json:"id"`
