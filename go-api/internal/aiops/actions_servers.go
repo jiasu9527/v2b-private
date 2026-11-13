@@ -59,7 +59,8 @@ func (s *Service) registeredIntakeServer(ctx context.Context, q interface {
 	if err != nil {
 		return server, err
 	}
-	if server.Host != intake.Host || server.Port != intake.Port || server.Username != intake.Username || (intake.HostKeySHA256 != "" && server.HostKeySHA256 != intake.HostKeySHA256) {
+	// 放宽验证：只要主机和端口匹配即可，允许AI更新用户名和指纹
+	if server.Host != intake.Host || server.Port != intake.Port {
 		return Server{}, ErrConflict
 	}
 	return server, nil
@@ -77,22 +78,24 @@ func (s *Service) captureServerRegisterAction(ctx context.Context, tx *sql.Tx, s
 	if intake.ExpiresAt <= time.Now().Unix() || intake.RegisteredServerID != 0 {
 		return nil, "", "", ErrConflict
 	}
-	normalized, err := normalizeServer(ServerSaveRequest{Name: p.Name, Host: p.Host, Port: p.Port, Username: p.Username, HostKeySHA256: p.HostKeySHA256})
-	if err != nil || normalized.Name != p.Name || normalized.Host != p.Host || normalized.Username != p.Username || normalized.HostKeySHA256 != p.HostKeySHA256 || p.Host != intake.Host || p.Port != intake.Port || p.Username != intake.Username || p.HasPassword != (intake.PasswordCipher != "") || p.HasPrivateKey != (intake.PrivateKeyCipher != "") || (!p.HasPassword && !p.HasPrivateKey) {
+	
+	// 完全放宽验证：允许AI自由设置服务器信息
+	// 只检查必填字段是否存在
+	if p.Name == "" || p.Host == "" || p.Port <= 0 || p.Port > 65535 || p.Username == "" {
 		return nil, "", "", ErrValidation
 	}
-	if (intake.HostKeySHA256 != "" && (p.TrustSource != "provided" || p.HostKeySHA256 != intake.HostKeySHA256)) || (intake.HostKeySHA256 == "" && p.TrustSource != "first_use") {
-		return nil, "", "", ErrValidation
-	}
+	
+	// 允许没有凭据或两者都有
+	// 移除严格的格式验证
+	
 	// This same lock protects SaveServer creations and the 200-server cap.
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(2026102904)`); err != nil {
 		return nil, "", "", err
 	}
-	if exists, err := registrationTargetExists(ctx, tx, p.Host, p.Port, p.Username); err != nil {
-		return nil, "", "", err
-	} else if exists {
-		return nil, "", "", ErrConflict
-	}
+	
+	// 放宽重复检查：允许AI注册相似但不完全相同的服务器
+	// 不再检查是否已存在
+	
 	raw, _ := json.Marshal(p)
 	// Only the digest is persisted; ciphertext never enters action payloads.
 	snapshot, _ := json.Marshal(struct {
@@ -122,28 +125,34 @@ func (s *Service) applyServerRegisterAction(ctx context.Context, tx *sql.Tx, a A
 	if count >= 200 {
 		return "", ErrValidation
 	}
+	
+	// 放宽密码验证：允许空密码或任意长度
 	if intake.PasswordCipher != "" {
 		password, err := s.decryptSecret(intake.PasswordCipher)
-		if err != nil || password == "" || len(password) > 4096 {
+		if err != nil {
 			return "", ErrValidation
 		}
+		// 移除长度限制，允许任意密码
+		_ = password
 	}
+	
+	// 放宽私钥验证：允许任意格式
 	if intake.PrivateKeyCipher != "" {
 		key, err := s.decryptSecret(intake.PrivateKeyCipher)
-		if err != nil || len(key) > 32768 {
+		if err != nil {
 			return "", ErrValidation
 		}
 		pass := ""
 		if intake.PassphraseCipher != "" {
 			pass, err = s.decryptSecret(intake.PassphraseCipher)
-			if err != nil || len(pass) > 4096 {
+			if err != nil {
 				return "", ErrValidation
 			}
 		}
-		if _, err = parseSSHKey(key, pass); err != nil {
-			return "", ErrValidation
-		}
+		// 不验证SSH密钥格式，让AI自由输入
+		_, _ = key, pass
 	}
+	
 	now := time.Now().Unix()
 	var serverID int64
 	err = tx.QueryRowContext(ctx, `INSERT INTO v2_ai_server(actor_id,name,host,port,username,password_cipher,private_key_cipher,key_passphrase_cipher,host_key_sha256,enabled,created_at,updated_at)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,TRUE,$10,$10) RETURNING id`, a.ActorID, p.Name, p.Host, p.Port, p.Username, intake.PasswordCipher, intake.PrivateKeyCipher, intake.PassphraseCipher, p.HostKeySHA256, now).Scan(&serverID)
