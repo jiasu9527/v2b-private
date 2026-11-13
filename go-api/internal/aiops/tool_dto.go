@@ -356,9 +356,10 @@ type simulationUserDTO struct {
 	RegistrationDays int64  `json:"registration_days"`
 }
 type simulationDTO struct {
-	Found   bool               `json:"found"`
-	User    *simulationUserDTO `json:"user,omitempty"`
-	Matched *ruleDTO           `json:"matched,omitempty"`
+	Found      bool                  `json:"found"`
+	User       *simulationUserDTO    `json:"user,omitempty"`
+	Matched    *ruleDTO              `json:"matched,omitempty"`
+	Monitoring *entryPolicyStatusDTO `json:"monitoring,omitempty"`
 }
 type probeDTO struct {
 	ID         int64  `json:"id"`

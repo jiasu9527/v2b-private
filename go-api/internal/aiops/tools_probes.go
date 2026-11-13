@@ -36,7 +36,7 @@ func probeToolDefinitions() []ToolDefinition {
 	p := page()
 	p["policy_id"] = integer("可选，只看指定规则；可以使用entry_simulate返回的matched.id")
 	p["target_id"] = integer("可选，仅使用本工具已返回的target_id；未知时省略，不能填1或复制policy_id、节点ID、二分组ID。与policy_id同时传入时取交集")
-	add("entry_probe_targets", "查找现有入口检测目标、规则及已登记探针 ID，不发探测。仅知规则ID时只传policy_id，省略target_id；空列表不是故障也不是正常，不可原样循环查询或猜ID。按 targets.next_offset 翻页；未配置监测的入口不会出现。返回的数字revision仅属监测配置，不能用于host_references/entry_coverage的字符串revision。", p)
+	add("entry_probe_targets", "只读查找已保存的入口检测目标和探针，不刷新目标、不发探测。仅知规则ID时只传policy_id，省略target_id。筛选错误时recovery会另列同规则真实目标，不改变原targets筛选；policy_status自动关联当前来源及已有观测，可直接据此回答，不要重复空查询或猜ID。按targets.next_offset翻页；数字revision仅属监测配置，不能用于host_references/entry_coverage。", p)
 	add("entry_probe_run", "提议对指定入口通过探针发起一次新 TCP 检测，完全访问自动执行，逐次确认模式等待批准。policy_ids 与 target_ids 至少填一项；都填时取交集。target_ids 精确到入口，未填时检查选中规则全部入口；probe_ids 未填时使用全部启用探针，最多50目标×50探针。任务已受理不等于检测通过，需用 entry_probe_result 查结果；上报仍可能触发现有自动切换/二分。", map[string]any{"policy_ids": ids("规则 ID，可省略"), "target_ids": ids("entry_probe_targets 返回的入口目标 ID，可省略"), "probe_ids": ids("指定探针 ID，可省略"), "reason": map[string]any{"type": "string", "description": "检测目的与预期影响"}}, "reason")
 	p = page()
 	p["run_id"] = integer("检测任务 run_id；审批完成后从动作输出取得")
@@ -115,6 +115,7 @@ type probeTargetDTO struct {
 	Host             string `json:"host"`
 	Port             int64  `json:"port"`
 	Enabled          bool   `json:"enabled"`
+	TargetCurrent    bool   `json:"target_current"`
 	AutoSplitEnabled bool   `json:"auto_split_enabled"`
 }
 type probeAgentDTO struct {
@@ -133,18 +134,21 @@ func (s *Service) callProbeTool(ctx context.Context, actorID, sessionID int64, c
 	switch call.Function.Name {
 	case "entry_probe_targets":
 		reader, ok := s.panel.(interface {
-			ListClientEntryMonitors(context.Context) (admin.ClientEntryMonitorOverview, error)
+			ReadClientEntryMonitors(context.Context) (admin.ClientEntryMonitorOverview, error)
 		})
 		if !ok {
 			return ToolOutcome{}, ErrUnavailable
 		}
-		v, e := reader.ListClientEntryMonitors(ctx)
+		v, e := reader.ReadClientEntryMonitors(ctx)
 		if e != nil {
+			if errors.Is(e, admin.ErrClientEntryMonitorRevisionConflict) {
+				return ToolOutcome{}, ErrConflict
+			}
 			return ToolOutcome{}, safeAIError(e)
 		}
-		policies := map[int64]bool{}
+		policies := map[int64]admin.ClientEntryMonitorPolicy{}
 		for _, p := range v.Policies {
-			policies[p.ID] = p.Enabled
+			policies[p.ID] = p
 		}
 		items := []probeTargetDTO{}
 		for _, m := range v.Items {
@@ -155,14 +159,14 @@ func (s *Service) callProbeTool(ctx context.Context, actorID, sessionID int64, c
 				if a.TargetID > 0 && t.ID != a.TargetID {
 					continue
 				}
-				items = append(items, probeTargetDTO{TargetID: t.ID, PolicyID: m.PolicyID, PolicyName: clip(m.PolicyName, 128), Name: clip(t.Name, 128), SourceKey: clip(t.SourceKey, 128), Host: clip(t.Host, 255), Port: t.Port, Enabled: m.Enabled && policies[m.PolicyID], AutoSplitEnabled: t.AutoSplitEnabled})
+				items = append(items, projectProbeTarget(m, t, policies[m.PolicyID]))
 			}
 		}
 		sort.Slice(items, func(i, j int) bool { return items[i].TargetID < items[j].TargetID })
 		probes := []probeAgentDTO{}
 		for _, p := range v.Probes {
 			if p.Enabled {
-				probes = append(probes, probeAgentDTO{ID: p.ID, Name: clip(p.Name, 128), Enabled: p.Enabled, LastHeartbeatAt: p.LastHeartbeatAt})
+				probes = append(probes, probeAgentDTO{ID: p.ID, Name: clip(p.Name, 32), Enabled: p.Enabled, LastHeartbeatAt: p.LastHeartbeatAt})
 			}
 		}
 		sort.Slice(probes, func(i, j int) bool { return probes[i].ID < probes[j].ID })
@@ -170,13 +174,25 @@ func (s *Service) callProbeTool(ctx context.Context, actorID, sessionID int64, c
 		if len(probes) > 50 {
 			return ToolOutcome{}, ErrValidation
 		}
+		// Keep every selectable ID, but do not let long probe labels consume
+		// the result budget reserved for target discovery and observations.
+		if jsonSize(probes) > 8000 {
+			for i := range probes {
+				probes[i].Name = ""
+			}
+		}
 		envelope := struct {
 			Revision         int64                   `json:"revision"`
 			Targets          pageDTO[probeTargetDTO] `json:"targets"`
 			Probes           []probeAgentDTO         `json:"enabled_probes"`
 			AutomaticEffects string                  `json:"automatic_effects"`
 			QueryHint        string                  `json:"query_hint,omitempty"`
-		}{Revision: v.Revision, Probes: probes, AutomaticEffects: "检测上报仍按原配置触发自动切换或二分；禁用目标不可发起", QueryHint: probeTargetQueryHint(a, len(items))}
+			Recovery         *probeTargetRecoveryDTO `json:"recovery,omitempty"`
+			PolicyStatus     *entryPolicyStatusDTO   `json:"policy_status,omitempty"`
+		}{Revision: v.Revision, Probes: probes, AutomaticEffects: "本次只读已有配置；主动检测上报仍按原配置触发自动切换或二分；禁用目标不可发起", QueryHint: probeTargetQueryHint(a, len(items)), Recovery: probeTargetRecovery(v, a, len(items))}
+		if a.PolicyID > 0 {
+			envelope.PolicyStatus = s.entryStatusForPolicy(ctx, a.PolicyID)
+		}
 		budget := maxToolOutputBytes - jsonSize(envelope) - 64
 		envelope.Targets = boundedPage(window(items, a.Limit, a.Offset), int64(len(items)), a.Limit, a.Offset, budget)
 		value = envelope
@@ -230,6 +246,79 @@ func (s *Service) callProbeTool(ctx context.Context, actorID, sessionID int64, c
 		return ToolOutcome{}, ErrUnavailable
 	}
 	return ToolOutcome{Content: string(raw)}, nil
+}
+
+func projectProbeTarget(m admin.ClientEntryMonitorRecord, t admin.ClientEntryMonitorTarget, policy admin.ClientEntryMonitorPolicy) probeTargetDTO {
+	current := false
+	host, err := admin.NormalizeEntryMonitorHost(t.Host)
+	if err == nil && t.Port > 0 && t.Port <= 65535 {
+		for _, candidate := range policy.Targets {
+			candidateHost, candidateErr := admin.NormalizeEntryMonitorHost(candidate.Host)
+			if candidate.SourceKey == t.SourceKey && candidateErr == nil && candidateHost == host {
+				current = true
+				break
+			}
+		}
+	}
+	return probeTargetDTO{TargetID: t.ID, PolicyID: m.PolicyID, PolicyName: clip(m.PolicyName, 64), Name: clip(t.Name, 64), SourceKey: clip(t.SourceKey, 96), Host: clip(t.Host, 255), Port: t.Port, Enabled: m.Enabled && policy.Enabled && current, TargetCurrent: current, AutoSplitEnabled: t.AutoSplitEnabled}
+}
+
+type probeTargetRecoveryDTO struct {
+	Code              string                   `json:"code"`
+	FiltersUnchanged  bool                     `json:"original_filters_unchanged"`
+	PolicyID          int64                    `json:"policy_id,omitempty"`
+	RequestedTargetID int64                    `json:"requested_target_id,omitempty"`
+	Candidates        *pageDTO[probeTargetDTO] `json:"same_policy_targets,omitempty"`
+	NextQuery         map[string]int64         `json:"next_query,omitempty"`
+	Message           string                   `json:"message"`
+}
+
+// Discovery is separate from the exact-filter page. A fabricated target must
+// not erase the useful same-policy evidence, but must never widen targets or
+// become an executable selection for a later probe/write action.
+func probeTargetRecovery(v admin.ClientEntryMonitorOverview, a probeToolArgs, total int) *probeTargetRecoveryDTO {
+	if total != 0 {
+		return nil
+	}
+	r := &probeTargetRecoveryDTO{Code: "no_configured_targets", FiltersUnchanged: true, PolicyID: a.PolicyID, RequestedTargetID: a.TargetID, Message: "当前筛选没有已保存的检测目标，不代表入口正常或故障。"}
+	policyExists, targetExists := false, false
+	var policy admin.ClientEntryMonitorPolicy
+	for _, p := range v.Policies {
+		if p.ID == a.PolicyID {
+			policyExists, policy = true, p
+		}
+	}
+	candidates := []probeTargetDTO{}
+	for _, m := range v.Items {
+		for _, target := range m.Targets {
+			if target.ID == a.TargetID {
+				targetExists = true
+			}
+			if a.PolicyID > 0 && m.PolicyID == a.PolicyID {
+				candidates = append(candidates, projectProbeTarget(m, target, policy))
+			}
+		}
+	}
+	switch {
+	case a.PolicyID > 0 && !policyExists:
+		r.Code = "policy_not_found"
+		r.Message = "当前入口候选配置中找不到该规则，请核对规则ID；没有扩大到其他规则。"
+	case a.TargetID > 0 && !targetExists:
+		r.Code = "target_not_found"
+		r.Message = "该检测目标ID不存在；同规则候选另列在same_policy_targets，可直接读取policy_status已有观测，不必再次猜ID。"
+	case a.TargetID > 0 && a.PolicyID > 0:
+		r.Code = "target_policy_mismatch"
+		r.Message = "该检测目标不属于所选规则；原筛选仍为空，同规则真实目标另列，不自动替换或发起检测。"
+	}
+	if a.PolicyID > 0 && policyExists {
+		sort.Slice(candidates, func(i, j int) bool { return candidates[i].TargetID < candidates[j].TargetID })
+		page := boundedPage(window(candidates, 5, 0), int64(len(candidates)), 5, 0, 6500)
+		r.Candidates = &page
+		if len(candidates) > 0 {
+			r.NextQuery = map[string]int64{"policy_id": a.PolicyID, "limit": 20, "offset": 0}
+		}
+	}
+	return r
 }
 
 // Do not silently broaden a filter or fabricate target IDs. An empty lookup

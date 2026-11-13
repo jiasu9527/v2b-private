@@ -60,12 +60,16 @@ func TestAIEntryQueryProgressPostgres(t *testing.T) {
 		if turn.Status != "completed" || turn.Error != "" || turn.DraftRound != 5 || calls.Load() != 5 {
 			t.Fatal("empty target loop did not finish", turn, calls.Load())
 		}
-		var results, actions int
+		var results, actions, summaries int
 		if err := f.db.QueryRow(`SELECT COUNT(*) FROM v2_ai_message WHERE turn_id=$1 AND role='tool' AND content::jsonb->'targets'->>'total'='0'`, turn.ID).Scan(&results); err != nil || results != 5 {
 			t.Fatal("empty target evidence not persisted", results, err)
 		}
 		if err := f.db.QueryRow(`SELECT COUNT(*) FROM v2_ai_action WHERE session_id=$1`, started.Session.ID).Scan(&actions); err != nil || actions != 0 {
 			t.Fatal("query correction dispatched writes or probes", actions, err)
+		}
+		expected := (&entryQueryProgressGuard{repeatedReasons: entryQueryEmptyTargets}).stoppedMessage()
+		if err := f.db.QueryRow(`SELECT COUNT(*) FROM v2_ai_message WHERE turn_id=$1 AND role='assistant' AND content=$2`, turn.ID, expected).Scan(&summaries); err != nil || summaries != 1 {
+			t.Fatal("empty target diagnosis not persisted", summaries, err)
 		}
 	})
 	for _, mode := range []string{"full", "standard"} {
@@ -106,7 +110,8 @@ func TestAIEntryQueryProgressPostgres(t *testing.T) {
 					t.Fatal("entry loop failed to finish honestly", turn, calls.Load())
 				}
 				var summaries, results, actions int
-				if err := f.db.QueryRow(`SELECT COUNT(*) FROM v2_ai_message WHERE turn_id=$1 AND role='assistant' AND content=$2`, turn.ID, entryQueryStoppedMessage).Scan(&summaries); err != nil || summaries != 1 {
+				expected := (&entryQueryProgressGuard{repeatedReasons: entryQueryInvalidArguments}).stoppedMessage()
+				if err := f.db.QueryRow(`SELECT COUNT(*) FROM v2_ai_message WHERE turn_id=$1 AND role='assistant' AND content=$2`, turn.ID, expected).Scan(&summaries); err != nil || summaries != 1 {
 					t.Fatal("missing persisted no-progress explanation", summaries, err)
 				}
 				if err := f.db.QueryRow(`SELECT COUNT(*) FROM v2_ai_message WHERE turn_id=$1 AND role='tool' AND content::jsonb->>'code'='invalid_arguments'`, turn.ID).Scan(&results); err != nil || results != 5 {
@@ -156,7 +161,7 @@ func TestAIEntryQueryProgressPostgres(t *testing.T) {
 			t.Fatal("productive work was prematurely stopped", turn, calls.Load())
 		}
 		var summaries int
-		if err := f.db.QueryRow(`SELECT COUNT(*) FROM v2_ai_message WHERE turn_id=$1 AND content=$2`, turn.ID, entryQueryStoppedMessage).Scan(&summaries); err != nil || summaries != 0 {
+		if err := f.db.QueryRow(`SELECT COUNT(*) FROM v2_ai_message WHERE turn_id=$1 AND content LIKE '%' || $2`, turn.ID, entryQueryStoppedMessage).Scan(&summaries); err != nil || summaries != 0 {
 			t.Fatal("unexpected forced summary", summaries, err)
 		}
 	})

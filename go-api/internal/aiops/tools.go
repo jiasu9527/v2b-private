@@ -67,7 +67,7 @@ func (s *Service) declaredToolDefinitions() []ToolDefinition {
 	p = page()
 	p["policy_id"] = num("可选精确规则ID")
 	add("entry_rules_list", "查询入口规则/UA/固定分组，指定邮箱仅返回数量；大规则嵌套列表会摘要裁剪并返回总数与truncated，不可将省略的条件视为不存在。按next_offset翻页。", p)
-	add("entry_simulate", "按实际UA和当前规则模拟入口；不改配置。", map[string]any{"email": str("完整邮箱"), "ua": str("实际UA最多1024字节，空表示真实为空")}, "email", "ua")
+	add("entry_simulate", "按实际UA和当前规则模拟入口，并在monitoring中自动关联命中来源、真实检测目标ID及已有TCP观测，无需猜ID再查询。不改配置或发探测。仅模拟当前规则候选，不代表用户全部节点或历史实际下发；同地址其他来源观测标为reference_only，不能视为本来源已监测。", map[string]any{"email": str("完整邮箱"), "ua": str("实际UA最多1024字节，空表示真实为空")}, "email", "ua")
 	add("entry_health", "读取已配置监测入口的TCP结果和来源/探针计数，不内联明细；用entry_health_detail按key分页读取sources/probes。未配置监测入口不在此表，不能以unmonitored=0声称全覆盖，请用entry_coverage核查。TCP正常不代表业务或延迟正常，不发新探测。", page())
 	add("backup_ips_list", "读取备用IP健康及占用，不清检测状态不领取IP。", page())
 	add("servers_list", "分页读取管理员登记SSH服务器，不返回密码/私钥；按next_offset继续。", page())
@@ -266,6 +266,7 @@ func (s *Service) callTool(ctx context.Context, actorID, sessionID int64, call T
 			if v.Matched != nil {
 				x := projectRule(*v.Matched)
 				r.Matched = &x
+				r.Monitoring = s.entryStatusForSimulation(ctx, *v.Matched)
 			}
 			result = r
 		}

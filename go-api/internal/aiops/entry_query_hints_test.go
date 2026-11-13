@@ -37,7 +37,7 @@ func TestEntryQueryToolsKeepOptionalFiltersOptional(t *testing.T) {
 	}
 }
 
-func (p *entryQueryHintPanel) ListClientEntryMonitors(context.Context) (admin.ClientEntryMonitorOverview, error) {
+func (p *entryQueryHintPanel) ReadClientEntryMonitors(context.Context) (admin.ClientEntryMonitorOverview, error) {
 	p.reads++
 	return admin.ClientEntryMonitorOverview{
 		Revision: 71,

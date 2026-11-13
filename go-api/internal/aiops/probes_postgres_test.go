@@ -89,6 +89,11 @@ func TestAIEntryProbeSelectionPostgres(t *testing.T) {
 		defer db.Exec(`DELETE FROM v2_dns_probe WHERE id=$1`, probe)
 		probes = append(probes, probe)
 	}
+	// Saving/refreshing monitored targets belongs to configuration, not to a
+	// read-only AI query. Initialize this fixture explicitly before discovery.
+	if _, err = panel.ListClientEntryMonitors(ctx); err != nil {
+		t.Fatal(err)
+	}
 	read, err := s.callProbeTool(ctx, actor, session, ToolCall{Function: ToolFunction{Name: "entry_probe_targets", Arguments: `{}`}})
 	if err != nil || strings.Contains(read.Content, "never-expose-fixture-secret") {
 		t.Fatal("targets/secret", err)

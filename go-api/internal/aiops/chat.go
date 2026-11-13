@@ -671,7 +671,7 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 			warn, stopEntryQueries = entryQueries.observe(assistant.ToolCalls, outcomes)
 			messages = entryQueryCorrectionContext(messages, warn)
 			if stopEntryQueries {
-				batch = append(batch, providerMessage{Role: "assistant", Content: entryQueryStoppedMessage})
+				batch = append(batch, providerMessage{Role: "assistant", Content: entryQueries.stoppedMessage()})
 			}
 		} else {
 			emptyTicketQueries = ticketEmptyQueryGuard{}
