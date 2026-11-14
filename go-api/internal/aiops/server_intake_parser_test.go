@@ -63,6 +63,15 @@ func TestSSHIntakeBatchLooseFieldLayouts(t *testing.T) {
 	}
 }
 
+func TestSSHIntakeUnparsedBareIdentityCredentialIsNotChatText(t *testing.T) {
+	if !sshIntakeUnparsedBareIdentityCredential([]string{"192.0.2.11 admin", "second-fixture"}) {
+		t.Fatal("unparsed second credential could escape into ordinary chat")
+	}
+	if sshIntakeUnparsedBareIdentityCredential([]string{"192.0.2.11 admin", "please inspect ports"}) {
+		t.Fatal("ordinary task text mistaken for credential")
+	}
+}
+
 func TestSSHIntakeLooseBatchNeverBorrowsSecondCredential(t *testing.T) {
 	for name, body := range map[string]string{
 		"first inline record missing password":   "IP：192.0.2.10 用户名：root\nIP：192.0.2.11 用户名：admin 密码：second-fixture",

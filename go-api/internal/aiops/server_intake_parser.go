@@ -133,6 +133,12 @@ func ParseSSHRegistrationInput(content string) (string, []SSHRegistrationInput, 
 		}
 		return content, nil, nil
 	}
+	// A later, incomplete bare record must not be left in the sanitized chat
+	// after an earlier record was accepted. Its next line may be a password,
+	// even though no explicit password label is present to trigger redaction.
+	if sshIntakeUnparsedBareIdentityCredential(strings.Split(strings.Join(remaining, "\n"), "\n")) {
+		return fail(ErrSSHIntakeInvalid)
+	}
 	secrets := make([]string, 0, 3*len(inputs))
 	seen := make(map[string]bool, len(inputs))
 	for index, input := range inputs {
@@ -619,6 +625,29 @@ func sshIntakeUnparsedBareCredentials(lines []string) bool {
 			}
 		} else if sshIntakeBarePassword(next[1]) {
 			return true
+		}
+	}
+	return false
+}
+
+func sshIntakeUnparsedBareIdentityCredential(lines []string) bool {
+	for index, line := range lines {
+		match := sshIntakeBareIdentity.FindStringSubmatch(strings.TrimSpace(line))
+		if match == nil {
+			continue
+		}
+		if _, _, err := sshIntakeEndpoint(match[1], false); err != nil {
+			continue
+		}
+		for _, candidate := range lines[index+1:] {
+			value := strings.TrimSpace(candidate)
+			if value == "" || strings.HasPrefix(value, "```") {
+				continue
+			}
+			if sshIntakeBarePassword(candidate) && !sshIntakeTaskVerb(value) {
+				return true
+			}
+			break
 		}
 	}
 	return false
