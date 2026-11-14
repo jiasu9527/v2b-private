@@ -70,10 +70,16 @@ func handleAITelegramMini(w http.ResponseWriter, r *http.Request, bridgeBase aiT
 		handleAIOpsError(w, aiops.ErrUnavailable)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	requestWindow, responseWindow := 30*time.Second, 35*time.Second
+	if action == "chat/send" {
+		// Free-form SSH intake can require a one-off model extraction before
+		// SendMessage creates the ordinary asynchronous turn.
+		requestWindow, responseWindow = 105*time.Second, 110*time.Second
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), requestWindow)
 	defer cancel()
 	r = r.WithContext(ctx)
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(35 * time.Second))
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(responseWindow))
 	if action == "auth" {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", "POST")

@@ -37,6 +37,50 @@ func TestSSHIntakeBatchFormats(t *testing.T) {
 	}
 }
 
+// Operators often paste copied panels or chat messages rather than preparing
+// records in the exact field-per-line order. These formats are unambiguous
+// because each record has its own host, username and credential, with explicit
+// numbered or blank-line separation when credentials precede the host.
+func TestSSHIntakeBatchLooseFieldLayouts(t *testing.T) {
+	for name, body := range map[string]string{
+		"one-line labeled records":  "第 1 台\nIP：192.0.2.10 用户名：root 密码：first-fixture\n第 2 台\n地址：192.0.2.11 端口：2222 账号：admin 密码：second-fixture",
+		"address and user together": "1) 192.0.2.10 root\n密码：first-fixture\n2) 192.0.2.11:2222 admin\n密码：second-fixture",
+		"fields before address":     "第一台服务器\n用户名：root\n密码：first-fixture\n地址：192.0.2.10\n\n第二台服务器\n账号：admin\n密码：second-fixture\n地址：192.0.2.11:2222",
+	} {
+		t.Run(name, func(t *testing.T) {
+			safe, records, err := ParseSSHRegistrationInput("帮我登记这些服务器：\n" + body + "\n登记后检查连接")
+			if err != nil || len(records) != 2 {
+				t.Fatalf("expected two locally parsed records: count=%d err=%v", len(records), err)
+			}
+			if records[0].Host != "192.0.2.10" || records[0].Username != "root" || records[0].Port != 22 || records[0].Password != "first-fixture" ||
+				records[1].Host != "192.0.2.11" || records[1].Username != "admin" || records[1].Port != 2222 || records[1].Password != "second-fixture" {
+				t.Fatal("loose layout changed credential-to-server association")
+			}
+			if strings.Contains(safe, "first-fixture") || strings.Contains(safe, "second-fixture") || !strings.Contains(safe, "登记后检查连接") {
+				t.Fatal("credential leaked or task instructions disappeared")
+			}
+		})
+	}
+}
+
+func TestSSHIntakeLooseBatchNeverBorrowsSecondCredential(t *testing.T) {
+	for name, body := range map[string]string{
+		"first inline record missing password":   "IP：192.0.2.10 用户名：root\nIP：192.0.2.11 用户名：admin 密码：second-fixture",
+		"second record missing username":         "IP：192.0.2.10 用户名：root 密码：first-fixture\nIP：192.0.2.11 密码：second-fixture",
+		"ambiguous password before next address": "用户名：root\n密码：first-fixture\n地址：192.0.2.10\n\n密码：second-fixture\n地址：192.0.2.11",
+	} {
+		t.Run(name, func(t *testing.T) {
+			safe, records, err := ParseSSHRegistrationInput(body)
+			if !errors.Is(err, ErrValidation) || safe != "" || len(records) != 0 {
+				t.Fatalf("ambiguous or incomplete batch escaped local validation: count=%d err=%v", len(records), err)
+			}
+			if strings.Contains(err.Error(), "fixture") {
+				t.Fatal("error reflected a credential")
+			}
+		})
+	}
+}
+
 func TestSSHIntakeBatchPreservesGroupsAcrossFormats(t *testing.T) {
 	for name, body := range map[string]string{
 		"JSON":           `[{"name":"东京一","group":"日本线路","host":"192.0.2.10","username":"root","password":"fixture-one"},{"name":"香港二","group_name":"香港线路","host":"192.0.2.11","username":"root","password":"fixture-two"}]`,
@@ -201,6 +245,8 @@ func TestSSHIntakeRejectsMalformedBarePortsLocally(t *testing.T) {
 
 func TestSSHIntakeErrorMessageNeverReflectsArbitraryWrapper(t *testing.T) {
 	for _, err := range []error{
+		fmt.Errorf("secret-fixture: %w", errSSHIntakeAIInvalid),
+		fmt.Errorf("secret-fixture: %w", errSSHIntakeAIUnavailable),
 		fmt.Errorf("secret-fixture: %w", ErrSSHIntakeInvalid),
 		fmt.Errorf("secret-fixture: %w", errSSHIntakeTooMany),
 		fmt.Errorf("secret-fixture: %w", sshIntakeRecordError(2, ErrSSHIntakeInvalid)),

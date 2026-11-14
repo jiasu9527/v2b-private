@@ -57,7 +57,9 @@ func (b *TelegramBridge) Close() {
 }
 
 func (b *TelegramBridge) telegramTick(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	// Dispatch may include the one-off AI extraction of a free-form SSH paste.
+	// Keep the work bounded without cancelling it at the old 25-second tick.
+	ctx, cancel := context.WithTimeout(ctx, 105*time.Second)
 	defer cancel()
 	if err := b.sweepTelegram(ctx); err != nil {
 		return

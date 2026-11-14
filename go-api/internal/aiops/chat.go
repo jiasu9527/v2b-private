@@ -71,6 +71,45 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 	if closed {
 		return out, ErrUnavailable
 	}
+	// A retry that already committed must never send the same credential-bearing
+	// paste through the extraction model again. The transaction below performs
+	// the authoritative CAS, including the concurrent first-send race.
+	var existingHash string
+	var existingID int64
+	err = s.db.QueryRowContext(ctx, `SELECT id,request_hash FROM v2_ai_turn WHERE actor_id=$1 AND request_id=$2`, actorID, req.RequestID).Scan(&existingID, &existingHash)
+	if err == nil {
+		if existingHash != fingerprint {
+			return out, ErrConflict
+		}
+		out.Turn, err = scanTurn(s.db.QueryRowContext(ctx, `SELECT `+turnColumns+` FROM v2_ai_turn WHERE id=$1`, existingID))
+		if err != nil {
+			return out, err
+		}
+		out.Session, err = scanSession(s.db.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM v2_ai_session WHERE id=$1`, out.Turn.SessionID))
+		if err != nil {
+			return out, err
+		}
+		if err = s.requireSessionAccess(ctx, actorID, out.Session.ID); err != nil {
+			return SendMessageResult{}, err
+		}
+		return out, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return out, err
+	}
+	// Free-form SSH extraction may call the configured model. Never hold the
+	// global AI/database transaction lock while waiting for that network call.
+	// The transaction below still rechecks session access and request
+	// idempotency before any credentials are saved.
+	if req.SessionID > 0 {
+		if err := s.requireSessionAccess(ctx, actorID, req.SessionID); err != nil {
+			return out, err
+		}
+	}
+	sanitized, sshInputs, err := s.prepareSSHChatInput(ctx, req.Model, req.Content)
+	if err != nil {
+		return out, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return out, err
@@ -91,8 +130,6 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,2026102905))`, fmt.Sprintf("%d:%s", actorID, req.RequestID)); err != nil {
 		return out, err
 	}
-	var existingHash string
-	var existingID int64
 	err = tx.QueryRowContext(ctx, `SELECT id,request_hash FROM v2_ai_turn WHERE actor_id=$1 AND request_id=$2`, actorID, req.RequestID).Scan(&existingID, &existingHash)
 	if err == nil {
 		if existingHash != fingerprint {
@@ -112,10 +149,6 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 		return out, tx.Commit()
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return out, err
-	}
-	sanitized, sshInputs, err := prepareKnowledgeChatInput(req.Content)
-	if err != nil {
 		return out, err
 	}
 	req.Content = strings.TrimSpace(sanitized)

@@ -70,10 +70,15 @@ func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Servic
 		handleAIOpsStream(w, r, sessions, service, actor.ID)
 		return
 	}
-	// Chat/model and SSH command execution are asynchronous. Short management
-	// operations get a bounded response window without changing other endpoints.
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(35 * time.Second))
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	// Chat work runs asynchronously after SendMessage returns, but a free-form
+	// SSH paste may first need one model request to extract its credentials.
+	// Keep the usual short deadline for all other management operations.
+	responseWindow, requestWindow := 35*time.Second, 30*time.Second
+	if action == "chat/send" {
+		responseWindow, requestWindow = 110*time.Second, 105*time.Second
+	}
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(responseWindow))
+	ctx, cancel := context.WithTimeout(r.Context(), requestWindow)
 	defer cancel()
 	r = r.WithContext(ctx)
 	var result any
@@ -195,7 +200,11 @@ func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Servic
 }
 func handleAIOpsError(w http.ResponseWriter, err error) {
 	if message, ok := aiops.SSHIntakeErrorMessage(err); ok {
-		writeJSON(w, 400, map[string]string{"message": message})
+		status := 400
+		if errors.Is(err, aiops.ErrUnavailable) {
+			status = 503
+		}
+		writeJSON(w, status, map[string]string{"message": message})
 		return
 	}
 	status, msg := 500, "AI 运维操作失败，请核对配置或服务状态后重试"

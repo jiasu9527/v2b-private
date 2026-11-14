@@ -17,6 +17,9 @@ const maxSSHIntakeBatchSize = 50
 var errSSHIntakeTooMany = fmt.Errorf("%w：一次最多整理 50 台 SSH 服务器，请缩小本批数量；凭据未发送给模型", ErrValidation)
 var sshIntakeNumberedLine = regexp.MustCompile(`^\s*(?:[-*]\s+|(?:[0-9]+[)、]\s*|[0-9]+\.[ \t]+))`)
 var sshIntakeInline = regexp.MustCompile(`^(\S+)[ \t]+(?:(\d+)[ \t]+)?([a-zA-Z_][a-zA-Z0-9_.-]*\$?)[ \t]+(.+)$`)
+var sshIntakeInlineLabels = regexp.MustCompile(`(?i)^(?:ip|host|hostname|地址|主机地址|服务器地址)\s*[:=：]\s*(\S+)\s+(?:(?:port|端口)\s*[:=：]\s*(\d+)\s+)?(?:user|username|login|用户名|用户|账号|账户)\s*[:=：]\s*(\S+)\s+(?:password|passwd|pwd|密码|登录密码)\s*[:=：]\s*(.+)$`)
+var sshIntakeBareIdentity = regexp.MustCompile(`^(\S+)[ \t]+([a-zA-Z_][a-zA-Z0-9_.-]*\$?)$`)
+var sshIntakeSecondEndpoint = regexp.MustCompile(`(?i)\s(?:ip|host|hostname|地址|主机地址|服务器地址)\s*[:=：]`)
 
 // ParseSSHRegistrationInput normalizes common pasted formats locally, then
 // validates every record before returning any of them. Model-bound text only
@@ -59,6 +62,13 @@ func ParseSSHRegistrationInput(content string) (string, []SSHRegistrationInput, 
 		}
 		field, value, labeled := sshIntakeLabel(line)
 		boundary := labeled && field == "host"
+		if labeled && field == "username" && len(pending) > 0 {
+			// A completed record followed by a fresh username is a new record
+			// whose address may appear later. Keep that password with the new
+			// user rather than merging it into the preceding server.
+			_, records, priorErr := parseSSHRegistrationSingle(strings.Join(pending, "\n"))
+			boundary = priorErr == nil && len(records) == 1
+		}
 		if labeled && field == "name" {
 			// A name immediately preceding the next host belongs to that
 			// record, even when a group label appears between them. A trailing
@@ -251,6 +261,7 @@ func normalizeSSHIntakePaste(content string) (string, error) {
 	lines := strings.Split(content, "\n")
 	var out []string
 	inKey, waitingSecret := false, false
+pasteLines:
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
 		trim := strings.TrimSpace(line)
@@ -273,6 +284,38 @@ func normalizeSSHIntakePaste(content string) (string, error) {
 			inKey = true
 			out = append(out, line)
 			continue
+		}
+		// Accept a copied panel row with field names on one line. Only the
+		// anchored host/user/password order is split; an arbitrary password
+		// containing label-like text must remain byte-for-byte unchanged.
+		candidate := sshIntakeNumberedLine.ReplaceAllString(line, "")
+		if match := sshIntakeInlineLabels.FindStringSubmatch(strings.TrimLeft(candidate, " \t")); match != nil {
+			// A second labeled endpoint on the same line is not password text.
+			// Leave it for the AI fallback rather than assigning its credential
+			// to the first server.
+			if !sshIntakeSecondEndpoint.MatchString(match[4]) {
+				if _, _, err := sshIntakeEndpoint(match[1], false); err == nil && sshUserRE.MatchString(match[3]) {
+					out = append(out, "host: "+match[1], "username: "+match[3], sshIntakeFormatField("password", match[4]))
+					if match[2] != "" {
+						out = append(out, "port: "+match[2])
+					}
+					continue
+				}
+			}
+		}
+		if match := sshIntakeBareIdentity.FindStringSubmatch(strings.TrimSpace(candidate)); match != nil {
+			if _, _, err := sshIntakeEndpoint(match[1], false); err == nil {
+				for next := i + 1; next < len(lines); next++ {
+					if strings.TrimSpace(lines[next]) == "" {
+						continue
+					}
+					if field, _, ok := sshIntakeLabel(lines[next]); ok && (field == "password" || field == "private_key") {
+						out = append(out, "host: "+match[1], "username: "+match[2])
+						continue pasteLines
+					}
+					break
+				}
+			}
 		}
 		// Embedded JSON with leading prose is deliberately not guessed, but
 		// escaped secret keys must still be caught before reaching a model.
@@ -371,7 +414,7 @@ func normalizeSSHIntakePaste(content string) (string, error) {
 		}
 		// Numbering and bullets are formatting only for explicit endpoints;
 		// passwords are never trimmed or stripped as list items.
-		candidate := sshIntakeNumberedLine.ReplaceAllString(line, "")
+		candidate = sshIntakeNumberedLine.ReplaceAllString(line, "")
 		if _, _, err := sshIntakeEndpoint(candidate, false); err == nil {
 			line, trim = candidate, strings.TrimSpace(candidate)
 		}
@@ -613,7 +656,7 @@ func SSHIntakeErrorMessage(err error) (string, bool) {
 	if errors.As(err, &record) && record != nil && record.index > 0 && record.index <= maxSSHIntakeBatchSize+1 {
 		return record.Error(), true
 	}
-	for _, fixed := range []error{errSSHIntakeTooMany, ErrSSHIntakeMultiple, ErrSSHIntakeInvalid} {
+	for _, fixed := range []error{errSSHIntakeAIInvalid, errSSHIntakeAIUnavailable, errSSHIntakeTooMany, ErrSSHIntakeMultiple, ErrSSHIntakeInvalid} {
 		if errors.Is(err, fixed) {
 			return fixed.Error(), true
 		}

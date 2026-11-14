@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeAIOps struct {
@@ -21,6 +22,31 @@ type fakeAIOps struct {
 	reasoningEffort  string
 	reasoningEfforts *map[string]string
 	configRequest    aiops.ConfigSaveRequest
+}
+
+type deadlineAIOps struct {
+	fakeAIOps
+	remaining time.Duration
+}
+
+func (f *deadlineAIOps) SendMessage(ctx context.Context, actor int64, req aiops.SendMessageRequest) (aiops.SendMessageResult, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		f.remaining = time.Until(deadline)
+	}
+	return f.fakeAIOps.SendMessage(ctx, actor, req)
+}
+
+func TestAIOpsChatSendAllowsFreeFormExtractionTime(t *testing.T) {
+	f := &deadlineAIOps{}
+	router := NewRouter(config.Config{AdminPath: "test"}, WithSessionService(strictAppleIDSession{identity: &session.Identity{ID: 7, IsAdmin: 1}}), WithAIOps(f))
+	r := httptest.NewRequest("POST", "/api/v1/test/ai-ops/chat/send", strings.NewReader(`{"model":"gpt-6.1-sol","content":"fixture","request_id":"fixture-001"}`))
+	r.Header.Set("Authorization", "Bearer fixture")
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, r)
+	if w.Code != 202 || f.remaining < 90*time.Second {
+		t.Fatalf("chat send did not reserve extraction window: status=%d remaining=%v", w.Code, f.remaining)
+	}
 }
 
 func (f *fakeAIOps) called(id int64) { f.calls++; f.actor = id }

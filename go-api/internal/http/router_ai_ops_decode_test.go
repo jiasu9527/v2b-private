@@ -91,11 +91,16 @@ func TestAIOpsChatDecoderRemainsStrictAndBounded(t *testing.T) {
 }
 
 func TestAIOpsSSHIntakeErrorKeepsSafeRecordIndex(t *testing.T) {
+	w := httptest.NewRecorder()
+	handleAIOpsError(w, fmt.Errorf("private-wrapper-fixture: %w", aiops.ErrUnavailable))
+	if w.Code != 503 || strings.Contains(w.Body.String(), "fixture") {
+		t.Fatal("unavailable error leaked wrapper", w.Body.String())
+	}
 	_, _, err := aiops.ParseSSHRegistrationInput("192.0.2.10 root first-fixture-password\n\nhost: 192.0.2.20\npassword: second-fixture-password")
 	if err == nil {
 		t.Fatal("incomplete second record accepted")
 	}
-	w := httptest.NewRecorder()
+	w = httptest.NewRecorder()
 	handleAIOpsError(w, fmt.Errorf("private-wrapper-fixture: %w", err))
 	if w.Code != 400 || !strings.Contains(w.Body.String(), "第 2 条") || strings.Contains(w.Body.String(), "fixture") {
 		t.Fatal("public error lost index or echoed raw input/wrapper", w.Body.String())
