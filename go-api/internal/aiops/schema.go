@@ -43,6 +43,8 @@ func (s *Service) ensureSchema(ctx context.Context) error {
 		// Upgrade the original one-intake-per-turn schema without losing old
 		// encrypted credentials. Existing rows become item 1 of their batch.
 		`ALTER TABLE v2_ai_server_intake ADD COLUMN IF NOT EXISTS item_index INTEGER NOT NULL DEFAULT 1 CHECK(item_index BETWEEN 1 AND 50)`,
+		`ALTER TABLE v2_ai_server_intake ADD COLUMN IF NOT EXISTS tool_call_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE v2_ai_server_intake ADD COLUMN IF NOT EXISTS tool_request_hash TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE v2_ai_server_intake DROP CONSTRAINT IF EXISTS v2_ai_server_intake_turn_id_key`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS v2_ai_server_intake_turn_item_idx ON v2_ai_server_intake(turn_id,item_index)`,
 		`CREATE INDEX IF NOT EXISTS v2_ai_server_intake_session_idx ON v2_ai_server_intake(session_id,id)`,

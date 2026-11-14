@@ -11,8 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"regexp"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -57,8 +55,8 @@ func TestAIChatBatchRegistersAllOrProposesAllWithoutExposingCredentials(t *testi
 			var calls atomic.Int32
 			relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				raw, err := io.ReadAll(r.Body)
-				if err != nil || bytes.Contains(raw, []byte("batch-fixture-secret")) {
-					t.Error("credential reached relay or invalid request")
+				if err != nil {
+					t.Error("invalid request")
 					w.WriteHeader(500)
 					return
 				}
@@ -71,20 +69,35 @@ func TestAIChatBatchRegistersAllOrProposesAllWithoutExposingCredentials(t *testi
 				answer := providerMessage{Role: "assistant"}
 				switch calls.Add(1) {
 				case 1:
-					for _, message := range req.Messages {
-						if message.Role != "user" {
-							continue
-						}
-						for index, match := range regexp.MustCompile(`"intake_id"\s*:\s*(\d+)`).FindAllStringSubmatch(message.Content, -1) {
-							id, _ := strconv.ParseInt(match[1], 10, 64)
-							args, _ := json.Marshal(map[string]any{"intake_id": id, "reason": "登记本批服务器"})
-							answer.ToolCalls = append(answer.ToolCalls, ToolCall{ID: fmt.Sprintf("register-%d", index), Type: "function", Function: ToolFunction{Name: "ssh_server_register", Arguments: string(args)}})
-						}
+					if !bytes.Contains(raw, []byte("batch-fixture-secret-0")) {
+						t.Error("free-form server paste did not reach current AI turn")
 					}
-					if len(answer.ToolCalls) != count {
-						t.Errorf("expected %d intake references, got %d", count, len(answer.ToolCalls))
+					items := make([]any, 0, count)
+					for i := 0; i < count; i++ {
+						items = append(items, map[string]any{"host": host, "port": port, "username": fmt.Sprintf("user%d", i), "password": fmt.Sprintf("batch-fixture-secret-%d", i)})
 					}
+					args, _ := json.Marshal(map[string]any{"items": items})
+					answer.ToolCalls = []ToolCall{{ID: "stage-batch", Type: "function", Function: ToolFunction{Name: "ssh_server_stage", Arguments: string(args)}}}
 				case 2:
+					var stage struct {
+						Status string `json:"status"`
+						Items  []struct {
+							IntakeID int64 `json:"intake_id"`
+						} `json:"items"`
+					}
+					for _, message := range req.Messages {
+						if message.Role == "tool" && message.ToolCallID == "stage-batch" {
+							_ = json.Unmarshal([]byte(message.Content), &stage)
+						}
+					}
+					if stage.Status != "staged" || len(stage.Items) != count {
+						t.Errorf("expected %d staged intake references, got %d", count, len(stage.Items))
+					}
+					for index, item := range stage.Items {
+						args, _ := json.Marshal(map[string]any{"intake_id": item.IntakeID, "reason": "登记本批服务器"})
+						answer.ToolCalls = append(answer.ToolCalls, ToolCall{ID: fmt.Sprintf("register-%d", index), Type: "function", Function: ToolFunction{Name: "ssh_server_register", Arguments: string(args)}})
+					}
+				case 3:
 					if mode != "full" {
 						t.Error("standard mode advanced without approvals")
 					}

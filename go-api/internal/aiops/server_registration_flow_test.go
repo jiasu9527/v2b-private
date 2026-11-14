@@ -10,8 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"regexp"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -44,11 +42,6 @@ func TestAIChatRegistersServerAndContinuesSSHWithoutExposingCredential(t *testin
 			w.WriteHeader(500)
 			return
 		}
-		if bytes.Contains(raw, []byte("secret-test")) {
-			t.Error("SSH credential reached relay")
-			w.WriteHeader(500)
-			return
-		}
 		var req completionRequest
 		if json.Unmarshal(raw, &req) != nil {
 			t.Error("bad request")
@@ -59,28 +52,41 @@ func TestAIChatRegistersServerAndContinuesSSHWithoutExposingCredential(t *testin
 		var answer providerMessage
 		switch n {
 		case 1:
-			var id int64
+			found := false
 			for _, m := range req.Messages {
-				if m.Role != "user" {
-					continue
-				}
-				match := regexp.MustCompile(`"intake_id"\s*:\s*(\d+)`).FindStringSubmatch(m.Content)
-				if len(match) == 2 {
-					id, _ = strconv.ParseInt(match[1], 10, 64)
+				if m.Role == "user" && strings.Contains(m.Content, "secret-test") && strings.Contains(m.Content, "检查系统状态") {
+					found = true
 				}
 			}
-			if id <= 0 {
-				t.Error("missing safe intake reference")
+			if !found {
+				t.Error("raw free-form operator request did not reach current AI turn")
 				w.WriteHeader(500)
 				return
 			}
-			intakeID.Store(id)
-			if !strings.Contains(string(raw), "检查系统状态") {
-				t.Error("original task missing")
+			args, _ := json.Marshal(map[string]any{"items": []any{map[string]any{"host": host, "port": port, "username": "root", "password": "secret-test", "name": "chat registration fixture"}}})
+			answer = providerMessage{Role: "assistant", ToolCalls: []ToolCall{{ID: "stage", Type: "function", Function: ToolFunction{Name: "ssh_server_stage", Arguments: string(args)}}}}
+		case 2:
+			var staged struct {
+				Status string `json:"status"`
+				Items  []struct {
+					IntakeID int64 `json:"intake_id"`
+				} `json:"items"`
 			}
+			for _, m := range req.Messages {
+				if m.Role == "tool" && m.ToolCallID == "stage" {
+					_ = json.Unmarshal([]byte(m.Content), &staged)
+				}
+			}
+			if staged.Status != "staged" || len(staged.Items) != 1 || staged.Items[0].IntakeID <= 0 {
+				t.Error("stage tool did not return intake_id")
+				w.WriteHeader(500)
+				return
+			}
+			id := staged.Items[0].IntakeID
+			intakeID.Store(id)
 			args, _ := json.Marshal(map[string]any{"intake_id": id, "name": "chat registration fixture", "reason": "登记后检查系统状态"})
 			answer = providerMessage{Role: "assistant", ToolCalls: []ToolCall{{ID: "register", Type: "function", Function: ToolFunction{Name: "ssh_server_register", Arguments: string(args)}}}}
-		case 2:
+		case 3:
 			var result struct {
 				Status string `json:"status"`
 				Output string `json:"output"`
@@ -105,7 +111,7 @@ func TestAIChatRegistersServerAndContinuesSSHWithoutExposingCredential(t *testin
 			}
 			args, _ := json.Marshal(map[string]any{"server_id": registered.ServerID, "reason": "核对系统状态"})
 			answer = providerMessage{Role: "assistant", ToolCalls: []ToolCall{{ID: "status", Type: "function", Function: ToolFunction{Name: "ssh_status", Arguments: string(args)}}}}
-		case 3:
+		case 4:
 			var result struct {
 				Status string `json:"status"`
 				Output string `json:"output"`
@@ -170,7 +176,7 @@ func TestAIChatRegistersServerAndContinuesSSHWithoutExposingCredential(t *testin
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	if calls.Load() != 3 || serverID.Load() <= 0 || intakeID.Load() <= 0 {
+	if calls.Load() != 4 || serverID.Load() <= 0 || intakeID.Load() <= 0 {
 		t.Fatal("incomplete registration flow")
 	}
 	servers, err := s.ListServers(ctx, actor)
@@ -211,7 +217,7 @@ func TestAIChatRegistersServerAndContinuesSSHWithoutExposingCredential(t *testin
 		t.Fatal("credential was not encrypted", err)
 	}
 	retry, err := s.SendMessage(ctx, actor, request)
-	if err != nil || retry.Turn.ID != sent.Turn.ID || calls.Load() != 3 {
+	if err != nil || retry.Turn.ID != sent.Turn.ID || calls.Load() != 4 {
 		t.Fatal("send replay repeated task", err)
 	}
 	var intakeCount int

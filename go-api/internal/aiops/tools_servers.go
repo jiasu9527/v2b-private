@@ -12,6 +12,20 @@ import (
 )
 
 func serverToolDefinitions() []ToolDefinition {
+	stageItem := map[string]any{"type": "object", "properties": map[string]any{
+		"host":        map[string]any{"type": "string", "description": "从操作人本轮原文识别出的 SSH 地址；不要猜测"},
+		"port":        map[string]any{"type": "integer", "minimum": 1, "maximum": 65535, "description": "可选；原文未给出时省略，后台默认 22"},
+		"username":    map[string]any{"type": "string", "description": "从原文识别出的登录用户名"},
+		"password":    map[string]any{"type": "string", "description": "原文中的完整密码；使用私钥时省略"},
+		"private_key": map[string]any{"type": "string", "description": "原文中的完整私钥；使用密码时省略"},
+		"passphrase":  map[string]any{"type": "string", "description": "可选私钥口令"},
+		"name":        map[string]any{"type": "string", "description": "可选显示名称"},
+		"group":       map[string]any{"type": "string", "description": "可选分组"},
+		"fingerprint": map[string]any{"type": "string", "description": "可选已知 SSH SHA256 主机指纹；不确定就省略"},
+	}, "required": []string{"host", "username"}, "additionalProperties": false}
+	stageRaw, _ := json.Marshal(map[string]any{"type": "object", "properties": map[string]any{
+		"items": map[string]any{"type": "array", "items": stageItem, "minItems": 1, "maxItems": maxSSHIntakeBatchSize, "description": "从操作人本轮任意格式的原文整理出的服务器；可分批提交，整轮最多 50 台、单次参数最多 32768 字节。每台必须有密码或完整私钥"},
+	}, "required": []string{"items"}, "additionalProperties": false})
 	raw, _ := json.Marshal(map[string]any{"type": "object", "properties": map[string]any{
 		"intake_id": map[string]any{"type": "integer", "minimum": 1, "description": "当前管理员在本会话提交SSH资料后由后台生成的intake_id；不可猜测或使用其他会话资料"},
 		"name":      map[string]any{"type": "string", "maxLength": 128, "description": "可选服务器名称，未填沿用提交名称或主机地址"},
@@ -26,6 +40,7 @@ func serverToolDefinitions() []ToolDefinition {
 	}, "required": []string{"server_id", "version", "group", "reason"}, "additionalProperties": false})
 	return []ToolDefinition{
 		sshIntakesToolDefinition(),
+		{Type: "function", Function: ToolFunctionDefinition{Name: "ssh_server_stage", Description: "从本轮操作人原文整理 SSH 服务器资料并加密暂存，不连接或登记服务器；原文格式不限。每台须有地址、用户名和完整密码或私钥；不要猜测或跨台借凭据。返回不含凭据的 intake_id，随后逐台用 ssh_server_register 登记。若资料确实不明，向操作人说明缺哪台，不要伪造。", Parameters: stageRaw}},
 		{Type: "function", Function: ToolFunctionDefinition{Name: "ssh_server_register", Description: "将本会话已安全收取的SSH资料提议登记到服务器列表，标准模式待审批、完全访问按当前授权执行。批量资料逐个intake_id调用，可用ssh_intakes_list核对进度。只接受intake_id，不接受密码私钥。先无认证读取主机指纹；未提供指纹时固定首次观测值（first_use），提供指纹必须匹配。仅新建、不覆盖已有服务器或凭据。登记成功不等于已登录，返回server_id后可用ssh_status检查。", Parameters: raw}},
 		{Type: "function", Function: ToolFunctionDefinition{Name: "propose_server_group", Description: "仅修改已登记SSH服务器的分组标签，不重新登记、不连接服务器、不修改地址、指纹或凭据。先用servers_list核对server_id和version；逐次确认生成审核卡，完全访问按本轮授权执行；成功后重新读取列表核对。", Parameters: groupRaw}},
 	}
