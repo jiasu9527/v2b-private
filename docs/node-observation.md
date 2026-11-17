@@ -15,7 +15,7 @@
 
    响应含**仅出现一次**的 `token`。只把它写入对应节点的本地私密配置／环境变量；后台只存其哈希。**每次保存都会轮换旧 token，需同步更新节点本地 `ObservationToken`**。`GET .../observation/nodes` 不返回 token。节点端令牌未更新期间不会上报，不能把这段空窗解释为用户没有路由尝试。
 3. `all` 模式的节点 `/user` 保持正常合资格用户列表，不做白名单过滤；`allowlist` 模式只能用于 `client_entry_only=1` 的专用节点，且即使暂停采集仍保留名单限制。`allowlist` 下传空名单并关闭采集可撤销全部用户。仅控制订阅下发**不是**节点端鉴权白名单。
-4. 节点 `/config` 返回 `observation_audit.enable`、`mode`、`allowed_user_ids` 与上报间隔，**不返回 token**。节点端只有同时具备本地 token 和该开关时才采集。
+4. 节点 `/config` 返回 `observation_audit.enable`、`mode`、`allowed_user_ids` 与上报间隔，**不返回 token**。全员模式默认每 10 秒批量上报，白名单模式每 60 秒；节点端只有同时具备本地 token 和该开关时才采集。
 5. 先用测试账号验证域名目标、纯 IP 目标与断网上报重试，再逐个节点开启；现有事件表示路由尝试，不能区分目标连接成功或失败。高流量场景还需监看队列丢弃、上报失败和数据库体积。
 
 ## 上报契约

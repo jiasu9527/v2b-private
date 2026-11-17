@@ -156,7 +156,7 @@ func TestObservationAllModeRetainsEveryEligibleNodeUser(t *testing.T) {
 	req.Header.Set("X-Observation-Capability", observationAllCapability)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"observation_audit":{"allowed_user_ids":[],"enable":true,"mode":"all","report_interval":60}`) {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"observation_audit":{"allowed_user_ids":[],"enable":true,"mode":"all","report_interval":10}`) {
 		t.Fatalf("all-mode config status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	req = httptest.NewRequest(http.MethodGet, "/api/v2/server/config?token=shared&node_id=7", nil)

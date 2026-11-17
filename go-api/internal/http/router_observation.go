@@ -24,9 +24,13 @@ func addObservationConfig(payload map[string]any, r *http.Request, settings node
 	if settings.Mode == nodeapi.ObservationModeAll && r.Header.Get("X-Observation-Capability") != observationAllCapability {
 		return false
 	}
+	interval := 60
+	if settings.Mode == nodeapi.ObservationModeAll {
+		interval = 10
+	}
 	payload["observation_audit"] = map[string]any{
 		"enable": settings.Enabled, "mode": settings.Mode,
-		"allowed_user_ids": settings.AllowedUserIDs, "report_interval": 60,
+		"allowed_user_ids": settings.AllowedUserIDs, "report_interval": interval,
 	}
 	return true
 }
