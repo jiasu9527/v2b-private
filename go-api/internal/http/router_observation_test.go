@@ -21,6 +21,7 @@ type fakeObservationNodeService struct {
 	configEnabled bool
 	configMode    string
 	configUsers   []int64
+	capability    string
 }
 
 func (f *fakeObservationNodeService) ProvisionObservation(context.Context, string, int64, bool, string, []int64) (string, error) {
@@ -35,6 +36,10 @@ func (f *fakeObservationNodeService) ObservationNodeConfig(context.Context, stri
 		mode = nodeapi.ObservationModeAllowlist
 	}
 	return nodeapi.ObservationNodeSettings{Configured: f.configUsers != nil || f.configMode != "", Enabled: f.configEnabled, Mode: mode, AllowedUserIDs: f.configUsers}, nil
+}
+func (f *fakeObservationNodeService) RecordObservationCapability(_ context.Context, _ string, _ int64, capability string) error {
+	f.capability = capability
+	return nil
 }
 func (f *fakeObservationNodeService) ReportObservation(_ context.Context, req nodeapi.ObservationReportRequest) (int64, error) {
 	f.report = req
@@ -164,5 +169,82 @@ func TestObservationAllModeRetainsEveryEligibleNodeUser(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUpgradeRequired || strings.Contains(rec.Body.String(), `"observation_audit"`) {
 		t.Fatalf("legacy node must be rejected without empty-list config: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestObservationAutoV2DefaultsToAllAndUsesExistingNodeKey(t *testing.T) {
+	svc := &fakeObservationNodeService{
+		fakeNodeService: fakeNodeService{server: nodeapi.ServerRecord{ID: 7, NodeType: "v2node", Fields: map[string]any{"protocol": "vless"}}},
+		inserted:        1,
+	}
+	router := NewRouter(config.Config{ServerToken: "shared"}, WithNodeService(svc))
+	path := "/api/v1/server/UniProxy/config?token=shared&node_type=v2node&node_id=7"
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `"observation_audit"`) {
+		t.Fatalf("old node unexpectedly enabled: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("X-Observation-Capability", observationAutoCapability)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"observation_audit":{"allowed_user_ids":[],"enable":true,"mode":"all","report_interval":10}`) {
+		t.Fatalf("auto-v2 config status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if svc.capability != observationAutoCapability {
+		t.Fatalf("auto-v2 capability was not recorded: %q", svc.capability)
+	}
+	reportPath := "/api/v1/server/UniProxy/observation?node_type=v2node&node_id=7"
+	jsonBody := `{"events":[{"event_id":"event_123","user_id":9,"occurred_at":` + strconv.FormatInt(time.Now().Unix(), 10) + `,"target_host":"example.com","target_port":443,"network":"tcp","result":"route_attempt"}]}`
+	for _, tc := range []struct {
+		key  string
+		want int
+	}{{"wrong", http.StatusUnauthorized}, {"shared", http.StatusOK}} {
+		req = httptest.NewRequest(http.MethodPost, reportPath, strings.NewReader(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Server-Token", tc.key)
+		rec = httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Fatalf("key=%q status=%d body=%s", tc.key, rec.Code, rec.Body.String())
+		}
+	}
+	if !svc.report.SharedKeyAuthenticated || svc.report.Token != "" || svc.report.NodeID != 7 {
+		t.Fatalf("report did not use existing node key: %+v", svc.report)
+	}
+}
+
+func TestObservationAutoV2RespectsExplicitDisable(t *testing.T) {
+	svc := &fakeObservationNodeService{
+		fakeNodeService: fakeNodeService{server: nodeapi.ServerRecord{ID: 7, NodeType: "v2node", Fields: map[string]any{"protocol": "vless"}}},
+		configMode:      nodeapi.ObservationModeAll,
+		configEnabled:   false,
+	}
+	router := NewRouter(config.Config{ServerToken: "shared"}, WithNodeService(svc))
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/server/config?token=shared&node_id=7", nil)
+	req.Header.Set("X-Observation-Capability", observationAutoCapability)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"observation_audit":{"allowed_user_ids":[],"enable":false,"mode":"all","report_interval":10}`) {
+		t.Fatalf("explicit disable not respected: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestObservationAutoV2SkipsExternalProtocols(t *testing.T) {
+	for _, protocol := range []string{"juicity", "mieru", "naive"} {
+		t.Run(protocol, func(t *testing.T) {
+			svc := &fakeObservationNodeService{fakeNodeService: fakeNodeService{
+				server: nodeapi.ServerRecord{ID: 7, NodeType: "v2node", Fields: map[string]any{"protocol": protocol}},
+			}}
+			router := NewRouter(config.Config{ServerToken: "shared"}, WithNodeService(svc))
+			req := httptest.NewRequest(http.MethodGet, "/api/v2/server/config?token=shared&node_id=7", nil)
+			req.Header.Set("X-Observation-Capability", observationAutoCapability)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `"observation_audit"`) {
+				t.Fatalf("external protocol unexpectedly enabled: status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }

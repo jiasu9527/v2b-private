@@ -4,7 +4,7 @@ import {
   AppstoreOutlined, DashboardOutlined, UserOutlined, ShoppingCartOutlined,
   SettingOutlined, FileTextOutlined, GiftOutlined, CreditCardOutlined, QuestionCircleOutlined,
   MessageOutlined, MenuFoldOutlined, MenuUnfoldOutlined, LogoutOutlined, DeploymentUnitOutlined,
-  ShareAltOutlined, DatabaseOutlined, BellOutlined, DownOutlined, SafetyCertificateOutlined, GlobalOutlined
+  ShareAltOutlined, DatabaseOutlined, BellOutlined, DownOutlined, SafetyCertificateOutlined, GlobalOutlined, BarChartOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import Login from './pages/Login';
@@ -33,6 +33,7 @@ import DNSPodPage from './pages/DNSPodPage';
 import DNSFailoverPage from './pages/DNSFailoverPage';
 import XboardMigrationPage from './pages/XboardMigrationPage';
 import NewAPIIntegrationPage from './pages/NewAPIIntegrationPage';
+import AccessStatisticsPage from './pages/AccessStatisticsPage';
 import { checkLogin, clearAuth, getAuth, getCurrentUserInfo, getSettings, pathAdminSegment, setAdminUserInfo } from './lib/api';
 
 const { Header, Sider, Content } = Layout;
@@ -71,6 +72,7 @@ const menu = [
   { type: 'item', key: '/ticket', icon: <MessageOutlined />, label: '工单管理' },
   { type: 'item', key: '/knowledge', icon: <QuestionCircleOutlined />, label: '知识库管理' },
   { type: 'heading', key: 'metric-heading', label: '指标' },
+  { type: 'item', key: '/access-statistics', icon: <BarChartOutlined />, label: '访问统计' },
   { type: 'item', key: '/queue', icon: <DatabaseOutlined />, label: '队列监控' },
 ];
 
@@ -90,6 +92,7 @@ function Page({ path }: { path: string }) {
   const route = path.split('?')[0];
   if (route === '/dashboard') return <Dashboard />;
   if (route === '/dashboard/online') return <OnlineAnalyticsPage />;
+  if (route === '/access-statistics') return <AccessStatisticsPage />;
   if (route === '/user') return <UserPage />;
   if (route === '/support/staff' || route === '/support/operations') return <UserPage initialTab="staff-operations" />;
   if (route === '/plan') return <PlanPage />;

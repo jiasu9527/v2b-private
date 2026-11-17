@@ -3,6 +3,7 @@ package nodeapi
 import (
 	"context"
 	"database/sql/driver"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,10 +19,13 @@ func TestObservationSummaryCountsDistinctUsersForDomainsAndIPs(t *testing.T) {
 	for _, pattern := range []string{
 		`CREATE TABLE IF NOT EXISTS v2_node_observation_config`,
 		`ALTER TABLE v2_node_observation_config ADD COLUMN IF NOT EXISTS mode`,
+		`CREATE TABLE IF NOT EXISTS v2_node_observation_capability`,
 		`CREATE TABLE IF NOT EXISTS v2_node_observation_event`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_time`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_user_time`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time`,
 	} {
 		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
@@ -59,5 +63,28 @@ func TestObservationFilterAllowsPickerBoundaryButRejectsLongerWindow(t *testing.
 	}
 	if _, err := normalizeObservationFilter(ObservationFilter{From: now - observationKeepDays*86400 - 20, To: now}); err == nil {
 		t.Fatal("overlong seven-day window accepted")
+	}
+}
+
+func TestObservationFilterAccountAndTargetAreExactAndParameterized(t *testing.T) {
+	filter, err := normalizeObservationFilter(ObservationFilter{Account: "  USER@Example.COM ", Target: "Example.COM."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	where, args := observationWhere(filter)
+	if !strings.Contains(where, "lower(email)=lower($3)") || !strings.Contains(where, "(e.target_host = $4 OR e.target_ip = $4)") {
+		t.Fatalf("missing exact account/target conditions: %s", where)
+	}
+	if len(args) != 4 || args[2] != "USER@Example.COM" || args[3] != "example.com" {
+		t.Fatalf("unexpected query args: %#v", args)
+	}
+	filter, err = normalizeObservationFilter(ObservationFilter{Account: "42", Target: "2001:DB8::1"})
+	if err != nil || filter.UserID != 42 || filter.Account != "" || filter.Target != "2001:db8::1" {
+		t.Fatalf("numeric account/IPv6 normalization: %+v %v", filter, err)
+	}
+	for _, bad := range []ObservationFilter{{Account: "0"}, {Account: "not-an-email"}, {Target: "example.com/path"}, {Target: "x' OR 1=1 --"}} {
+		if _, err := normalizeObservationFilter(bad); err == nil {
+			t.Fatalf("invalid filter accepted: %+v", bad)
+		}
 	}
 }

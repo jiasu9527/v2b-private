@@ -248,10 +248,11 @@ func handleServerV2Config(w http.ResponseWriter, r *http.Request, cfg config.Con
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "观察节点配置暂时无法读取"})
 			return true
 		}
-		if !addObservationConfig(payload, r, settings) {
+		if !addObservationConfig(payload, r, settings, fieldString(server, "protocol")) {
 			writeJSON(w, http.StatusUpgradeRequired, map[string]any{"message": "节点程序不支持全员观察模式，请先升级节点程序"})
 			return true
 		}
+		recordObservationCapability(r, observations, server.ID)
 	}
 	return writeJSONWithETag(w, r, payload)
 }

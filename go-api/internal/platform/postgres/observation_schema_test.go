@@ -17,10 +17,13 @@ func TestObservationSchemaIsAdditiveAndIdempotent(t *testing.T) {
 		for _, pattern := range []string{
 			`CREATE TABLE IF NOT EXISTS v2_node_observation_config`,
 			`ALTER TABLE v2_node_observation_config ADD COLUMN IF NOT EXISTS mode`,
+			`CREATE TABLE IF NOT EXISTS v2_node_observation_capability`,
 			`CREATE TABLE IF NOT EXISTS v2_node_observation_event`,
 			`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_time`,
 			`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_user_time`,
 			`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time`,
+			`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time`,
+			`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time`,
 		} {
 			mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
 		}

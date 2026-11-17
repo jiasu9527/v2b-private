@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -8,14 +9,30 @@ import (
 	"strconv"
 	"strings"
 
+	"forest/go-api/internal/config"
 	"forest/go-api/internal/nodeapi"
 	"forest/go-api/internal/session"
 )
 
 const maxObservationJSONBody = 64 << 10
 const observationAllCapability = "all-v1"
+const observationAutoCapability = "auto-v2"
 
-func addObservationConfig(payload map[string]any, r *http.Request, settings nodeapi.ObservationNodeSettings) bool {
+func addObservationConfig(payload map[string]any, r *http.Request, settings nodeapi.ObservationNodeSettings, protocol string) bool {
+	if r.Header.Get("X-Observation-Capability") == observationAutoCapability {
+		if !nodeapi.ObservationProtocolSupported(protocol) {
+			// External protocol engines do not emit Xray dispatcher events and
+			// reject observation_audit during startup.
+			return true
+		}
+		// New nodes collect routing-attempt metadata for every authenticated user.
+		// This does not change the node's user/authentication allowlist.
+		payload["observation_audit"] = map[string]any{
+			"enable": !settings.Configured || settings.Enabled, "mode": nodeapi.ObservationModeAll,
+			"allowed_user_ids": []int64{}, "report_interval": 10,
+		}
+		return true
+	}
 	if !settings.Configured {
 		return true
 	}
@@ -33,6 +50,16 @@ func addObservationConfig(payload map[string]any, r *http.Request, settings node
 		"allowed_user_ids": settings.AllowedUserIDs, "report_interval": interval,
 	}
 	return true
+}
+
+func recordObservationCapability(r *http.Request, observations nodeapi.ObservationService, nodeID int64) {
+	capability := r.Header.Get("X-Observation-Capability")
+	if capability != observationAutoCapability && capability != observationAllCapability {
+		capability = "legacy"
+	}
+	// The node's config fetch must not fail just because coverage telemetry is
+	// temporarily unavailable; the statistics page will show it as unconfirmed.
+	_ = observations.RecordObservationCapability(r.Context(), "v2node", nodeID, capability)
 }
 
 func observationService(w http.ResponseWriter, service nodeapi.Service) (nodeapi.ObservationService, bool) {
@@ -55,7 +82,7 @@ func observationNodeFromQuery(r *http.Request) (string, int64, error) {
 	return "v2node", id, nil
 }
 
-func handleServerObservation(w http.ResponseWriter, r *http.Request, service nodeapi.Service) bool {
+func handleServerObservation(w http.ResponseWriter, r *http.Request, cfg config.Config, service nodeapi.Service) bool {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"message": "请求方式不支持"})
@@ -84,11 +111,22 @@ func handleServerObservation(w http.ResponseWriter, r *http.Request, service nod
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "观察事件格式无效或请求过大"})
 		return true
 	}
+	sharedKey := r.Header.Get("X-Server-Token")
+	sharedKeyAuthenticated := false
+	if sharedKey != "" {
+		expected := strings.TrimSpace(cfg.ServerToken)
+		if expected == "" || subtle.ConstantTimeCompare([]byte(sharedKey), []byte(expected)) != 1 {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"message": "节点密钥无效"})
+			return true
+		}
+		sharedKeyAuthenticated = true
+	}
 	inserted, err := observations.ReportObservation(r.Context(), nodeapi.ObservationReportRequest{
-		NodeType: nodeType,
-		NodeID:   nodeID,
-		Token:    r.Header.Get("X-Observation-Token"),
-		Events:   payload.Events,
+		NodeType:               nodeType,
+		NodeID:                 nodeID,
+		Token:                  r.Header.Get("X-Observation-Token"),
+		SharedKeyAuthenticated: sharedKeyAuthenticated,
+		Events:                 payload.Events,
 	})
 	if err != nil {
 		switch {
@@ -160,7 +198,11 @@ func handleAdminObservationNodes(w http.ResponseWriter, r *http.Request, session
 
 func observationFilterFromQuery(r *http.Request) (nodeapi.ObservationFilter, error) {
 	q := r.URL.Query()
-	filter := nodeapi.ObservationFilter{NodeType: strings.TrimSpace(q.Get("node_type"))}
+	filter := nodeapi.ObservationFilter{
+		NodeType: strings.TrimSpace(q.Get("node_type")),
+		Account:  strings.TrimSpace(q.Get("account")),
+		Target:   strings.TrimSpace(q.Get("target")),
+	}
 	for _, item := range []struct {
 		key string
 		out *int64

@@ -50,13 +50,18 @@ type ObservationReportRequest struct {
 	NodeType string
 	NodeID   int64
 	Token    string
-	Events   []ObservationEvent
+	// Set only by the HTTP handler after validating X-Server-Token against the
+	// existing node API key. New nodes do not need a separate observation key.
+	SharedKeyAuthenticated bool
+	Events                 []ObservationEvent
 }
 
 type ObservationFilter struct {
 	NodeType string
 	NodeID   int64
 	UserID   int64
+	Account  string
+	Target   string
 	From     int64
 	To       int64
 	Page     int
@@ -75,6 +80,7 @@ type ObservationService interface {
 	ProvisionObservation(ctx context.Context, nodeType string, nodeID int64, enabled bool, mode string, allowedUserIDs []int64) (string, error)
 	ObservationNodes(ctx context.Context) ([]map[string]any, error)
 	ObservationNodeConfig(ctx context.Context, nodeType string, nodeID int64) (ObservationNodeSettings, error)
+	RecordObservationCapability(ctx context.Context, nodeType string, nodeID int64, capability string) error
 	ReportObservation(ctx context.Context, req ObservationReportRequest) (int64, error)
 	ObservationEvents(ctx context.Context, filter ObservationFilter) (map[string]any, error)
 	ObservationSummary(ctx context.Context, filter ObservationFilter) (map[string]any, error)
@@ -96,6 +102,14 @@ func validateObservationNode(nodeType string, nodeID int64) error {
 		return fmt.Errorf("%w: observation requires v2node", ErrObservationInvalid)
 	}
 	return nil
+}
+
+func ObservationProtocolSupported(protocol string) bool {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "vmess", "vless", "trojan", "shadowsocks", "hysteria2", "tuic", "anytls":
+		return true
+	}
+	return false
 }
 
 func uniqueObservationUsers(ids []int64, enabled bool) ([]int64, error) {
@@ -150,9 +164,7 @@ func (s *DBService) ProvisionObservation(ctx context.Context, nodeType string, n
 		return "", fmt.Errorf("observation node not found: %w", err)
 	}
 	protocol := strings.ToLower(strings.TrimSpace(fmt.Sprint(server.Fields["protocol"])))
-	switch protocol {
-	case "vmess", "vless", "trojan", "shadowsocks", "hysteria2", "tuic", "anytls":
-	default:
+	if !ObservationProtocolSupported(protocol) {
 		return "", fmt.Errorf("%w: observation requires an Xray-backed protocol", ErrObservationInvalid)
 	}
 	var dedicated bool
@@ -227,9 +239,10 @@ func (s *DBService) ObservationNodes(ctx context.Context) ([]map[string]any, err
 	rows, err := s.db.QueryContext(ctx, `SELECT n.id,n.name,n.protocol,n.client_entry_only,n."show",
  c.node_id IS NOT NULL,COALESCE(c.enabled,false),COALESCE(c.mode,''),
  COALESCE(c.allowed_user_ids,'[]'::jsonb),COALESCE(c.created_at,0),COALESCE(c.updated_at,0),
- COALESCE(latest.occurred_at,0)
+ COALESCE(latest.occurred_at,0),COALESCE(cap.capability,''),COALESCE(cap.last_seen_at,0)
 FROM v2_server_v2node n
 LEFT JOIN v2_node_observation_config c ON c.node_type='v2node' AND c.node_id=n.id
+LEFT JOIN v2_node_observation_capability cap ON cap.node_type='v2node' AND cap.node_id=n.id
 LEFT JOIN LATERAL (
  SELECT occurred_at FROM v2_node_observation_event
  WHERE node_type='v2node' AND node_id=n.id ORDER BY occurred_at DESC,id DESC LIMIT 1
@@ -241,12 +254,12 @@ ORDER BY n.id`)
 	defer rows.Close()
 	result := make([]map[string]any, 0)
 	for rows.Next() {
-		var name, protocol, mode string
-		var nodeID, createdAt, updatedAt, lastEventAt int64
+		var name, protocol, mode, capability string
+		var nodeID, createdAt, updatedAt, lastEventAt, lastSeenAt int64
 		var clientEntryOnly, show int
 		var configured, enabled bool
 		var idsJSON []byte
-		if err := rows.Scan(&nodeID, &name, &protocol, &clientEntryOnly, &show, &configured, &enabled, &mode, &idsJSON, &createdAt, &updatedAt, &lastEventAt); err != nil {
+		if err := rows.Scan(&nodeID, &name, &protocol, &clientEntryOnly, &show, &configured, &enabled, &mode, &idsJSON, &createdAt, &updatedAt, &lastEventAt, &capability, &lastSeenAt); err != nil {
 			return nil, err
 		}
 		var ids []int64
@@ -254,10 +267,9 @@ ORDER BY n.id`)
 			return nil, err
 		}
 		protocol = strings.ToLower(strings.TrimSpace(protocol))
-		supported := false
-		switch protocol {
-		case "vmess", "vless", "trojan", "shadowsocks", "hysteria2", "tuic", "anytls":
-			supported = true
+		supported := ObservationProtocolSupported(protocol)
+		if lastSeenAt < time.Now().Unix()-600 {
+			capability = ""
 		}
 		result = append(result, map[string]any{
 			"node_type": "v2node", "node_id": nodeID, "name": name, "protocol": protocol,
@@ -265,6 +277,8 @@ ORDER BY n.id`)
 			"configured": configured, "enabled": enabled, "mode": mode,
 			"allowed_user_ids": ids, "created_at": createdAt, "updated_at": updatedAt,
 			"last_event_at": lastEventAt,
+			"capability":    capability, "auto_capable": supported && capability == "auto-v2" && (!configured || enabled),
+			"last_seen_at": lastSeenAt,
 		})
 	}
 	return result, rows.Err()
@@ -313,35 +327,54 @@ func (s *DBService) ReportObservation(ctx context.Context, req ObservationReport
 	if err := validateObservationNode(req.NodeType, req.NodeID); err != nil {
 		return 0, err
 	}
-	if len(req.Events) == 0 || len(req.Events) > 100 || len(req.Token) != 64 {
+	if len(req.Events) == 0 || len(req.Events) > 100 || (!req.SharedKeyAuthenticated && len(req.Token) != 64) {
 		return 0, ErrObservationInvalid
 	}
 	if err := s.ensureObservationSchema(ctx); err != nil {
 		return 0, err
 	}
-	var enabled bool
 	var mode string
-	var storedHash, idsJSON []byte
-	err := s.db.QueryRowContext(ctx, `SELECT enabled,mode,token_hash,allowed_user_ids FROM v2_node_observation_config WHERE node_type='v2node' AND node_id=$1`, req.NodeID).Scan(&enabled, &mode, &storedHash, &idsJSON)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, ErrObservationUnauthorized
-	}
-	if err != nil {
-		return 0, err
-	}
-	hash := sha256.Sum256([]byte(req.Token))
-	if !enabled || subtle.ConstantTimeCompare(storedHash, hash[:]) != 1 {
-		return 0, ErrObservationUnauthorized
-	}
-	if mode != ObservationModeAll && mode != ObservationModeAllowlist {
-		return 0, ErrObservationUnauthorized
-	}
-	var nodeExists bool
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_server_v2node WHERE id=$1 AND ($2='all' OR client_entry_only=1))`, req.NodeID, mode).Scan(&nodeExists); err != nil {
-		return 0, err
-	}
-	if !nodeExists {
-		return 0, ErrObservationUnauthorized
+	var idsJSON []byte
+	if req.SharedKeyAuthenticated {
+		server, err := s.LookupServer(ctx, ServerLookupRequest{NodeType: "v2node", NodeID: req.NodeID})
+		if err != nil || !ObservationProtocolSupported(fmt.Sprint(server.Fields["protocol"])) {
+			return 0, ErrObservationUnauthorized
+		}
+		// A previous dedicated-node allowlist still constrains its users. The
+		// automatic collector never widens node authentication by itself.
+		settings, err := s.ObservationNodeConfig(ctx, "v2node", req.NodeID)
+		if err != nil {
+			return 0, err
+		}
+		if settings.Configured && !settings.Enabled {
+			return 0, ErrObservationUnauthorized
+		}
+		mode = ObservationModeAll
+		if settings.Configured && settings.Mode == ObservationModeAllowlist {
+			mode = ObservationModeAllowlist
+			idsJSON, _ = json.Marshal(settings.AllowedUserIDs)
+		}
+	} else {
+		var enabled bool
+		var storedHash []byte
+		err := s.db.QueryRowContext(ctx, `SELECT enabled,mode,token_hash,allowed_user_ids FROM v2_node_observation_config WHERE node_type='v2node' AND node_id=$1`, req.NodeID).Scan(&enabled, &mode, &storedHash, &idsJSON)
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrObservationUnauthorized
+		}
+		if err != nil {
+			return 0, err
+		}
+		hash := sha256.Sum256([]byte(req.Token))
+		if !enabled || subtle.ConstantTimeCompare(storedHash, hash[:]) != 1 || (mode != ObservationModeAll && mode != ObservationModeAllowlist) {
+			return 0, ErrObservationUnauthorized
+		}
+		var nodeExists bool
+		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM v2_server_v2node WHERE id=$1 AND ($2='all' OR client_entry_only=1))`, req.NodeID, mode).Scan(&nodeExists); err != nil {
+			return 0, err
+		}
+		if !nodeExists {
+			return 0, ErrObservationUnauthorized
+		}
 	}
 	var allowed map[int64]struct{}
 	if mode == ObservationModeAllowlist {

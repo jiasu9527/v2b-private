@@ -3,6 +3,7 @@ package nodeapi
 import (
 	"context"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,30 @@ func normalizeObservationFilter(filter ObservationFilter) (ObservationFilter, er
 	}
 	if filter.NodeID < 0 || filter.UserID < 0 {
 		return filter, ErrObservationInvalid
+	}
+	filter.Account = strings.TrimSpace(filter.Account)
+	if filter.Account != "" {
+		if len(filter.Account) > 254 || strings.ContainsAny(filter.Account, " \t\r\n") {
+			return filter, ErrObservationInvalid
+		}
+		if id, err := strconv.ParseInt(filter.Account, 10, 64); err == nil {
+			if id <= 0 || (filter.UserID > 0 && filter.UserID != id) {
+				return filter, ErrObservationInvalid
+			}
+			filter.UserID = id
+			filter.Account = ""
+		} else if !strings.Contains(filter.Account, "@") {
+			return filter, ErrObservationInvalid
+		}
+	}
+	filter.Target = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(filter.Target), "."))
+	if filter.Target != "" {
+		if len(filter.Target) > 253 || strings.ContainsAny(filter.Target, "/:@?# \\ \t\r\n") && net.ParseIP(filter.Target) == nil {
+			return filter, ErrObservationInvalid
+		}
+		if ip := net.ParseIP(filter.Target); ip != nil {
+			filter.Target = ip.String()
+		}
 	}
 	now := time.Now().Unix()
 	if filter.To == 0 {
@@ -54,6 +79,15 @@ func observationWhere(filter ObservationFilter) (string, []any) {
 	if filter.UserID > 0 {
 		args = append(args, filter.UserID)
 		clauses = append(clauses, "e.user_id = $"+strconv.Itoa(len(args)))
+	}
+	if filter.Account != "" {
+		args = append(args, filter.Account)
+		clauses = append(clauses, "e.user_id IN (SELECT id FROM v2_user WHERE lower(email)=lower($"+strconv.Itoa(len(args))+"))")
+	}
+	if filter.Target != "" {
+		args = append(args, filter.Target)
+		placeholder := "$" + strconv.Itoa(len(args))
+		clauses = append(clauses, "(e.target_host = "+placeholder+" OR e.target_ip = "+placeholder+")")
 	}
 	return " WHERE " + strings.Join(clauses, " AND "), args
 }

@@ -48,10 +48,13 @@ func TestReportObservationRequiresPerNodeTokenAndAllowlistedUser(t *testing.T) {
 	for _, pattern := range []string{
 		`CREATE TABLE IF NOT EXISTS v2_node_observation_config`,
 		`ALTER TABLE v2_node_observation_config ADD COLUMN IF NOT EXISTS mode`,
+		`CREATE TABLE IF NOT EXISTS v2_node_observation_capability`,
 		`CREATE TABLE IF NOT EXISTS v2_node_observation_event`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_time`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_user_time`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time`,
 	} {
 		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
@@ -92,10 +95,13 @@ func TestProvisionObservationRejectsSharedNode(t *testing.T) {
 	for _, pattern := range []string{
 		`CREATE TABLE IF NOT EXISTS v2_node_observation_config`,
 		`ALTER TABLE v2_node_observation_config ADD COLUMN IF NOT EXISTS mode`,
+		`CREATE TABLE IF NOT EXISTS v2_node_observation_capability`,
 		`CREATE TABLE IF NOT EXISTS v2_node_observation_event`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_time`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_user_time`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time`,
 	} {
 		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
@@ -121,10 +127,13 @@ func TestProvisionObservationAllModeAllowsSharedNodeWithoutUserList(t *testing.T
 	for _, pattern := range []string{
 		`CREATE TABLE IF NOT EXISTS v2_node_observation_config`,
 		`ALTER TABLE v2_node_observation_config ADD COLUMN IF NOT EXISTS mode`,
+		`CREATE TABLE IF NOT EXISTS v2_node_observation_capability`,
 		`CREATE TABLE IF NOT EXISTS v2_node_observation_event`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_time`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_user_time`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time`,
 	} {
 		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
@@ -152,10 +161,13 @@ func TestReportObservationAllModeDoesNotUseAllowlist(t *testing.T) {
 	for _, pattern := range []string{
 		`CREATE TABLE IF NOT EXISTS v2_node_observation_config`,
 		`ALTER TABLE v2_node_observation_config ADD COLUMN IF NOT EXISTS mode`,
+		`CREATE TABLE IF NOT EXISTS v2_node_observation_capability`,
 		`CREATE TABLE IF NOT EXISTS v2_node_observation_event`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_time`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_user_time`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time`,
 	} {
 		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
@@ -179,6 +191,45 @@ func TestReportObservationAllModeDoesNotUseAllowlist(t *testing.T) {
 	}
 }
 
+func TestReportObservationWithExistingNodeKeyNeedsNoManualConfig(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, pattern := range []string{
+		`CREATE TABLE IF NOT EXISTS v2_node_observation_config`,
+		`ALTER TABLE v2_node_observation_config ADD COLUMN IF NOT EXISTS mode`,
+		`CREATE TABLE IF NOT EXISTS v2_node_observation_capability`,
+		`CREATE TABLE IF NOT EXISTS v2_node_observation_event`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_user_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time`,
+	} {
+		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	mock.ExpectQuery(`SELECT row_to_json\(t\)`).WithArgs(int64(7)).WillReturnRows(
+		sqlmock.NewRows([]string{"row_to_json"}).AddRow([]byte(`{"id":7,"group_id":"[1]","route_id":"[]","protocol":"anytls"}`)))
+	mock.ExpectQuery(`SELECT enabled,mode,allowed_user_ids FROM v2_node_observation_config`).WithArgs(int64(7)).WillReturnRows(
+		sqlmock.NewRows([]string{"enabled", "mode", "allowed_user_ids"}))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM v2_user WHERE id IN`).WithArgs(`[5]`).WillReturnRows(
+		sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectExec(`INSERT INTO v2_node_observation_event`).WillReturnResult(sqlmock.NewResult(1, 1))
+	svc := &DBService{db: db}
+	inserted, err := svc.ReportObservation(context.Background(), ObservationReportRequest{
+		NodeType: "v2node", NodeID: 7, SharedKeyAuthenticated: true,
+		Events: []ObservationEvent{{EventID: "event_123", UserID: 5, OccurredAt: time.Now().Unix(), TargetHost: "example.com", TargetPort: 443, Network: "tcp", Result: "route_attempt"}},
+	})
+	if err != nil || inserted != 1 {
+		t.Fatalf("auto report inserted=%d err=%v", inserted, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestObservationNodesIncludesUnconfiguredNodesForCoverage(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -188,23 +239,27 @@ func TestObservationNodesIncludesUnconfiguredNodesForCoverage(t *testing.T) {
 	for _, pattern := range []string{
 		`CREATE TABLE IF NOT EXISTS v2_node_observation_config`,
 		`ALTER TABLE v2_node_observation_config ADD COLUMN IF NOT EXISTS mode`,
+		`CREATE TABLE IF NOT EXISTS v2_node_observation_capability`,
 		`CREATE TABLE IF NOT EXISTS v2_node_observation_event`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_time`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_user_time`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time`,
 	} {
 		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
-	cols := []string{"id", "name", "protocol", "client_entry_only", "show", "configured", "enabled", "mode", "allowed_user_ids", "created_at", "updated_at", "last_event_at"}
+	cols := []string{"id", "name", "protocol", "client_entry_only", "show", "configured", "enabled", "mode", "allowed_user_ids", "created_at", "updated_at", "last_event_at", "capability", "last_seen_at"}
 	mock.ExpectQuery(`FROM v2_server_v2node n`).WillReturnRows(sqlmock.NewRows(cols).
-		AddRow(7, "MPLS A", "anytls", 0, 1, false, false, "", []byte(`[]`), 0, 0, 0).
-		AddRow(8, "MPLS B", "vless", 0, 1, true, true, ObservationModeAll, []byte(`[]`), 1, 2, 3))
+		AddRow(7, "MPLS A", "anytls", 0, 1, false, false, "", []byte(`[]`), 0, 0, 0, "", 0).
+		AddRow(8, "MPLS B", "vless", 0, 1, true, true, ObservationModeAll, []byte(`[]`), 1, 2, 3, "auto-v2", time.Now().Unix()).
+		AddRow(9, "MPLS C", "vless", 0, 1, false, false, "", []byte(`[]`), 0, 0, 0, "auto-v2", time.Now().Unix()-1000))
 	svc := &DBService{db: db}
 	nodes, err := svc.ObservationNodes(context.Background())
-	if err != nil || len(nodes) != 2 {
+	if err != nil || len(nodes) != 3 {
 		t.Fatalf("nodes=%#v err=%v", nodes, err)
 	}
-	if nodes[0]["configured"] != false || nodes[1]["configured"] != true || nodes[1]["mode"] != ObservationModeAll || nodes[1]["last_event_at"] != int64(3) {
+	if nodes[0]["configured"] != false || nodes[1]["configured"] != true || nodes[1]["mode"] != ObservationModeAll || nodes[1]["last_event_at"] != int64(3) || nodes[1]["auto_capable"] != true || nodes[2]["auto_capable"] != false || nodes[2]["capability"] != "" {
 		t.Fatalf("coverage rows wrong: %#v", nodes)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -221,10 +276,13 @@ func TestDeleteExpiredObservationUsesBoundedBatch(t *testing.T) {
 	for _, pattern := range []string{
 		`CREATE TABLE IF NOT EXISTS v2_node_observation_config`,
 		`ALTER TABLE v2_node_observation_config ADD COLUMN IF NOT EXISTS mode`,
+		`CREATE TABLE IF NOT EXISTS v2_node_observation_capability`,
 		`CREATE TABLE IF NOT EXISTS v2_node_observation_event`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_time`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_user_time`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time`,
+		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time`,
 	} {
 		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
 	}

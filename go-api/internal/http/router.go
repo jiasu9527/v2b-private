@@ -342,7 +342,7 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 				return
 			}
 		case r.URL.Path == "/api/v1/server/UniProxy/observation":
-			if handleServerObservation(w, r, state.node) {
+			if handleServerObservation(w, r, cfg, state.node) {
 				return
 			}
 		case r.URL.Path == "/api/v1/server/UniProxy/push":
