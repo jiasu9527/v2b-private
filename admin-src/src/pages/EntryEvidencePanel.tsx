@@ -13,6 +13,7 @@ import {
 } from './entryEvidence';
 import './EntryEvidencePanel.css';
 import EntryInvestigationPanel from './EntryInvestigationPanel';
+import NodeObservationPanel from './NodeObservationPanel';
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : '请求失败，请重试';
 const emptyPage = <T,>(): EvidencePage<T> => ({ items: [], total: 0, current: 1, page_size: 20 });
@@ -339,6 +340,7 @@ export default function EntryEvidencePanel({ rows, onRulesChanged }: { rows: unk
         { title: '父轮次', dataIndex: 'parent_case_id', width: 100, render: (id) => id ? <Button type="link" onClick={() => void openCase(id)}>#{id}</Button> : '—' },
         { title: '操作', width: 160, render: (_, item) => <Space><Button size="small" onClick={() => void openCase(item.id)}>查看</Button>{isAdmin && <Popconfirm title="删除此排查档案及保存的名单证据？" description="不会回滚已执行的入口规则。" onConfirm={() => mutation('delete', async () => { await apiJsonPost(`${ENTRY_EVIDENCE_PATH}/case-delete`, { case_id: item.id }); await loadCases(); })}><Button size="small" danger disabled={!!busy}>删除</Button></Popconfirm>}</Space> },
       ]} pagination={{ current: cases.current, pageSize: cases.page_size, total: cases.total, showSizeChanger: true, onChange: (page, size) => void loadCases(page, size) }} /></> },
+      ...(isAdmin ? [{ key: 'node-observation', label: '节点访问观察', children: <NodeObservationPanel /> }] : []),
       ...(isAdmin ? [{ key: 'settings', label: '记录保留', children: <Card size="small" title="历史证据保留设置"><Space direction="vertical"><Typography.Text type="secondary">仅管理员可调整保留期及删除档案。已冻结的证据快照与实时记录分开保留，具体清理范围以服务端设置为准。</Typography.Text><Space><InputNumber aria-label="证据保留天数" min={1} max={365} precision={0} value={keepDays} onChange={(value) => setKeepDays(value || 7)} addonAfter="天" /><Button type="primary" loading={busy === 'settings'} disabled={!status || !!busy} onClick={() => void mutation('settings', async () => { await apiJsonPost(`${ENTRY_EVIDENCE_PATH}/settings`, { keep_days: keepDays }); await loadStatus(); message.success('保留设置已保存'); })}>保存</Button></Space></Space></Card> }] : []),
     ]} />
 

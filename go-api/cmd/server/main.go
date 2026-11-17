@@ -73,6 +73,9 @@ func main() {
 		if err := postgres.EnsureOnlineLocationSchema(ctx, db); err != nil {
 			log.Fatalf("ensure online location schema: %v", err)
 		}
+		if err := postgres.EnsureObservationSchema(ctx, db); err != nil {
+			log.Fatalf("ensure node observation schema: %v", err)
+		}
 		report, err := postgres.MigrateLegacyServerHostEntryRules(ctx, db)
 		if err != nil {
 			var migrationErr *postgres.LegacyEntryHostMigrationError
@@ -181,6 +184,13 @@ func main() {
 		telegramService.WithAIOps(aiTelegram)
 		nodeDBService := nodeapi.NewDBService(cfg, db, userDBService).WithRuntimeConfig(runtimeConfig).WithOnlineGeoResolver(onlineGeo)
 		nodeService = nodeDBService
+		observationCtx, stopObservation := context.WithCancel(ctx)
+		observationDone := make(chan struct{})
+		go func() {
+			defer close(observationDone)
+			nodeDBService.RunObservationMaintenance(observationCtx)
+		}()
+		defer func() { stopObservation(); <-observationDone }()
 		adminDBService.WithOnlineLocationRefresh(nodeDBService.ReconcileOnlineLocations)
 		backgroundRunner = background.NewRunner(jobQueue, adminDBService, userDBService, adminDBService, adminDBService, appleIDService)
 	}

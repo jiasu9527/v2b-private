@@ -241,7 +241,19 @@ func handleServerV2Config(w http.ResponseWriter, r *http.Request, cfg config.Con
 		return true
 	}
 
-	return writeJSONWithETag(w, r, buildV2ServerConfig(cfg, server, routes))
+	payload := buildV2ServerConfig(cfg, server, routes)
+	if observations, ok := service.(nodeapi.ObservationService); ok {
+		settings, err := observations.ObservationNodeConfig(r.Context(), server.NodeType, server.ID)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "观察节点配置暂时无法读取"})
+			return true
+		}
+		if !addObservationConfig(payload, r, settings) {
+			writeJSON(w, http.StatusUpgradeRequired, map[string]any{"message": "节点程序不支持全员观察模式，请先升级节点程序"})
+			return true
+		}
+	}
+	return writeJSONWithETag(w, r, payload)
 }
 
 func lookupNodeServerV2Legacy(w http.ResponseWriter, r *http.Request, cfg config.Config, service nodeapi.Service) (nodeapi.ServerRecord, bool) {

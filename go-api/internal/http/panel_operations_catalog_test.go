@@ -132,8 +132,11 @@ func TestPanelOperationCatalogCoversAdminRoutes(t *testing.T) {
 		paths[op.Path] = true
 	}
 	excluded := map[string]string{
-		"/new-api/":        "wallet payment integration, credentials and settlement are administrator-only and excluded from AI operations",
-		"/commission-log/": "subroutes checked below",
+		"/observation/nodes":   "node observation configuration and one-time token are administrator-only; never delegate mutation",
+		"/observation/events":  "user browsing metadata is restricted to the administrator observation UI",
+		"/observation/summary": "user browsing metadata is restricted to the administrator observation UI",
+		"/new-api/":            "wallet payment integration, credentials and settlement are administrator-only and excluded from AI operations",
+		"/commission-log/":     "subroutes checked below",
 		"/server/client-entry-user-policy/investigations/": "subroutes checked below",
 		"/server/client-entry-user-policy/retirement/":     "preview/execute/receipt covered by TestAIEntryGroupCatalogDispatch; audit has a separate fixed route",
 		"/ai-ops/telegram/": "Telegram authorization/configuration is managed by humans; never recursively invoke",

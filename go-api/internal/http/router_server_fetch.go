@@ -33,6 +33,30 @@ func handleServerUniProxyUser(w http.ResponseWriter, r *http.Request, cfg config
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": err.Error()})
 		return true
 	}
+	if server.NodeType == "v2node" {
+		if observations, ok := service.(nodeapi.ObservationService); ok {
+			settings, err := observations.ObservationNodeConfig(r.Context(), server.NodeType, server.ID)
+			if err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "观察节点名单暂时无法读取"})
+				return true
+			}
+			// A configured dedicated node stays allowlisted even when collection
+			// is switched off. An explicit empty list revokes every account.
+			if settings.Configured && settings.Mode == nodeapi.ObservationModeAllowlist {
+				allow := make(map[int64]struct{}, len(settings.AllowedUserIDs))
+				for _, id := range settings.AllowedUserIDs {
+					allow[id] = struct{}{}
+				}
+				filtered := users[:0]
+				for _, user := range users {
+					if _, ok := allow[user.ID]; ok {
+						filtered = append(filtered, user)
+					}
+				}
+				users = filtered
+			}
+		}
+	}
 
 	payload := map[string]any{"users": users}
 	if wantsMsgpack(r) {
@@ -53,7 +77,21 @@ func handleServerUniProxyConfig(w http.ResponseWriter, r *http.Request, cfg conf
 		return true
 	}
 
-	return writeJSONWithETag(w, r, buildUniProxyConfig(cfg, server, routes))
+	payload := buildUniProxyConfig(cfg, server, routes)
+	if server.NodeType == "v2node" {
+		if observations, ok := service.(nodeapi.ObservationService); ok {
+			settings, err := observations.ObservationNodeConfig(r.Context(), server.NodeType, server.ID)
+			if err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "观察节点配置暂时无法读取"})
+				return true
+			}
+			if !addObservationConfig(payload, r, settings) {
+				writeJSON(w, http.StatusUpgradeRequired, map[string]any{"message": "节点程序不支持全员观察模式，请先升级节点程序"})
+				return true
+			}
+		}
+	}
+	return writeJSONWithETag(w, r, payload)
 }
 
 func handleServerUniProxyAliveList(w http.ResponseWriter, r *http.Request, cfg config.Config, service nodeapi.Service) bool {

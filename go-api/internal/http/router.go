@@ -341,6 +341,10 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			if handleServerUniProxySensitive(w, r, cfg, state.node) {
 				return
 			}
+		case r.URL.Path == "/api/v1/server/UniProxy/observation":
+			if handleServerObservation(w, r, state.node) {
+				return
+			}
 		case r.URL.Path == "/api/v1/server/UniProxy/push":
 			if handleServerUniProxyPush(w, r, cfg, state.node) {
 				return
@@ -998,6 +1002,18 @@ func NewRouter(cfg config.Config, options ...Option) http.Handler {
 			}
 		case r.URL.Path == adminPrefix+"/subscribe-guard/stats":
 			if handleAdminSubscribeGuardStats(w, r, cfg, state.session, state.node, state.user, state.admin) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/observation/nodes":
+			if handleAdminObservationNodes(w, r, state.session, state.node) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/observation/events":
+			if handleAdminObservationRead(w, r, state.session, state.node, false) {
+				return
+			}
+		case r.URL.Path == adminPrefix+"/observation/summary":
+			if handleAdminObservationRead(w, r, state.session, state.node, true) {
 				return
 			}
 		case r.URL.Path == adminPrefix+"/subscribe-guard/search":
