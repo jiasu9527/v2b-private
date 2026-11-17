@@ -1073,6 +1073,18 @@ build_admin_frontend() {
   ADMIN_BUILD_STAGED="${staged}"
 }
 
+# The destination is a symlink to a directory. Plain `mv -f` can follow it
+# and move the new link *inside* the old release instead of replacing it.
+# Both variants below rename the link itself atomically on their platform.
+replace_admin_frontend_symlink() {
+  local next="$1"
+  local current="$2"
+  case "$(uname -s)" in
+    Darwin|FreeBSD|OpenBSD|NetBSD) mv -fh "${next}" "${current}" ;;
+    *) mv -fT "${next}" "${current}" ;;
+  esac
+}
+
 activate_admin_frontend() {
   [[ -n "${ADMIN_BUILD_STAGED}" ]] || return 0
   local base="${LOCAL_TOOL_DIR}/admin-new"
@@ -1090,7 +1102,7 @@ activate_admin_frontend() {
   fi
   : > "${ADMIN_BUILD_STAGED}/.published"
   ln -s "releases/$(basename "${ADMIN_BUILD_STAGED}")" "${next}"
-  mv -f "${next}" "${current}"
+  replace_admin_frontend_symlink "${next}" "${current}"
   ADMIN_ACTIVATED=true
   echo "后台前端已启用：$(basename "${ADMIN_BUILD_STAGED}")"
 }
@@ -1102,7 +1114,7 @@ rollback_admin_frontend() {
   local next="${base}/.rollback.$$"
   if [[ "${ADMIN_PREVIOUS_PRESENT}" == "true" ]]; then
     ln -s "${ADMIN_PREVIOUS_LINK}" "${next}"
-    mv -f "${next}" "${current}"
+    replace_admin_frontend_symlink "${next}" "${current}"
   else
     rm -f "${current}"
   fi

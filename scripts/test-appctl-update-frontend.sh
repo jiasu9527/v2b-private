@@ -38,6 +38,18 @@ if [[ "$*" == "run build -- --outDir "* ]]; then
 fi
 EOF
 chmod +x "${TASK_TMP}/fakebin/npm"
+# Linux coreutils treats a symlink to a directory as a directory for plain
+# `mv -f`. Reproduce that behavior even when this test runs on macOS, so a
+# regression cannot silently leave `current` pointing at the old release.
+cat > "${TASK_TMP}/fakebin/mv" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == -f && $# -eq 3 && -L "$3" && -d "$3" ]]; then
+  exec /bin/mv "$2" "$3/"
+fi
+exec /bin/mv "$@"
+EOF
+chmod +x "${TASK_TMP}/fakebin/mv"
 cat > "${TASK_TMP}/fake-go" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -70,8 +82,10 @@ for marker in first second; do
     PATH="${TASK_TMP}/fakebin:/usr/bin:/bin" "${TASK_TMP}/scripts/appctl" update > "${TASK_TMP}/${marker}.out"
   current="${TASK_TMP}/.local/admin-new/current"
   [[ -L "${current}" ]]
+  [[ "$(readlink "${current}")" == releases/* ]]
   [[ "$(cat "${current}/admin.js")" == "compiled release ${marker}" ]]
   [[ "$(cat "${current}/index.css")" == "compiled css ${marker}" ]]
+  [[ -z "$(find "${TASK_TMP}/.local/admin-new/releases" \( -name '.current.*' -o -name '.rollback.*' \) -print -quit)" ]]
   [[ "$(cat "${TASK_TMP}/public/assets/admin-new/admin.js")" == "bundled old" ]]
 done
 
@@ -97,6 +111,7 @@ if FAIL_RESTART=1 RUN_MARKER=restart-broken GO_BIN="${TASK_TMP}/fake-go" SYSTEMC
   exit 1
 fi
 [[ "$(readlink "${TASK_TMP}/.local/admin-new/current")" == "${before}" ]]
+[[ "$(cat "${TASK_TMP}/.local/admin-new/current/admin.js")" == 'compiled release install' ]]
 [[ "$(cat "${TASK_TMP}/go-api/go.mod")" == 'module fixture' ]]
 [[ "$(cat "${TASK_TMP}/go-api/go.sum")" == 'checksum fixture' ]]
 ! grep -q '^mod tidy$' "${GO_LOG}"
