@@ -664,7 +664,7 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 						recoverSSH = true
 						if serverID > 0 {
 							failedSSHServers[serverID] = result.ActionID
-							messages = append(messages, providerMessage{Role: "system", Content: fmt.Sprintf("本轮服务器 #%d 的SSH连接预算已耗尽（动作 #%d），命令未发送；只跳过该服务器，不是整轮停止。%s", serverID, result.ActionID, sshSetupRecoveryInstruction)})
+							messages = sshSetupRecoveryContext(messages, failedSSHServers)
 						}
 					} else if result.SSHExitCode != nil && *result.SSHExitCode > 0 {
 						// The process terminated: let the next model request diagnose

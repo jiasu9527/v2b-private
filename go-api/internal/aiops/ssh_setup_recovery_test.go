@@ -83,3 +83,15 @@ func TestSSHSetupRecoverySurvivesActionContextRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSSHSetupRecoveryContextStaysBoundedAcrossManyHosts(t *testing.T) {
+	messages := []providerMessage{{Role: "system", Content: "original-policy"}, {Role: "user", Content: "current task"}}
+	servers := map[int64]int64{}
+	for i := int64(1); i <= 200; i++ {
+		servers[i] = i + 1000
+		messages = sshSetupRecoveryContext(messages, servers)
+	}
+	if len(messages) != 3 || messages[0].Content != "original-policy" || messages[1].Content != "current task" || !strings.Contains(messages[2].Content, `"200":1200`) || len(messages[2].Content) > 10000 {
+		t.Fatal("failed-host context grew without bound or lost target budget", len(messages))
+	}
+}

@@ -66,3 +66,17 @@ func sshRecoveryServerID(call ToolCall) int64 {
 	}
 	return args.ServerID
 }
+
+// Keep one bounded context rather than one permanent system message per failed
+// host: a large batch must not hit the model message limit merely by skipping
+// unavailable servers. The in-memory guard remains authoritative after compaction.
+func sshSetupRecoveryContext(messages []providerMessage, servers map[int64]int64) []providerMessage {
+	out := make([]providerMessage, 0, len(messages)+1)
+	for _, message := range messages {
+		if message.contextKind != "ssh_setup_recovery" {
+			out = append(out, message)
+		}
+	}
+	raw, _ := json.Marshal(servers)
+	return append(out, providerMessage{Role: "system", contextKind: "ssh_setup_recovery", Content: "本轮已跳过的SSH服务器ID及失败动作ID：" + string(raw) + "。这些命令未发送，只跳过相应服务器，不是整轮停止。" + sshSetupRecoveryInstruction})
+}
