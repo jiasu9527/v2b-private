@@ -27,11 +27,28 @@ func (s *DBService) insertCompactObservation(ctx context.Context, nodeID int64, 
 	if _, err = tx.ExecContext(ctx, `SET LOCAL lock_timeout='3s'`); err != nil {
 		return 0, err
 	}
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock_shared(582791,1)`); err != nil {
+		return 0, err
+	}
 	// PostgreSQL partition uniqueness includes the day/time. Serialize reports
 	// from the same node and probe all live partitions to preserve the original
 	// (node,eventID) idempotency even if a retry changes its timestamp.
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('observation-report:'||$1::bigint::text,0))`, nodeID); err != nil {
 		return 0, err
+	}
+	archived, err := s.archivedObservationRetries(ctx, tx, nodeID, events)
+	if err != nil {
+		return 0, err
+	}
+	remaining := make([]ObservationEvent, 0, len(events))
+	for _, event := range events {
+		if !archived[event.EventID] {
+			remaining = append(remaining, event)
+		}
+	}
+	events = remaining
+	if len(events) == 0 {
+		return 0, tx.Commit()
 	}
 	var q strings.Builder
 	q.WriteString(`WITH incoming(node_id,user_id,event_key,occurred_at,client_ip,target_host,target_ip,target_port,network,received_at,event_id) AS (VALUES `)

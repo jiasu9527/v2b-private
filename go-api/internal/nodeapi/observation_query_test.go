@@ -18,12 +18,16 @@ func TestObservationSummaryCountsDistinctUsersForDomainsAndIPs(t *testing.T) {
 	defer db.Close()
 	now := time.Now().Unix()
 	args := []driver.Value{now - 60, now, "v2node", int64(7)}
-	mock.ExpectQuery(`SELECT COUNT\(\*\),COUNT\(DISTINCT e.user_id\)`).WithArgs(args...).WillReturnRows(
-		sqlmock.NewRows([]string{"events", "users", "known", "unknown"}).AddRow(4, 2, 3, 1))
-	mock.ExpectQuery(`SELECT e.target_host,COUNT\(DISTINCT e.user_id\)`).WithArgs(args...).WillReturnRows(
-		sqlmock.NewRows([]string{"domain", "users", "events"}).AddRow("example.test", 2, 3))
-	mock.ExpectQuery(`SELECT e.target_ip,COUNT\(DISTINCT e.user_id\)`).WithArgs(args...).WillReturnRows(
-		sqlmock.NewRows([]string{"ip", "users", "events"}).AddRow("192.0.2.1", 2, 4))
+	mock.ExpectBegin()
+	mock.ExpectExec(`LOCK TABLE v2_node_observation_event,v2_node_observation_compact IN ACCESS SHARE MODE`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT e.user_id,e.target_host,e.target_ip,COUNT`).WithArgs(args...).WillReturnRows(
+		sqlmock.NewRows([]string{"user_id", "host", "ip", "count"}).
+			AddRow(1, "example.test", "192.0.2.1", 2).
+			AddRow(2, "example.test", "192.0.2.1", 1).
+			AddRow(2, "", "192.0.2.1", 1))
+	mock.ExpectQuery(`FROM v2_node_observation_archive`).WithArgs(now-60, now, int64(7), observationArchiveQueryBatch).
+		WillReturnRows(archiveQueryTestRows())
+	mock.ExpectCommit()
 	svc := observationTestService(db)
 	result, err := svc.ObservationSummary(context.Background(), ObservationFilter{NodeType: "v2node", NodeID: 7, From: now - 60, To: now})
 	if err != nil {
@@ -88,7 +92,12 @@ func TestObservationEventsDoesNotCountBeforeReturningOnePage(t *testing.T) {
 		AddRow("v2node", 7, "event_003", 9, "user@example.test", now-1, "", "example.test", "", 443, "tcp", "route_attempt", 0, 0).
 		AddRow("v2node", 7, "event_002", 9, "user@example.test", now-1, "", "example.test", "", 443, "tcp", "route_attempt", 0, 0).
 		AddRow("v2node", 7, "event_001", 9, "user@example.test", now-1, "", "example.test", "", 443, "tcp", "route_attempt", 0, 0)
+	mock.ExpectBegin()
+	mock.ExpectExec(`LOCK TABLE v2_node_observation_event,v2_node_observation_compact IN ACCESS SHARE MODE`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT e.node_type,e.node_id,e.event_id`).WithArgs(now-60, now, 3, 0).WillReturnRows(rows)
+	mock.ExpectQuery(`FROM v2_node_observation_archive`).WithArgs(now-60, now, observationArchiveQueryBatch).
+		WillReturnRows(archiveQueryTestRows())
+	mock.ExpectCommit()
 	svc := observationTestService(db)
 	f := ObservationFilter{From: now - 60, To: now, PageSize: 2}
 	page, err := svc.ObservationEvents(context.Background(), f)

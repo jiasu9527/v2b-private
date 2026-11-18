@@ -255,7 +255,7 @@ func (s *DBService) ObservationNodes(ctx context.Context) ([]map[string]any, err
 	rows, err := s.db.QueryContext(ctx, `SELECT n.id,n.name,n.protocol,n.client_entry_only,n."show",
  c.node_id IS NOT NULL,COALESCE(c.enabled,false),COALESCE(c.mode,''),
  COALESCE(c.allowed_user_ids,'[]'::jsonb),COALESCE(c.created_at,0),COALESCE(c.updated_at,0),
- COALESCE(latest.occurred_at,0),COALESCE(cap.capability,''),COALESCE(cap.last_seen_at,0)
+ GREATEST(COALESCE(latest.occurred_at,0),COALESCE(cold.last_at,0)),COALESCE(cap.capability,''),COALESCE(cap.last_seen_at,0)
 FROM v2_server_v2node n
 LEFT JOIN v2_node_observation_config c ON c.node_type='v2node' AND c.node_id=n.id
 LEFT JOIN v2_node_observation_capability cap ON cap.node_type='v2node' AND cap.node_id=n.id
@@ -263,6 +263,10 @@ LEFT JOIN LATERAL (
  SELECT occurred_at FROM v2_node_observation_history
  WHERE node_type='v2node' AND node_id=n.id ORDER BY occurred_at DESC LIMIT 1
 ) latest ON TRUE
+LEFT JOIN LATERAL (
+ SELECT last_at FROM v2_node_observation_archive
+ WHERE node_ids @> ARRAY[n.id::bigint] ORDER BY last_at DESC,id DESC LIMIT 1
+) cold ON TRUE
 ORDER BY n.id`)
 	if err != nil {
 		return nil, err
@@ -450,6 +454,25 @@ func (s *DBService) RunObservationMaintenance(ctx context.Context) {
 			// otherwise eventually reject new reports or retain expired data.
 			log.Printf("observation partition maintenance failed: %v", err)
 		}
+		archiveCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
+		stats, err := s.ArchiveObservation(archiveCtx, time.Now())
+		cancel()
+		if stats["archived_events"] > 0 {
+			log.Printf("observation archive: events=%d blocks=%d compressed_bytes=%d", stats["archived_events"], stats["blocks"], stats["compressed_bytes"])
+		}
+		if err != nil && ctx.Err() == nil && !errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("observation archive failed (uncommitted source rows retained): %v", err)
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(ctx, 8*time.Second)
+		if err := postgres.DeleteExpiredObservationArchives(cleanupCtx, s.db, time.Now().Unix()-observationKeepDays*86400); err != nil && ctx.Err() == nil {
+			log.Printf("observation archive expiry failed: %v", err)
+		}
+		if bytes, err := postgres.ReclaimEmptyObservationStorage(cleanupCtx, s.db, postgres.ObservationColdBefore(time.Now())); err != nil && ctx.Err() == nil {
+			log.Printf("observation empty-storage reclamation postponed: %v", err)
+		} else if bytes > 0 {
+			log.Printf("observation empty-storage reclaimed_bytes=%d", bytes)
+		}
+		cleanupCancel()
 		select {
 		case <-ctx.Done():
 			return

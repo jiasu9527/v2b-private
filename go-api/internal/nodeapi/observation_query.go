@@ -3,12 +3,14 @@ package nodeapi
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -111,6 +113,16 @@ func observationReadError(ctx context.Context, err error) error {
 	return err
 }
 
+func observationItemAfter(a, b map[string]any) bool {
+	if a["occurred_at"].(int64) != b["occurred_at"].(int64) {
+		return a["occurred_at"].(int64) > b["occurred_at"].(int64)
+	}
+	if a["node_id"].(int64) != b["node_id"].(int64) {
+		return a["node_id"].(int64) > b["node_id"].(int64)
+	}
+	return a["event_id"].(string) > b["event_id"].(string)
+}
+
 func observationWhere(filter ObservationFilter) (string, []any) {
 	clauses := []string{"e.occurred_at >= $1", "e.occurred_at < $2"}
 	args := []any{max(filter.From, time.Now().Unix()-observationKeepDays*86400), filter.To}
@@ -152,10 +164,22 @@ func (s *DBService) ObservationEvents(ctx context.Context, filter ObservationFil
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if err := s.ensureObservationSchema(ctx); err != nil {
 		return nil, err
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	// LOCK is a utility statement: acquire relation locks before the first
+	// repeatable-read snapshot. PostgreSQL TRUNCATE is not MVCC-safe, so an
+	// empty hot heap must not be reclaimed between snapshot creation and the
+	// hot read. The lock recursively includes compact partitions.
+	if _, err := tx.ExecContext(ctx, `LOCK TABLE v2_node_observation_event,v2_node_observation_compact IN ACCESS SHARE MODE`); err != nil {
+		return nil, observationReadError(ctx, err)
 	}
 	where, args := observationWhere(filter)
 	seen := int64((filter.Page - 1) * filter.PageSize)
@@ -165,18 +189,18 @@ func (s *DBService) ObservationEvents(ctx context.Context, filter ObservationFil
 		base := len(args)
 		// The leading timestamp bound permits time-index scans and partition
 		// pruning. The tuple makes ties deterministic across nodes and stores.
-		where += fmt.Sprintf(` AND e.occurred_at <= $%d AND (e.occurred_at,e.node_id,e.event_id) < ($%d,$%d,$%d)`, base+1, base+1, base+2, base+3)
+		where += fmt.Sprintf(` AND e.occurred_at <= $%d AND (e.occurred_at,e.node_id,e.event_id COLLATE "C") < ($%d,$%d,$%d)`, base+1, base+1, base+2, base+3)
 		args = append(args, cursor.At, cursor.NodeID, cursor.EventID)
 	}
 	limitArg := len(args) + 1
 	offsetArg := len(args) + 2
-	args = append(args, filter.PageSize+1, offset)
+	args = append(args, filter.PageSize+offset+1, 0)
 	// Never count the full event table before displaying one page. Limit the
 	// events first, so account decoration also touches at most page_size+1 rows.
-	rows, err := s.db.QueryContext(ctx, `SELECT e.node_type,e.node_id,e.event_id,e.user_id,COALESCE(u.email,''),e.occurred_at,e.client_ip,e.target_host,e.target_ip,e.target_port,e.network,e.result,e.uplink_bytes,e.downlink_bytes
+	rows, err := tx.QueryContext(ctx, `SELECT e.node_type,e.node_id,e.event_id,e.user_id,COALESCE(u.email,''),e.occurred_at,e.client_ip,e.target_host,e.target_ip,e.target_port,e.network,e.result,e.uplink_bytes,e.downlink_bytes
 FROM (SELECT e.* FROM v2_node_observation_history e`+where+
-		` ORDER BY e.occurred_at DESC,e.node_id DESC,e.event_id DESC LIMIT $`+strconv.Itoa(limitArg)+` OFFSET $`+strconv.Itoa(offsetArg)+`) e
-LEFT JOIN v2_user u ON u.id=e.user_id ORDER BY e.occurred_at DESC,e.node_id DESC,e.event_id DESC`, args...)
+		` ORDER BY e.occurred_at DESC,e.node_id DESC,e.event_id COLLATE "C" DESC LIMIT $`+strconv.Itoa(limitArg)+` OFFSET $`+strconv.Itoa(offsetArg)+`) e
+LEFT JOIN v2_user u ON u.id=e.user_id ORDER BY e.occurred_at DESC,e.node_id DESC,e.event_id COLLATE "C" DESC`, args...)
 	if err != nil {
 		return nil, observationReadError(ctx, err)
 	}
@@ -192,6 +216,33 @@ LEFT JOIN v2_user u ON u.id=e.user_id ORDER BY e.occurred_at DESC,e.node_id DESC
 		items = append(items, map[string]any{"node_type": nodeType, "node_id": nodeID, "event_id": eventID, "user_id": userID, "email": email, "occurred_at": occurredAt, "client_ip": clientIP, "target_host": targetHost, "target_ip": targetIP, "target_port": targetPort, "network": network, "result": result, "uplink_bytes": uplink, "downlink_bytes": downlink})
 	}
 	if err := rows.Err(); err != nil {
+		return nil, observationReadError(ctx, err)
+	}
+	rows.Close()
+	cold, err := s.archivedObservationEvents(ctx, tx, filter, cursor, filter.PageSize+offset+1)
+	if err != nil {
+		return nil, observationReadError(ctx, err)
+	}
+	items = append(items, cold...)
+	sort.Slice(items, func(i, j int) bool { return observationItemAfter(items[i], items[j]) })
+	// A repeatable-read snapshot makes archive insert + hot delete atomic to
+	// this reader. Defensive identity dedup also protects older mixed writers.
+	unique := items[:0]
+	keys := make(map[string]bool, len(items))
+	for _, item := range items {
+		key := fmt.Sprintf("%v:%v:%v", item["node_type"], item["node_id"], item["event_id"])
+		if !keys[key] {
+			keys[key] = true
+			unique = append(unique, item)
+		}
+	}
+	items = unique
+	if offset > len(items) {
+		items = nil
+	} else {
+		items = items[offset:]
+	}
+	if err = tx.Commit(); err != nil {
 		return nil, observationReadError(ctx, err)
 	}
 	hasMore := len(items) > filter.PageSize
@@ -229,46 +280,47 @@ func (s *DBService) ObservationSummary(ctx context.Context, filter ObservationFi
 	if err := s.ensureObservationSchema(ctx); err != nil {
 		return nil, err
 	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	// LOCK is a utility statement: acquire relation locks before the first
+	// repeatable-read snapshot. PostgreSQL TRUNCATE is not MVCC-safe, so an
+	// empty hot heap must not be reclaimed between snapshot creation and the
+	// hot read. The lock recursively includes compact partitions.
+	if _, err := tx.ExecContext(ctx, `LOCK TABLE v2_node_observation_event,v2_node_observation_compact IN ACCESS SHARE MODE`); err != nil {
+		return nil, observationReadError(ctx, err)
+	}
 	where, args := observationWhere(filter)
-	var events, users, known, unknown int64
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*),COUNT(DISTINCT e.user_id),COUNT(*) FILTER(WHERE e.target_host<>''),COUNT(*) FILTER(WHERE e.target_host='') FROM v2_node_observation_history e`+where, args...).Scan(&events, &users, &known, &unknown); err != nil {
-		return nil, err
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT e.target_host,COUNT(DISTINCT e.user_id),COUNT(*) FROM v2_node_observation_history e`+where+
-		` AND e.target_host<>'' GROUP BY e.target_host ORDER BY COUNT(DISTINCT e.user_id) DESC,COUNT(*) DESC,e.target_host LIMIT 30`, args...)
+	rows, err := tx.QueryContext(ctx, `SELECT e.user_id,e.target_host,e.target_ip,COUNT(*) FROM v2_node_observation_history e`+where+` GROUP BY e.user_id,e.target_host,e.target_ip`, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	topDomains := make([]map[string]any, 0)
+	acc := newObservationSummaryAccumulator()
 	for rows.Next() {
-		var domain string
-		var domainUsers, domainEvents int64
-		if err := rows.Scan(&domain, &domainUsers, &domainEvents); err != nil {
-			return nil, fmt.Errorf("scan observation domain: %w", err)
+		var userID, count int64
+		var host, ip string
+		if err = rows.Scan(&userID, &host, &ip, &count); err != nil {
+			rows.Close()
+			return nil, err
 		}
-		topDomains = append(topDomains, map[string]any{"domain": domain, "users": domainUsers, "events": domainEvents})
+		if err = acc.add(userID, host, ip, count); err != nil {
+			rows.Close()
+			return nil, err
+		}
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	ipRows, err := s.db.QueryContext(ctx, `SELECT e.target_ip,COUNT(DISTINCT e.user_id),COUNT(*) FROM v2_node_observation_history e`+where+
-		` AND e.target_ip<>'' GROUP BY e.target_ip ORDER BY COUNT(DISTINCT e.user_id) DESC,COUNT(*) DESC,e.target_ip LIMIT 30`, args...)
+	err = rows.Err()
+	rows.Close()
 	if err != nil {
 		return nil, err
 	}
-	defer ipRows.Close()
-	topIPs := make([]map[string]any, 0)
-	for ipRows.Next() {
-		var address string
-		var ipUsers, ipEvents int64
-		if err := ipRows.Scan(&address, &ipUsers, &ipEvents); err != nil {
-			return nil, fmt.Errorf("scan observation target IP: %w", err)
-		}
-		topIPs = append(topIPs, map[string]any{"ip": address, "users": ipUsers, "events": ipEvents})
-	}
-	if err := ipRows.Err(); err != nil {
+	err = scanArchivedObservations(ctx, tx, filter, func(e archivedObservationEvent) error { return acc.add(e.UserID, e.TargetHost, e.TargetIP, 1) })
+	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"events": events, "users": users, "known_domain_events": known, "unknown_domain_events": unknown, "top_domains": topDomains, "top_ips": topIPs}, nil
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return acc.result(), nil
 }

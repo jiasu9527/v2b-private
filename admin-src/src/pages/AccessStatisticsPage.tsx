@@ -181,7 +181,7 @@ export default function AccessStatisticsPage() {
 
   return <div className="legacy-page access-statistics-page">
     <div className="content-heading">访问统计</div>
-    <Typography.Paragraph type="secondary" className="access-statistics-intro">查询用户经节点发起的代理路由目标。新版 v2node 使用原节点 Key 自动上报所有已鉴权用户；可查最近 7 天，按 UTC 天清理，物理保留不足 8 天。</Typography.Paragraph>
+    <Typography.Paragraph type="secondary" className="access-statistics-intro">查询用户经节点发起的代理路由目标。新版 v2node 使用原节点 Key 自动上报所有已鉴权用户；可查最近 7 天；近期日志实时查询，超过 12 小时的日志自动无损压缩，仍保留每条记录与原始时间。</Typography.Paragraph>
     <Alert showIcon type="info" message="记录的是路由尝试，不是网站访问成功" description="只保存可见的目标域名或 IP、时间、用户及节点，不保存完整网址、网页内容。没有记录也不能证明用户没有访问；旧版或未上报的节点不在统计范围内。" />
 
     <Card title="筛选记录" size="small">

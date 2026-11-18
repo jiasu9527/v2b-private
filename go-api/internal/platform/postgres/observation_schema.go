@@ -90,5 +90,8 @@ FROM v2_node_observation_compact`,
 			return fmt.Errorf("ensure observation schema: %w", err)
 		}
 	}
-	return EnsureObservationPartitions(ctx, db, time.Now())
+	if err := EnsureObservationPartitions(ctx, db, time.Now()); err != nil {
+		return err
+	}
+	return EnsureObservationArchiveSchema(ctx, db)
 }

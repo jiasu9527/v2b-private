@@ -41,6 +41,18 @@ func TestObservationSchemaIsAdditiveAndIdempotent(t *testing.T) {
 			mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_node_observation_day_[0-9]{8} PARTITION OF v2_node_observation_compact FOR VALUES FROM \([0-9]+\) TO \([0-9]+\)`).WillReturnResult(sqlmock.NewResult(0, 0))
 		}
 		mock.ExpectCommit()
+		for _, pattern := range []string{
+			`CREATE TABLE IF NOT EXISTS v2_node_observation_archive`,
+			`ALTER TABLE v2_node_observation_archive ALTER COLUMN payload SET STORAGE EXTERNAL`,
+			`CREATE INDEX IF NOT EXISTS idx_observation_archive_user_time`,
+			`CREATE INDEX IF NOT EXISTS idx_observation_archive_time`,
+			`CREATE INDEX IF NOT EXISTS idx_observation_archive_last_time`,
+			`CREATE INDEX IF NOT EXISTS idx_observation_archive_nodes`,
+			`CREATE INDEX IF NOT EXISTS idx_observation_archive_hosts`,
+			`CREATE INDEX IF NOT EXISTS idx_observation_archive_ips`,
+		} {
+			mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
 		if err := EnsureObservationSchema(context.Background(), db); err != nil {
 			t.Fatal(err)
 		}

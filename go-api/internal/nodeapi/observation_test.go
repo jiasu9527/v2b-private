@@ -22,7 +22,9 @@ func observationTestService(db *sql.DB) *DBService {
 func expectCompactObservationInsert(mock sqlmock.Sqlmock, count int64) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`SET LOCAL lock_timeout='3s'`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock_shared\(582791,1\)`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock\(hashtextextended`).WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT id,last_at,event_bloom,to_json\(node_ids\) FROM v2_node_observation_archive`).WithArgs(int64(0), int64(7)).WillReturnRows(sqlmock.NewRows([]string{"id", "last_at", "event_bloom", "node_ids"}))
 	mock.ExpectExec(`WITH incoming[\s\S]*INSERT INTO v2_node_observation_compact`).WillReturnResult(sqlmock.NewResult(0, count))
 	mock.ExpectCommit()
 }
