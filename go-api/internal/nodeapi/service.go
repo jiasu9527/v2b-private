@@ -96,8 +96,8 @@ type DBService struct {
 	runtime                runtimeConfigProvider
 	sensitiveSchemaOnce    sync.Once
 	sensitiveSchemaErr     error
-	observationSchemaOnce  sync.Once
-	observationSchemaErr   error
+	observationSchemaMu    sync.Mutex
+	observationSchemaReady bool
 	onlineGeo              ipgeo.Resolver
 	onlineGeoLastError     atomic.Int64
 	onlineGeoRefreshMu     sync.Mutex

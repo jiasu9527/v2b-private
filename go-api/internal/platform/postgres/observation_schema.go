@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 )
 
-// EnsureObservationSchema is additive and intentionally separate from the
-// legacy sensitive-domain audit.
+// EnsureObservationSchema never rewrites the old event heap during startup.
+// New writes use compact daily partitions; the history view keeps the old
+// records readable until their retention window expires.
 func EnsureObservationSchema(ctx context.Context, db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("db is nil")
@@ -55,11 +57,38 @@ func EnsureObservationSchema(ctx context.Context, db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time ON v2_node_observation_event(node_type,node_id,occurred_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time ON v2_node_observation_event(target_host,occurred_at DESC) WHERE target_host<>''`,
 		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time ON v2_node_observation_event(target_ip,occurred_at DESC) WHERE target_ip<>''`,
+		`CREATE TABLE IF NOT EXISTS v2_node_observation_compact (
+			node_id bigint NOT NULL,
+			user_id bigint NOT NULL,
+			occurred_at bigint NOT NULL,
+			received_at bigint NOT NULL,
+			event_key bytea NOT NULL CHECK (octet_length(event_key) BETWEEN 9 AND 65),
+			client_ip inet,
+			target_host varchar(253) NOT NULL DEFAULT '',
+			target_ip inet,
+			target_port integer NOT NULL CHECK (target_port BETWEEN 1 AND 65535),
+			network smallint NOT NULL CHECK (network IN (0,1)),
+			UNIQUE (node_id,event_key,occurred_at)
+		) PARTITION BY RANGE (occurred_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_observation_compact_time ON v2_node_observation_compact(occurred_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_observation_compact_user_time ON v2_node_observation_compact(user_id,occurred_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_observation_compact_node_time ON v2_node_observation_compact(node_id,occurred_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_observation_compact_host_time ON v2_node_observation_compact(target_host,occurred_at DESC) WHERE target_host<>''`,
+		`CREATE INDEX IF NOT EXISTS idx_observation_compact_ip_time ON v2_node_observation_compact((COALESCE(host(target_ip),'')),occurred_at DESC) WHERE COALESCE(host(target_ip),'')<>''`,
+		`CREATE OR REPLACE VIEW v2_node_observation_history AS
+SELECT node_type,node_id,event_id::text,user_id,occurred_at,client_ip::text,target_host,target_ip::text,target_port,network::text,result::text,uplink_bytes,downlink_bytes,received_at
+FROM v2_node_observation_event
+UNION ALL
+SELECT 'v2node'::varchar(16),node_id,
+ CASE WHEN get_byte(event_key,0)=0 THEN encode(substring(event_key FROM 2),'hex') ELSE convert_from(substring(event_key FROM 2),'UTF8') END,
+ user_id,occurred_at,COALESCE(host(client_ip),''),target_host,COALESCE(host(target_ip),''),target_port,
+ CASE network WHEN 0 THEN 'tcp' ELSE 'udp' END,'route_attempt'::text,0::bigint,0::bigint,received_at
+FROM v2_node_observation_compact`,
 	}
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("ensure observation schema: %w", err)
 		}
 	}
-	return nil
+	return EnsureObservationPartitions(ctx, db, time.Now())
 }

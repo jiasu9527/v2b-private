@@ -202,6 +202,7 @@ func observationFilterFromQuery(r *http.Request) (nodeapi.ObservationFilter, err
 		NodeType: strings.TrimSpace(q.Get("node_type")),
 		Account:  strings.TrimSpace(q.Get("account")),
 		Target:   strings.TrimSpace(q.Get("target")),
+		Cursor:   strings.TrimSpace(q.Get("cursor")),
 	}
 	for _, item := range []struct {
 		key string
@@ -260,6 +261,11 @@ func handleAdminObservationRead(w http.ResponseWriter, r *http.Request, sessions
 	if err != nil {
 		if errors.Is(err, nodeapi.ErrObservationInvalid) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"message": "查询范围无效"})
+		} else if errors.Is(err, nodeapi.ErrObservationQueryTimeout) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "查询超时，请指定用户、目标或缩小时间范围；明细与汇总可分别读取"})
+		} else if errors.Is(err, nodeapi.ErrObservationQueryBusy) {
+			w.Header().Set("Retry-After", "5")
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "已有统计正在计算，请稍后重试；不影响明细查询"})
 		} else {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "观察记录暂时无法读取"})
 		}

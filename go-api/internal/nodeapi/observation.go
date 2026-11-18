@@ -10,9 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +29,8 @@ var (
 	ErrObservationUnauthorized   = errors.New("observation node unauthorized or disabled")
 	ErrObservationInvalid        = errors.New("invalid observation event")
 	ErrObservationUserNotAllowed = errors.New("observation event user is no longer allowed")
+	ErrObservationQueryTimeout   = errors.New("observation query timed out")
+	ErrObservationQueryBusy      = errors.New("observation summary already running")
 	observationEventIDPattern    = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 )
 
@@ -66,6 +68,7 @@ type ObservationFilter struct {
 	To       int64
 	Page     int
 	PageSize int
+	Cursor   string
 }
 
 type ObservationNodeSettings struct {
@@ -91,10 +94,21 @@ func (s *DBService) ensureObservationSchema(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return errors.New("node service unavailable")
 	}
-	s.observationSchemaOnce.Do(func() {
-		s.observationSchemaErr = postgres.EnsureObservationSchema(ctx, s.db)
-	})
-	return s.observationSchemaErr
+	s.observationSchemaMu.Lock()
+	defer s.observationSchemaMu.Unlock()
+	if s.observationSchemaReady {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := postgres.EnsureObservationSchema(ctx, s.db); err != nil {
+		// Request cancellation or a brief DDL lock must not disable all future
+		// reads/reports until the next process restart. Cache successes only.
+		return err
+	}
+	s.observationSchemaReady = true
+	return nil
 }
 
 func validateObservationNode(nodeType string, nodeID int64) error {
@@ -231,6 +245,8 @@ func (s *DBService) ObservationNodeConfig(ctx context.Context, nodeType string, 
 }
 
 func (s *DBService) ObservationNodes(ctx context.Context) ([]map[string]any, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	if err := s.ensureObservationSchema(ctx); err != nil {
 		return nil, err
 	}
@@ -244,8 +260,8 @@ FROM v2_server_v2node n
 LEFT JOIN v2_node_observation_config c ON c.node_type='v2node' AND c.node_id=n.id
 LEFT JOIN v2_node_observation_capability cap ON cap.node_type='v2node' AND cap.node_id=n.id
 LEFT JOIN LATERAL (
- SELECT occurred_at FROM v2_node_observation_event
- WHERE node_type='v2node' AND node_id=n.id ORDER BY occurred_at DESC,id DESC LIMIT 1
+ SELECT occurred_at FROM v2_node_observation_history
+ WHERE node_type='v2node' AND node_id=n.id ORDER BY occurred_at DESC LIMIT 1
 ) latest ON TRUE
 ORDER BY n.id`)
 	if err != nil {
@@ -419,29 +435,7 @@ func (s *DBService) ReportObservation(ctx context.Context, req ObservationReport
 			return 0, ErrObservationUserNotAllowed
 		}
 	}
-	// One atomic statement per batch avoids up to 100 round trips for every
-	// node report when all-user collection is enabled.
-	var sqlText strings.Builder
-	sqlText.WriteString(`INSERT INTO v2_node_observation_event(node_type,node_id,event_id,user_id,occurred_at,client_ip,target_host,target_ip,target_port,network,result,uplink_bytes,downlink_bytes,received_at) VALUES `)
-	args := make([]any, 0, len(req.Events)*13)
-	for i, event := range req.Events {
-		if i > 0 {
-			sqlText.WriteByte(',')
-		}
-		sqlText.WriteString("('v2node'")
-		for field := 0; field < 13; field++ {
-			sqlText.WriteString(",$")
-			sqlText.WriteString(strconv.Itoa(len(args) + field + 1))
-		}
-		sqlText.WriteByte(')')
-		args = append(args, req.NodeID, event.EventID, event.UserID, event.OccurredAt, event.ClientIP, event.TargetHost, event.TargetIP, event.TargetPort, event.Network, event.Result, event.UplinkBytes, event.DownlinkBytes, now)
-	}
-	sqlText.WriteString(` ON CONFLICT(node_type,node_id,event_id) DO NOTHING`)
-	result, err := s.db.ExecContext(ctx, sqlText.String(), args...)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+	return s.insertCompactObservation(ctx, req.NodeID, req.Events, now)
 }
 
 func (s *DBService) RunObservationMaintenance(ctx context.Context) {
@@ -451,7 +445,11 @@ func (s *DBService) RunObservationMaintenance(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
-		_ = s.DeleteExpiredObservation(ctx)
+		if err := s.DeleteExpiredObservation(ctx); err != nil && ctx.Err() == nil {
+			// Maintenance failures must be visible; silently missing a day would
+			// otherwise eventually reject new reports or retain expired data.
+			log.Printf("observation partition maintenance failed: %v", err)
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -464,11 +462,8 @@ func (s *DBService) DeleteExpiredObservation(ctx context.Context) error {
 	if err := s.ensureObservationSchema(ctx); err != nil {
 		return err
 	}
-	// Bound each delete transaction so large all-user logs do not lock or
-	// generate WAL for the entire seven-day backlog at once.
-	_, err := s.db.ExecContext(ctx, `WITH expired AS (
-SELECT id FROM v2_node_observation_event WHERE occurred_at < $1 ORDER BY occurred_at,id LIMIT 50000
-)
-DELETE FROM v2_node_observation_event WHERE id IN (SELECT id FROM expired)`, time.Now().Unix()-observationKeepDays*86400)
-	return err
+	if err := postgres.EnsureObservationPartitions(ctx, s.db, time.Now()); err != nil {
+		return err
+	}
+	return postgres.DeleteExpiredObservationPartitions(ctx, s.db, time.Now().Unix()-observationKeepDays*86400)
 }

@@ -24,9 +24,23 @@ func TestObservationSchemaIsAdditiveAndIdempotent(t *testing.T) {
 			`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time`,
 			`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time`,
 			`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time`,
+			`CREATE TABLE IF NOT EXISTS v2_node_observation_compact`,
+			`CREATE INDEX IF NOT EXISTS idx_observation_compact_time`,
+			`CREATE INDEX IF NOT EXISTS idx_observation_compact_user_time`,
+			`CREATE INDEX IF NOT EXISTS idx_observation_compact_node_time`,
+			`CREATE INDEX IF NOT EXISTS idx_observation_compact_host_time`,
+			`CREATE INDEX IF NOT EXISTS idx_observation_compact_ip_time`,
+			`CREATE OR REPLACE VIEW v2_node_observation_history`,
 		} {
 			mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
 		}
+		mock.ExpectBegin()
+		mock.ExpectExec(`SET LOCAL lock_timeout='2s'`).WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(`SELECT pg_advisory_xact_lock\(582791,0\)`).WillReturnResult(sqlmock.NewResult(0, 0))
+		for offset := -7; offset <= 1; offset++ {
+			mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_node_observation_day_[0-9]{8} PARTITION OF v2_node_observation_compact FOR VALUES FROM \([0-9]+\) TO \([0-9]+\)`).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+		mock.ExpectCommit()
 		if err := EnsureObservationSchema(context.Background(), db); err != nil {
 			t.Fatal(err)
 		}

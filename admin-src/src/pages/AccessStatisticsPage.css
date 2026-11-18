@@ -5,3 +5,7 @@
 .access-statistics-page details>summary{cursor:pointer;color:#475569;font-weight:500;margin-bottom:10px}
 .access-statistics-page .access-statistics-target{padding:0;max-width:100%;height:auto;white-space:normal;text-align:left;overflow-wrap:anywhere}
 @media(max-width:575.98px){.access-statistics-page{gap:10px}.access-statistics-page .ant-card-body{padding:12px}.access-statistics-page .ant-form-item .ant-input,.access-statistics-page .ant-form-item .ant-picker{font-size:16px}}
+
+.access-statistics-pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:16px}
+.access-statistics-summary-error{margin-top:12px}
+@media(max-width:575.98px){.access-statistics-pagination .ant-space{width:100%;justify-content:flex-end}.access-statistics-pagination .ant-select{min-width:104px}.access-statistics-page .ant-card-head{flex-wrap:wrap;row-gap:8px}.access-statistics-page .ant-card-extra{margin-inline-start:8px}}

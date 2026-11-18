@@ -3,12 +3,29 @@ package nodeapi
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
+
+// Schema migrations are exercised by the postgres schema and integration tests.
+// Individual service tests isolate authorization, writes, queries and maintenance.
+func observationTestService(db *sql.DB) *DBService {
+	svc := &DBService{db: db}
+	svc.observationSchemaReady = true
+	return svc
+}
+
+func expectCompactObservationInsert(mock sqlmock.Sqlmock, count int64) {
+	mock.ExpectBegin()
+	mock.ExpectExec(`SET LOCAL lock_timeout='3s'`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock\(hashtextextended`).WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`WITH incoming[\s\S]*INSERT INTO v2_node_observation_compact`).WillReturnResult(sqlmock.NewResult(0, count))
+	mock.ExpectCommit()
+}
 
 func TestNormalizeObservationEvent(t *testing.T) {
 	now := time.Now().Unix()
@@ -44,20 +61,7 @@ func TestReportObservationRequiresPerNodeTokenAndAllowlistedUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	svc := &DBService{db: db}
-	for _, pattern := range []string{
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_config`,
-		`ALTER TABLE v2_node_observation_config ADD COLUMN IF NOT EXISTS mode`,
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_capability`,
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_event`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_user_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time`,
-	} {
-		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
-	}
+	svc := observationTestService(db)
 	token := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	hash := sha256.Sum256([]byte(token))
 	row := func() *sqlmock.Rows {
@@ -76,7 +80,7 @@ func TestReportObservationRequiresPerNodeTokenAndAllowlistedUser(t *testing.T) {
 	}
 	mock.ExpectQuery(`SELECT enabled,mode,token_hash,allowed_user_ids FROM v2_node_observation_config`).WithArgs(int64(7)).WillReturnRows(row())
 	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM v2_server_v2node`).WithArgs(int64(7), ObservationModeAllowlist).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
-	mock.ExpectExec(`INSERT INTO v2_node_observation_event`).WillReturnResult(sqlmock.NewResult(1, 1))
+	expectCompactObservationInsert(mock, 1)
 	inserted, err := svc.ReportObservation(context.Background(), ObservationReportRequest{NodeType: "v2node", NodeID: 7, Token: token, Events: []ObservationEvent{{EventID: "event_123", UserID: 5, OccurredAt: time.Now().Unix(), TargetHost: "example.com", TargetPort: 443, Network: "tcp", Result: "route_attempt"}}})
 	if err != nil || inserted != 1 {
 		t.Fatalf("valid event inserted=%d error=%v", inserted, err)
@@ -92,24 +96,11 @@ func TestProvisionObservationRejectsSharedNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	for _, pattern := range []string{
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_config`,
-		`ALTER TABLE v2_node_observation_config ADD COLUMN IF NOT EXISTS mode`,
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_capability`,
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_event`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_user_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time`,
-	} {
-		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
-	}
 	mock.ExpectQuery(`SELECT row_to_json\(t\)`).WithArgs(int64(7)).WillReturnRows(
 		sqlmock.NewRows([]string{"row_to_json"}).AddRow([]byte(`{"id":7,"group_id":"[1]","route_id":"[]","protocol":"anytls"}`)))
 	mock.ExpectQuery(`SELECT client_entry_only=1 FROM v2_server_v2node`).WithArgs(int64(7)).WillReturnRows(
 		sqlmock.NewRows([]string{"client_entry_only"}).AddRow(false))
-	svc := &DBService{db: db}
+	svc := observationTestService(db)
 	if _, err := svc.ProvisionObservation(context.Background(), "v2node", 7, true, ObservationModeAllowlist, []int64{5}); !errors.Is(err, ErrObservationInvalid) {
 		t.Fatalf("shared node accepted: %v", err)
 	}
@@ -124,25 +115,12 @@ func TestProvisionObservationAllModeAllowsSharedNodeWithoutUserList(t *testing.T
 		t.Fatal(err)
 	}
 	defer db.Close()
-	for _, pattern := range []string{
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_config`,
-		`ALTER TABLE v2_node_observation_config ADD COLUMN IF NOT EXISTS mode`,
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_capability`,
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_event`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_user_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time`,
-	} {
-		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
-	}
 	mock.ExpectQuery(`SELECT row_to_json\(t\)`).WithArgs(int64(7)).WillReturnRows(
 		sqlmock.NewRows([]string{"row_to_json"}).AddRow([]byte(`{"id":7,"group_id":"[1]","route_id":"[]","protocol":"anytls"}`)))
 	mock.ExpectQuery(`SELECT client_entry_only=1 FROM v2_server_v2node`).WithArgs(int64(7)).WillReturnRows(
 		sqlmock.NewRows([]string{"client_entry_only"}).AddRow(false))
 	mock.ExpectExec(`INSERT INTO v2_node_observation_config`).WithArgs(int64(7), true, ObservationModeAll, sqlmock.AnyArg(), `[]`, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
-	svc := &DBService{db: db}
+	svc := observationTestService(db)
 	token, err := svc.ProvisionObservation(context.Background(), "v2node", 7, true, ObservationModeAll, []int64{})
 	if err != nil || len(token) != 64 {
 		t.Fatalf("all mode token=%q err=%v", token, err)
@@ -158,27 +136,14 @@ func TestReportObservationAllModeDoesNotUseAllowlist(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	for _, pattern := range []string{
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_config`,
-		`ALTER TABLE v2_node_observation_config ADD COLUMN IF NOT EXISTS mode`,
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_capability`,
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_event`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_user_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time`,
-	} {
-		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
-	}
 	token := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	hash := sha256.Sum256([]byte(token))
 	mock.ExpectQuery(`SELECT enabled,mode,token_hash,allowed_user_ids FROM v2_node_observation_config`).WithArgs(int64(7)).WillReturnRows(
 		sqlmock.NewRows([]string{"enabled", "mode", "token_hash", "allowed_user_ids"}).AddRow(true, ObservationModeAll, hash[:], []byte(`[]`)))
 	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM v2_server_v2node`).WithArgs(int64(7), ObservationModeAll).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM v2_user WHERE id IN`).WithArgs(`[999,1000]`).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
-	mock.ExpectExec(`INSERT INTO v2_node_observation_event`).WillReturnResult(sqlmock.NewResult(1, 2))
-	svc := &DBService{db: db}
+	expectCompactObservationInsert(mock, 2)
+	svc := observationTestService(db)
 	inserted, err := svc.ReportObservation(context.Background(), ObservationReportRequest{NodeType: "v2node", NodeID: 7, Token: token, Events: []ObservationEvent{
 		{EventID: "event_123", UserID: 999, OccurredAt: time.Now().Unix(), TargetHost: "example.com", TargetPort: 443, Network: "tcp", Result: "route_attempt"},
 		{EventID: "event_124", UserID: 1000, OccurredAt: time.Now().Unix(), TargetHost: "example.net", TargetPort: 443, Network: "tcp", Result: "route_attempt"},
@@ -197,27 +162,14 @@ func TestReportObservationWithExistingNodeKeyNeedsNoManualConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	for _, pattern := range []string{
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_config`,
-		`ALTER TABLE v2_node_observation_config ADD COLUMN IF NOT EXISTS mode`,
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_capability`,
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_event`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_user_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time`,
-	} {
-		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
-	}
 	mock.ExpectQuery(`SELECT row_to_json\(t\)`).WithArgs(int64(7)).WillReturnRows(
 		sqlmock.NewRows([]string{"row_to_json"}).AddRow([]byte(`{"id":7,"group_id":"[1]","route_id":"[]","protocol":"anytls"}`)))
 	mock.ExpectQuery(`SELECT enabled,mode,allowed_user_ids FROM v2_node_observation_config`).WithArgs(int64(7)).WillReturnRows(
 		sqlmock.NewRows([]string{"enabled", "mode", "allowed_user_ids"}))
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM v2_user WHERE id IN`).WithArgs(`[5]`).WillReturnRows(
 		sqlmock.NewRows([]string{"count"}).AddRow(1))
-	mock.ExpectExec(`INSERT INTO v2_node_observation_event`).WillReturnResult(sqlmock.NewResult(1, 1))
-	svc := &DBService{db: db}
+	expectCompactObservationInsert(mock, 1)
+	svc := observationTestService(db)
 	inserted, err := svc.ReportObservation(context.Background(), ObservationReportRequest{
 		NodeType: "v2node", NodeID: 7, SharedKeyAuthenticated: true,
 		Events: []ObservationEvent{{EventID: "event_123", UserID: 5, OccurredAt: time.Now().Unix(), TargetHost: "example.com", TargetPort: 443, Network: "tcp", Result: "route_attempt"}},
@@ -236,25 +188,12 @@ func TestObservationNodesIncludesUnconfiguredNodesForCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	for _, pattern := range []string{
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_config`,
-		`ALTER TABLE v2_node_observation_config ADD COLUMN IF NOT EXISTS mode`,
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_capability`,
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_event`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_user_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time`,
-	} {
-		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
-	}
 	cols := []string{"id", "name", "protocol", "client_entry_only", "show", "configured", "enabled", "mode", "allowed_user_ids", "created_at", "updated_at", "last_event_at", "capability", "last_seen_at"}
 	mock.ExpectQuery(`FROM v2_server_v2node n`).WillReturnRows(sqlmock.NewRows(cols).
 		AddRow(7, "MPLS A", "anytls", 0, 1, false, false, "", []byte(`[]`), 0, 0, 0, "", 0).
 		AddRow(8, "MPLS B", "vless", 0, 1, true, true, ObservationModeAll, []byte(`[]`), 1, 2, 3, "auto-v2", time.Now().Unix()).
 		AddRow(9, "MPLS C", "vless", 0, 1, false, false, "", []byte(`[]`), 0, 0, 0, "auto-v2", time.Now().Unix()-1000))
-	svc := &DBService{db: db}
+	svc := observationTestService(db)
 	nodes, err := svc.ObservationNodes(context.Background())
 	if err != nil || len(nodes) != 3 {
 		t.Fatalf("nodes=%#v err=%v", nodes, err)
@@ -267,27 +206,22 @@ func TestObservationNodesIncludesUnconfiguredNodesForCoverage(t *testing.T) {
 	}
 }
 
-func TestDeleteExpiredObservationUsesBoundedBatch(t *testing.T) {
+func TestDeleteExpiredObservationMaintainsPartitionsInsteadOfDeletingRows(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	for _, pattern := range []string{
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_config`,
-		`ALTER TABLE v2_node_observation_config ADD COLUMN IF NOT EXISTS mode`,
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_capability`,
-		`CREATE TABLE IF NOT EXISTS v2_node_observation_event`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_user_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_node_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_host_time`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_node_observation_event_ip_time`,
-	} {
-		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectBegin()
+	mock.ExpectExec(`SET LOCAL lock_timeout='2s'`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock\(582791,0\)`).WillReturnResult(sqlmock.NewResult(0, 0))
+	for i := 0; i < 9; i++ {
+		mock.ExpectExec(`CREATE TABLE IF NOT EXISTS v2_node_observation_day_[0-9]{8} PARTITION OF v2_node_observation_compact`).WillReturnResult(sqlmock.NewResult(0, 0))
 	}
-	mock.ExpectExec(`WITH expired AS \([\s\S]*LIMIT 50000[\s\S]*DELETE FROM v2_node_observation_event`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 100))
-	svc := &DBService{db: db}
+	mock.ExpectCommit()
+	mock.ExpectQuery(`SELECT namespace.nspname,child.relname,pg_get_expr`).WillReturnRows(sqlmock.NewRows([]string{"schema", "relname", "bound"}))
+	mock.ExpectQuery(`SELECT MAX\(occurred_at\) FROM v2_node_observation_event`).WillReturnRows(sqlmock.NewRows([]string{"max"}).AddRow(nil))
+	svc := observationTestService(db)
 	if err := svc.DeleteExpiredObservation(context.Background()); err != nil {
 		t.Fatal(err)
 	}
