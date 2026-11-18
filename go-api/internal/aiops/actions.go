@@ -37,9 +37,13 @@ func hashOperation(raw string) string {
 }
 func scanAction(row interface{ Scan(...any) error }) (Action, error) {
 	var a Action
-	err := row.Scan(&a.ID, &a.SessionID, &a.ActorID, &a.ApprovedBy, &a.RejectedBy, &a.ToolCallID, &a.Kind, &a.TargetID, &a.TargetType, &a.ServerLabel, &a.Payload, &a.Reason, &a.Status, &a.ExpiresAt, &a.ClaimedAt, &a.CompletedAt, &a.Output, &a.Error, &a.CreatedAt, &a.UpdatedAt, &a.ApprovalMode, &a.AuthorizationTurnID, &a.ExitCode)
+	var setupRaw []byte
+	err := row.Scan(&a.ID, &a.SessionID, &a.ActorID, &a.ApprovedBy, &a.RejectedBy, &a.ToolCallID, &a.Kind, &a.TargetID, &a.TargetType, &a.ServerLabel, &a.Payload, &a.Reason, &a.Status, &a.ExpiresAt, &a.ClaimedAt, &a.CompletedAt, &a.Output, &a.Error, &a.CreatedAt, &a.UpdatedAt, &a.ApprovalMode, &a.AuthorizationTurnID, &a.ExitCode, &setupRaw)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrNotFound
+	}
+	if err == nil && a.Kind == "ssh_command" && a.Status == "failed" && a.ExitCode == nil {
+		a.SSHSetupFailure = decodeSSHSetupFailure(setupRaw)
 	}
 	return a, err
 }
@@ -708,6 +712,7 @@ func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, 
 	go s.watchAction(ctx, cancel, a.ID)
 	status, output, problem := "failed", "", "操作执行失败，可能已部分执行；请人工检查"
 	var exitCode *int
+	var setupFailure *SSHSetupFailure
 	if retryStateRead(ctx, func(check context.Context) error {
 		if err := s.requireOperator(check, a.ApprovedBy); err != nil {
 			return err
@@ -770,6 +775,7 @@ func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, 
 					})
 					output = result.Output
 					exitCode = result.ExitCode
+					setupFailure = result.SetupFailure
 					if result.Err == nil {
 						status = "succeeded"
 						problem = ""
@@ -811,7 +817,7 @@ func (s *Service) executeAction(ctx context.Context, cancel context.CancelFunc, 
 		}
 	}
 	// UPDATE only: session reset/deletion cannot be undone by a late completion.
-	_ = s.persistActionCompletion(a, status, output, problem, exitCode)
+	_ = s.persistActionCompletion(a, status, output, problem, exitCode, setupFailure)
 }
 
 func (s *Service) monitorActionStillCurrent(ctx context.Context, ids []int64, expected string) bool {

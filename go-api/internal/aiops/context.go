@@ -26,7 +26,7 @@ func (s *Service) refreshActionContext(ctx context.Context, sessionID int64, mes
 			out = append(out, message)
 		}
 	}
-	actions, err := s.db.QueryContext(ctx, `SELECT id,kind,status,output,error,COALESCE(authorization_turn_id,0) FROM v2_ai_action WHERE session_id=$1 ORDER BY id DESC LIMIT 10`, sessionID)
+	actions, err := s.db.QueryContext(ctx, `SELECT id,kind,status,output,error,COALESCE(authorization_turn_id,0),target_id,ssh_setup_failure FROM v2_ai_action WHERE session_id=$1 ORDER BY id DESC LIMIT 10`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -34,16 +34,25 @@ func (s *Service) refreshActionContext(ctx context.Context, sessionID int64, mes
 	summaries := []map[string]any{}
 	summaryBudget := 16000
 	for actions.Next() {
-		var id, turnID int64
+		var id, turnID, targetID int64
+		var setupRaw []byte
 		var kind, status, output, problem string
-		if err = actions.Scan(&id, &kind, &status, &output, &problem, &turnID); err != nil {
+		if err = actions.Scan(&id, &kind, &status, &output, &problem, &turnID, &targetID, &setupRaw); err != nil {
 			return nil, err
 		}
 		output = contextText(output, min(4000, max(0, summaryBudget)))
 		summaryBudget -= len(output)
 		problem = contextText(problem, min(1000, max(0, summaryBudget)))
 		summaryBudget -= len(problem)
-		summaries = append(summaries, map[string]any{"action_id": id, "authorization_turn_id": turnID, "kind": kind, "status": status, "output": output, "error": problem})
+		summary := map[string]any{"action_id": id, "authorization_turn_id": turnID, "kind": kind, "status": status, "output": output, "error": problem}
+		a := Action{Kind: kind, Status: status, TargetID: targetID, SSHSetupFailure: decodeSSHSetupFailure(setupRaw)}
+		if sshSetupActionRecovery(a) {
+			summary["server_id"] = targetID
+			summary["execution_state"] = "not_executed"
+			summary["recovery"] = "ssh_setup"
+			summary["ssh_setup_failure"] = a.SSHSetupFailure
+		}
+		summaries = append(summaries, summary)
 	}
 	if err = actions.Err(); err != nil {
 		return nil, err

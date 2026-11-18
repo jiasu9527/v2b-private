@@ -2,6 +2,7 @@ package aiops
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -108,12 +109,17 @@ func (s *Service) retryPanelAdminSession(ctx context.Context, session int64) err
 // Retrying this UPDATE repeats only the receipt, not the business operation.
 // UPDATE-only and the running guard prevent resurrecting a deleted session or
 // overwriting a completion persisted after a lost database acknowledgement.
-func (s *Service) persistActionCompletion(a Action, status, output, problem string, exitCode *int) error {
+func (s *Service) persistActionCompletion(a Action, status, output, problem string, exitCode *int, setup ...*SSHSetupFailure) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	now := time.Now().Unix()
+	var setupRaw any
+	if len(setup) == 1 && a.Kind == "ssh_command" && status == "failed" && exitCode == nil && validSSHSetupFailure(setup[0]) {
+		encoded, _ := json.Marshal(setup[0])
+		setupRaw = string(encoded)
+	}
 	return retryOperation(ctx, transientOperationIO, time.Second, func(ctx context.Context) error {
-		_, err := s.db.ExecContext(ctx, `UPDATE v2_ai_action SET status=$2,output=$3,error=$4,completed_at=$5,updated_at=$5,exit_code=$6 WHERE id=$1 AND status='running'`, a.ID, status, output, problem, now, exitCode)
+		_, err := s.db.ExecContext(ctx, `UPDATE v2_ai_action SET status=$2,output=$3,error=$4,completed_at=$5,updated_at=$5,exit_code=$6,ssh_setup_failure=$7::jsonb WHERE id=$1 AND status='running'`, a.ID, status, output, problem, now, exitCode, setupRaw)
 		return err
 	})
 }

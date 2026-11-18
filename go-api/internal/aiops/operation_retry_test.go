@@ -98,10 +98,10 @@ func TestOperationRetryCompletionOnly(t *testing.T) {
 	defer db.Close()
 	s := &Service{db: db}
 	query := "UPDATE v2_ai_action SET status=.*WHERE id=.*AND status='running'"
-	mock.ExpectExec(query).WithArgs(int64(19), "succeeded", "done", "", sqlmock.AnyArg(), nil).WillReturnError(io.EOF)
+	mock.ExpectExec(query).WithArgs(int64(19), "succeeded", "done", "", sqlmock.AnyArg(), nil, nil).WillReturnError(io.EOF)
 	// The first UPDATE may already have committed. Zero rows is a successful
 	// reconciliation, not a reason to create or execute a replacement action.
-	mock.ExpectExec(query).WithArgs(int64(19), "succeeded", "done", "", sqlmock.AnyArg(), nil).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(query).WithArgs(int64(19), "succeeded", "done", "", sqlmock.AnyArg(), nil, nil).WillReturnResult(sqlmock.NewResult(0, 0))
 	if err = s.persistActionCompletion(Action{ID: 19}, "succeeded", "done", "", nil); err != nil {
 		t.Fatal(err)
 	}

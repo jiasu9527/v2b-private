@@ -513,6 +513,7 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 		}
 	}
 	failedSSHCommands := map[string]int64{}
+	failedSSHServers := map[int64]int64{}
 	failedPanelOperations := map[string]int64{}
 	var panelReadOnlyActionID int64
 	var emptyTicketQueries ticketEmptyQueryGuard
@@ -609,12 +610,13 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 		for _, call := range assistant.ToolCalls {
 			result := ToolOutcome{Content: `{"status":"skipped","message":"已有动作待确认或任务已停止，本轮不执行后续工具"}`}
 			if recoverSSH {
-				result.Content = `{"status":"skipped","message":"前一条 SSH 命令非零退出，跳过本批后续决策；请先分析输出和核对现状，再重新规划"}`
+				result.Content = `{"status":"skipped","message":"前一条 SSH 操作未成功，跳过本批后续调用；请按其恢复说明核对结果并重新规划，不得假设执行成功"}`
 			}
 			if recoverPanel {
 				result.Content = `{"status":"skipped","message":"前一后台操作未成功，跳过本批后续调用；请先读取其结果并核对现状，再按恢复要求重新规划"}`
 			}
 			commandKey := sshRecoveryCommandKey(call)
+			serverID := sshRecoveryServerID(call)
 			operationKey := panelRecoveryOperationKey(call)
 			canCall := (!pending || registrationBatch) && !halt && !recoverSSH && !recoverPanel
 			if full && canCall {
@@ -630,6 +632,10 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 				raw, _ := json.Marshal(map[string]any{"status": "error", "code": "panel_operation_already_failed", "action_id": actionID, "message": "相同后台操作及参数本轮已在写前检查失败，未再次提交。请先查询现状并修正参数，不能仅修改原因或字段顺序后原样重试"})
 				result = ToolOutcome{ActionID: actionID, Content: string(raw)}
 				recoverPanel = true
+			} else if actionID := failedSSHServers[serverID]; full && actionID > 0 && canCall {
+				raw, _ := json.Marshal(map[string]any{"status": "error", "code": "ssh_server_unavailable", "action_id": actionID, "server_id": serverID, "execution_state": "not_executed", "message": sshSetupRecoveryInstruction})
+				result = ToolOutcome{ActionID: actionID, Content: string(raw)}
+				recoverSSH = true
 			} else if actionID := failedSSHCommands[commandKey]; full && actionID > 0 && canCall {
 				raw, _ := json.Marshal(map[string]any{"status": "error", "code": "ssh_command_already_failed", "action_id": actionID, "message": "该服务器上的同一命令本轮已非零退出，未再次执行。请根据失败输出先核对现状，再修正命令；不要原样重跑"})
 				result = ToolOutcome{ActionID: actionID, Content: string(raw)}
@@ -650,6 +656,15 @@ func (s *Service) runTurn(ctx context.Context, actorID, sessionID, turnID int64,
 						errText = formatAutomaticActionError(result, err)
 						if result.Content == "" {
 							result.Content = toolErrorContent(err)
+						}
+					} else if result.SSHSetupRecovery {
+						// No exec request left the process. Quarantine only this
+						// target for this turn; let the next model round replan
+						// independent work instead of halting the whole task.
+						recoverSSH = true
+						if serverID > 0 {
+							failedSSHServers[serverID] = result.ActionID
+							messages = append(messages, providerMessage{Role: "system", Content: fmt.Sprintf("本轮服务器 #%d 的SSH连接预算已耗尽（动作 #%d），命令未发送；只跳过该服务器，不是整轮停止。%s", serverID, result.ActionID, sshSetupRecoveryInstruction)})
 						}
 					} else if result.SSHExitCode != nil && *result.SSHExitCode > 0 {
 						// The process terminated: let the next model request diagnose

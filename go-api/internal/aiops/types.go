@@ -161,6 +161,7 @@ type ToolOutcome struct {
 	ActionID         int64
 	Content          string
 	Pending          bool
+	SSHSetupRecovery bool              `json:"-"`
 	SSHExitCode      *int              `json:"-"`
 	PanelRecovery    panelRecoveryKind `json:"-"`
 	KnowledgeSecrets []string          `json:"-"`

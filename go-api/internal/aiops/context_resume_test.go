@@ -33,9 +33,9 @@ func TestAIHistoryContinueRetainsFailedTaskWithoutPartialTools(t *testing.T) {
 		AddRow(4, "failed", "user", "继续", `[]`, "", "").
 		AddRow(5, "running", "user", "继续", `[]`, "", "")
 	mock.ExpectQuery(`SELECT turn.id,turn.status,.*message.role='user'.*status IN\('completed','pending','failed','interrupted'\).*ORDER BY message.id`).WithArgs(int64(9), int64(5)).WillReturnRows(rows)
-	mock.ExpectQuery(`SELECT id,kind,status,output,error,COALESCE\(authorization_turn_id,0\) FROM v2_ai_action`).WithArgs(int64(9)).WillReturnRows(sqlmock.NewRows([]string{"id", "kind", "status", "output", "error", "authorization_turn_id"}).
-		AddRow(88, "ssh_command", "unknown", "端口读取到一部分", "断线，结果未知", 2).
-		AddRow(87, "node_update", "succeeded", "连接端口已更新为 54101", "", 1))
+	mock.ExpectQuery(`SELECT id,kind,status,output,error,COALESCE\(authorization_turn_id,0\),target_id,ssh_setup_failure FROM v2_ai_action`).WithArgs(int64(9)).WillReturnRows(sqlmock.NewRows([]string{"id", "kind", "status", "output", "error", "authorization_turn_id", "target_id", "ssh_setup_failure"}).
+		AddRow(88, "ssh_command", "unknown", "端口读取到一部分", "断线，结果未知", 2, 10, nil).
+		AddRow(87, "node_update", "succeeded", "连接端口已更新为 54101", "", 1, 9, nil))
 	messages, err := s.history(context.Background(), 9, 5)
 	if err != nil {
 		t.Fatal(err)

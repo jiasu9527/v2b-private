@@ -541,10 +541,11 @@ func redactSSHOutput(raw string, secrets []string, final bool) string {
 }
 
 type sshRunResult struct {
-	Output    string
-	Uncertain bool
-	ExitCode  *int
-	Err       error
+	Output       string
+	Uncertain    bool
+	ExitCode     *int
+	SetupFailure *SSHSetupFailure
+	Err          error
 }
 
 func (s *Service) runSSH(ctx context.Context, v sshSecretServer, command string) sshRunResult {
@@ -604,7 +605,12 @@ func (s *Service) runSSHWithGuard(ctx context.Context, v sshSecretServer, comman
 	}
 	session, cleanup, err := connectSSHSession(ctx, v, auth, report, guard)
 	if err != nil {
-		return sshRunResult{Output: out.safeString(secrets, true), Err: err}
+		var setup *sshConnectionFailure
+		var metadata *SSHSetupFailure
+		if errors.As(err, &setup) {
+			metadata = setup.setupMetadata()
+		}
+		return sshRunResult{Output: out.safeString(secrets, true), Err: err, SetupFailure: metadata}
 	}
 	defer cleanup()
 	if ctx.Err() != nil {
