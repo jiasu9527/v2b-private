@@ -256,6 +256,8 @@ func telegramSafeError(err error) string {
 		return message
 	}
 	switch {
+	case errors.Is(err, ErrWebLoginChat):
+		return ErrWebLoginChat.Error()
 	case errors.Is(err, ErrBusy):
 		return "当前会话或运维服务正在处理任务；本条没有排队执行，请等待或停止后重新发送。"
 	case errors.Is(err, ErrForbidden), errors.Is(err, ErrNotFound):

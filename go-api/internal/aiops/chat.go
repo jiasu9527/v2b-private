@@ -35,6 +35,9 @@ func requestHash(req SendMessageRequest) string {
 }
 func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessageRequest) (SendMessageResult, error) {
 	var out SendMessageResult
+	if len(req.Content) <= maxContentBytes && containsWebLoginChatCredentials(req.Content) {
+		return out, ErrWebLoginChat
+	}
 	// Preserve original bytes for idempotency and SSH password parsing. In
 	// particular, trailing whitespace on a credential line is significant.
 	fingerprint := requestHash(req)
@@ -72,8 +75,7 @@ func (s *Service) SendMessage(ctx context.Context, actorID int64, req SendMessag
 		return out, ErrUnavailable
 	}
 	// The transaction below performs the authoritative request-id CAS, including
-	// the concurrent first-send race. No format-specific parser runs before the
-	// operator's message reaches the main AI conversation.
+	// the concurrent first-send race. SSH input keeps its existing handling.
 	var existingHash string
 	var existingID int64
 	err = s.db.QueryRowContext(ctx, `SELECT id,request_hash FROM v2_ai_turn WHERE actor_id=$1 AND request_id=$2`, actorID, req.RequestID).Scan(&existingID, &existingHash)

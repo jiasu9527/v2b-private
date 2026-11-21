@@ -39,6 +39,11 @@
   overflow-wrap: anywhere;
   line-height: 1.7;
 }
+.ai-ops-web-login-chat {
+  margin: 12px 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 @media (max-width: 700px) {
   .ai-ops-web-login-fields {
     grid-template-columns: minmax(0, 1fr);

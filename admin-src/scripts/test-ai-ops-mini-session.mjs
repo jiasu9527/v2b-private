@@ -165,6 +165,7 @@ function pageHarness({ miniApp = true, actorID = 7, isAdmin = false, sessions = 
     },
     apiJsonPost: async (path, params) => { calls.push(['post', path, params]); if (post) return post(path, params); return {}; },
     loadServers: async () => {}, applyConfig: () => calls.push(['config']),
+    clearWebLoginChat() {},
     begin: () => true, finish() {}, fail: (error) => calls.push(['error', error.message]), message: { success() {} },
     setSessions: (value) => { state.sessions = typeof value === 'function' ? value(state.sessions) : value; },
     setDetail: (value) => { state.detail = typeof value === 'function' ? value(state.detail) : value; },

@@ -105,6 +105,9 @@ func (b *TelegramBridge) handleTelegramUpdate(ctx context.Context, in TelegramIn
 	if command == "" && !callback && (strings.TrimSpace(in.Text) == "" || len(in.Text) > maxContentBytes || !utf8.ValidString(in.Text)) {
 		return true, ErrValidation
 	}
+	if command == "" && !callback && containsWebLoginChatCredentials(in.Text) {
+		return true, b.publicTelegramNotice(ctx, tx, in, ErrWebLoginChat.Error())
+	}
 	kind := "command"
 	payload := in.Text
 	if callback {

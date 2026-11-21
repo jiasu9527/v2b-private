@@ -92,6 +92,7 @@ test('real send handler preserves quick-message drafts, prevents double clicks a
     const draft = { current: '保留这个草稿' }, selectedRef = { current: 0 }, selectionSequence = { current: 0 };
     const bindings = {
       draft, selectedRef, selectionSequence, detail: null, config: {}, model: 'fixture-model', foreignFullAccess: false,
+      parseAIWebLoginText: () => ({ kind: 'chat' }), clearWebLoginChat() {},
       aiMessageTooLarge: model.aiMessageTooLarge, AI_CHAT_SIZE_ERROR: model.AI_CHAT_SIZE_ERROR, message: { error() { assert.fail('unexpected size error'); } },
       aiModelReady: () => true, aiSessionBusy: () => false,
       begin: () => { if (locked) return false; locked = true; return true; }, finish: () => { locked = false; },
@@ -229,7 +230,7 @@ test('IME candidates, composition end, modifiers and held Enter cannot send acci
 });
 
 test('same permission/loading guards apply to keyboard and button, and stop stays available', () => {
-  for (const options of [{ loaded: false }, { busy: 'send' }, { busy: 'access' }, { sessionBusy: true }, { unavailable: true }, { sendBlocked: true }]) {
+  for (const options of [{ loaded: false }, { busy: 'send' }, { busy: 'web-login' }, { busy: 'access' }, { sessionBusy: true }, { unavailable: true }, { sendBlocked: true }]) {
     const instance = composer('request', options);
     instance.key();
     assert.equal(instance.sent.length, 0);

@@ -225,6 +225,8 @@ func handleAIOpsError(w http.ResponseWriter, err error) {
 		status, msg = 400, aiops.ErrSSHIntakeInvalid.Error()
 	case errors.Is(err, aiops.ErrSSHIntakeMultiple):
 		status, msg = 400, aiops.ErrSSHIntakeMultiple.Error()
+	case errors.Is(err, aiops.ErrWebLoginChat):
+		status, msg = 400, aiops.ErrWebLoginChat.Error()
 	case errors.Is(err, aiops.ErrValidation):
 		status, msg = 400, aiops.ErrValidation.Error()
 	case errors.Is(err, aiops.ErrNotFound):

@@ -155,6 +155,9 @@ func (b *TelegramBridge) MiniSendMessage(ctx context.Context, token string, req 
 	if !requestIDPattern.MatchString(req.RequestID) || req.SessionID < 0 || len(req.Content) > maxContentBytes || strings.TrimSpace(req.Content) == "" || !utf8.ValidString(req.Content) {
 		return out, ErrValidation
 	}
+	if containsWebLoginChatCredentials(req.Content) {
+		return out, ErrWebLoginChat
+	}
 	if err := b.ready(ctx); err != nil {
 		return out, err
 	}

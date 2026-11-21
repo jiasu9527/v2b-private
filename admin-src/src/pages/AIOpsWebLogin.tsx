@@ -4,7 +4,7 @@ import { GlobalOutlined, LockOutlined } from '@ant-design/icons';
 import { aiOpsRequestHeaders, aiOpsRequestURL } from '../lib/api';
 import './AIOpsWebLogin.css';
 
-type LoginFields = {
+export type LoginFields = {
   url: string;
   target_url?: string;
   username: string;
@@ -12,7 +12,7 @@ type LoginFields = {
   task: string;
   model?: string;
 };
-type LoginResult = {
+export type LoginResult = {
   origin: string;
   page_title: string;
   summary: string;
@@ -106,6 +106,19 @@ function responseResult(payload: unknown, expectedOrigin: string): LoginResult |
   return { origin: result.origin, page_title: result.page_title.slice(0, 220), model: result.model.slice(0, 120), summary: result.summary };
 }
 
+// Used by the conversation input as well as the optional standalone form.
+// Never use the normal chat transport for an input that contains credentials.
+export async function runAIOpsWebLogin(fields: LoginFields, signal: AbortSignal, expectedOrigin: string): Promise<{ result: LoginResult } | { error: string }> {
+  try {
+    const response = await webLoginRequest('/run', signal, fields);
+    if (!response.ok) return { error: await runFailure(response) };
+    const result = responseResult(await response.json(), expectedOrigin);
+    return result ? { result } : { error: '服务器未返回有效的网页查询结果。' };
+  } catch {
+    return { error: '连接中断，未自动重试。网站可能已收到登录请求，请确认后再操作。' };
+  }
+}
+
 export default function AIOpsWebLogin({ models }: { models: string[] }) {
   const [form] = Form.useForm<LoginFields>();
   const [availability, setAvailability] = useState<Availability>('loading');
@@ -177,24 +190,16 @@ export default function AIOpsWebLogin({ models }: { models: string[] }) {
     setFeedback('');
     setResult(null);
     try {
-      const pending = webLoginRequest('/run', controller.signal, {
+      const pending = runAIOpsWebLogin({
         url: url.href, target_url: target?.href, username, password: fields.password, task, model: fields.model,
-      });
+      }, controller.signal, url.origin);
       // Clear the live field immediately; no password is kept in request/retry
       // state, chat history or a browser storage adapter.
       form.setFieldValue('password', '');
       const response = await pending;
-      if (!response.ok) {
-        const explanation = await runFailure(response);
-        if (!controller.signal.aborted) setFeedback(explanation);
-        return;
-      }
-      const next = responseResult(await response.json(), url.origin);
       if (controller.signal.aborted) return;
-      if (next) setResult(next);
-      else setFeedback('服务器未返回有效的网页分析结果。');
-    } catch {
-      if (!controller.signal.aborted) setFeedback('连接中断，未自动重试。网站可能已收到登录请求，请确认后再操作。');
+      if ('result' in response) setResult(response.result);
+      else setFeedback(response.error);
     } finally {
       if (currentRun.current === controller) {
         currentRun.current = null;
@@ -212,7 +217,7 @@ export default function AIOpsWebLogin({ models }: { models: string[] }) {
           <Tag color="blue">只读</Tag>
         </div>
         <Paragraph type="secondary">
-          填写网站、账号和查询任务，AI 运维在独立浏览器中完成常见账号密码登录，再读取指定页面或登录后的页面。
+          可以直接在运维对话里发一段网页登录资料；这里的表单仅备用。登录后只读取指定页面或落地页。
         </Paragraph>
         {!secure ? <Alert showIcon type="warning" message="请使用 HTTPS 打开后台后再提交网页登录资料。" /> :
           availability === 'loading' ? <Space role="status"><Spin size="small" /><Text>正在检查网页登录组件…</Text></Space> :

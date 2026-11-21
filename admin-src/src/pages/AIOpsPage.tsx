@@ -12,7 +12,8 @@ import AIOpsModelEndpointSettings from './AIOpsModelEndpointSettings';
 import AIOpsKnowledge from './AIOpsKnowledge';
 import AIOpsTelegram from './AIOpsTelegram';
 import AIOpsServersPanel from './AIOpsServersPanel';
-import AIOpsWebLogin from './AIOpsWebLogin';
+import AIOpsWebLogin, { aiOpsLoginURL, runAIOpsWebLogin, type LoginResult } from './AIOpsWebLogin';
+import { parseAIWebLoginText } from './aiOpsWebLoginText';
 import { watchAIChatScroll } from './aiOpsChatScroll';
 import { aiMergeSessionList } from './aiOpsModel';
 import { AI_CHAT_SIZE_ERROR, aiMessageTooLarge } from './aiOpsModel';
@@ -23,6 +24,10 @@ const initialConfig: AIConfig = { enabled: false, base_url: '', models: AI_DEFAU
 const responseList = (response: any): any[] => Array.isArray(response?.data) ? response.data : [];
 type Confirmation = { kind: 'delete' | 'clear' | 'reset' | 'server-delete'; session?: AISession; server?: AIServer };
 type Review = { action: AIAction; decision: 'approve' | 'reject' };
+type WebLoginChatResult =
+  | { state: 'loading' }
+  | { state: 'done'; result: LoginResult }
+  | { state: 'error'; message: string };
 
 export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {}) {
   const [tab, setTab] = useState('chat');
@@ -55,6 +60,21 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState('');
   const busyRef = useRef(false);
+  const [webLoginChat, setWebLoginChat] = useState<WebLoginChatResult | null>(null);
+  const webLoginRun = useRef<AbortController | null>(null);
+  const clearWebLoginChat = useCallback(() => {
+    webLoginRun.current?.abort();
+    setWebLoginChat(null);
+  }, []);
+  useEffect(() => {
+    setWebLoginChat(null);
+    const onPageHide = () => { clearWebLoginChat(); setDraft(''); };
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      webLoginRun.current?.abort();
+    };
+  }, [clearWebLoginChat, setDraft, actorID, isAdmin]);
   const [error, setError] = useState('');
   const [now, setNow] = useState(Date.now());
   const [configForm] = Form.useForm();
@@ -142,6 +162,7 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
   const changeTab = (next: string) => {
     if ((next === 'settings' && !isAdmin) || (next === 'web-login' && (!isAdmin || miniApp)) || (next === 'telegram' && miniApp)) return;
     if (miniApp) miniResumeDone.current = true;
+    if (next !== 'chat') clearWebLoginChat();
     setTab(next);
     if (next === 'servers') void loadServers().catch((e) => fail(e, '读取服务器列表失败'));
   };
@@ -278,18 +299,19 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
     // Poll/stream updates and same-length message replacements follow only if
     // the reader has not scrolled up. Hidden tabs have no active controller.
     chatScroll.current?.refresh();
-  }, [tab, selectedID, detail?.messages, detail?.actions, visibleDraft?.draft_content]);
+  }, [tab, selectedID, detail?.messages, detail?.actions, visibleDraft?.draft_content, webLoginChat]);
   const reviewAction = useCallback((action: AIAction, decision: 'approve' | 'reject') => { setConfirmedOutput(false); setReview({ action, decision }); }, []);
   const refreshTranscriptLayout = useCallback(() => { chatScroll.current?.refresh(); }, []);
   const selectSession = (session: AISession, fetchDetail = true) => {
     if (!aiCanReadSession(session, actorID, isAdmin)) return;
+    clearWebLoginChat();
     miniResumeDone.current = true;
     reasoningEdited.current = false; setReasoningEffort(aiSessionReasoning(session));
     followOutput.current = true;
     selectionSequence.current += 1; selectedRef.current = session.id; setSelectedID(session.id); setDetail(null); setDraft(''); setSendRetry(null); setNewAccessMode(AI_DEFAULT_ACCESS_MODE); setModel(session.model); setTab('chat');
     if (fetchDetail) void loadDetail(session.id).catch((e) => fail(e, '读取会话失败'));
   };
-  const newSession = () => { miniResumeDone.current = true; followOutput.current = true; reasoningEdited.current = false; setReasoningEffort('default'); selectionSequence.current += 1; selectedRef.current = 0; detailSequence.current += 1; setSelectedID(0); setDetail(null); setNewAccessMode(AI_DEFAULT_ACCESS_MODE); setDraft(''); setSendRetry(null); setTab('chat'); };
+  const newSession = () => { clearWebLoginChat(); miniResumeDone.current = true; followOutput.current = true; reasoningEdited.current = false; setReasoningEffort('default'); selectionSequence.current += 1; selectedRef.current = 0; detailSequence.current += 1; setSelectedID(0); setDetail(null); setNewAccessMode(AI_DEFAULT_ACCESS_MODE); setDraft(''); setSendRetry(null); setTab('chat'); };
   const accessMode = selectedID ? aiAccessMode(detail?.session) : newAccessMode;
   const foreignFullAccess = !!detail && aiAccessMode(detail.session) === 'full' && !aiOwnsFullAccess(detail.session, actorID);
   const changeAccess = async (mode: AIAccessMode) => {
@@ -328,7 +350,46 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
   const send = async (contentOverride?: string, { preserveDraft = false }: AIOpsSendOptions = {}) => {
     const content = contentOverride ?? draft.current;
     if (aiMessageTooLarge(content)) { message.error(AI_CHAT_SIZE_ERROR); return; }
+    // Route recognizable website credentials before creating a chat retry
+    // record or calling chat/send. Invalid or unavailable login paths must
+    // never fall back to sending the same content to the normal model.
+    const website = parseAIWebLoginText(content);
+    if (website.kind !== 'chat') {
+      followOutput.current = true;
+      const showError = (message: string) => setWebLoginChat({ state: 'error', message });
+      if (miniApp || !isAdmin || window.location.protocol !== 'https:') {
+        showError('网页登录请用管理员账号打开 HTTPS 网页后台。资料未发送给模型。');
+        return;
+      }
+      if (website.kind === 'invalid') { showError(website.message); return; }
+      const url = aiOpsLoginURL(website.url);
+      const target = website.target_url ? aiOpsLoginURL(website.target_url) : undefined;
+      if (!url || target === null || (target && target.origin !== url.origin)) {
+        showError('请填写一个公网 HTTPS 网站；目标页必须同域，网址不要带查询参数。资料未发送给模型。');
+        return;
+      }
+      if (!begin('web-login')) return;
+      const controller = new AbortController();
+      webLoginRun.current = controller;
+      setSendRetry(null);
+      if (!preserveDraft && draft.current === content) setDraft('');
+      setWebLoginChat({ state: 'loading' });
+      try {
+        const response = await runAIOpsWebLogin({
+          url: url.href, target_url: target?.href, username: website.username, password: website.password,
+          task: website.task, model,
+        }, controller.signal, url.origin);
+        if (!alive.current || controller.signal.aborted || webLoginRun.current !== controller) return;
+        if ('result' in response) setWebLoginChat({ state: 'done', result: response.result });
+        else showError(response.error);
+      } finally {
+        if (webLoginRun.current === controller) webLoginRun.current = null;
+        finish();
+      }
+      return;
+    }
     if (!content.trim() || !aiModelReady(config, model) || (selectedRef.current > 0 && !detail) || aiSessionBusy(detail) || foreignFullAccess || !begin('send')) return;
+    clearWebLoginChat();
     followOutput.current = true;
     const originalID = selectedRef.current;
     const selection = selectionSequence.current;
@@ -456,8 +517,17 @@ export default function AIOpsPage({ miniApp = false }: { miniApp?: boolean } = {
       {foreignFullAccess && <div className="ai-ops-access-owner"><Text type="secondary">操作人 #{detail?.session.full_access_by || '未知'} 的授权不可沿用；请切换权限或由你启用。</Text><Button size="small" disabled={!!busy || aiSessionBusy(detail)} onClick={() => void changeAccess('full')}>由我启用完全访问</Button></div>}
       <div className="ai-ops-messages" ref={mountMessageViewport} onScroll={() => chatScroll.current?.onScroll()}>
         <AIOpsTranscript detail={detail} selectedID={selectedID} miniApp={miniApp} busy={!!busy} enabled={config.enabled} now={now} streamConnected={streamConnected} onReview={reviewAction} onLayout={refreshTranscriptLayout} />
+        {webLoginChat && <div className="ai-ops-web-login-chat" aria-live="polite">
+          {webLoginChat.state === 'loading' && <Alert showIcon type="info" message="正在登录并读取网页…" action={<Button size="small" onClick={() => {
+            clearWebLoginChat();
+            setWebLoginChat({ state: 'error', message: '已停止等待；网站可能已收到登录请求。' });
+          }}>停止等待</Button>} />}
+          {webLoginChat.state === 'error' && <Alert showIcon type="warning" message={webLoginChat.message} />}
+          {webLoginChat.state === 'done' && <Alert showIcon type="success" message={`网页查询 · ${webLoginChat.result.page_title || webLoginChat.result.origin}`}
+            description={<div className="ai-ops-web-login-result">{webLoginChat.result.summary}</div>} />}
+        </div>}
       </div>
-      <AIOpsComposer ref={composer} draftRef={draft} miniApp={miniApp} compact={compact} loaded={loaded} busy={busy} sessionBusy={aiSessionBusy(detail)} unavailable={unavailable} sendBlocked={foreignFullAccess || (selectedID > 0 && !detail)} isAdmin={isAdmin} onSend={(content, options) => void send(content, options)} onStop={() => void stop()} />
+      <AIOpsComposer ref={composer} draftRef={draft} miniApp={miniApp} compact={compact} loaded={loaded} busy={busy} sessionBusy={aiSessionBusy(detail)} unavailable={unavailable} sendBlocked={foreignFullAccess || (selectedID > 0 && !detail)} isAdmin={isAdmin} webLoginChatEnabled={!miniApp && isAdmin && typeof window !== 'undefined' && window.location.protocol === 'https:'} onSend={(content, options) => void send(content, options)} onStop={() => void stop()} />
     </section>
     <Drawer title="历史会话" aria-label="历史会话" placement={miniApp ? 'bottom' : 'left'} rootClassName={miniApp ? 'mini-ops-history-drawer' : 'ai-ops-history-drawer'} width="min(360px, 90vw)" height={miniApp ? '80%' : undefined} open={compact && historyOpen} onClose={() => setHistoryOpen(false)} destroyOnHidden>{compact && sessionHistory}</Drawer>
     <Drawer title="对话设置" aria-label="对话设置" placement={compact ? 'bottom' : 'right'} rootClassName={miniApp ? 'mini-ops-settings-drawer' : 'ai-ops-settings-drawer'} width={360} height={compact ? 'auto' : undefined} open={settingsOpen} onClose={() => setSettingsOpen(false)} destroyOnHidden>

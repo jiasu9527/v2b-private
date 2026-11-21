@@ -131,7 +131,7 @@ test('browsers without ResizeObserver retain initial restoration and streaming f
 test('page activates scrolling for all tab and session changes, not clocks or drawer toggles', () => {
   assert.match(page, /if \(tab !== 'chat'\) return;\s+const scroll = watchAIChatScroll/);
   assert.match(page, /scroll\.dispose\(\); chatScroll\.current = null; \};\s+\}, \[tab, selectedID\]\)/);
-  assert.match(page, /chatScroll\.current\?\.refresh\(\);\s+\}, \[tab, selectedID, detail\?\.messages, detail\?\.actions, visibleDraft\?\.draft_content\]\)/);
+  assert.match(page, /chatScroll\.current\?\.refresh\(\);\s+\}, \[tab, selectedID, detail\?\.messages, detail\?\.actions, visibleDraft\?\.draft_content, webLoginChat\]\)/);
   assert.match(page, /else if \(tab !== 'chat'\) setTab\('chat'\)/);
   assert.doesNotMatch(page, /pane\.scrollTop\s*=/);
 });
