@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+# Never include website credentials in shell arguments, environment or debug logs.
+unset DEBUG DEBUG_FILE PWDEBUG NODE_DEBUG NODE_OPTIONS ENV BASH_ENV
+export PLAYWRIGHT_BROWSERS_PATH=0
+cd -- "$(dirname -- "$0")"
+exec node ./run.mjs

@@ -31,6 +31,8 @@ type Service struct {
 	httpClient      providerHTTPClient
 	relayHealthMu   sync.Mutex
 	relayCooldowns  map[[32]byte]time.Time
+	webLoginCancel  context.CancelFunc
+	webLoginStarted time.Time
 }
 
 func NewService(cfg config.Config, db *sql.DB, panel Panel) *Service {
@@ -41,6 +43,9 @@ func (s *Service) Close() {
 	s.closed = true
 	for _, cancel := range s.workers {
 		cancel()
+	}
+	if s.webLoginCancel != nil {
+		s.webLoginCancel()
 	}
 	s.mu.Unlock()
 	s.wg.Wait()

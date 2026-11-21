@@ -92,6 +92,7 @@ type Config struct {
 	ProbeStorageDir                    string
 	QueueWorkers                       int
 	AppKey                             string
+	AIOpsWebLoginRunner                string
 	AccessLogEnabled                   bool
 	SlowRequestLogThreshold            time.Duration
 	ReadTimeout                        time.Duration
@@ -245,6 +246,7 @@ func Load() Config {
 		ProbeStorageDir:                    getEnv("PROBE_STORAGE_DIR", "../storage/probe"),
 		QueueWorkers:                       int(getEnvInt64("QUEUE_WORKERS", 4)),
 		AppKey:                             os.Getenv("APP_KEY"),
+		AIOpsWebLoginRunner:                strings.TrimSpace(os.Getenv("AI_OPS_WEB_LOGIN_RUNNER")),
 		AccessLogEnabled:                   getEnvBool("ACCESS_LOG_ENABLE", false),
 		SlowRequestLogThreshold:            getEnvDurationMS("SLOW_REQUEST_LOG_THRESHOLD_MS", 500*time.Millisecond),
 		ReadTimeout:                        10 * time.Second,

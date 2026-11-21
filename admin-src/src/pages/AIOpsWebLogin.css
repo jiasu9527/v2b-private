@@ -1,0 +1,49 @@
+.ai-ops-web-login {
+  display: grid;
+  gap: 16px;
+  max-width: 960px;
+}
+.ai-ops-web-login-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.ai-ops-web-login-heading > .anticon {
+  color: #486f99;
+  font-size: 20px;
+}
+.ai-ops-web-login-heading h4.ant-typography {
+  margin: 0;
+}
+.ai-ops-web-login-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 16px;
+}
+.ai-ops-web-login-model {
+  max-width: 400px;
+}
+.ai-ops-web-login .ai-ops-web-login-note {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.ai-ops-web-login-feedback {
+  margin-top: 14px;
+}
+.ai-ops-web-login-result {
+  margin-top: 14px;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+}
+@media (max-width: 700px) {
+  .ai-ops-web-login-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ai-ops-web-login .ant-card-body {
+    padding: 16px;
+  }
+}

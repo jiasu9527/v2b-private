@@ -36,6 +36,10 @@ func WithAIOps(service aiOpsService) Option {
 func handleAIOps(w http.ResponseWriter, r *http.Request, sessions session.Service, service aiOpsService, action string) {
 	disableResponseCache(w)
 	w.Header().Set("Vary", "Authorization")
+	if action == "web-login/status" || action == "web-login/run" {
+		handleAIOpsWebLogin(w, r, sessions, service, action)
+		return
+	}
 	actor, ok := authenticateSupportSession(w, r, sessions, false)
 	if !ok {
 		return
